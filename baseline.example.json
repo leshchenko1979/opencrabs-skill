@@ -1,0 +1,9 @@
+{
+  "sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "run_id": 32985886393,
+  "contributors": [
+    "<editor-uuid-prefix>"
+  ],
+  "feature_presence_check": "PASS (non-vacuous): feature literals present in artifact (strings | grep), absent in old binary — markers validated non-vacuous before conclusion",
+  "note": "CYCLE example, <date> UTC. Single origin: <editor> ORDER <sha> (feature; author <name> <time>, Session-Id <uuid>). Ingress verified first-hand. Dispatch run <id>, job name 'Linux amd64 (<full sha>, <features>)' (head_sha carrier tip NOT trusted). GREEN attempt 1: completed, conclusion success (API re-verified). Artifact sha256 <hash> installed byte-identical via backup->install->hash chain; rollback <backup-ref>. Chained restart per recipe: ONE systemd-run unit 'systemctl --user restart opencrabs-ops; sleep 30' (never bare restart)."
+}

@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-seal-state — pre-restart state seal (compiler.md Step 5 / Phase A).
+#
+# Merges this swap's facts into baseline.json (schema-preserving: unknown keys
+# are kept) and optionally records order ledger transitions in orders.json.
+# Absorbs oc-contributors: contributor list is derived from Session-Id trailers
+# over <left>..<right> in the local fork clone (~/opencrabs) — the SAME command
+# Step 5.1 documents.
+#
+#   1. baseline.json merge (only keys whose flags are passed):
+#        --sha <full-40>        → .sha, .deployed_sha
+#        --run-id <n>           → .run_id
+#        --binary-sha <sha256>  → .binary_sha256
+#        --features <set>       → .features
+#        --marker <m> [--found 0|1] [--evidence <line>] → .feature_presence[<m>]
+#        --set-note <text>      → .note
+#        --contrib-from <sha> --contrib-to <sha> → .contributors (trailer scan)
+#        --git <path>           → local clone for the scan (default ~/opencrabs)
+#        --cycle <n>            → .cycle
+#   2. orders.json transitions (optional):
+#        --add-order <sha> --order-features <set>  → append queued (dedup by sha)
+#        --mark-order <sha> [--with-run <id>] [--status S] [--order-evidence T]
+#            status vocabulary (case-insensitive in, UPPER stored):
+#            QUEUED DISPATCHED GREEN RED DEPLOYED SUPERSEDED VOID
+#            default status when only --with-run given: DISPATCHED
+#            matches .sha OR legacy .order_sha rows; evidence stored as .evidence
+#        --purge-order <sha> → remove matching row(s) (verified-phantom rows only;
+#            prints removed rows on --verbose; refuses unknown sha, exit 1)
+#
+# --dry-run prints the resulting JSON without writing.
+# Exit codes: 0 OK | 1 invocation | 2 CONTRIBUTOR-SCAN-FAIL | 3 WRITE-FAIL/INVALID
+#
+# Deps: jq, git (only for contributor scan).
+# =============================================================================
+set -u
+
+BASE="${OC_BASELINE:-/root/.opencrabs/profiles/ops/opencrabs-dev/baseline.json}"
+ORDERS="${OC_ORDERS:-/root/.opencrabs/profiles/ops/opencrabs-dev/orders.json}"
+GIT="${OC_GIT:-/root/opencrabs}"
+SHA="" RUN_ID="" BIN_SHA="" FEATURES="" MARKER="" FOUND="" EVIDENCE="" NOTE="" CYCLE=""
+CONTRIB_FROM="" CONTRIB_TO=""
+ADD_ORDER="" ADD_ORDER_FEAT="" MARK_ORDER="" WITH_RUN="" MARK_STATUS="" ORDER_EVIDENCE="" PURGE_ORDER=""
+DRY=0 VERBOSE=0
+
+fail() { echo "oc-seal-state: $2" >&2; exit "$1"; }
+say()  { [ "$VERBOSE" = 1 ] && echo "$*" >&2 || true; }
+
+usage() {
+  echo "Usage: oc-seal-state [--baseline P] [--orders P] [--git P] [--sha S] [--run-id N] [--binary-sha H] [--features F] [--marker M] [--found 0|1] [--evidence L] [--set-note T] [--cycle N] [--contrib-from A --contrib-to B] [--add-order S --order-features F] [--mark-order S --with-run N] [--status S] [--order-evidence T] [--purge-order S] [--dry-run] [--verbose] [--selftest]" >&2
+}
+
+selftest() {
+  local passed=0 total=7 rc d
+  d="$(mktemp -d)"
+  printf '{"sha":"aaaa","run_id":1,"name":"keep-me"}' > "$d/b.json"
+  printf '{"orders":[]}' > "$d/o.json"
+  "$0" --baseline "$d/b.json" --orders "$d/o.json" --sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --run-id 42 --marker width=1600 --found 1 --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  "$0" --baseline "$d/b.json" --orders "$d/o.json" --add-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --order-features telegram --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  "$0" --baseline "$d/b.json" --orders "$d/o.json" --mark-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --with-run 99 --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  "$0" --baseline "$d/b.json" --orders "$d/o.json" --mark-order cccccccccccccccccccccccccccccccccccccccc --status deployed --order-evidence "disk==proc" --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  "$0" --baseline "$d/b.json" --orders "$d/o.json" --mark-order cccccccccccccccccccccccccccccccccccccccc --with-run 9 --status BOGUS --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
+  "$0" --baseline "$d/b.json" --orders "$d/o.json" --purge-order dddddddddddddddddddddddddddddddddddddddd --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
+  "$0" >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
+  rm -rf "$d"
+  echo "selftest OK: $passed/$total cases (no network)"
+  [ "$passed" = "$total" ]
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --baseline) BASE="$2"; shift 2 ;;
+    --orders)   ORDERS="$2"; shift 2 ;;
+    --git)      GIT="$2"; shift 2 ;;
+    --sha)      SHA="$2"; shift 2 ;;
+    --run-id)   RUN_ID="$2"; shift 2 ;;
+    --binary-sha) BIN_SHA="$2"; shift 2 ;;
+    --features) FEATURES="$2"; shift 2 ;;
+    --marker)   MARKER="$2"; shift 2 ;;
+    --found)    FOUND="$2"; shift 2 ;;
+    --evidence) EVIDENCE="$2"; shift 2 ;;
+    --set-note) NOTE="$2"; shift 2 ;;
+    --cycle)    CYCLE="$2"; shift 2 ;;
+    --contrib-from) CONTRIB_FROM="$2"; shift 2 ;;
+    --contrib-to)   CONTRIB_TO="$2"; shift 2 ;;
+    --add-order)    ADD_ORDER="$2"; shift 2 ;;
+    --order-features) ADD_ORDER_FEAT="$2"; shift 2 ;;
+    --mark-order)   MARK_ORDER="$2"; shift 2 ;;
+    --with-run)     WITH_RUN="$2"; shift 2 ;;
+    --status)       MARK_STATUS="$2"; shift 2 ;;
+    --order-evidence) ORDER_EVIDENCE="$2"; shift 2 ;;
+    --purge-order)  PURGE_ORDER="$2"; shift 2 ;;
+    --dry-run)  DRY=1; shift ;;
+    --verbose)  VERBOSE=1; shift ;;
+    --selftest) selftest; exit $? ;;
+    -h|--help)  usage; exit 1 ;;
+    *) usage; exit 1 ;;
+  esac
+done
+
+[ -n "$SHA" ] || [ -n "$MARKER" ] || [ -n "$CONTRIB_TO" ] || [ -n "$NOTE" ] || [ -n "$CYCLE" ] || [ -n "$RUN_ID" ] || [ -n "$BIN_SHA" ] || [ -n "$FEATURES" ] || [ -n "$ADD_ORDER" ] || [ -n "$MARK_ORDER" ] || [ -n "$PURGE_ORDER" ] \
+  || fail 1 "nothing to do: pass at least one --sha/--run-id/--binary-sha/--features/--marker/--set-note/--cycle/--contrib-to/--add-order/--mark-order/--purge-order"
+
+NEW_CONTRIB=""
+if [ -n "$CONTRIB_TO" ]; then
+  [ -n "$CONTRIB_FROM" ] || fail 1 "--contrib-to needs --contrib-from (left edge = previous baseline sha)"
+  [ -d "$GIT/.git" ] || fail 2 "clone not found: $GIT"
+  OUT="$(git -C "$GIT" log --format='%H%x09%(trailers:key=Session-Id,valueonly,separator=|)' "$CONTRIB_FROM..$CONTRIB_TO" 2>/dev/null)" \
+    || fail 2 "contributor scan failed ($CONTRIB_FROM..$CONTRIB_TO in $GIT); fetch the clone first"
+  NEW_CONTRIB="$(printf '%s\n' "$OUT" | cut -f2 | tr '|' '\n' \
+    | grep -E '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' | sort -u \
+    | jq -R . | jq -s 'if length==0 then . else . end')"
+  say "contributors($CONTRIB_FROM..$CONTRIB_TO): $(printf '%s' "$NEW_CONTRIB" | jq -c .)"
+fi
+
+# ---- baseline merge --------------------------------------------------------
+if [ -n "$SHA" ]; then
+  printf '%s' "$SHA" | grep -Eq '^[0-9a-fA-F]{40}$' || fail 1 "--sha must be full 40-char"
+fi
+
+# Build a filter list of updates (each guarded by "has arg")
+UPDATES=()
+[ -n "$SHA" ]      && UPDATES+=('.sha=$sha | .deployed_sha=$sha')
+[ -n "$RUN_ID" ]   && UPDATES+=('.run_id=($runid|tonumber)')
+[ -n "$BIN_SHA" ]  && UPDATES+=('.binary_sha256=$bin')
+[ -n "$FEATURES" ] && UPDATES+=('.features=$feat')
+[ -n "$NOTE" ]     && UPDATES+=('.note=$note')
+[ -n "$CYCLE" ]    && UPDATES+=('.cycle=($cycle|tonumber)')
+[ -n "$NEW_CONTRIB" ] && UPDATES+=('.contributors=$contrib')
+[ -n "$MARKER" ] && UPDATES+=('.feature_presence[$marker]={marker:$marker, found:($found|tonumber), evidence:$evidence}')
+
+if [ "${#UPDATES[@]}" -gt 0 ]; then
+  FILTER="$(IFS='|'; echo "${UPDATES[*]}")"
+  ARGS=()
+  [ -n "$SHA" ]      && ARGS+=(--arg sha "$SHA")
+  [ -n "$RUN_ID" ]   && ARGS+=(--arg runid "$RUN_ID")
+  [ -n "$BIN_SHA" ]  && ARGS+=(--arg bin "$BIN_SHA")
+  [ -n "$FEATURES" ] && ARGS+=(--arg feat "$FEATURES")
+  [ -n "$NOTE" ]     && ARGS+=(--arg note "$NOTE")
+  [ -n "$CYCLE" ]    && ARGS+=(--arg cycle "$CYCLE")
+  [ -n "$NEW_CONTRIB" ] && ARGS+=(--argjson contrib "$NEW_CONTRIB")
+  if [ -n "$MARKER" ]; then
+    ARGS+=(--arg marker "$MARKER")
+    ARGS+=(--arg found "${FOUND:-1}")
+    ARGS+=(--arg evidence "${EVIDENCE:-}")
+  fi
+  NEWBASE="$(jq "${ARGS[@]}" "$FILTER" "$BASE" 2>/dev/null)" || fail 3 "baseline merge failed on $BASE"
+else
+  NEWBASE="$(cat "$BASE")"
+fi
+
+# ---- order status vocabulary ------------------------------------------------
+if [ -n "$MARK_STATUS" ]; then
+  MARK_STATUS="$(printf '%s' "$MARK_STATUS" | tr '[:lower:]' '[:upper:]')"
+  case "$MARK_STATUS" in
+    QUEUED|DISPATCHED|GREEN|RED|DEPLOYED|SUPERSEDED|VOID) ;;
+    *) fail 1 "--status must be one of QUEUED DISPATCHED GREEN RED DEPLOYED SUPERSEDED VOID" ;;
+  esac
+fi
+
+# ---- orders transitions ----------------------------------------------------
+NEWORDERS=""
+if [ -n "$ADD_ORDER" ] || [ -n "$MARK_ORDER" ] || [ -n "$PURGE_ORDER" ]; then
+  [ -f "$ORDERS" ] || fail 3 "orders ledger not found: $ORDERS"
+  if [ -n "$ADD_ORDER" ]; then
+    printf '%s' "$ADD_ORDER" | grep -Eq '^[0-9a-fA-F]{40}$' || fail 1 "--add-order must be full 40-char"
+    NEWORDERS="$(jq --arg s "$ADD_ORDER" --arg f "${ADD_ORDER_FEAT:-telegram}" \
+      '.orders += [{"sha":$s, "features":$f, "status":"queued"}] | .orders |= unique_by(.sha)' "$ORDERS")" \
+      || fail 3 "orders add failed"
+  fi
+  if [ -n "$MARK_ORDER" ]; then
+    printf '%s' "$MARK_ORDER" | grep -Eq '^[0-9a-fA-F]{40}$' || fail 1 "--mark-order must be full 40-char"
+    [ -n "$WITH_RUN" ] || [ -n "$MARK_STATUS" ] || fail 1 "--mark-order needs --with-run and/or --status"
+    BASE_ORD="${NEWORDERS:-$(cat "$ORDERS")}"
+    NEWORDERS="$(printf '%s' "$BASE_ORD" | jq --arg s "$MARK_ORDER" --arg r "$WITH_RUN" \
+      --arg st "${MARK_STATUS:-DISPATCHED}" --arg ev "$ORDER_EVIDENCE" \
+      '(.orders[] | select((.sha // .order_sha) == $s)) |=
+        ((if $r == "" then . else .run_id = $r end)
+         | .status = $st
+         | (if $ev == "" then . else .evidence = $ev end))')" \
+      || fail 3 "orders mark failed"
+  fi
+  if [ -n "$PURGE_ORDER" ]; then
+    printf '%s' "$PURGE_ORDER" | grep -Eq '^[0-9a-fA-F]{40}$' || fail 1 "--purge-order must be full 40-char"
+    BASE_ORD="${NEWORDERS:-$(cat "$ORDERS")}"
+    PURGED="$(printf '%s' "$BASE_ORD" | jq -c --arg s "$PURGE_ORDER" \
+      '[.orders[] | select((.sha // .order_sha) == $s)]')" \
+      || fail 3 "orders purge scan failed"
+    [ "$PURGED" != "[]" ] || fail 1 "--purge-order: no row with sha $PURGE_ORDER"
+    NEWORDERS="$(printf '%s' "$BASE_ORD" | jq --arg s "$PURGE_ORDER" \
+      '.orders |= map(select((.sha // .order_sha) != $s))')" \
+      || fail 3 "orders purge failed"
+    if [ "$VERBOSE" = 1 ]; then echo "oc-seal-state: purged: $PURGED" >&2; fi
+  fi
+fi
+
+# ---- emit ------------------------------------------------------------------
+if [ "$DRY" = 1 ]; then
+  printf '%s\n' "$NEWBASE" | jq .
+  [ -z "$NEWORDERS" ] || { echo "--- orders ---"; printf '%s\n' "$NEWORDERS" | jq .; }
+else
+  if [ -n "$NEWBASE" ]; then
+    printf '%s\n' "$NEWBASE" > "$BASE.tmp" || fail 3 "write failed: $BASE.tmp"
+    mv -f "$BASE.tmp" "$BASE" || fail 3 "mv failed: $BASE"
+    jq -e . "$BASE" >/dev/null 2>&1 || fail 3 "post-write validation failed: $BASE is not valid JSON"
+  fi
+  if [ -n "$NEWORDERS" ]; then
+    printf '%s\n' "$NEWORDERS" > "$ORDERS.tmp" || fail 3 "write failed: $ORDERS.tmp"
+    mv -f "$ORDERS.tmp" "$ORDERS" || fail 3 "mv failed: $ORDERS"
+    jq -e . "$ORDERS" >/dev/null 2>&1 || fail 3 "post-write validation failed: $ORDERS is not valid JSON"
+  fi
+  jq -n --arg b "$BASE" --arg o "$ORDERS" '{baseline:$b, orders:$o, status:"sealed"}'
+fi
+exit 0

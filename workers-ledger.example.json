@@ -1,0 +1,54 @@
+{
+  "_comment": "Supervisor ledger: which skill version each worker has been NOTIFIED of vs has ACKNOWLEDGED. Registry stores identity + version stamps ONLY — no volatile status fields; liveness is discovered at query time (session_search / gh / git). UUIDs and topic IDs below are placeholders.",
+  "ledger_version": 1,
+  "current_skill_version": "0.4.14",
+  "workers": [
+    {
+      "uuid": "00000000-0000-0000-0000-000000000001",
+      "role": "compiler",
+      "topic_id": "<compiler-topic>",
+      "feature": "-",
+      "last_notified": {
+        "version": "0.4.14",
+        "at": "2026-08-26T19:27Z"
+      },
+      "last_acked": {
+        "version": "0.4.13",
+        "at": "2026-08-26T18:31:15Z"
+      },
+      "confirmed": true,
+      "notes": [
+        "example note: identity proven by signed Session-Id commit trailers"
+      ],
+      "events": [
+        {
+          "kind": "notify",
+          "version": "0.4.14",
+          "scope": "v0.4.14 Duty-4 batch (P1-P6)",
+          "at": "2026-08-26T19:27Z"
+        }
+      ]
+    },
+    {
+      "uuid": "00000000-0000-0000-0000-000000000002",
+      "role": "editor",
+      "topic_id": "<editor-topic>",
+      "feature": "example-feature",
+      "last_notified": {
+        "version": "0.4.14",
+        "at": "2026-08-26T19:27Z"
+      },
+      "last_acked": null,
+      "confirmed": true,
+      "notes": [],
+      "events": [
+        {
+          "kind": "notify_deferred",
+          "version": "0.4.12",
+          "reason": "dormant — no live session at gate check",
+          "at": "2026-08-26T18:14Z"
+        }
+      ]
+    }
+  ]
+}

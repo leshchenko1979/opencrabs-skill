@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-pr-atomicity — verify a PR is ATOMIC before the issue is closed.
+#
+#   Atomicity contract (owner directive 2026-08-26, v0.4.15):
+#     - one problem per issue, one logical change per commit, ONE issue per PR
+#     - every commit in the PR carries an Issue-Ref: #N trailer matching
+#       EXACTLY the single issue the PR body claims (Closes #N / Refs #N)
+#     - a PR whose diff mixes fixed and unfixed concerns forces a binary
+#       status on a mixed bag and mislabels both
+#
+# Checks (all LIVE against the API at call time — relay-predication):
+#   1. ARG SHAPE   — PR number is a positive integer         (else exit 1)
+#   2. PR EXISTS   — gh api pulls/{n} state != 404           (else exit 4)
+#   3. BODY CLAIM  — extract issue refs from the PR body
+#                    (Closes/Fixes/Refs #N)                  (else exit 2
+#                    if ZERO claims — a PR must claim one issue)
+#   4. ONE ISSUE   — more than one distinct claimed issue    (else exit 2
+#                    MIXED)
+#   5. PER-COMMIT  — every commit in the PR carries an
+#                    Issue-Ref (or Closes/Refs/Fixes) trailer naming
+#                    the claimed issue; commits without one or with a
+#                    mismatched ref fail                     (else exit 2)
+#
+# Exit codes: 0 ATOMIC | 1 invocation | 2 NON-ATOMIC (detail on stderr + JSON)
+#             4 PR not found / API error
+#
+# Deps: gh (authenticated), jq. CLI output paging handled via --paginate
+# (SKILL.md §Upstream relations item 5 — never conclude from the first page).
+# =============================================================================
+set -u
+
+REPO="${OC_REPO:-adolfousier/opencrabs}"
+VERBOSE=0
+
+fail() { echo "oc-pr-atomicity: $2" >&2; exit "$1"; }
+say()  { [ "$VERBOSE" = 1 ] && echo "$*" >&2 || true; }
+
+usage() {
+  echo "Usage: oc-pr-atomicity <pr-number> [--repo R] [--verbose] [--selftest]" >&2
+  echo "Exit: 0 ATOMIC | 1 invocation | 2 NON-ATOMIC | 4 PR not found" >&2
+}
+
+selftest() {
+  local passed=0 total=3 rc
+  "$0"     >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
+  "$0" abc >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
+  "$0" -1  >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
+  echo "selftest OK: $passed/$total arg-shape cases (no network)"
+  [ "$passed" = "$total" ]
+}
+
+PR=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)     REPO="$2"; shift 2 ;;
+    --verbose)  VERBOSE=1; shift ;;
+    --selftest) selftest; exit $? ;;
+    -h|--help)  usage; exit 1 ;;
+    *)
+      if [ -z "$PR" ]; then PR="$1"; else usage; exit 1; fi
+      shift ;;
+  esac
+done
+
+[ -n "$PR" ] || fail 1 "missing <pr-number> argument"
+printf '%s' "$PR" | grep -Eq '^[1-9][0-9]*$' \
+  || fail 1 "pr-number must be a positive integer, got '$PR'"
+
+# ---- 2. PR EXISTS ----------------------------------------------------------
+PR_JSON="$(gh api "repos/$REPO/pulls/$PR" --jq '{state,title,body}' 2>/dev/null)" \
+  || fail 4 "PR #$PR not found on $REPO (or API error)"
+STATE="$(printf '%s' "$PR_JSON" | jq -r .state)"
+BODY="$(printf '%s' "$PR_JSON" | jq -r .body)"
+say "PR #$PR state=$STATE on $REPO"
+
+# ---- 3. BODY CLAIM ---------------------------------------------------------
+CLAIMS="$(printf '%s\n' "$BODY" | grep -oE '(Closes|Fixes|Refs)[[:space:]]*#?[0-9]+|issues/[0-9]+' | grep -oE '[0-9]+' | sort -u)"
+[ -n "$CLAIMS" ] \
+  || fail 2 "PR body claims NO issue (no Closes/Fixes/Refs #N, no .../issues/N URL) — a PR must claim exactly one"
+
+# ---- 4. ONE ISSUE ----------------------------------------------------------
+NCLAIMS="$(printf '%s\n' "$CLAIMS" | wc -l | tr -d ' ')"
+{ [ "$NCLAIMS" = 1 ] || fail 2 "MIXED: PR body claims $NCLAIMS distinct issues ($(printf '%s' "$CLAIMS" | tr '\n' ' ')) — one PR = one issue (atomicity)"; }
+
+# ---- 5. PER-COMMIT ---------------------------------------------------------
+COMMITS="$(gh api "repos/$REPO/pulls/$PR/commits?per_page=100" --paginate --jq '.[] | .sha')" \
+  || fail 4 "cannot list commits for PR #$PR"
+[ -n "$COMMITS" ] || fail 4 "PR #$PR has no commits"
+
+N_BAD=0
+BAD_CMTS=""
+while read -r sha; do
+  [ -n "$sha" ] || continue
+  CMT="$(gh api "repos/$REPO/commits/$sha" --jq .commit.message 2>/dev/null)" || continue
+  REF="$(printf '%s\n' "$CMT" | sed -n 's/^\(Issue-Ref\|Closes\|Refs\|Fixes\):[[:space:]]*#\?\([0-9]\+\).*/\2/p' | head -1)"
+  if [ -z "$REF" ]; then
+    N_BAD=$((N_BAD+1)); BAD_CMTS="${BAD_CMTS}  ${sha}  (no Issue-Ref trailer)\n"
+  elif [ "$REF" != "$CLAIMS" ]; then
+    N_BAD=$((N_BAD+1)); BAD_CMTS="${BAD_CMTS}  ${sha}  (Issue-Ref #${REF} != claimed #${CLAIMS})\n"
+  fi
+done <<EOF
+$COMMITS
+EOF
+
+if [ "$N_BAD" -gt 0 ]; then
+  printf 'oc-pr-atomicity: NON-ATOMIC — %d commit(s) fail the Issue-Ref check (claimed issue #%s):\n%b' \
+    "$N_BAD" "$CLAIMS" "$BAD_CMTS" >&2
+  exit 2
+fi
+
+N_CMTS="$(printf '%s\n' "$COMMITS" | grep -c .)"
+jq -n --arg repo "$REPO" --arg pr "$PR" --arg state "$STATE" --arg issue "$CLAIMS" --argjson n "$N_CMTS" \
+  '{atomic:true, repo:$repo, pr:($pr|tonumber), state:$state, claimed_issue:($issue|tonumber), commits_checked:$n}'
+exit 0

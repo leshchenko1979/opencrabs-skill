@@ -1,0 +1,12 @@
+# Operational ledgers — live local state, NEVER committed (examples in *.example.json)
+workers-ledger.json
+orders.json
+baseline.json
+
+# Local backups / probes
+*.bak
+_probe
+
+# Editor/OS junk
+*~
+.DS_Store

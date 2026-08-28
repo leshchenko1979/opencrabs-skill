@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-consent-check — machine gate for the CONSENT REGISTER
+# (workers-ledger.json consents[]).
+#
+# Born from RULING-CORRECTION #1 (2026-08-26): a permission-DENYING ruling was
+# issued from codified gates + memory while the owner's go-ahead sat one grep
+# away in chat history. Contract per SKILL.md hard rule CONSENT REGISTER:
+# rulings CITE register entries, never memory. `--check` exit 3 means NOT
+# registered — the caller MUST grep the chat record before issuing ANY
+# permission ruling (silence != consent).
+#
+# Usage:
+#   ./tools/oc-consent-check --ledger <workers-ledger.json> list [--json]
+#   ./tools/oc-consent-check --ledger <f> --check --msgid <id>
+#   ./tools/oc-consent-check --ledger <f> --add --msgid <id> --topic <id> \
+#        --quote "<verbatim>" [--lane L] [--kind K] [--chat C]
+#   ./tools/oc-consent-check --ledger <f> --selftest
+#
+# Exit codes: 0 ok · 2 usage · 3 NOT registered (grep first!) · 4 malformed/missing register
+# Register shape verified on disk 2026-08-27:
+#   {t, from, chat, topic, message_id(STRING — e.g. "33198" or "1238-relay"), quote, lane, kind}
+# =============================================================================
+set -u
+
+usage() { echo "usage: $0 --ledger <file> list [--json] | --check --msgid <id> | --add --msgid <id> --topic <id> --quote <verbatim> [--lane L] [--kind K] [--chat C] | --selftest" >&2; exit 2; }
+
+CMD=""; LEDGER=""; MSGID=""; TOPIC=""; QUOTE=""; LANE="-"; KIND="consent"; CHAT="forum"; JSON=0; SELFTEST=0
+[ $# -gt 0 ] || usage
+while [ $# -gt 0 ]; do
+  case "$1" in
+    list|--list) CMD=list ;;
+    --check) CMD=check ;;
+    --add) CMD=add ;;
+    --selftest) SELFTEST=1 ;;
+    --json) JSON=1 ;;
+    --ledger) LEDGER="${2:-}"; shift ;;
+    --msgid) MSGID="${2:-}"; shift ;;
+    --topic) TOPIC="${2:-}"; shift ;;
+    --quote) QUOTE="${2:-}"; shift ;;
+    --lane) LANE="${2:-}"; shift ;;
+    --kind) KIND="${2:-}"; shift ;;
+    --chat) CHAT="${2:-}"; shift ;;
+    *) usage ;;
+  esac
+  shift
+done
+
+if [ "$SELFTEST" -eq 1 ]; then
+  d="$(mktemp -d)" || exit 4
+  trap 'rm -rf "$d"' EXIT
+  L="$d/wl.json"
+  printf '{"consents":[{"t":"T0","from":"Alexey","chat":"forum","topic":"29947","message_id":"1238-relay","quote":"GO relayed","lane":"mermaid","kind":"swap-go"}]}\n' > "$L"
+  OUT="$("$0" --ledger "$L" --check --msgid 1238-relay)"
+  [ $? -eq 0 ] || { echo "selftest: check missed seeded entry" >&2; exit 1; }
+  printf '%s' "$OUT" | grep -q '"swap-go"' || { echo "selftest: wrong hit payload" >&2; exit 1; }
+  "$0" --ledger "$L" --check --msgid 404 >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: unknown msgid must exit 3" >&2; exit 1; }
+  "$0" --ledger "$L" --add --msgid 33198 --topic 31847 --quote "#1234 swap GO" >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: add failed" >&2; exit 1; }
+  [ "$(jq '.consents|length' "$L")" -eq 2 ] || { echo "selftest: append did not land" >&2; exit 1; }
+  "$0" --ledger "$L" --add --msgid 33198 --topic x --quote dup >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: duplicate add must no-op 0" >&2; exit 1; }
+  [ "$(jq '.consents|length' "$L")" -eq 2 ] || { echo "selftest: duplicate appended!" >&2; exit 1; }
+  printf 'garbage{' > "$d/bad.json"
+  "$0" --ledger "$d/bad.json" --check --msgid 1 >/dev/null 2>&1
+  [ $? -eq 4 ] || { echo "selftest: malformed register must exit 4" >&2; exit 1; }
+  "$0" --ledger "$d/none.json" list >/dev/null 2>&1
+  [ $? -eq 4 ] || { echo "selftest: missing register must exit 4" >&2; exit 1; }
+  "$0" >/dev/null 2>&1
+  [ $? -eq 2 ] || { echo "selftest: no args must exit 2" >&2; exit 1; }
+  echo "selftest OK"; exit 0
+fi
+
+[ -n "$LEDGER" ] && [ -n "$CMD" ] || usage
+
+reg_ok() {
+  [ -f "$LEDGER" ] || { echo "register missing: $LEDGER" >&2; exit 4; }
+  jq -e '(.consents|type)=="array"' "$LEDGER" >/dev/null 2>&1 \
+    || { echo "malformed register (need consents[]): $LEDGER" >&2; exit 4; }
+}
+
+case "$CMD" in
+  list)
+    reg_ok
+    if [ "$JSON" -eq 1 ]; then
+      jq '.consents' "$LEDGER"
+    else
+      jq -r '.consents[] | [(.t//"-"),(.message_id//"-"),(.topic//"-"),(.lane//"-"),((.quote//"")[0:60])] | @tsv' "$LEDGER"
+    fi
+    ;;
+  check)
+    [ -n "$MSGID" ] || usage
+    reg_ok
+    HIT="$(jq -c --arg m "$MSGID" '[.consents[] | select(.message_id==$m)][0] // empty' "$LEDGER")"
+    if [ -z "$HIT" ]; then
+      echo "NOT REGISTERED msgid=$MSGID -> grep chat record BEFORE issuing any permission ruling" >&2
+      exit 3
+    fi
+    printf '%s\n' "$HIT"
+    ;;
+  add)
+    [ -n "$MSGID" ] && [ -n "$TOPIC" ] && [ -n "$QUOTE" ] || usage
+    reg_ok
+    DUP="$(jq --arg m "$MSGID" '[.consents[] | select(.message_id==$m)] | length' "$LEDGER")"
+    [ "$DUP" -eq 0 ] || { echo "duplicate msgid=$MSGID already registered; no-op" >&2; exit 0; }
+    NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    TMP="$(mktemp)" || exit 4
+    jq --arg t "$NOW" --arg m "$MSGID" --arg topic "$TOPIC" --arg q "$QUOTE" \
+       --arg l "$LANE" --arg k "$KIND" --arg c "$CHAT" \
+       '.consents += [{t:$t, from:"Alexey", chat:$c, topic:$topic, message_id:$m, quote:$q, lane:$l, kind:$k}]' \
+       "$LEDGER" > "$TMP" || { rm -f "$TMP"; echo "add failed (jq)" >&2; exit 4; }
+    mv "$TMP" "$LEDGER"
+    jq -c --arg m "$MSGID" '[.consents[] | select(.message_id==$m)][0]' "$LEDGER"
+    ;;
+  *)
+    usage
+    ;;
+esac
+exit 0
