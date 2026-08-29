@@ -87,8 +87,11 @@ BEND (v0.4.42, ruling event 1323): TOOL-written stamps (oc-deploy swap-execute
 etc. — flock write happens in a tool subprocess no session can commit from)
 are committed by the HOSTING session — the turn that observes the stamp on
 disk — bundling the tool stamp with its own adjacent stamp in one commit if
-both are pending (message names all stamps); oc-ledger self-commit code
-(oc-work/oc-ledger-design-20260829.md) is the end state.
+both are pending (message names all stamps); the end state is NOW LIVE
+(v0.4.45): ledger writes route through `tools/oc-ledger` (stamp/sync/
+check-version/cadence/ack/enroll), and the pending-stamp sweep is
+`oc-ledger commit-pending [--bundle]`, run on Duty-3/4 cadence — item-2(b)
+ruling 2026-08-29 (design: oc-work/oc-ledger-design-20260829.md).
 target ONLY (a) lanes actively MID-CYCLE at publish time whose duties the
 change touches and which would hit the gap within THIS cycle, and (b) workers
 more than THREE versions behind who act substantively while stale (skew-chase

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-review-persist — Duty-6 lens reports land on disk the moment they exist.
+# Born from the 2026-08-29 ghost incident + the 16:45Z "all four persisted"
+# correction: a report that lives only in session memory is NOT persisted.
+#
+# usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]
+#   lens ∈ A B C D self redundancy-ontology efficiency-creep cli-automation
+#          deletion-safety
+#   @file reads the report body from a file; - reads stdin; anything else is
+#         literal report text (quote it).
+#   DIR defaults to /tmp. Writes skill-review-<lens>-<YYYYMMDD>.md (same-day
+#   re-run OVERWRITES, noted in the file header) and appends ONE index line:
+#       skill-review-index.log:  ts|lens|path|sha256|bytes
+#   The index line is the receipt Duty-6/7 quote — no receipt, no "persisted".
+#
+# Exit codes: 0 persisted + re-read verified · 2 usage (bad lens/empty input)
+#   · 3 re-read sha256 mismatch (storage NOT trusted) · 4 write failure.
+# Discipline: re-read verify after every write — storage is not trusted until
+#   the bytes round-trip (same law as the ledger's tmp->validate->mv).
+# =============================================================================
+set -u
+_OC_DIR="$(cd "$(dirname "$0")" && pwd)"
+_OC_LIB="$_OC_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-review-persist" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+LENSES=" A B C D self redundancy-ontology efficiency-creep cli-automation deletion-safety "
+die() { echo "oc-review-persist: $2" >&2; exit "$1"; }
+
+# ---- selftest (8 cases) -------------------------------------------------------
+if [ "${1:-}" = "--selftest" ]; then
+  export OC_TOOLS_NOLOG=1
+  T="$(mktemp -d)"; P=0; F=0; day="$(date -u +%Y%m%d)"
+  chk() { if [ "$2" = "$3" ]; then P=$((P+1)); else F=$((F+1)); echo "  FAIL rp - $1 (want rc=$2 got rc=$3)" >&2; fi; }
+  okf() { if eval "$1" >/dev/null 2>&1; then P=$((P+1)); else F=$((F+1)); echo "  FAIL rp - $2" >&2; fi; }
+  ME="$0"
+  bash "$ME" A "report one" --dir "$T" >/dev/null 2>&1; chk "happy-literal" 0 $?
+  okf "[ -f '$T/skill-review-A-$day.md' ]" "file-exists"
+  okf "grep -q '|A|$T/skill-review-A-$day.md|' '$T/skill-review-index.log'" "index-line"
+  bash "$ME" bogus "x" --dir "$T" >/dev/null 2>&1; chk "bad-lens" 2 $?
+  bash "$ME" A "" --dir "$T" >/dev/null 2>&1; chk "empty-input" 2 $?
+  echo "from file" > "$T/in.md"
+  bash "$ME" B "@$T/in.md" --dir "$T" >/dev/null 2>&1; chk "at-file" 0 $?
+  okf "grep -q 'from file' '$T/skill-review-B-$day.md'" "at-file-content"
+  bash "$ME" A "report two" --dir "$T" >/dev/null 2>&1; chk "same-day-overwrite" 0 $?
+  okf "grep -q 'report two' '$T/skill-review-A-$day.md' && grep -q 'same-day overwrite' '$T/skill-review-A-$day.md'" "overwrite-noted"
+  rm -rf "$T"
+  echo "oc-review-persist selftest: PASS=$P FAIL=$F"
+  [ "$F" -eq 0 ]; exit $?
+fi
+
+# ---- main ----------------------------------------------------------------------
+lens="${1:-}"; src="${2:-}"; DIR="${OC_REVIEW_DIR:-/tmp}"; shift 2 2>/dev/null || true
+while [ $# -gt 0 ]; do case "$1" in --dir) DIR="${2:-}"; shift 2 ;; *) shift ;; esac; done
+
+[ -n "$lens" ] || die 2 "usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]"
+case "$LENSES" in *" $lens "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES)" ;; esac
+[ -n "$src" ] || die 2 "report input is empty (pass text, @file, or -)"
+
+case "$src" in
+  -)  BODY="$(cat)" ;;
+  @*) f="${src#@}"; [ -f "$f" ] || die 2 "@file not found: $f"; BODY="$(cat "$f")" ;;
+  *)  if [ -f "$src" ]; then BODY="$(cat "$src")"; else BODY="$src"; fi ;;
+esac
+[ -n "$BODY" ] || die 2 "report body is empty after read"
+
+mkdir -p "$DIR" || die 4 "cannot create dir: $DIR"
+day="$(date -u +%Y%m%d)"; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+OUT="$DIR/skill-review-$lens-$day.md"
+note=""
+[ -f "$OUT" ] && note="same-day overwrite of prior version"
+{ [ -n "$note" ] && echo "[$ts] NOTE: $note"; echo "$BODY"; } > "$OUT" || die 4 "write failed: $OUT"
+
+sum="$(sha256sum "$OUT" | cut -d' ' -f1)"; bytes="$(wc -c < "$OUT")"
+echo "$ts|$lens|$OUT|$sum|$bytes" >> "$DIR/skill-review-index.log" || die 4 "index append failed"
+
+# re-read verify: storage is not trusted until the bytes round-trip
+rsum="$(sha256sum "$OUT" 2>/dev/null | cut -d' ' -f1)"
+[ "$rsum" = "$sum" ] || die 3 "re-read sha256 mismatch ($sum vs $rsum) — treat as NOT persisted"
+echo "persisted: lens=$lens path=$OUT bytes=$bytes sha256=${sum:0:16}…${note:+ ($note)}"

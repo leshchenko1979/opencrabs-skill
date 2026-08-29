@@ -437,10 +437,41 @@ if tool oc-deploy; then
   rm -rf "$d"
 fi
 
+# ---- 11. oc-ledger (KERNEL C1–C5 + item-2(b) commit-pending sweep) ---------
+section "oc-ledger"
+run_selftest oc-ledger
+d="$(mktemp -d)"; mkdir -p "$d/state"
+printf '{"current_skill_version":"0.0.1","meta":{"skill_version":"0.0.1","current_skill_version":"0.0.1"},"updated_at":"x","workers":[],"events":[]}' > "$d/state/workers-ledger.json"
+OC_LEDGER="$d/state/workers-ledger.json" "$TOOLS_DIR/oc-ledger" stamp note "battery edge" >/dev/null 2>&1 \
+  && [ "$(jq '.events[-1].n' "$d/state/workers-ledger.json")" = "1" ] \
+  && ok "empty-events fixture: first stamp -> n=1" || bad "empty-events fixture stamp"
+OC_LEDGER="$d/state/workers-ledger.json" "$TOOLS_DIR/oc-ledger" frobnicate >/dev/null 2>&1
+[ $? -eq 2 ] && ok "unknown subcommand -> 2 (usage)" || bad "unknown subcommand -> expected 2"
+rm -rf "$d"
+
+# ---- 12. oc-review-persist (ghost-incident cure: reports on disk) ----------
+section "oc-review-persist"
+run_selftest oc-review-persist
+d="$(mktemp -d)"
+"$TOOLS_DIR/oc-review-persist" A "battery edge report" --dir "$d" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ -s "$d/skill-review-A-$(date -u +%Y%m%d).md" ] && [ -s "$d/skill-review-index.log" ]; then
+  ok "persist + index receipt on disk"
+else
+  bad "persist edge (rc=$rc)"
+fi
+rm -rf "$d"
+
+# ---- battery receipt (oc-ledger sync gate reads this; the file itself rides --
+# ---- the skill repo via commit-pending --bundle) ------------------------------
+verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
+printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
+  "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \
+  > "$TOOLS_DIR/tests/battery-last.json"
+
 # ---- summary ----------------------------------------------------------------
 note ""
 note "=============================="
-note "  PASS: $PASS   FAIL: $FAIL"
+note "  PASS: $PASS   FAIL: $FAIL   (receipt: tools/tests/battery-last.json = $verdict)"
 note "=============================="
 [ "$FAIL" -eq 0 ] || note "tests FAILED (nonzero exit below)"
 [ "$FAIL" -eq 0 ]
