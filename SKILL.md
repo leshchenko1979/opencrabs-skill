@@ -8,7 +8,7 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.45
+version: 0.4.46
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -59,7 +59,10 @@ register + test source of truth (archived compiler-step anchors stripped
 | `./tools/oc-pr-atomicity <pr-number>` | atomicity gate (editor Phase 7 / issue triage) | 0 ok / 2 atomicity-violation / 4 api |
 | `./tools/oc-ledger <verb>` | atomic ledger writes under flock: `stamp <kind> --what ...` (ruling/idea/idea-verdict/design-feedback/design-locked/review-battery/incident/note/ack), `sync --version v --why ...` (version-bump sync, battery-gated, commits both repos + tag), `check-version`, `cadence`, `ack`, `enroll`, `commit-pending [--bundle]` (pending-stamp commit sweep — item-2(b), Duty-3/4 cadence) | 0 ok / 1 verdict-fail / 2 usage / 3 ledger / 4 write / 5 battery-gate / 6 version |
 | `./tools/oc-review-persist <lens> <text\|@file\|->` | lens report → disk at `oc-work/skill-review-<lens>-<YYYYMMDD>.md` + index receipt line (sha256 + bytes, re-read verified) — the ghost-incident cure: no review leaves a session as chat-only text | 0 persisted / 2 usage / 3 re-read-mismatch / 4 write-fail |
-| `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) | CI run green/red — dispatch via `gh workflow run`, watch with `gh run watch` |
+| `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo R] [--carrier C]` | one-command PR-lane lint gate (editor.md Phase 5): FULL-sha shape gate → LOUD yml-on-carrier check → dispatch → sha-bound run resolve (concurrent-lane safe) → watch → per-job/per-step report with the **fmt soft-fail exposed**; wraps the raw `gh` row below | 0 GREEN / 2 usage-or-shape / 3 RED / 4 dispatch-or-api / 5 in-flight-timeout |
+| `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic for §Upstream relations item 1: fetch + merge-base + `AHEAD`/`BEHIND` TSV + patch-id `ABSORBED-CANDIDATE` rows; READ-ONLY (never merges/pushes/rebases) — PROPOSE/WAIT judgment stays human | 0 clean / 1 delta (verdict) / 2 usage / 3 fetch-or-git-fail |
+| `./tools/oc-wt add\|remove <task> ...` | editor Phase 2 worktree ritual: `add` = prune → fetch → validate local branch → behind-base gate → worktree add → CHAINED `oc-index-worktree` (un-skippable); `remove` = dirty-tree gate, `--force` journals the destroyed listing FIRST; validates branches, never creates them | 0 ok / 2 usage / 3 path-exists-or-dirty / 4 index-failed / 5 repo-or-branch-missing / 6 behind-base |
+| `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | **manual fallback — prefer `./tools/oc-prchecks`** (row above). PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) | CI run green/red — dispatch via `gh workflow run`, watch with `gh run watch` |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (incl. the
 `oc-seal-state` IFS-join regression guard). Must stay green before any version
@@ -312,7 +315,9 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
 
 1. **Watch = supervisor duty (`oc-deploy` watch), every build cycle**
    (archived anchor: Step 1 pre-flight): fetch
-   `adolfousier`, compare upstream tip vs fork merge-base. Small clean delta →
+   `adolfousier`, compare upstream tip vs fork merge-base — the arithmetic is
+   ONE COMMAND: `./tools/oc-upstream-delta` (base/ahead/behind TSV + patch-id
+   ABSORBED-CANDIDATE rows; exit 0 clean, 1 delta = verdict consumed here). Small clean delta →
    PROPOSE the sync (owner word gates it — see item 2); mass absorption
    (maintainer took our features) or conflicts beyond trivial → notify Alexey
    with the delta and WAIT.
