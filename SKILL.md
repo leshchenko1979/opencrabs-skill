@@ -8,7 +8,7 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.44
+version: 0.4.45
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -57,6 +57,8 @@ register + test source of truth (archived compiler-step anchors stripped
 | `./tools/oc-watchdog-check [watch]` | thin cron-friendly alias over `oc-deploy watch`: accepts optional leading `watch`, strips no-op `--baseline`, passes verdict + rc through | passthrough: 0 WATCH-CLEAN / 2 WATCH-ALERT |
 | `./tools/oc-consent-check` | **RETIRED 2026-08-28 18:50Z** (owner order: deploy consent ELIMINATED — GREEN carrier run + artifact verify IS the authorization). Archived at `tools/archive/oc-consent-check`, audit history only; ledger `consents[]` rows kept as record. Upstream-PR owner-word gate unaffected. | — |
 | `./tools/oc-pr-atomicity <pr-number>` | atomicity gate (editor Phase 7 / issue triage) | 0 ok / 2 atomicity-violation / 4 api |
+| `./tools/oc-ledger <verb>` | atomic ledger writes under flock: `stamp <kind> --what ...` (ruling/idea/idea-verdict/design-feedback/design-locked/review-battery/incident/note/ack), `sync --version v --why ...` (version-bump sync, battery-gated, commits both repos + tag), `check-version`, `cadence`, `ack`, `enroll`, `commit-pending [--bundle]` (pending-stamp commit sweep — item-2(b), Duty-3/4 cadence) | 0 ok / 1 verdict-fail / 2 usage / 3 ledger / 4 write / 5 battery-gate / 6 version |
+| `./tools/oc-review-persist <lens> <text\|@file\|->` | lens report → disk at `oc-work/skill-review-<lens>-<YYYYMMDD>.md` + index receipt line (sha256 + bytes, re-read verified) — the ghost-incident cure: no review leaves a session as chat-only text | 0 persisted / 2 usage / 3 re-read-mismatch / 4 write-fail |
 | `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) | CI run green/red — dispatch via `gh workflow run`, watch with `gh run watch` |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (incl. the
