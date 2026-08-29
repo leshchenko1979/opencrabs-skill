@@ -8,7 +8,7 @@ description: >
   compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.38
+version: 0.4.39
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -24,6 +24,7 @@ metadata:
     - "v0.4.36: KERNEL CLI batch (owner 'Go' 2026-08-28 21:16Z) — 5 new tools: oc-carrier-features, oc-issue-sweep, oc-skew-scan, oc-ping-proof, oc-watchdog-check; oc-attrib gains --deployed (range from deployed markers, fan-out compute backend for issue #24); oc-deploy ship/poll resolves EMPTY --features from carrier YAML via oc-carrier-features (loud fail, no silent fallback); unified tools.log via tools/lib/oc-log.sh (JSONL, filterable with jq); battery 64 PASS / 0 FAIL; AGENTS.md interim post-swap notify bridge RETIRED (#23 session-notify verb live in 49125f8c)"
     - "v0.4.37: issue #24 mechanical notify fan-out (owner 'Go' 2026-08-28 22:42Z, design doc oc-work/oc-deploy-fanout-issue24-20260828.md) — oc-deploy gains TWO modes: 'contributors' (thin wrapper over oc-attrib --deployed/--range, TSV session+issue+sha7) and 'fanout --run <id> [--dry-run]' (GREEN leg: notify live-swap contributor sessions via 'opencrabs session notify --profile ops'; RED leg: gh annotations -> git blame -> culprit Session-Id trailer notified as blamed + suspect cc, zero-sites fallback HUMAN-FLAGs all range sessions; dead uuids skipped verb-rc-2, unowned counted, idempotent via fanout.state, per-run JSONL journal under STATE_DIR/oc-deploy/journal/fanout-<run>-*.jsonl); auto-wired: GREEN fires at swap_execute tail after receipt seal + markers, poll gains failed-run RED scan (both OC_DEPLOY_NOFANOUT=1-suppressed, subshell-isolated); selftest 128 cases, battery 76 PASS / 0 FAIL"
     - "v0.4.38: ledger unification + process re-anchoring (owner 'Also fix' + 'Go' 2026-08-29 07:32Z) — oc-deploy + oc-order-validate LEDGER defaults now point DIRECTLY at canonical opencrabs-dev/workers-ledger.json (the old $STATE_DIR default silently kept a second ledger in the skill dir: two-file drift, baseline/orders backup paths at an empty dir, cycle counter reset 25->1; incident 2026-08-29); OC_LEDGER overrides, explicit OC_DEPLOY_STATE_DIR keeps test fixtures isolated; skill-dir duplicate + orphaned lock deleted; oc-deploy --selftest re-exec moved from bare $0 to readlink -f'd $SELF (relative invocations no longer die rc 127); stale 'supervisor bridge until #23/#24' pointers re-anchored to LIVE mechanical fan-out in editor.md/SKILL.md/supervisor.md + AGENTS.md; selftest 128 cases green in all three invocation forms, battery 76 PASS / 0 FAIL"
+    - "v0.4.39: feedback-loop completion (owner 'Go' 2026-08-29 08:12Z) — Duty 4 poll-workers gains STANDING cadence (every five shipped version bumps, shared trigger with Duty 6); new Duty 7 IDEA BOX: editors push 'IDEA: ADD|CHANGE <rule/tool> in <file+section> BECAUSE <gap actually hit>' to the supervisor lane via session_notify the moment they hit a gap, supervisor stamps ledger kinds idea (arrival) + idea-verdict (ACCEPT-mechanical / KERNEL-semantic / REJECT), same-turn ack, merges with open Duty-4 proposals; Duty 6 gains Reviewer D — DELETION SAFETY (enumerate stale-looking artifacts, list readers/writers as evidence, classify DELETE-SAFE/ARCHIVE/KEEP, nothing deletes without triple-check + owner word; born from the 2026-08-29 live-ledger deletion incident), closing the dangling (A/B/C/D) parenthetical; editor.md push clause + SKILL.md role-row registration; battery 76 PASS / 0 FAIL"
 ---
 
 # opencrabs-dev — OpenCrabs source procedure
@@ -101,7 +102,7 @@ Ask the operator which role this session employs before doing anything:
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
 | **COMPILER** | **RETIRED 2026-08-28 (S3 cutover, owner "let's go to S3" msgid 34717)** — duties now `tools/oc-deploy` (ship/poll/swap-execute) + supervisor watch. Re-enable = one notify per archived runbook | `compiler.md` (ARCHIVED runbook) |
-| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input | `supervisor.md` |
+| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), triage the idea box (Duty 7 — workers push `IDEA:` notifies; ledger kinds `idea` / `idea-verdict`), 4-lens skill review (Duty 6, incl. Reviewer D deletion safety) | `supervisor.md` |
 
 Roles **DO NOT intersect**:
 

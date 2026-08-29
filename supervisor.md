@@ -108,8 +108,9 @@ FULL UUID - partial ids rejected at parse time.
 
 ## Duty 4 — Poll workers for skill input
 
-Cadence: on owner request, or when incidents cluster without a rule. Proven
-protocol (first run 2026-08-26, 12 proposals → 9 accepts):
+Cadence: STANDING — after every FIVE shipped version bumps (shared trigger
+with Duty 6), on owner request, or when incidents cluster without a rule.
+Proven protocol (first run 2026-08-26, 12 proposals → 9 accepts):
 
 1. Live roster FIRST (`session_search`, same turn).
 2. Notify every non-dormant editor: proposals in strict format —
@@ -164,6 +165,14 @@ Method:
      proposed tool + its single-command interface. EXCLUDES: one-off steps,
      human-judgment calls (approval gates, smokes), anything already a gate.
      Candidates feed the Supervisor's process-tool ownership (scope above).
+   - Reviewer D — DELETION SAFETY (owner directive 2026-08-29): enumerate
+     retired / stale / duplicate-looking artifacts in the skill scope (files,
+     state files, ledgers, markers, tool flags) and for EACH list what reads
+     or writes it (grep tools/, crons, skill files, journal vocabulary), then
+     classify DELETE-SAFE / ARCHIVE / KEEP with that reference list as the
+     evidence. "Looks stale" is a hypothesis, never a verdict — born from the
+     2026-08-29 live-ledger deletion incident. Nothing deletes without the
+     Supervisor's poll triple-check + owner word.
 2. Brief: four file paths, role map, ontology terms, ref names, strict output
    contract — numbered findings `file §section · verbatim quote · dimension ·
    problem · concrete fix · severity`. No pleasantries.
@@ -180,3 +189,26 @@ Method:
 Rationale: the Supervisor authors most rules — author-blindness is structural
 (owner caveat, 2026-08-26). Independent subagent eyes + the owner gate keep
 the set honest.
+
+## Duty 7 — Idea box: workers push process/tooling fixes (owner directive 2026-08-29)
+
+Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
+a wrong tool or a wrong process MAY report it to the supervisor lane the
+moment it happens; no waiting for a poll.
+
+1. Format = Duty 4's strict format with an `IDEA:` prefix, sent to the
+   supervisor lane via `session_notify`:
+   `IDEA: ADD|CHANGE <rule/tool> in <file+section> BECAUSE <gap actually hit>`
+   + date + evidence. Ideas NEVER edit skill files — the Supervisor authors,
+   the owner approves (Duty 4 discipline applies unchanged).
+2. INBOX = the ledger: on receipt the Supervisor stamps an `idea` event into
+   `workers-ledger.json` (sender session, ts, text) — durable, jq-filterable,
+   cannot die in a session log.
+3. Same-turn ACK to the sender, then triage; the verdict is stamped as an
+   `idea-verdict` ledger event:
+   - ACCEPT-MECHANICAL → queued into the next skill version batch.
+   - KERNEL-SEMANTIC → batched to the owner with a verdict table; ships ONLY
+     on his word (diagram gate applies).
+   - REJECT → reason journaled, never silently dropped.
+4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
+   (convergence beats volume); duplicate ideas stamp ONE event, not N.

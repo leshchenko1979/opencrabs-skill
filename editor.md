@@ -72,6 +72,11 @@ editor-facing duties:
   `session_notify` with `target_session` taken from the mechanical
   `[session-notify from=<uuid>]` header or `session_search` — never a telegram
   tool aimed at their topic/thread or at the owner DM.
+- Process/tooling ideas → the supervisor lane's IDEA BOX (supervisor.md
+  Duty 7): push them the moment you hit the gap via `session_notify`, strict
+  format `IDEA: ADD|CHANGE <rule/tool> in <file+section> BECAUSE <gap
+  actually hit>` + date + evidence. You propose; the supervisor triages and
+  stamps the ledger; you never edit skill files.
 - Reads: `tg_get_messages` in your own topic only; no `tg_search_global`, no
   cross-chat/list probing. Reactions allowed (owner consent signal).
 - The `/tq-approve` forum-topic flow and Gatus DM reports are OTHER lanes'
