@@ -140,3 +140,10 @@
 2026-08-29T23:17:29Z	watch	781ecd80346459356800a5cf404077f287a4d9f7	-	clean:ship-event	stage=S3
 2026-08-29T23:17:32Z	swap	781ecd80346459356800a5cf404077f287a4d9f7	telegram	handed-off:oc-swap-781ecd80-1788045452	stage=S3
 2026-08-29T23:18:50Z	swap	781ecd80346459356800a5cf404077f287a4d9f7	telegram	deployed	stage=S3
+2026-08-29T23:47:30Z	ship	cbc770585bf77a38a64e95780e126b59937dddb2	telegram	fetch-fail	stage=S3
+2026-08-29T23:47:41Z	watch	cbc770585bf77a38a64e95780e126b59937dddb2	-	ALERT:stray	stage=S3
+2026-08-29T23:47:44Z	ship	cbc770585bf77a38a64e95780e126b59937dddb2	telegram	dispatch-fail	stage=S3
+2026-08-29T23:47:59Z	watch	cbc770585bf77a38a64e95780e126b59937dddb2	-	ALERT:stray	stage=S3
+2026-08-29T23:48:03Z	ship	cbc770585bf77a38a64e95780e126b59937dddb2	telegram	dispatch-fail	stage=S3
+2026-08-29T23:51:03Z	watch	cbc770585bf77a38a64e95780e126b59937dddb2	-	ALERT:stray	stage=S3
+2026-08-29T23:51:09Z	ship	cbc770585bf77a38a64e95780e126b59937dddb2	telegram	dispatched	stage=S3
