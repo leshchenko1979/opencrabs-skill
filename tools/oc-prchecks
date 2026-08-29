@@ -4,22 +4,33 @@
 # 2026-08-29 four-lens review run-2; design: /root/oc-work/oc-prchecks-design-20260829.md).
 #
 # Kills the 4-step flag-sensitive hand ritual of editor.md Phase 5:
-#   shape gate (full sha only) -> LOUD yml-on-carrier check -> dispatch ->
-#   sha-bound run resolve -> watch -> per-step report with the fmt soft-fail
-#   EXPOSED (job-green hides fmt failures; this tool reads the STEP).
+#   shape gate (full sha only) -> LOUD yml-on-carrier check -> dispatch under
+#   a state-dir LOCK -> TIME-WINDOW RUN ADOPTION -> watch -> per-step report
+#   with the fmt soft-fail EXPOSED (job-green hides fmt failures; this tool
+#   reads the STEP).
+#
+# v0.4.48 Duty-7 rebuild (field lesson, run 33277921811): workflow_dispatch
+# runs set headSha to the DISPATCH REF (the carrier branch head), NEVER to the
+# `-f ref=<sha>` input — the old sha-bound filter could never match. Adoption
+# is now: event==workflow_dispatch AND headBranch==carrier AND
+# createdAt>=dispatch_ts, earliest-wins, under a dispatch lock so two lanes
+# dispatching concurrently cannot adopt each other's run. `--repo` also accepts
+# a repo/worktree PATH (resolved via its origin remote).
 #
 # Usage:
-#   oc-prchecks <branch-or-sha> [--wait N] [--repo R] [--carrier C] [--no-log]
+#   oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
 #   oc-prchecks --selftest          offline, gh-shim injected (zero network)
 #
 # Defaults: --repo leshchenko1979/opencrabs, --carrier ci/quick-build-linux,
 # --wait 600 (15s poll). Env: OC_GH (gh shim), OC_PRCHECKS_POLL,
-# OC_PRCHECKS_RESOLVE_WAIT, OC_PRCHECKS_RESOLVE_POLL (tests).
+# OC_PRCHECKS_RESOLVE_WAIT, OC_PRCHECKS_RESOLVE_POLL,
+# OC_DEPLOY_STATE_DIR (lock home), OC_PRCHECKS_LOCK_WAIT (tests/ops).
 #
 # Exit: 0 GREEN (terminal, all jobs+steps ok, fmt explicit)
-#       2 usage / sha-shape / unknown ref
+#       2 usage / sha-shape / unknown ref / repo-path-no-origin
 #       3 RED (terminal with a failure, or fmt step missing/skipped/failed)
-#       4 dispatch-or-api failure (incl. yml-missing-on-carrier, resolve timeout)
+#       4 dispatch-or-api-or-lock failure (incl. yml-missing-on-carrier,
+#         adoption timeout, dispatch lock busy)
 #       5 still in flight after --wait (run id + URL on stdout for resume)
 # =============================================================================
 set -u
@@ -37,17 +48,24 @@ WAIT_SECS=600
 POLL="${OC_PRCHECKS_POLL:-15}"
 RESOLVE_WAIT="${OC_PRCHECKS_RESOLVE_WAIT:-60}"
 RESOLVE_POLL="${OC_PRCHECKS_RESOLVE_POLL:-5}"
+LOCK_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
+LOCK_FILE="$LOCK_DIR/.oc-prchecks-dispatch.lock"
+LOCK_WAIT="${OC_PRCHECKS_LOCK_WAIT:-90}"
 
 usage() {
   cat >&2 <<EOS
-Usage: $PROG <branch-or-sha> [--wait N] [--repo R] [--carrier C] [--no-log]
-Exit: 0 GREEN / 2 usage-or-shape / 3 RED / 4 dispatch-or-api / 5 in-flight-timeout
+Usage: $PROG <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
+Exit: 0 GREEN / 2 usage-or-shape / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout
 EOS
   exit 2
 }
 
 # ---------- selftest (offline, injectable gh shim) ---------------------------
-mk_shim() { # $1=path $2=scenario — emits a gh stub serving canned fixtures
+mk_shim() { # $1=path $2=scenario — emits a gh stub serving canned fixtures.
+  # run list is CARRIER-SHAPED like reality (v0.4.48 field lesson): headSha on
+  # workflow_dispatch runs is the carrier ref, so adoption filters on
+  # event/headBranch/createdAt. Decoys: wrong event (333), wrong branch (444),
+  # createdAt before dispatch (555), later eligible run (222).
   cat > "$1" <<EOS
 #!/usr/bin/env bash
 S="$2"
@@ -63,9 +81,12 @@ case "\$*" in
     exit 0 ;;
   *"run list"*)
     case "\$S" in
-      resolve_timeout) printf '[{"databaseId":222,"headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","createdAt":"%s"}]\n' "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" ;;
-      *) printf '[{"databaseId":222,"headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","createdAt":"%s"},{"databaseId":111,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","createdAt":"%s"}]\n' \
-           "\$(date -u -d '+9 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" ;;
+      resolve_timeout)
+        printf '[{"databaseId":333,"event":"push","headBranch":"ci/quick-build-linux","createdAt":"%s"},{"databaseId":555,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","createdAt":"%s"}]\n' \
+          "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '-60 seconds' +%Y-%m-%dT%H:%M:%SZ)" ;;
+      *)
+        printf '[{"databaseId":222,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","createdAt":"%s"},{"databaseId":111,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","createdAt":"%s"},{"databaseId":333,"event":"push","headBranch":"ci/quick-build-linux","createdAt":"%s"},{"databaseId":444,"event":"workflow_dispatch","headBranch":"main","createdAt":"%s"},{"databaseId":555,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","createdAt":"%s"}]\n' \
+          "\$(date -u -d '+9 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '-30 seconds' +%Y-%m-%dT%H:%M:%SZ)" ;;
     esac ;;
   *"run view"*"--json jobs"*)
     case "\$S" in
@@ -85,13 +106,14 @@ EOS
 
 do_selftest() {
   D="$(mktemp -d)"; trap '_rc=$?; rm -rf "$D"; oc_log_finish "$_rc"' EXIT
+  mkdir -p "$D/state"
   local pass=0 fail=0 SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  local E="OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1"
   t_ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
   t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
   run_t() { # $1=scenario $2..=args ; echoes rc in $T_RC, out in $T_OUT
     mk_shim "$D/gh" "$1"; shift
-    T_OUT="$(OC_GH="$D/gh" OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+    T_OUT="$(OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+      OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
       OC_TOOLS_NOLOG=1 "$SELF" "$@" 2>&1)"; T_RC=$?
   }
   SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
@@ -101,10 +123,10 @@ do_selftest() {
   run_t yml_missing "$SHA";          [ "$T_RC" -eq 4 ] && t_ok "yml missing on carrier -> 4 (LOUD)" || t_bad "yml missing (rc=$T_RC)"
   run_t dispatch_fail "$SHA";        [ "$T_RC" -eq 4 ] && t_ok "dispatch fail -> 4" || t_bad "dispatch fail (rc=$T_RC)"
   run_t green "$SHA"
-  if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"VERDICT GREEN"*"runs/111"*) true ;; *) false ;; esac; then
-    t_ok "sha-bound resolve picks OUR run (111, decoy 222 ignored) -> GREEN"
-  else t_bad "resolve/GREEN (rc=$T_RC out=$T_OUT)"; fi
-  run_t resolve_timeout "$SHA";      [ "$T_RC" -eq 4 ] && t_ok "resolve timeout (decoy-only) -> 4" || t_bad "resolve timeout (rc=$T_RC)"
+  if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"adopted run=111"*"VERDICT GREEN"*"runs/111"*) true ;; *) false ;; esac; then
+    t_ok "time-window adoption picks earliest eligible (111; decoys 222/333/444/555 ignored) -> GREEN"
+  else t_bad "adoption/GREEN (rc=$T_RC out=$T_OUT)"; fi
+  run_t resolve_timeout "$SHA";      [ "$T_RC" -eq 4 ] && t_ok "adoption timeout (decoys only) -> 4" || t_bad "adoption timeout (rc=$T_RC)"
   run_t fmt_failed "$SHA"
   if [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"cargo fmt"*) true ;; *) false ;; esac; then
     t_ok "fmt soft-fail EXPOSED: job success + fmt failure -> 3 RED"
@@ -117,16 +139,30 @@ do_selftest() {
   else t_bad "in-flight (rc=$T_RC out=$T_OUT)"; fi
   # journal line present (extra.verdict)
   mk_shim "$D/gh" green
-  OC_GH="$D/gh" OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+  OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+    OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
     OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" "$SHA" >/dev/null 2>&1
   if [ -f "$D/tools.log" ] && jq -e 'select(.tool=="oc-prchecks" and .exit==0 and .extra.verdict=="GREEN")' "$D/tools.log" >/dev/null 2>&1; then
     t_ok "journal line with extra.verdict=GREEN"
   else t_bad "journal line missing/wrong"; fi
   # --no-log suppresses
   rm -f "$D/tools.log"
-  OC_GH="$D/gh" OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+  OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+    OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
     OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" "$SHA" --no-log >/dev/null 2>&1
   [ ! -s "$D/tools.log" ] && t_ok "--no-log suppresses journal" || t_bad "--no-log leaked a journal line"
+  # dispatch lock contention -> 4 (background holder keeps the lock 6s; wait=1)
+  ( exec 8>"$D/state/.oc-prchecks-dispatch.lock"; flock 8; sleep 6 ) &
+  HOLDER=$!
+  sleep 0.4
+  mk_shim "$D/gh" green
+  T_OUT="$(OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=1 \
+    OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+    OC_TOOLS_NOLOG=1 "$SELF" "$SHA" 2>&1)"; T_RC=$?
+  if [ "$T_RC" -eq 4 ] && case "$T_OUT" in *"lock"*) true ;; *) false ;; esac; then
+    t_ok "dispatch lock contention -> 4 (no double-dispatch)"
+  else t_bad "lock contention (rc=$T_RC out=$T_OUT)"; fi
+  kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
 
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
@@ -147,6 +183,21 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$REF" ] || usage
+
+# ---------- step 0: --repo SLUG-or-PATH (v0.4.48 Duty-7 fix) -----------------
+# A path (repo checkout or worktree) resolves via its origin remote; anything
+# that is not an existing git dir passes through as a slug.
+REPO_INPUT="$REPO"
+if REPO_TOP="$(git -C "$REPO_INPUT" rev-parse --show-toplevel 2>/dev/null)"; then
+  REPO_REMOTE="$(git -C "$REPO_TOP" remote get-url origin 2>/dev/null || true)"
+  case "$REPO_REMOTE" in
+    https://github.com/*) REPO="${REPO_REMOTE#https://github.com/}"; REPO="${REPO%.git}" ;;
+    git@github.com:*)     REPO="${REPO_REMOTE#git@github.com:}";     REPO="${REPO%.git}" ;;
+    *) echo "$PROG: --repo path '$REPO_INPUT' has no GitHub origin remote" >&2; exit 2 ;;
+  esac
+  echo "repo-path: $REPO_INPUT -> slug $REPO" >&2
+fi
+oc_log_extra "repo" "$REPO"
 
 # ---------- step 1: SHAPE gate (carrier inputs are sha-bound, Gate 1 3349cf7e)
 case "$REF" in
@@ -170,38 +221,54 @@ else
 fi
 oc_log_extra "sha" "$SHA"
 
-# ---------- step 2: LOUD yml-on-carrier check, then dispatch -----------------
+# ---------- step 2: LOUD yml-on-carrier check ---------------------------------
 "$GH_BIN" api "repos/$REPO/contents/.github/workflows/pr-checks.yml?ref=$CARRIER" >/dev/null 2>&1 || {
   echo "$PROG: pr-checks.yml NOT FOUND on carrier '$CARRIER' — dispatch would silently no-op" >&2
   oc_log_extra "yml_check" "missing"
   exit 4
 }
 oc_log_extra "yml_check" "ok"
+
+# ---------- step 3: dispatch + adoption under the dispatch lock ---------------
+# The lock serializes dispatch->adoption across concurrent editor lanes: with
+# time-window adoption (no sha to bind on), two lanes dispatching at once would
+# otherwise adopt each other's run. First dispatch grabs the lock; adoption
+# releases it.
+[ -d "$LOCK_DIR" ] || mkdir -p "$LOCK_DIR" || { echo "$PROG: cannot create lock dir $LOCK_DIR" >&2; exit 4; }
+exec 8>"$LOCK_FILE" || { echo "$PROG: cannot open dispatch lock $LOCK_FILE" >&2; exit 4; }
+flock -w "$LOCK_WAIT" 8 || {
+  echo "$PROG: dispatch lock busy for ${LOCK_WAIT}s (another lane is dispatching; retry later)" >&2
+  oc_log_extra "dispatch_lock" "timeout"
+  exit 4
+}
 DISPATCH_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 "$GH_BIN" workflow run pr-checks.yml --repo "$REPO" --ref "$CARRIER" -f "ref=$SHA" >/dev/null 2>&1 || {
   echo "$PROG: dispatch failed (repo=$REPO carrier=$CARRIER)" >&2
   oc_log_extra "dispatch" "failed"
+  flock -u 8
   exit 4
 }
 oc_log_extra "dispatch" "ok"
 oc_log_extra "dispatch_ts" "$DISPATCH_TS"
 
-# ---------- step 3: sha-bound run resolve (concurrent-lane safe) --------------
 RUN_ID=""
 deadline=$(( $(date +%s) + RESOLVE_WAIT ))
 while [ -z "$RUN_ID" ]; do
   LIST="$("$GH_BIN" run list --workflow pr-checks.yml --repo "$REPO" --limit 30 \
-    --json databaseId,headSha,createdAt 2>/dev/null)" || LIST="[]"
-  RUN_ID="$(printf '%s' "$LIST" | jq -r --arg sha "$SHA" --arg ts "$DISPATCH_TS" \
-    '[.[] | select(.headSha==$sha and .createdAt >= $ts)] | sort_by(.createdAt) | .[0].databaseId // empty' 2>/dev/null)"
+    --json databaseId,createdAt,event,headBranch 2>/dev/null)" || LIST="[]"
+  RUN_ID="$(printf '%s' "$LIST" | jq -r --arg br "$CARRIER" --arg ts "$DISPATCH_TS" \
+    '[.[] | select(.event=="workflow_dispatch" and .headBranch==$br and .createdAt >= $ts)] | sort_by(.createdAt) | .[0].databaseId // empty' 2>/dev/null)"
   [ -n "$RUN_ID" ] && break
   [ "$(date +%s)" -ge "$deadline" ] && {
-    echo "$PROG: no run for $SHA appeared within ${RESOLVE_WAIT}s (dispatch ts $DISPATCH_TS)" >&2
+    echo "$PROG: no run adopted within ${RESOLVE_WAIT}s (dispatch ts $DISPATCH_TS, carrier $CARRIER)" >&2
     oc_log_extra "resolve" "timeout"
+    flock -u 8
     exit 4
   }
   sleep "$RESOLVE_POLL"
 done
+flock -u 8
+echo "adopted run=$RUN_ID (time-window attribution under dispatch lock)" >&2
 oc_log_extra "run_id" "$RUN_ID"
 RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
 

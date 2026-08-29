@@ -14,7 +14,8 @@
 #   oc-deploy poll [--execute]
 #   oc-deploy swap-execute --sha <40-hex> --run <id> [--features F]
 #                          [--artifact-dir D] [--drill]        # Phase B
-#   oc-deploy watch                    # stray-commit tripwire (report-only)
+#   oc-deploy watch [--with-delta]       # stray-commit tripwire (report-only)
+#                                        # + optional upstream arithmetic leg
 #   oc-deploy contributors <old>..<new> | --deployed [--repo R]   # issue #24 D1
 #   oc-deploy fanout --run <id> [--dry-run]   # issue #24: mechanical notify fan-out
 #   oc-deploy --selftest
@@ -378,6 +379,29 @@ Issue-Ref: #99"
   out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" "$SELF_BIN" watch 2>&1)"; rc=$?
   check_rc "watch-covered-rc" $rc 0
   check_has "watch-covered-line" "$out" "WATCH-CLEAN"
+
+  # 16b. watch --with-delta (v0.4.48 merge B) — stub delta tool, no real
+  # upstream fixture: rc 0 = clean, rc 1 = present (advisory).
+  printf '#!/usr/bin/env bash\necho "BASE abc1234"\nexit 0\n' > "$SD/delta-stub-clean"; chmod +x "$SD/delta-stub-clean"
+  printf '#!/usr/bin/env bash\necho "BASE abc1234"\necho "AHEAD 2"\nexit 1\n' > "$SD/delta-stub-ahead"; chmod +x "$SD/delta-stub-ahead"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" OC_DEPLOY_DELTA_TOOL="$SD/delta-stub-clean" "$SELF_BIN" watch --with-delta 2>&1)"; rc=$?
+  check_rc "watch-delta-clean-rc" $rc 0
+  check_has "watch-delta-prefix" "$out" "DELTA: BASE abc1234"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" OC_DEPLOY_DELTA_TOOL="$SD/delta-stub-ahead" "$SELF_BIN" watch --with-delta 2>&1)"; rc=$?
+  check_rc "watch-delta-ahead-rc-stays-0" $rc 0
+  check_has "watch-delta-ahead-line" "$out" "DELTA: AHEAD 2"
+
+  # 19. tripwire severity wins: a SECOND stray commit on top of the covered
+  # tip + delta present → rc 2; the advisory delta runs but never masks the
+  # alarm.
+  git -C "$T/repo" fetch -q "$T/remote.git" main
+  git -C "$T/repo" checkout -qB watchtest2 FETCH_HEAD
+  git -C "$T/repo" commit -q --allow-empty -m "stray again"
+  git -C "$T/repo" push -q "$T/remote.git" HEAD:refs/heads/main
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_DELTA_TOOL="$SD/delta-stub-ahead" "$SELF_BIN" watch --with-delta 2>&1)"; rc=$?
+  check_rc "watch-delta-trip-wins-rc" $rc 2
+  check_has "watch-delta-trip-alert" "$out" "WATCH-ALERT"
+  check_has "watch-delta-trip-delta-ran" "$out" "DELTA: AHEAD 2"
   # 17. fanout GREEN leg (issue #24): deployed run -> one notify per session,
   #     dead uuid -> skip journal line; idempotent re-run is a no-op
   printf 'cccccccccccccccccccccccccccccccccccccccc\n' > "$SD/deployed.sha"
@@ -1091,25 +1115,44 @@ watch_precheck() { # $1=tip-sha ; piggyback, report-only, never fails the host
   return 0
 }
 
-watch_run() { # explicit `oc-deploy watch` ; exit 0 clean | 2 stray (report-only)
-  local TIP DEP REASON
+watch_run() { # explicit `oc-deploy watch [--with-delta]` ; exit 0 clean | 2 stray (report-only)
+  # $1 = WITH_DELTA. Merge B (v0.4.48): upstream arithmetic rides the same
+  # duty call. The delta leg is READ-ONLY; its rc 1 = verdict (delta present),
+  # NOT a failure — tripwire severity wins for the combined exit code.
+  local WITH_DELTA="${1:-0}" TIP DEP REASON TRIP_RC=0 DELTA_TOOL DELTA_OUT DELTA_RC
   TIP="$(git ls-remote "$REMOTE" refs/heads/main 2>/dev/null | awk '{print $1}')"
   [ -n "$TIP" ] || die 2 "watch: cannot read fork main tip from $REMOTE"
   DEP="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
   if REASON="$(watch_covered "$TIP")"; then
     shadow_log watch "$TIP" "-" "clean:$REASON"
     echo "WATCH-CLEAN: fork main ${TIP:0:8} covered ($REASON); deployed=${DEP:0:8}"
-    exit 0
+  else
+    TRIP_RC=2
+    shadow_log watch "$TIP" "-" "ALERT:stray"
+    echo "WATCH-ALERT: fork main ${TIP:0:8} NOT covered by deployed sha (${DEP:0:8}) nor any ship/swap event"
+    if [ "$DEP" != "none" ]; then
+      "$GH" api "repos/$FORK/compare/$DEP...$TIP" 2>/dev/null \
+        | jq -r '.commits[]? | "  \(.sha[0:8]) \(.commit.author.date) \(.commit.author.name): \(.commit.message | split("\n")[0])"' 2>/dev/null \
+        || true
+    fi
+    echo "report-only: attribute via Session-Id trailers; oc-deploy NEVER builds autonomously"
   fi
-  shadow_log watch "$TIP" "-" "ALERT:stray"
-  echo "WATCH-ALERT: fork main ${TIP:0:8} NOT covered by deployed sha (${DEP:0:8}) nor any ship/swap event"
-  if [ "$DEP" != "none" ]; then
-    "$GH" api "repos/$FORK/compare/$DEP...$TIP" 2>/dev/null \
-      | jq -r '.commits[]? | "  \(.sha[0:8]) \(.commit.author.date) \(.commit.author.name): \(.commit.message | split("\n")[0])"' 2>/dev/null \
-      || true
+  if [ "$WITH_DELTA" = "1" ]; then
+    DELTA_TOOL="${OC_DEPLOY_DELTA_TOOL:-$(dirname "$SELF")/oc-upstream-delta}"
+    if [ -x "$DELTA_TOOL" ]; then
+      DELTA_OUT="$("$DELTA_TOOL" 2>&1)"; DELTA_RC=$?
+      printf '%s\n' "$DELTA_OUT" | sed 's/^/DELTA: /'
+      case "$DELTA_RC" in
+        0) shadow_log watch "$TIP" "-" "delta:clean" ;;
+        1) shadow_log watch "$TIP" "-" "delta:present" ;;
+        *) shadow_log watch "$TIP" "-" "delta:fail-rc$DELTA_RC"
+           echo "WARN: oc-upstream-delta rc=$DELTA_RC (tripwire verdict stands)" >&2 ;;
+      esac
+    else
+      echo "WARN: oc-upstream-delta not found at $DELTA_TOOL — delta leg skipped" >&2
+    fi
   fi
-  echo "report-only: attribute via Session-Id trailers; oc-deploy NEVER builds autonomously"
-  exit 2
+  exit "$TRIP_RC"
 }
 
 # KILL FILE: first line of EVERY invocation (before arg parsing).
@@ -1121,7 +1164,7 @@ MODE="${1:-}"; [ $# -gt 0 ] && shift
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. Kill-file check already ran above.
 if [ "$MODE" = contributors ]; then contributors_run "$@"; exit $?; fi
-SHA=""; FEATURES=""; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
+SHA=""; FEATURES=""; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
 while [ $# -gt 0 ]; do
   case "$1" in
     --sha)      SHA="${2:-}"; shift ;;
@@ -1130,8 +1173,9 @@ while [ $# -gt 0 ]; do
     --run)      RUN_ID="${2:-}"; shift ;;
     --drill)    DRILL=1 ;;
     --dry-run)  DRYRUN=1 ;;   # issue #24: fanout rehearsal — never marks done
+    --with-delta) WITH_DELTA=1 ;;   # merge B (v0.4.48): watch rides oc-upstream-delta too
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
-    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 1 ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 1 ;;
     *)          die 1 "unknown arg: $1" ;;
   esac
   shift || true
@@ -1264,8 +1308,8 @@ case "$MODE" in
     ;;
   # ----------------------------------------------------------------- watch --
   watch)
-    watch_run
+    watch_run "${WITH_DELTA:-0}"
     ;;
   --selftest) selftest "$@" ;;
-  *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest" ;;
+  *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest" ;;
 esac

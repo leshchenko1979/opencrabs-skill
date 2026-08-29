@@ -9,6 +9,10 @@
 # (supervisor.md bump steps). oc-deploy itself only ever appends to the live
 # file, so truncate-after-archive loses nothing.
 #
+# CHAINED as the tail step of `oc-ledger sync` since v0.4.48 (merge A): the
+# bump cadence IS the rotation cadence now — mechanical, not prose. Standalone
+# invocation remains the manual fallback (and what sync execs under the hood).
+#
 # Exit codes: 0 ok/noop | 1 usage | 2 io-fail
 # =============================================================================
 set -uo pipefail

@@ -11,20 +11,23 @@
 #                                          tmp -> jq-validate -> mv) + git leg
 #   sync --version <v> [--why <text>]      ONE atomic write: 3 version fields
 #                                          + skill-bump event; battery-receipt
-#                                          gate; skill-repo commit + tag
+#                                          gate; skill-repo commit + tag; tail
+#                                          step: oc-shadow-rotate (merge A)
 #   check-version                          SKILL.md vs 3 ledger fields (RO)
 #   cadence                                skill-bumps since last review (RO)
 #   ack <uuid> <version> [--at <ts>]       worker last_acked + ack event
 #   enroll <uuid> <role> [--topic N] [--feature X]   roster row creation
 #   commit-pending [--bundle]              sweep: commit uncommitted stamps /
 #                                          runtime artifacts (B1–B4 option b)
-#   --selftest                             fixture suite (34 cases)
+#   --selftest                             fixture suite (36 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
 #   4 write-fail (live file untouched) · 5 battery gate · 6 version mismatch.
-# Kinds (frozen v1): ruling idea idea-verdict design-feedback design-locked
-#   review-battery incident note ack roster-enroll
+# Kinds (frozen v1; v1.1 adds claim): ruling idea idea-verdict design-feedback
+#   design-locked review-battery incident note ack roster-enroll claim
+#   (v1.1 change 2026-08-29: Duty-7 IDEA from editor lane 7e1ebbb6, task #34 —
+#   the ISSUE ROUTING row requires a claim shape; two lanes hit the gap live.)
 #   (skill-bump is stamp-REFUSED — it exists only via `sync`.)
 # Discipline: n = max(events[].n)+1 computed INSIDE the lock; read-only
 #   subcommands never lock; every mutation journals via lib/oc-log.sh; git is
@@ -40,7 +43,7 @@ SKILL_DIR="${OC_SKILL_DIR:-$(cd "$_OC_DIR/.." && pwd)}"
 STATE_DIR_DEFAULT="/root/.opencrabs/profiles/ops/opencrabs-dev"
 LEDGER=""
 SELFTEST=0
-KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident note ack roster-enroll "
+KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident note ack roster-enroll claim "
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 die() { echo "oc-ledger: $2" >&2; exit "$1"; }
@@ -102,7 +105,7 @@ cmd_stamp() {
   [ -n "$kind" ] || die 2 "usage: oc-ledger stamp <kind> \"<what>\" [--by <label>]"
   [ -n "$what" ] || die 2 "stamp: what must be non-empty"
   [ "$kind" = "skill-bump" ] && die 2 "stamp: kind skill-bump is sync-only — use: oc-ledger sync --version <v>"
-  case "$KINDS" in *" $kind "*) ;; *) die 2 "stamp: unknown kind '$kind' (frozen v1 vocabulary — see header)" ;; esac
+  case "$KINDS" in *" $kind "*) ;; *) die 2 "stamp: unknown kind '$kind' (v1.1 vocabulary — see header)" ;; esac
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   _stamp_locked() {
     local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
@@ -180,6 +183,19 @@ cmd_sync() {
         || echo "commit-lag: skill commit deferred" >&2
       git tag "v$v" 2>/dev/null || echo "tag v$v exists or failed" >&2 )
   fi
+
+  # Tail step (merge A, v0.4.48): shadow-rotate rides the bump cadence —
+  # the anchor for rotation becomes mechanical instead of prose. Rotation is
+  # durability, not a gate: failure WARNS, never fails the bump. Selftests
+  # redirect STATE_DIR to fixtures, so this stays side-effect-free there.
+  ROT_OUT="$("$_OC_DIR/oc-shadow-rotate" 2>&1)"; ROT_RC=$?
+  if [ "$ROT_RC" -eq 0 ]; then
+    echo "shadow-rotate: $ROT_OUT"
+  else
+    echo "WARN: shadow-rotate tail step rc=$ROT_RC (bump unaffected): $ROT_OUT" >&2
+  fi
+  oc_log_extra "shadow_rotate" "rc=$ROT_RC"
+
   cmd_cadence || true
 }
 
@@ -300,7 +316,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (34 cases) ------------------------------------------------------
+# ---- selftest (36 cases) ------------------------------------------------------
 cmd_selftest() {
   export OC_TOOLS_NOLOG=1
   local T P=0 F=0
@@ -332,6 +348,7 @@ EOF
   bash "$ME" stamp bogus-kind "x" >/dev/null 2>&1; chk "unknown-kind" 2 $?
   bash "$ME" stamp note "" >/dev/null 2>&1; chk "empty-what" 2 $?
   bash "$ME" stamp skill-bump "x" >/dev/null 2>&1; chk "skill-bump-refused" 2 $?
+  bash "$ME" stamp claim "CLAIM #fixture — v1.1 kind" >/dev/null 2>&1; chk "stamp-claim-v1.1" 0 $?
   OC_LEDGER="$T/nope.json" bash "$ME" stamp note "x" >/dev/null 2>&1; chk "ledger-missing" 3 $?
   echo "{broken" > "$T/bad.json"; OC_LEDGER="$T/bad.json" bash "$ME" stamp note "x" >/dev/null 2>&1; chk "ledger-corrupt" 3 $?
   # 9-13: sync gates
@@ -345,7 +362,8 @@ EOF
   sed -i 's/version: 0.4.9/version: 0.4.2/' "$T/skill/SKILL.md"
   bash "$ME" sync --version 0.4.9 >/dev/null 2>&1; chk "sync-step-gap" 6 $?
   # 14-17: sync happy + git legs + re-sync
-  bash "$ME" sync --version 0.4.2 --why selftest >/dev/null 2>&1; chk "sync-happy" 0 $?
+  SYNC_OUT="$(bash "$ME" sync --version 0.4.2 --why selftest 2>&1)"; chk "sync-happy" 0 $?
+  case "$SYNC_OUT" in *"shadow-rotate:"*) ok ;; *) bad "sync-tail-rotate-line" ;; esac
   chk "sync-three-fields" "true" "$(jq '(.current_skill_version == "0.4.2") and (.meta.current_skill_version == "0.4.2") and (.meta.skill_version == "0.4.2")' "$OC_LEDGER")"
   chk "sync-event" "skill-bump" "$(jq -r '[.events[] | select(.kind == "skill-bump")] | last | .kind // ""' "$OC_LEDGER")"
   git -C "$T/state" log --oneline | grep -q "skill-bump v0.4.2" && ok || bad "sync-state-commit"

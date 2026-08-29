@@ -170,11 +170,16 @@ evidence is the GREEN `pr-checks.yml` run on your branch: fmt + clippy +
 `cargo test --locked --all-features`. Iterate on code locally, push the branch,
 re-dispatch pr-checks, read the run log — that loop replaces every local lint run.
 
-- **One command (v0.4.46):** `tools/oc-prchecks <branch>` runs the whole ritual —
-  FULL-sha shape gate, LOUD yml-on-carrier check, dispatch, sha-bound run resolve,
-  watch, per-step report with the fmt soft-fail EXPOSED. Exit 0 GREEN / 3 RED /
-  5 still-in-flight (prints the run URL for resume). The manual 4-step form stays
-  in SKILL.md's tool table as fallback.
+- **One command (v0.4.46; adoption fixed v0.4.48):** `tools/oc-prchecks <branch> [--repo SLUG-or-PATH]`
+  runs the whole ritual — FULL-sha shape gate, LOUD yml-on-carrier check,
+  dispatch under a state-dir lock, time-window run adoption
+  (`workflow_dispatch` + carrier branch + created-after-dispatch, earliest-wins —
+  the old sha-bound filter could never match: workflow_dispatch headSha is the
+  carrier ref, not the `-f ref` input), watch, per-step report with the fmt
+  soft-fail EXPOSED. `--repo` accepts the slug OR a repo/worktree path
+  (resolved via its origin remote — no more slug/path confusion). Exit 0 GREEN /
+  3 RED / 5 still-in-flight (prints the run URL for resume). The manual 4-step
+  form stays in SKILL.md's tool table as fallback.
 - Gate your BRANCH state, not the shared checkout: the run proves what CI saw on
   your branch (your commits on top of the branch base).
 - Push after every fix-round; the NEWEST green run URL is the evidence
