@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-index-worktree — make codegraph usable in a git worktree.
+#
+# codegraph builds ONE index per TREE at <tree>/.codegraph/codegraph.db. A git
+# worktree's .git is only a 'gitdir:' pointer, so it inherits nothing from the
+# main checkout — every worktree starts "Not initialized" and queries return
+# empty. This tool closes that gap (learned 2026-08-26, live probes):
+#
+#   1. PATH must exist, be a dir, and be inside a git working tree    (else 5)
+#   2. No .codegraph  -> codegraph init <path>    (fresh full index)
+#      .codegraph    -> codegraph sync <path>     (cheap incremental)
+#      --force-init  -> codegraph index <path>    (rebuild from scratch)
+#   3. status must read initialized afterwards                          (else 4)
+#
+# Exit codes: 0 OK (indexed/synced) | 4 index-step-failed |
+#             5 bad-input (missing path / not a git tree / usage)
+#
+# Deps: git, codegraph (both on PATH; no network needed).
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-index-worktree" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+PATH_ARG=""
+DRY=0
+FORCE=0
+VERBOSE=0
+
+fail() { echo "oc-index-worktree: $2" >&2; exit "$1"; }
+say()  { [ "$VERBOSE" = 1 ] && echo "oc-index-worktree: $*" >&2 || true; }
+
+usage() {
+  echo "Usage: oc-index-worktree <path> [--dry-run] [--force-init] [--verbose] [--selftest]" >&2
+  echo "Exit: 0 OK | 4 index-step-failed | 5 bad-input (missing/not-git/usage)" >&2
+}
+
+selftest() {
+  local passed=0 total=3 rc d
+  d="$(mktemp -d)"
+  # 1: missing path        -> 5
+  "$0" "$d/nope" >/dev/null 2>&1; rc=$?; [ "$rc" = 5 ] && passed=$((passed+1))
+  # 2: existing, not git   -> 5
+  mkdir -p "$d/plain"
+  "$0" "$d/plain" >/dev/null 2>&1; rc=$?; [ "$rc" = 5 ] && passed=$((passed+1))
+  # 3: fresh git repo, dry-run -> 0 (never indexes in selftest)
+  git init -q "$d" 2>/dev/null || git -C "$d" init -q
+  "$0" "$d" --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  rm -rf "$d"
+  echo "selftest OK: $passed/$total cases (no network, no indexing)"
+  [ "$passed" = "$total" ]
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run)     DRY=1; shift ;;
+    --force-init)  FORCE=1; shift ;;
+    --verbose)     VERBOSE=1; shift ;;
+    --selftest)    selftest; exit $? ;;
+    -h|--help)     usage; exit 1 ;;
+    *)
+      if [ -z "$PATH_ARG" ]; then PATH_ARG="$1"; else usage; exit 5; fi
+      shift ;;
+  esac
+done
+
+[ -n "$PATH_ARG" ] || fail 5 "missing <path>"
+[ -d "$PATH_ARG" ] || fail 5 "not a directory: $PATH_ARG"
+command -v git >/dev/null 2>&1      || fail 5 "git not on PATH"
+command -v codegraph >/dev/null 2>&1 || fail 5 "codegraph not on PATH"
+
+# ---- inside a git working tree? -------------------------------------------
+git -C "$PATH_ARG" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || fail 5 "not inside a git working tree: $PATH_ARG"
+
+# worktree vs main: --git-dir differs from --git-common-dir for linked trees
+GD="$(git -C "$PATH_ARG" rev-parse --git-dir 2>/dev/null)"
+CGD="$(git -C "$PATH_ARG" rev-parse --git-common-dir 2>/dev/null)"
+if [ "$GD" != "$CGD" ]; then
+  say "linked worktree detected (git-dir=$GD, common=$CGD)"
+else
+  say "main checkout (git-dir=$GD)"
+fi
+
+# ---- decide action ---------------------------------------------------------
+CG_DIR="$PATH_ARG/.codegraph"
+ACTION="init"
+if [ -d "$CG_DIR" ]; then
+  ACTION="sync"
+  [ "$FORCE" = 1 ] && ACTION="index"
+fi
+
+echo "oc-index-worktree: $PATH_ARG -> codegraph $ACTION"
+if [ "$DRY" = 1 ]; then
+  say "dry-run: no changes made"
+  exit 0
+fi
+
+codegraph "$ACTION" "$PATH_ARG" >/dev/null 2>&1 \
+  || fail 4 "codegraph $ACTION failed — rerun manually: codegraph $ACTION $PATH_ARG"
+
+codegraph status "$PATH_ARG" >/dev/null 2>&1 \
+  || fail 4 "codegraph status failed after $ACTION (index unreadable?)"
+echo "oc-index-worktree: OK ($ACTION) — codegraph usable inside $PATH_ARG"
+exit 0

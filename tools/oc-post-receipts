@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-post-receipts — Telegram topic receipt posts (compiler.md Phase A/B).
+#
+# Posts restart/swap receipts to the compiler's home topics. Wraps the raw
+# curl Bot API call compiler.md documents as the canonical delivery lane.
+#
+# Token resolution order (OP profile bot @redevest_admin_tools_bot only):
+#   1. $OC_TG_TOKEN (env)
+#   2. [channels.telegram] token in the OPS profile config.toml
+#      (NEVER keys.toml [telegram] bot_token — that's @bot_oc of the
+#       DEFAULT profile -> `400 chat not found`, verified 2026-08-25.)
+#
+# Modes:
+#   --dry-run                     print the exact curl that WOULD run, send nothing
+#   --topic <id> --text "<txt>"   raw send to that topic
+#   --receipt-artifact             canned swap receipt (is-active, sha256, version)
+#       --unit <name> --expected <sha> [--version-arg "--version"]
+#
+# Destinations per compiler.md: primary 30129, HQ 30220. Two --topic calls.
+# Exit: 0 ok | 1 token missing | 2 send-failed | 3 bad args.
+# Deps: curl. Token NEVER printed or leaked to stdout.
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-post-receipts" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+TOKEN="${OC_TG_TOKEN:-}"
+CONFIG="${OC_CONFIG:-/root/.opencrabs/profiles/ops/config.toml}"
+API="https://api.telegram.org"
+DRY=0
+TOPIC="" TEXT="" RECEIPT_ARTIFACT=0
+UNIT="" EXPECTED="" VERSION_ARG="--version"
+
+# ---- token resolution (never leaks to stdout) -----------------------------
+resolve_token() {
+  if [ -n "$TOKEN" ]; then return 0; fi
+  if [ -f "$CONFIG" ]; then
+    TOKEN="$(awk -F= '/^\[channels\.telegram\]/{s=1} s&&/^[[:space:]]*token[[:space:]]*=/{gsub(/[ \t"\x27\n]/, "", $2); gsub(/^ +/, "", $2); print $2; exit}' "$CONFIG")"
+  fi
+  if [ -n "$TOKEN" ]; then return 0; fi
+  echo "oc-post-receipts: token not found (OC_TG_TOKEN or [channels.telegram] token in $CONFIG)" >&2
+  return 1
+}
+
+# ---- canned Phase B artifact receipt (is-active + sha256 + version) -------
+emit_receipt() {
+  local unit="$1" version_arg="$2"
+  local active sha verline match
+  active="$(systemctl --user is-active "$unit" 2>/dev/null || echo unknown)"
+  sha="$(sha256sum /usr/local/bin/opencrabs 2>/dev/null | awk '{print $1}' || echo na)"
+  if [ -n "$EXPECTED" ]; then
+    match="$([ "$sha" = "$EXPECTED" ] && echo YES || echo NO)"
+  else
+    match="(no expected given)"
+  fi
+  if [ -n "$version_arg" ]; then
+    verline="$(/usr/local/bin/opencrabs "$version_arg" 2>/dev/null | head -1 || echo banner-unknown)"
+  else
+    verline="(n/a)"
+  fi
+  printf 'Phase-B receipt for %s:\nis-active=%s\nsha256=%s\nexpected=%s\nmatch=%s\nversion=%s\n' \
+    "$unit" "$active" "$sha" "${EXPECTED:-na}" "$match" "$verline"
+}
+
+send() {
+  local topic="$1" body="$2"
+  local resp
+  # Topic ids are message_thread_id inside the forum supergroup, NOT chat_id.
+  # Forum chat: OC_FORUM_CHAT_ID env override, default = l1979 ops group.
+  local forum_chat="${OC_FORUM_CHAT_ID:--1003936827469}"
+  if [ "$DRY" = 1 ]; then
+    echo "DRY: curl -s -X POST $API/bot<TOKEN>/sendMessage -d chat_id=$forum_chat -d message_thread_id=$topic --data-urlencode text='<first-line>…'"
+    return 0
+  fi
+  resolve_token || return 1
+  resp="$(curl -s -X POST "$API/bot$TOKEN/sendMessage" \
+    -d chat_id="$forum_chat" -d message_thread_id="$topic" --data-urlencode "text=$body")"
+  if ! printf '%s' "$resp" | grep -q '"ok":true'; then
+    echo "oc-post-receipts: send to $topic failed: $(printf '%s' "$resp" | head -c 200)" >&2
+    return 2
+  fi
+  echo "sent to topic $topic"
+  return 0
+}
+
+usage() {
+  cat >&2 <<'EOS'
+Usage: oc-post-receipts [--dry-run] --topic <id> --text "<txt>"
+       oc-post-receipts [--dry-run] --receipt-artifact --unit <id> [--expected <sha256>] [--version-arg v]
+  --topic id --text txt   raw send into forum topic id (repeat for 30129 AND 30220).
+                          chat_id = forum supergroup (OC_FORUM_CHAT_ID, default -1003936827469);
+                          id goes to message_thread_id — a bare topic id is NOT a valid chat_id.
+  --receipt-artifact      canned Phase-B swap receipt
+  --dry-run               print the call, send nothing (exit 0)
+  Token: OC_TG_TOKEN or [channels.telegram] token in config.toml
+EOS
+  exit 3
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run)      DRY=1; shift ;;
+    --topic)        TOPIC="$2"; shift 2 ;;
+    --text)         TEXT="$2"; shift 2 ;;
+    --receipt-artifact) RECEIPT_ARTIFACT=1; shift ;;
+    --unit)         UNIT="$2"; shift 2 ;;
+    --expected)     EXPECTED="$2"; shift 2 ;;
+    --version-arg)  VERSION_ARG="$2"; shift 2 ;;
+    -h|--help)      usage ;;
+    *)              usage ;;
+  esac
+done
+
+if [ -n "$TOPIC" ]; then
+  [ -n "$TEXT" ] || usage
+  send "$TOPIC" "$TEXT"
+  exit $?
+fi
+
+if [ "$RECEIPT_ARTIFACT" = 1 ]; then
+  [ -n "$UNIT" ] || usage
+  body="$(emit_receipt "$UNIT" "$VERSION_ARG")"
+  send "30129" "$body"
+  exit $?
+fi
+
+[ -n "$VERSION_ARG" ] && [ "$RECEIPT_ARTIFACT" != 1 ] && usage
+usage

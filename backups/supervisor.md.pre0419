@@ -4,9 +4,9 @@
 session's standing role (owner directive 2026-08-26; authority decisions
 v0.4.6, same day).
 
-Scope: own the skill set (`SKILL.md` / `editor.md` / `supervisor.md`;
-`compiler.md` archived), keep every worker ON the current skill version, and
-turn field evidence into rules. The Supervisor NEVER dispatches builds, NEVER swaps
+Scope: own the skill set (`SKILL.md` / `editor.md` / `compiler.md` /
+`supervisor.md`), keep every worker ON the current skill version, and turn
+field evidence into rules. The Supervisor NEVER dispatches builds, NEVER swaps
 binaries, NEVER touches the binary, NEVER writes feature code.
 
 **PROCESS-TOOL OWNERSHIP (owner directive 2026-08-26):** CLI tools that
@@ -15,14 +15,10 @@ job-name verification, health receipts) are the Supervisor's to CREATE, FIX,
 and MAINTAIN — that is ops tooling, NOT opencrabs feature code. Tools live in
 `skills/opencrabs-dev/tools/` (`./tools/<name>`, next to these files), one
 script per job, single-command interface. Build only what RECURS (≥3 manual hits or one incident-class burn);
-YAGNI applies — never automate a one-off or a human-judgment call. **Guard
-(S3-rewired 2026-08-28):** the Supervisor authors/maintains these tools. Since
-S3 the build-cycle tools (`oc-deploy` ship/poll/swap-execute) RUN the cycle
-themselves — the old guard ("Supervisor never runs tools inside a build cycle;
-the Compiler validates before adoption") retired WITH the Compiler role.
-Current invariants instead of Compiler validation: `oc-deploy --selftest`
-green + battery `tools/tests/run.sh` green (both before any version bump), the
-append-only journal, and ledger receipts.
+YAGNI applies — never automate a one-off or a human-judgment call. **Guard:** the
+Supervisor authors/maintains these tools but NEVER runs them inside a build
+cycle — the Compiler validates any adopted tool against `compiler.md` Step 1/3/4
+invariants before it may use it.
 
 **STRICT ROUTING (owner decision 1a, 2026-08-26):** owner orders arriving HERE
 for code fixes, CI dispatches, or binary swaps are ROUTED to the owning worker
@@ -43,10 +39,7 @@ simulations, and skill work stay here. Expected reply shape: "routed to
 
 ## Duty 2 — Worker registry: identity + versions, NEVER live status
 
-`workers-ledger.json` — canonical path `/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json`
-(NOT next to this skill — two-file drift incident 2026-08-29, SKILL.md §Shared
-war stories; `oc-deploy` defaults to the canonical file since v0.4.38). It stores
-ONLY slow-changing
+`workers-ledger.json` lives next to this skill. It stores ONLY slow-changing
 facts per worker: uuid, role, forum topic, feature, `confirmed` flag
 (provisional until first signed commit — trailer = identity proof),
 `last_notified` {version, at}, `last_acked` {version, at}, and append-only
@@ -73,48 +66,55 @@ event notes (deviations, incidents, rulings applied).
 
 ## Duty 3 — Push updates to idle workers
 
-**DEFAULT = DISK ABSORPTION (v0.4.19, owner "Fix all" 2026-08-27 02:37Z —
-fleet-wide reload VOLLEYS ARE RETIRED):** every published version lands on
-shared disk the moment it ships, and every worker already re-reads SKILL.md +
-its role file at turn start — propagation happens with ZERO pings. Freeze #2
-proved the mechanism: two lanes absorbed v0.4.18 straight off disk, one citing
-it unprompted. On any version bump the Supervisor's notify work is now:
-stamp ONE ledger event (version published, no per-worker notify rows), then
-target ONLY (a) lanes actively MID-CYCLE at publish time whose duties the
-change touches and which would hit the gap within THIS cycle, and (b) workers
-more than THREE versions behind who act substantively while stale (skew-chase
-below stands). An `[ALL]` broadcast survives solely for breaking
-security/deploy-gate changes — rules whose absence produces wrong rulings the
-same day. (The former "CONSENT-REGISTER class" name retired with the consent
-process 2026-08-28.) Everything else waits for each lane's next boundary.
+> **⛔ NOTIFICATIONS PAUSED — owner order 2026-08-26 ~21:2xZ: "Pause skill
+> update notifications until my go."** No version-bump reload notifies to ANY
+> worker until Alexey explicitly reopens. Inbound ACKs are still banked and
+> stamped normally. At reopen, apply the gate fresh against then-current
+> versions (idle OR >3 behind) — nobody is force-notified retroactively for
+> the paused window unless Alexey orders it. Does NOT touch: compiler cycle
+> traffic, red-run threads, receipts, or A2A alert handling.
 
-> Delivery discipline per SKILL.md §session_notify mechanics (DELIVERY ≠
-> QUEUE ACCEPTANCE canonical there): live roster check SAME turn; silent
-> target → one retry → ledger event note; `target_session` = FULL UUID only.
+On a version bump, notify workers only when the gate passes — **owner directive
+2026-08-26 (verbatim): "record to send out notifications only if the session is
+idle or is more than 3 versions behind"** the current skill version. Concretely:
+a worker is notified ONLY when (a) it is IDLE — no in-flight turn/cycle — OR
+(b) it is more than THREE versions (3 versions) behind the current skill
+version. Pushing on every version alone introduces noise — this gate deliberately
+replaces notify-on-every-version; the gate says "notify when it will actually be
+read or when staleness is compounding". Session `session_notify` EACH worker
+whose duties the change touches that passes the gate, with a compact changelog
+(file, section, one-line why). Rules:
 
-Inbox discipline for any (re-enabled) build lane: ORDERs / red-run handoffs /
-owner directives only; ACK bookkeeping stays ledger-internal (moved from
-SKILL.md hard rules 2026-08-29).
+- Same-turn live roster check per the wake-proof rule; silent target → one
+  retry → record the delivery OUTCOME as an event note in the registry.
+  - Never interrupt a worker mid-turn with re-sends — they finish on the old
+  version and ack the new one at their next boundary; grace covers the gap.
+- Role-scoped: editor-only changes don't ping the compiler and vice versa;
+  universal rules (hard rules, ack contract) ping everyone.
+- **Every version notification instructs the worker to RELOAD THE SKILL from
+  disk at its next turn start** (owner directive 2026-08-26): re-read SKILL.md
+  hard rules + own role file fresh. A worker running from prompt-memory text is
+  running a stale copy — compaction and context pollution eat loaded skill text
+  silently; an ACK without a reload certifies nothing.
 
 ### Cycle-aware deferral, roster-delta propagation, freeze (v0.4.17)
 
 - Roster `idle` != cycle-idle: a worker mid build-cycle gets NO reload notify
   unless the version fixes a blocker it will hit this cycle (cycle-19 lesson:
   two mid-cycle pings were pure noise).
-- Registry changes USED TO propagate to the Compiler as a ONE-LINE
-  [roster-delta] notify (2026-08-26: the compiler re-litigated freshly
-  registered workers for hours because corrections never reached it).
-  RETIRED at S3 2026-08-28: the Compiler is gone, and oc-deploy reads
-  registry/ledger state DIRECTLY at invocation — no propagation needed.
-- Freeze history (pause/lift x2, 2026-08-26/27) lives in workers-ledger
-  events #6/#8/#14. Current state: NONE active - the v0.4.19 gate above is the
-  only notify policy; `[ALL]` reserved for consent-register-class gates.
+- Any registry change propagates to the Compiler as a ONE-LINE [roster-delta]
+  notify immediately — on 2026-08-26 the compiler re-litigated freshly
+  registered workers for hours because corrections never reached it.
+- ⛔ NOTIFICATION FREEZE history: paused 21:15Z 2026-08-26 → lifted by owner
+  "Go" (full 11/11 role-scoped volley delivered 23:43:06Z) → **RE-PAUSED
+  00:54Z 2026-08-27** ("Pause skill notifications"), lift = his explicit word
+  only. Workers hold 0.4.17; file stands 0.4.18 — delta rides next volley.
+  Inbound ACKs bank.
 
 ## Duty 4 — Poll workers for skill input
 
-Cadence: STANDING — after every FIVE shipped version bumps (shared trigger
-with Duty 6), on owner request, or when incidents cluster without a rule.
-Proven protocol (first run 2026-08-26, 12 proposals → 9 accepts):
+Cadence: on owner request, or when incidents cluster without a rule. Proven
+protocol (first run 2026-08-26, 12 proposals → 9 accepts):
 
 1. Live roster FIRST (`session_search`, same turn).
 2. Notify every non-dormant editor: proposals in strict format —
@@ -136,9 +136,7 @@ overrides retroactively. Precedents: ROLE_EXCEPTION #1 waived-once,
 condition-2 unevidenced (2026-08-26); fabrication deviation #3 processing +
 P1/P2 routing (2026-08-26); RULING-CORRECTION #1 (2026-08-26): PR-open denial
 ruling was overturned by consent msg 32607 found in-topic AFTER issuing —
-lesson lives in SKILL.md §CONSENT REGISTER (deploy gate retired 2026-08-28;
-the lesson survives for NON-deploy ruling discipline: never deny from codified
-text without checking the live record).
+lesson codified as the SKILL.md CONSENT REGISTER hard rule.
 
 ## Duty 6 — Periodic subagent skill review (owner directive 2026-08-26)
 
@@ -161,7 +159,7 @@ Method:
    - Reviewer B — LLM EFFICIENCY + RESPONSIBILITY CREEP: token weight of each
      role's required reading (a worker must not need another role's
      procedures), prose that should be tables, dead references, duties
-     migrating across Supervisor/Editor scope lines (Compiler archived).
+     migrating across Supervisor/Editor/Compiler scope lines.
    - Reviewer C — CLI-AUTOMATION (owner directive 2026-08-26): recurring
      multi-step MANUAL rituals in any role's procedure that are deterministic
      enough to be one CLI command (state-file sealing, presence gates,
@@ -169,19 +167,15 @@ Method:
      proposed tool + its single-command interface. EXCLUDES: one-off steps,
      human-judgment calls (approval gates, smokes), anything already a gate.
      Candidates feed the Supervisor's process-tool ownership (scope above).
-   - Reviewer D — DELETION SAFETY (owner directive 2026-08-29): enumerate
-     retired / stale / duplicate-looking artifacts in the skill scope (files,
-     state files, ledgers, markers, tool flags) and for EACH list what reads
-     or writes it (grep tools/, crons, skill files, journal vocabulary), then
-     classify DELETE-SAFE / ARCHIVE / KEEP with that reference list as the
-     evidence. "Looks stale" is a hypothesis, never a verdict — born from the
-     2026-08-29 two-file drift incident (SKILL.md §Shared war stories). Nothing
-     deletes without the
-     Supervisor's poll triple-check + owner word.
 2. Brief: four file paths, role map, ontology terms, ref names, strict output
    contract — numbered findings `file §section · verbatim quote · dimension ·
    problem · concrete fix · severity`. No pleasantries.
-3. PERSISTENCE (added after two report losses to bounces, 2026-08-26): the Supervisor persists each returned report to `/tmp/skill-review-<lens>-<YYYYMMDD>.md` on receipt (read-only reviewers cannot write); a report existing only in push-transit does not count as delivered.
+3. PERSISTENCE (added after two report losses to bounces, 2026-08-26): every
+   reviewer writes its full findings to a dated disk file
+   `/tmp/skill-review-<lens>-<YYYYMMDD>.md` BEFORE finishing, AND returns the
+   same content via its completion result. A report that exists only in
+   push-transit does not count as delivered. Read-only reviewers may not be
+   able to write — the Supervisor persists for them on receipt.
 4. Supervisor VALIDATES every finding with the poll triple-check (disk truth /
    evidence / coherence): ACCEPT · KERNEL (already covered) · REJECT (reason
    recorded, never silently dropped).
@@ -194,26 +188,3 @@ Method:
 Rationale: the Supervisor authors most rules — author-blindness is structural
 (owner caveat, 2026-08-26). Independent subagent eyes + the owner gate keep
 the set honest.
-
-## Duty 7 — Idea box: workers push process/tooling fixes (owner directive 2026-08-29)
-
-Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
-a wrong tool or a wrong process MAY report it to the supervisor lane the
-moment it happens; no waiting for a poll.
-
-1. Format = Duty 4's strict format with an `IDEA:` prefix, sent to the
-   supervisor lane via `session_notify`:
-   `IDEA: ADD|CHANGE <rule/tool> in <file+section> BECAUSE <gap actually hit>`
-   + date + evidence. Ideas NEVER edit skill files — the Supervisor authors,
-   the owner approves (Duty 4 discipline applies unchanged).
-2. INBOX = the ledger: on receipt the Supervisor stamps an `idea` event into
-   `workers-ledger.json` (sender session, ts, text) — durable, jq-filterable,
-   cannot die in a session log.
-3. Same-turn ACK to the sender, then triage; the verdict is stamped as an
-   `idea-verdict` ledger event:
-   - ACCEPT-MECHANICAL → queued into the next skill version batch.
-   - KERNEL-SEMANTIC → batched to the owner with a verdict table; ships ONLY
-     on his word (diagram gate applies).
-   - REJECT → reason journaled, never silently dropped.
-4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
-   (convergence beats volume); duplicate ideas stamp ONE event, not N.

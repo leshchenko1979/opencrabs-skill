@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-watchdog-check — B26: THIN alias for `oc-deploy watch`, the fork-main-vs-
+# deployed divergence tripwire (all logic lives in oc-deploy watch_run — NO
+# logic duplication here). Gives the check a STABLE finding-name (this tool)
+# and its own unified-log line. Verdict + exit code pass through from
+# `oc-deploy watch` unchanged. --baseline is accepted as a no-op for cron
+# compatibility (the old baseline plumbing is retired; the tripwire is live
+# always — it reads deployed.sha itself).
+#
+# Usage:
+#   oc-watchdog-check [watch] [--baseline] [same flags as oc-deploy watch]
+#   oc-watchdog-check --selftest
+#
+# Exit codes: passthrough of `oc-deploy watch` (0 WATCH-CLEAN / 2 WATCH-ALERT)
+#             · 1 help · 2 sibling oc-deploy missing
+# Env: OC_TOOLS_LOG
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-watchdog-check" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT   # fires on `exit $rc` below -> one line per run, rc = watch's rc
+
+if [ "${1:-}" = "--selftest" ]; then
+  d="$(mktemp -d)" || exit 3
+  trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  ARGLOG="$d/args.log"; export ARGLOG
+  cat > "$d/oc-deploy" <<EOF
+#!/usr/bin/env bash
+echo "watch-args: \$*" >> "\$ARGLOG"
+echo "WATCH-CLEAN: fork main 49125f8c covered; deployed=49125f8c"
+exit \${FAKE_RC:-0}
+EOF
+  chmod +x "$d/oc-deploy"
+  cp "$0" "$d/oc-watchdog-check"; chmod +x "$d/oc-watchdog-check"
+  # --baseline consumed by the wrapper, not forwarded (cron compat no-op)
+  "$d/oc-watchdog-check" --baseline > "$d/out1" 2>/dev/null; rc=$?
+  [ $rc -eq 0 ] || { echo "selftest: baseline rc=$rc want=0 (passthrough)" >&2; exit 1; }
+  grep -q "WATCH-CLEAN" "$d/out1" || { echo "selftest: verdict not forwarded" >&2; exit 1; }
+  grep -qx "watch-args: watch" "$ARGLOG" || { echo "selftest: baseline leaked into watch args: $(cat "$ARGLOG")" >&2; exit 1; }
+  # leading `watch` mode accepted (alias shape)
+  : > "$ARGLOG"
+  "$d/oc-watchdog-check" watch --baseline >/dev/null 2>&1; rc=$?
+  [ $rc -eq 0 ] || { echo "selftest: watch-mode rc=$rc want=0" >&2; exit 1; }
+  grep -qx "watch-args: watch" "$ARGLOG" || { echo "selftest: watch-mode args wrong: $(cat "$ARGLOG")" >&2; exit 1; }
+  # exit-code pass-through (watch rc 2 = alert)
+  FAKE_RC=2 "$d/oc-watchdog-check" --baseline >/dev/null 2>&1; rc=$?
+  [ $rc -eq 2 ] || { echo "selftest: alert rc=$rc want=2 (passthrough)" >&2; exit 1; }
+  # help
+  "$d/oc-watchdog-check" -h >/dev/null 2>&1; rc=$?
+  [ $rc -eq 1 ] || { echo "selftest: help rc=$rc want=1" >&2; exit 1; }
+  echo "selftest OK"; exit 0
+fi
+
+WATCH="$(cd "$(dirname "$0")" && pwd)/oc-deploy"
+[ -x "$WATCH" ] || { echo "oc-watchdog-check: sibling oc-deploy not found: $WATCH" >&2; exit 2; }
+
+case "${1:-}" in
+  -h|--help) echo "oc-watchdog-check: alias for 'oc-deploy watch' (0 clean / 2 alert). --baseline accepted, ignored." >&2; exit 1 ;;
+esac
+[ "${1:-}" = "watch" ] && shift
+ARGS=()
+for a in "$@"; do
+  [ "$a" = "--baseline" ] || ARGS+=("$a")
+done
+"$WATCH" watch "${ARGS[@]}"
+rc=$?
+exit "$rc"

@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-carrier-features — print the carrier workflow's `features:` default set.
+#
+# KERNEL batch D1 (C1, 2026-08-28). The carrier branch ci/quick-build-linux
+# owns the ONLY quick-build-linux.yml; its workflow_dispatch `features:` input
+# default IS the canonical feature set (owner build-lane directive: prod
+# builds carry the set the carrier defines). Replaces hand `grep -A2` of the
+# yml at 4 sites; oc-deploy ship resolves its --features default through this
+# tool and ABORTS on read failure (never a silent fallback set).
+#
+# Usage:
+#   ./tools/oc-carrier-features [--repo ~/opencrabs] [--ref ci/quick-build-linux] [--fetch]
+#   ./tools/oc-carrier-features --selftest
+#
+# Exit codes: 0 set printed · 2 usage · 3 carrier yml unfetchable ·
+#             4 no features input found / invalid shape
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-carrier-features" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="$(basename "$0")"
+usage() { echo "usage: $0 [--repo <path>] [--ref <branch>] [--fetch] | --selftest" >&2; exit 2; }
+
+REPO="$HOME/opencrabs"; REF="ci/quick-build-linux"; FETCH=0; SELFTEST=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo) REPO="${2:-}"; shift ;;
+    --ref) REF="${2:-}"; shift ;;
+    --fetch) FETCH=1 ;;
+    --selftest) SELFTEST=1 ;;
+    *) usage ;;
+  esac
+  shift
+done
+[ -n "$REPO" ] && [ -n "$REF" ] || usage
+
+# extract <yml-text> — features: input default on stdout; empty if absent
+extract_features_default() {
+  printf '%s\n' "$1" | awk '
+    {
+      line = $0
+      indent = 0
+      if (match(line, /[^ ]/)) indent = RSTART - 1
+    }
+    !inf && line ~ /^ *features:[[:space:]]*$/ { inf = 1; fi_indent = indent; next }
+    inf {
+      if (line ~ /^[[:space:]]*$/) next
+      if (indent <= fi_indent) { inf = 0; next }        # left the features block
+      if (line ~ /^ *default:/) {
+        sub(/^ *default:[[:space:]]*/, "", line)
+        gsub(/[\047"]/, "", line)                       # strip single/double quotes
+        sub(/[[:space:]]+#.*$/, "", line)               # trailing comment
+        gsub(/[[:space:]]/, "", line)
+        print line
+        exit
+      }
+    }
+  '
+}
+
+valid_set() { printf '%s' "$1" | grep -Eq '^[a-z0-9_-]+(,[a-z0-9_-]+)*$'; }
+
+read_carrier() { # -> yml on stdout, rc 3 on failure
+  if [ "$FETCH" -eq 1 ]; then
+    git -C "$REPO" fetch -q origin "$REF" >/dev/null 2>&1 \
+      || { echo "$PROG: git fetch origin $REF failed in $REPO" >&2; return 3; }
+  fi
+  git -C "$REPO" show "origin/$REF:.github/workflows/quick-build-linux.yml" 2>/dev/null \
+    || { echo "$PROG: cannot read carrier yml at origin/$REF in $REPO" >&2; return 3; }
+}
+
+if [ "$SELFTEST" -eq 1 ]; then
+  d="$(mktemp -d)" || exit 3
+  trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  mk_yml() { # $1=file $2=features-default line ("" = no features input at all)
+    {
+      printf 'name: quick-build-linux\non:\n  workflow_dispatch:\n    inputs:\n'
+      printf '      source_ref:\n        description: full 40-char sha\n        required: true\n'
+      if [ -n "$2" ]; then
+        printf '      features:\n        description: comma set\n'
+        printf '        %s\n' "$2"
+      fi
+      printf '      after_inputs_key:\n        default: nope\n'
+      printf 'jobs:\n  build:\n    runs-on: ubuntu-latest\n'
+    } > "$1"
+  }
+  mkrepo() { # $1=dir $2=features default line
+    git init -q -b main "$1" || return 1
+    git -C "$1" config user.email t@t; git -C "$1" config user.name t
+    mkdir -p "$1/.github/workflows"
+    mk_yml "$1/.github/workflows/quick-build-linux.yml" "$2"
+    git -C "$1" add -A; git -C "$1" commit -qm carrier
+    git init -q --bare "$1.git"
+    git -C "$1" remote add origin "$1.git"
+    git -C "$1" push -q origin "HEAD:refs/heads/$REF"
+    git -C "$1" fetch -q origin
+  }
+  pass=0; fail=0
+  chk() { if [ "$1" -eq "$2" ]; then pass=$((pass+1)); echo "selftest: $3 OK"; else fail=$((fail+1)); echo "selftest: $3 FAIL (rc=$1 want $2)"; fi }
+
+  mkrepo "$d/good" "default: 'telegram'" || exit 3
+  OUT="$("$0" --repo "$d/good")"; chk $? 0 "valid carrier prints set"
+  [ "$OUT" = "telegram" ] && { pass=$((pass+1)); echo "selftest: exact set OK"; } || { fail=$((fail+1)); echo "selftest: got '$OUT' want 'telegram'"; }
+
+  mkrepo "$d/multi" "default: 'telegram,browser'" || exit 3
+  OUT="$("$0" --repo "$d/multi")"
+  [ "$OUT" = "telegram,browser" ] && { pass=$((pass+1)); echo "selftest: multi-feature set OK"; } || { fail=$((fail+1)); echo "selftest: multi got '$OUT'"; }
+
+  mkrepo "$d/nofeat" "" || exit 3
+  "$0" --repo "$d/nofeat" >/dev/null 2>&1; chk $? 4 "no features input -> 4"
+
+  mkrepo "$d/badshape" "default: 'tele gram!'" || exit 3
+  "$0" --repo "$d/badshape" >/dev/null 2>&1; chk $? 4 "invalid shape -> 4"
+
+  "$0" --repo "$d/good" --ref no-such-branch >/dev/null 2>&1; chk $? 3 "missing carrier branch -> 3"
+  "$0" --repo "$d/nope" >/dev/null 2>&1; chk $? 3 "missing repo -> 3"
+
+  [ "$fail" -eq 0 ] && { echo "selftest OK ($pass checks)"; exit 0; } || { echo "selftest FAILED ($fail)" >&2; exit 1; }
+fi
+
+YML="$(read_carrier)" || exit 3
+SET="$(extract_features_default "$YML")"
+[ -n "$SET" ] || { echo "$PROG: no features input default found in carrier yml" >&2; exit 4; }
+valid_set "$SET" || { echo "$PROG: features default is not a comma-set: '$SET'" >&2; exit 4; }
+printf '%s\n' "$SET"
+exit 0

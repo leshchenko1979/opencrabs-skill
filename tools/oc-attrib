@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-attrib — attribute commits in a range to worker LANES via Session-Id
+# trailers joined against workers-ledger.json.
+#
+# War-story provenance (2026-08-26/27): the supervisor cracked THREE rogue CI
+# dispatches by hand, pulling trailers off remote forks and cross-referencing
+# session UUIDs against the roster. This turns that ritual into one call.
+# Unsigned or ledger-unmapped sessions are NEVER silently dropped — they carry
+# literal markers "(unsigned)" / "(unmapped)" and stay visible in every row.
+#
+# Usage:
+#   ./tools/oc-attrib --repo <path> --range <A..B> [--ledger workers-ledger.json] [--json]
+#   ./tools/oc-attrib --repo <path> --deployed [--ledger workers-ledger.json] [--json]
+#       --deployed composes <prev_sha>..<deployed_sha> from deployed markers
+#       (deployed.sha + deployed.meta.json) in $OC_DEPLOY_STATE_DIR (default skills/opencrabs-dev)
+#   ./tools/oc-attrib --selftest
+#
+# Exit codes: 0 ok · 2 usage / bad range syntax · 3 git failure · 4 empty range
+#            · 5 --deployed markers missing (deployed.sha or prev_sha absent)
+# Output (TSV, sorted by session):
+#   session <TAB> topic_id <TAB> feature <TAB> issue_refs(CSV) <TAB> sha7s(CSV)
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-attrib" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT   # early exits (usage/git-fail) — cleanup traps below supersede but also log
+
+usage() { echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--json] | --selftest" >&2; exit 2; }
+
+SELFTEST=0; JSON=0; REPO="."; RANGE=""; LEDGER=""; DEPLOYED=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo) REPO="${2:-}"; shift ;;
+    --range) RANGE="${2:-}"; shift ;;
+    --deployed) DEPLOYED=1 ;;
+    --ledger) LEDGER="${2:-}"; shift ;;
+    --json) JSON=1 ;;
+    --selftest) SELFTEST=1 ;;
+    *) usage ;;
+  esac
+  shift
+done
+
+if [ "$SELFTEST" -eq 1 ]; then
+  d="$(mktemp -d)" || exit 3
+  trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  git -C "$d" init -q -b main || exit 3
+  git -C "$d" config user.email t@t; git -C "$d" config user.name t
+  mk() { printf '%s' "$1" > "$d/f.txt"; git -C "$d" add f.txt
+         printf '%s' "$2" > "$d/.msg"; git -C "$d" commit -q -F "$d/.msg"; }
+  M1='#1239 archive scoping fix
+
+Session-Id: cccccccc-4444-5555-6666-777777777777
+Issue-Ref: #1239'
+  M2='hotfix, no trailer'
+  mk a1 "$M1"; mk a2 "$M2"
+  printf '{"workers":[{"uuid":"cccccccc-4444-5555-6666-777777777777","role":"editor","topic_id":31789,"feature":"plan-tool"}]}\n' > "$d/wl.json"
+  OUT="$("$0" --repo "$d" --range main --ledger "$d/wl.json")"
+  [ $? -eq 0 ] || { echo "selftest: nonzero exit" >&2; exit 1; }
+  printf '%s\n' "$OUT" | awk -F'\t' '$1=="cccccccc-4444-5555-6666-777777777777"&&$2=="31789"&&$3=="plan-tool"&&$4=="#1239"{f=1} END{exit f?0:1}' \
+    || { echo "selftest: mapped row wrong" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q '(unsigned)' || { echo "selftest: unsigned silently dropped" >&2; exit 1; }
+  printf '%s\n' "$OUT" | wc -l | grep -qx 2 || { echo "selftest: unexpected row count" >&2; exit 1; }
+  # C2: --deployed composes prev_sha..deployed from markers; must equal explicit range
+  R_FROM="$(git -C "$d" rev-parse HEAD~1)"; R_TO="$(git -C "$d" rev-parse HEAD)"
+  printf '%s\n' "$R_TO" > "$d/deployed.sha"
+  printf '{"sha":"%s","prev_sha":"%s"}\n' "$R_TO" "$R_FROM" > "$d/deployed.meta.json"
+  OUT_D="$(OC_DEPLOY_STATE_DIR="$d" "$0" --repo "$d" --deployed --ledger "$d/wl.json")" || { echo "selftest: --deployed nonzero exit" >&2; exit 1; }
+  OUT_R="$("$0" --repo "$d" --range "$R_FROM..$R_TO" --ledger "$d/wl.json")"
+  [ "$OUT_D" = "$OUT_R" ] || { echo "selftest: --deployed range != explicit range" >&2; exit 1; }
+  mkdir -p "$d/nostate"
+  OC_DEPLOY_STATE_DIR="$d/nostate" OC_TOOLS_NOLOG=1 "$0" --repo "$d" --deployed >/dev/null 2>&1; rc=$?
+  [ $rc -eq 5 ] || { echo "selftest: --deployed missing markers rc=$rc want=5" >&2; exit 1; }
+  "$0" --repo "$d" --range main --deployed >/dev/null 2>&1; rc=$?
+  [ $rc -eq 2 ] || { echo "selftest: --range + --deployed rc=$rc want=2" >&2; exit 1; }
+  echo "selftest OK"; exit 0
+fi
+
+# C2 (KERNEL 2026-08-28): --deployed composes prev_sha..deployed from markers.
+if [ "$DEPLOYED" -eq 1 ]; then
+  [ -z "$RANGE" ] || usage   # --range and --deployed are alternatives
+  SD="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/skills/opencrabs-dev}"
+  TO_REPO="$(head -1 "$SD/deployed.sha" 2>/dev/null)"
+  FROM_REPO="$(jq -r '.prev_sha // empty' "$SD/deployed.meta.json" 2>/dev/null)"
+  [ -n "$TO_REPO" ] && [ -n "$FROM_REPO" ] || { echo "deployed markers missing in: $SD" >&2; exit 5; }
+  RANGE="$FROM_REPO..$TO_REPO"
+fi
+[ -n "$RANGE" ] || usage
+git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repo: $REPO" >&2; exit 3; }
+
+N=$(git -C "$REPO" rev-list --count "$RANGE" 2>/dev/null)
+rc=$?
+[ $rc -eq 0 ] || { echo "bad range: $RANGE" >&2; exit 3; }
+[ "$N" -gt 0 ] || { echo "empty range: $RANGE" >&2; exit 4; }
+
+TMP="$(mktemp)" || exit 3
+trap '_rc=$?; rm -f "$TMP"; oc_log_finish "$_rc"' EXIT
+for sha in $(git -C "$REPO" rev-list --reverse "$RANGE"); do
+  body="$(git -C "$REPO" show -s --format=%B "$sha")" || exit 3
+  sess="$(printf '%s\n' "$body" | sed -n 's/^Session-Id:[[:space:]]*//p' | tail -1)"
+  [ -n "$sess" ] || sess="(unsigned)"
+  iss="$(printf '%s\n' "$body" | sed -n 's/^Issue-Ref:[[:space:]]*//p' | tail -1 | tr -d ' ')"
+  short="$(printf '%s' "$sha" | cut -c1-7)"
+  printf '%s\t%s\t%s\n' "$sess" "$iss" "$short" >> "$TMP"
+done
+
+# uuid -> "topic_id \x01 feature" lookup (built fresh per call; never cached)
+MF=""
+if [ -n "$LEDGER" ] && [ -f "$LEDGER" ]; then
+  MF="$(mktemp)" || exit 3
+  jq -r '(.workers // [])[] | [(.uuid//""),(.topic_id|tostring),(.feature//"-")] | @tsv' "$LEDGER" > "$MF" 2>/dev/null \
+    || { echo "unreadable ledger: $LEDGER" >&2; rm -f "$MF"; exit 3; }
+fi
+
+DEDUP="$(awk -F'\t' -v mf="$MF" '
+  BEGIN { if (mf != "") { while ((getline line < mf) > 0) { split(line, a, "\t"); map[a[1]] = a[2] "\x01" a[3] } close(mf) } }
+  {
+    s = $1
+    if (!(s in seen)) { seen[s] = 1; order[++k] = s }
+    cnt[s]++
+    if ($2 != "" && !index(is[s], $2)) is[s] = is[s] (is[s] == "" ? "" : ",") $2
+    if (!index(hs[s], $3)) hs[s] = hs[s] (hs[s] == "" ? "" : ",") $3
+  }
+  END {
+    for (i = 1; i <= k; i++) {
+      s = order[i]; tp = "-"; ft = (s == "(unsigned)" ? "(unsigned)" : "(unmapped)")
+      if (s in map) { split(map[s], m, "\x01"); tp = m[1]; ft = m[2] }
+      printf "%s\t%s\t%s\t%s\t%s\n", s, tp, ft, is[s], hs[s]
+    }
+  }
+' "$TMP" | LC_ALL=C sort)"
+[ -n "$MF" ] && rm -f "$MF"
+
+if [ "$JSON" -eq 1 ]; then
+  printf '%s\n' "$DEDUP" | jq -Rn '
+    [ inputs | select(length>0) | split("\t")
+    | { session: .[0]
+      , lane: { topic_id: (.[1] | if test("^[0-9]+$") then tonumber else . end)
+              , feature:  .[2] }
+      , issues: (.[3] | split(",") | map(select(length>0)))
+      , shas:   (.[4] | split(",")) } ]'
+else
+  printf '%s\n' "$DEDUP"
+fi
+exit 0

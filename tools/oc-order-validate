@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-order-validate — validate a build sha before dispatch (invoked from
+# oc-deploy ship; 4 gates: shape, existence, containment, signature).
+#
+#   An ORDER is a full-40 source_ref sha the editor just fast-forward-merged
+#   into fork main. Every claim below is verified LIVE against the remote at
+#   call time (relay-predication: never accept the sha at face value — P2).
+#
+# Checks (in order, each a hard gate):
+#   1. ARG SHAPE   — sha is exactly 40 hex chars              (else exit 1)
+#   2. EXISTENCE   — sha is a real commit on the remote       (else exit 4)
+#   3. CONTAINMENT — sha is an ancestor of the fork main tip  (else exit 2)
+#   4. SIGNATURE   — the commit carries a Session-Id trailer whose uuid is
+#                    in the workers ledger                     (else exit 3)
+#
+# Exit codes: 0 VALID | 1 invocation/arg-shape | 2 UNMERGED | 3 UNSIGNED/unknown
+#             4 UNKNOWN-REF
+#
+# Deps: gh (authenticated for the fork), jq.
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-order-validate" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+REPO="${OC_REPO:-leshchenko1979/opencrabs}"
+LEDGER="${OC_LEDGER:-/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"   # v0.4.38: canonical path (skill-dir duplicate deleted 2026-08-29; oc-deploy passes OC_LEDGER explicitly in the ship chain)
+TIP=""
+FEATURES=""
+VERBOSE=0
+
+fail() { echo "oc-order-validate: $2" >&2; exit "$1"; }
+say()  { [ "$VERBOSE" = 1 ] && echo "$*" >&2 || true; }
+
+usage() {
+  echo "Usage: oc-order-validate <40-hex-sha> [--repo R] [--ledger L] [--tip T] [--features SET] [--verbose] [--selftest]" >&2
+  echo "Exit: 0 VALID | 1 invocation | 2 UNMERGED | 3 UNSIGNED/unknown | 4 UNKNOWN-REF" >&2
+}
+
+selftest() {
+  local passed=0 total=3 rc
+  "$0"           >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
+  "$0" 7aae6365  >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
+  "$0" zz00000000000000000000000000000000000000 >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
+  echo "selftest OK: $passed/$total arg-shape cases (no network)"
+  [ "$passed" = "$total" ]
+}
+
+# ---- arg parsing -----------------------------------------------------------
+SHA=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)     REPO="$2"; shift 2 ;;
+    --ledger)   LEDGER="$2"; shift 2 ;;
+    --tip)      TIP="$2"; shift 2 ;;
+    --features) FEATURES="$2"; shift 2 ;;
+    --verbose)  VERBOSE=1; shift ;;
+    --selftest) selftest; exit $? ;;
+    -h|--help)  usage; exit 1 ;;
+    *)
+      if [ -z "$SHA" ]; then
+        SHA="$1"
+      else
+        usage; exit 1
+      fi
+      shift ;;
+  esac
+done
+
+[ -n "$SHA" ] || fail 1 "missing <sha> argument"
+printf '%s' "$SHA" | grep -Eq '^[0-9a-fA-F]{40}$' \
+  || fail 1 "sha must be exactly 40 hex chars, got '${SHA:0:12}…' (short-sha input invalid — actions/checkout would fetch a literal <sha>* branch)"
+[ -f "$LEDGER" ] || fail 1 "ledger not found: $LEDGER"
+
+# ---- 2. EXISTENCE ----------------------------------------------------------
+say "check: sha exists on $REPO"
+gh api "repos/$REPO/commits/$SHA" --jq .sha >/dev/null 2>&1 \
+  || fail 4 "sha $SHA not found on $REPO"
+
+# ---- 3. CONTAINMENT --------------------------------------------------------
+[ -n "$TIP" ] || TIP="$(gh api "repos/$REPO/commits/main" --jq .sha)" \
+  || fail 4 "cannot resolve main tip on $REPO"
+say "check: $SHA contained in tip $TIP"
+STATUS="$(gh api "repos/$REPO/compare/$SHA...$TIP" --jq .status 2>/dev/null)" \
+  || fail 4 "compare API failed for $SHA...$TIP"
+case "$STATUS" in
+  identical|ahead) : ;;                     # sha is ancestor of (or equals) tip
+  *) fail 2 "UNMERGED: $SHA is not an ancestor of tip $TIP (compare status=$STATUS); the ORDER must post-date the ff-merge" ;;
+esac
+
+# ---- 4. SIGNATURE ----------------------------------------------------------
+MSG="$(gh api "repos/$REPO/commits/$SHA" --jq .commit.message)" || fail 4 "cannot read commit message"
+SID="$(printf '%s\n' "$MSG" | sed -n 's/^Session-Id:[[:space:]]*\([0-9a-fA-F-]\{36\}\).*/\1/p' | head -1)"
+[ -n "$SID" ] || fail 3 "UNSIGNED: no Session-Id trailer on $SHA — attribution mandatory (SKILL.md session-notify loop)"
+ROLE="$(jq -r --arg u "$SID" '.workers[] | select(.uuid==$u) | .role // empty' "$LEDGER" 2>/dev/null)"
+[ -n "$ROLE" ] || fail 3 "UNSIGNED: Session-Id $SID is not in the workers ledger"
+
+# ---- evidence --------------------------------------------------------------
+jq -n \
+  --arg repo "$REPO" \
+  --arg sha "$SHA" \
+  --arg tip "$TIP" \
+  --arg sid "$SID" \
+  --arg role "$ROLE" \
+  --arg feat "$FEATURES" \
+  '{valid:true, repo:$repo, sha:$sha, tip:$tip, contained:true, session_id:$sid, role:$role, features:$feat}'
+exit 0

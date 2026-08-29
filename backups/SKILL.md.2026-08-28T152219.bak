@@ -1,0 +1,424 @@
+---
+name: opencrabs-dev
+description: >
+  OpenCrabs source ops (~/opencrabs): roles EDITOR (fork issues, per-task
+  worktrees, modum gate, signed commits, push + sha hand-off, oc-deploy ship,
+  smoke-test-on-notify, upstream PR), COMPILER (RETIRED at S3 cutover
+  2026-08-28 — quick-build dispatch/swap now automated in tools/oc-deploy;
+  compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
+  Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
+  (/opencrabs-dev)
+version: 0.4.32
+author: leshchenko1979
+metadata:
+  tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, modum, session-notify]
+  references:
+    - https://github.com/adolfousier/opencrabs (upstream — PRs only; new issues NEVER filed here, owner 2026-08-27)
+    - https://github.com/leshchenko1979/opencrabs (fork — push target + ISSUES HOME, owner 2026-08-27)
+---
+
+# opencrabs-dev — OpenCrabs source procedure
+
+**Owns:** everything touching `~/opencrabs` source, its GitHub Actions runs, or the
+installed `opencrabs` binary. This file = shared facts + role router only. Actual
+procedures live in TWO role files (`editor.md` / `supervisor.md`) + one
+ARCHIVED runbook (`compiler.md` — retired at S3 cutover 2026-08-28, re-enable
+= one notify);
+load ONLY the one matching the session's role.
+
+## Canonical tooling (v0.4.12, PROCESS-TOOL ownership)
+
+Mechanical rituals the roles once hand-ran are now single commands in `tools/`
+(owner-aware: CLI-tool creation/fix is the Supervisor's scope). Canonical
+commands are wired into `compiler.md` — this section is the register + test
+source of truth:
+
+| Tool | Slot | Exit-coded |
+|---|---|---|
+| `./tools/oc-order-validate <sha>` | ORDER intake (compiler Step 1) | 0 ok / 2 UNMERGED / 4 UNSIGNED |
+| `./tools/oc-job-verify <run-id> <source-ref> [--features]` | run identity (Step 1) | 0 VERIFIED / 2 IN-FLIGHT / 3 FAILED / 4 REF-MISMATCH / 5 NOT-FOUND |
+| `./tools/oc-artifact-verify <run-id> <bin> <marker>` | EXECUTION SANITY SIGNAL + FEATURE-PRESENCE CHECK (Step 3) | 0 ok / 3 marker-missing(no swap) / 4 fail |
+| `./tools/oc-seal-state <sha> [...]` | baseline/orders seal (Step 5); order vocabulary QUEUED…VOID, per-row `--order-evidence`, `--purge-order`; matches legacy `order_sha` rows | 0 ok / 1 invocation / 2 scan-fail / 3 write-fail |
+| `./tools/oc-post-receipts ...` | Phase A/B receipts | 0 ok / 1 no-token / 2 send-failed / 3 bad-args |
+| `./tools/oc-index-worktree <path>` | worktree codegraph index (editor Phase 2) | 0 ok / 4 index-failed / 5 bad-input |
+| `./tools/oc-ci-parity` | workflows parity fork↔upstream post-merge (Step 7) | 0 identical / 4 DRIFT / 5 usage / 6 api |
+| `./tools/oc-contributors --repo <path> --range <A..B>` | Session-Id trailer extraction + contributor dedup over a commit range (compiler notification targeting, Duty reviews) | 0 ok / 2 usage / 3 git-fail / 4 empty-range |
+| `./tools/oc-attrib --repo <path> --range <A..B> [--ledger <f>]` | commit-range → worker-lane attribution via Session-Id join against roster (`(unsigned)`/`(unmapped)` rows never dropped) | 0 ok / 2 usage / 3 git-fail / 4 empty-range |
+| `./tools/oc-consent-check --ledger <f> list\|--check\|--add` | CONSENT REGISTER machine gate: cite-before-ruling, atomic add, exit 3 = grep chat first | 0 ok / 2 usage / 3 not-registered / 4 malformed |
+| `./tools/oc-pr-atomicity <pr-number>` | atomicity gate (editor Phase 7 / issue triage) | 0 ok / 2 atomicity-violation / 4 api |
+| `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) | CI run green/red — dispatch via `gh workflow run`, watch with `gh run watch` |
+
+Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (incl. the
+`oc-seal-state` IFS-join regression guard). Must stay green before any version
+bump; tools are never edited without re-running it.
+
+## STEP ZERO — establish the role (mandatory on every load)
+
+Ask the operator which role this session employs before doing anything:
+
+> **Editor, Compiler, or Supervisor?**
+
+| Role | Owns | Procedure file |
+|------|------|----------------|
+| **EDITOR** | Commits + error fixes: claim issue → worktree → code → modum → sign → push → ff-merge into fork `main` → ORDER build → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
+| **COMPILER** | **RETIRED 2026-08-28 (S3 cutover, owner "let's go to S3" msgid 34717)** — duties now `tools/oc-deploy` (ship/poll/swap-execute) + supervisor watch. Re-enable = one notify per archived runbook | `compiler.md` (ARCHIVED runbook) |
+| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input | `supervisor.md` |
+
+Roles **DO NOT intersect**:
+
+- The Editor NEVER installs/swaps binaries, NEVER restarts daemons, NEVER dispatches
+- The Compiler NEVER writes, commits, or fixes code, NEVER touches editor feature
+  branches or worktrees — TWO sanctioned touches, both bounded in their own
+  steps: the Step 6 integration sweep over fork `main` AND Step 7 rebase-port
+  fixups (`compiler.md` Steps 6 + 7).
+- Hand-off point: the Editor produces (branch pushed AND fast-forwarded into fork
+  `main` + reported shas); the Compiler takes it from there (dispatch `main` →
+  watch → swap). If the run is RED, the Compiler
+  reports evidence and stops — fixing code is always Editor work.
+
+If the request mixes both (e.g. "fix X and deploy it"), split into two sessions/two
+role loads — do not fuse the roles in one pass without Alexey saying so explicitly.
+
+## Session-notify loop (since v0.3.3)
+
+Editors live in a Telegram forum group: one topic = one editor = one live session
+= ONE feature.
+
+- Every Editor commit carries a git trailer: `Session-Id: <full session uuid>`
+  (`git commit --trailer "Session-Id: <uuid>"`). FULL uuid — the 8-char display
+  form cannot drive routing. Each session READS ITS OWN UUID straight from its
+  runtime prompt/session context — no lookup tool needed (correction
+  2026-08-25); the Compiler takes notification targets from these trailers.
+- After a healthy swap the Compiler extracts contributors over
+  `<prev-swapped-sha>..<verified-run-headSha>` (right edge = the run's VERIFIED
+  headSha, never "current main" — a merge landing mid-build leaves main ahead of
+  the binary), notifies each contributing editor's session
+  about the new binary, then records `{sha, run_id, contributors}` to the
+  baseline state file — its `sha` is the left edge of the next attribution range.
+- Editors own testing THEIR features on notification: SMOKE TESTS against the
+  swapped binary running on this box — no cargo, no compile, ever
+  (decision 2026-08-25). Failures funnel back to the COMPILER, which attributes
+  them via Session-Id trailers and asks the guilty editors for fixes.
+- Separation holds inside the loop: Compiler notifies + attributes but NEVER
+  fixes code; Editors fix + re-push but NEVER attribute others' failures.
+
+### session_notify mechanics (upstream #1203, commit 13a24f25)
+
+- Same-process only: pushes into a LIVE session's queue on THIS box. Target must
+  have messaged since boot; dead/cross-instance targets error → fall back to
+  `a2a_send`, else list UNREACHABLE in the report.
+- DELIVERY ≠ QUEUE ACCEPTANCE (2026-08-26, Alexey): a ping counts as delivered
+  ONLY with post-ping proof — same-turn live roster check (`session_search`),
+  target PINGED-WOKEN (`last_active` > ping time) or PINGED-SILENT. Ledger
+  entries saying "pinged" without wake evidence are forbidden (both roles).
+- Sender identity is mechanical — deliveries arrive prefixed
+  `[session-notify from=<uuid>]`; replies route back with `target_session = from`.
+  Neither role can forge or strip identity.
+- Delivery drains at the target's next tool-loop boundary and wakes idle
+  sessions — no polling anywhere.
+
+### Telegram surface law (v0.4.31, owner directive 2026-08-28)
+
+Inter-role communication is **session_notify ONLY**. No lane ever uses telegram
+send/edit tools to talk to another session, another role's topic, the forum
+General area, an unrelated chat, or the owner DM. *(2026-08-28 audit: ~1.3k
+telegram_send calls/day traced across lanes — every destination belonged to the
+sender's own surface, but tool-driven sends that escape the own topic read as
+board-wide broadcast and duplicate the session's auto-routed text.)*
+
+- An Editor's telegram surface is ITS OWN TOPIC and nothing else. Normal replies
+  auto-route there as session text — that is the ONLY sanctioned output.
+  Editors NEVER invoke send/edit telegram tools (`telegram_send`,
+  `tg_send_message`, `tg_edit_message`, `telegram_edit`) — not even into their
+  own topic (session text already covers it); no `tg_search_global` /
+  cross-chat reads; `tg_get_messages` limited to the own topic. Reactions are
+  allowed (owner consent signal).
+- Sanctioned senders (NOT editors — none of this is lane-to-lane): the
+  task-queue skill's documented `/tq-approve` topic-creation + invitation flow;
+  alerting lanes reporting to the owner DM per the ops runbook; the
+  supervisor's own session text.
+- Violation pattern for the supervisor: a TOOL_ACCUM row showing an editor
+  lane calling a telegram send/edit tool → session_notify the rule; second
+  offense → review toggled.
+
+## Test ontology (v0.4.2 — three kinds + one sanity signal, NEVER conflate)
+
+| | SMOKE TEST | CODE TESTS | FEATURE-PRESENCE CHECK |
+|---|---|---|---|
+| Answers | does my feature WORK for a user right now? | is the code correct by analysis standards? | is the feature actually INSIDE the artifact we are about to deploy? |
+| What | behavioral drive of ONE shipped feature | compile/run verification: cargo fmt, clippy, cargo test | static markers: binary strings/symbols, sha256 identity vs artifact, source-tree grep |
+| Where | live `opencrabs-ops` unit, its real surfaces (Telegram, cron, MCP) | GitHub Actions ONLY — carrier compile pre-flight, upstream Lint/Test checks (fork `ci.yml` removed 2026-08-26) | this box, against the DOWNLOADED artifact + its source tree — nothing running |
+| When | after a swap notify (`editor.md` Phase 6b) | pre-flight gate before PRs (Phase 7 step 2b); every CI run | pre-swap, every cycle (`compiler.md` Steps 3+5) |
+| Who | owning Editor | Editor dispatches the gate; Compiler reads build/lint conclusions | Compiler alone |
+| Toolchain | none — local cargo FORBIDDEN in any form (binaries disabled 2026-08-28; editor.md §Box law) | CI's own — never local | `strings`, `sha256sum`, `git grep` — none compile anything |
+| Evidence | one line: drove X, observed Y (+ run id / sha) | job/step conclusions read via API | marker found/not-found + checksum line in baseline.json |
+| On FAIL | issue FIRST, then evidence to Compiler | fix before merge / PR | NO swap — feature missing from build; regression stated plainly |
+
+The table above carries the content; what remains prose:
+
+- **SMOKE TEST** is the ONLY evidence that may back an upstream PR approval
+  request (hard rule + `editor.md` Phase 7 step 0).
+- **EXECUTION SANITY SIGNAL** — the swap-path `--version` run (`compiler.md`
+  Step 3) — is NONE of the three kinds: it proves only "this file is a
+  runnable opencrabs binary". Not behavioral, not analytical, not presence
+  evidence; never cite it as any kind of test result.
+
+Rule: never write "tests pass" without naming the kind. A green Lint run is NOT
+a smoke pass; a smoke pass says nothing about clippy; a presence hit says
+nothing about behavior.
+
+## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
+
+ONE location for BOTH roles: the Compiler diagnoses with these in Step 2; the
+Editor applies the same ones in its fix round (editor.md Phase 6c). Neither
+role uses them as a licence to fix outside its scope.
+
+- Fix unresolved-name/import errors FIRST (E0425/E0433...) — later errors are
+  usually poisoned fallout. When scopes look shifted, count brace DEPTH, not
+  brace counts.
+- Match-arm narrowing does not inherit through outer arms — an inner match
+  needs its own exhaustive arms regardless of the outer guard.
+- **Contradictory INCOMING verdicts → settle via live GH API before acting**
+  (v0.4.14, proposal P3): when two claims about the SAME run/sha disagree (e.g.
+  a RED report vs a Compiler ACK calling that run "in_progress"), resolve with
+  `gh run view <id> --json status,conclusion` FIRST — even Compiler ACKs can be
+  stale. v0.4.6 predicates govern claims WE pass on; nothing sanitizes claims
+  that ARRIVE — the receiver checks. *(2026-08-26 cycle-18: run 32999957533
+  concluded `failure` at 18:36:56Z while a Compiler ACK still called it
+  in_progress/AIRBORNE)*
+
+## Shared environment facts (both roles)
+
+- Checkout `~/opencrabs`: remote **`origin`** = fork `leshchenko1979/opencrabs`
+  (push target) · remote **`adolfousier`** = sync source (upstream).
+- BUILD SOURCE = fork `main`. Editors fast-forward their signed commits into
+  `leshchenko1979/opencrabs@main`; the Compiler dispatches THAT ref — every
+  artifact compiles all editors' merged changes TOGETHER (decision 2026-08-25).
+  Building upstream/adolfousier refs is the exception, explicit ask only.
+- Branch NAMESPACES are reserved so any role can tell development from upstream
+  PR heads at a glance (decision 2026-08-25): `<type>/<slug>` with type ∈
+  `feat|fix|ci|chore` = DEVELOPMENT — fork-only, ff-merged into fork `main`
+  (editor Phase 6), archived after merge · `leshchenko1979/<slug>` = UPSTREAM PR HEADS ONLY (renamed from `up/*`, decision 2026-08-27)
+  — created solely in editor Phase 7 off `adolfousier/main`, never merged into
+  fork `main`, never a dispatch source. The Compiler reads the prefix, knows
+  what it is looking at.
+- This box has **no sanctioned Rust toolchain** — CI is the compiler (ruling
+  2026-06-16, hardened owner-GO 2026-08-28). Never install cargo/rustc here —
+  and never INVOKE them: a working rustup tree survives under `~/.cargo/` +
+  `~/.rustup/` (kept for the owner-approved rustfmt wrapper), its compile
+  binaries were DISABLED 2026-08-28 (`/root/toolchain-disabled-20260828/`,
+  manifest + `restore.sh`), and the BLOCKED stubs in `/usr/local/bin` are the
+  floor of the rule, not the rule. Any invocation in any form — PATH, login
+  shell, PATH-prepend, explicit path — is a violation even when it exits 0.
+  Sanctioned local tools: `modum` (lint) + `/usr/local/bin/rustfmt` wrapper
+  (fmt only); build/test/clippy = CI dispatch (pr-checks.yml / quick-build).
+  Full text: editor.md §Box law.
+- Live binary: `/usr/local/bin/opencrabs`. Daemons run as systemd **user** units
+  (`systemctl --user`) — system-scope queries (`systemctl`, `/etc/systemd`) find nothing.
+- Daemon PID identity (v0.4.15): NEVER `pgrep | head -1` — three daemons share
+  this box (family, default, ops) and pgrep can grab the wrong one. The ops unit's
+  PID comes only from `systemctl --user show opencrabs-ops -p MainPID --value`
+  *(2026-08-26 cycle-18: pgrep caught the old family daemon 1545179, Aug-25 boot,
+  vs the ops unit 1779537 — disk-vs-proc split until MainPID settled it)*.
+- Builds are MINIMAL-FEATURE by design: `cargo build --locked --profile ci
+  --no-default-features --features "<set>"` *(profile ci = thin LTO /
+codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing #[cfg]
+  gates) CLOSED 2026-08-25 — feature subsets compile clean.
+- The feature set is PARAMETRIZED (`ebf44f69`, 2026-08-25): a workflow_dispatch
+  input `features` (comma-separated). Its **`default:` in the workflow yml on the
+  CARRIER branch `ci/quick-build-linux` is the SINGLE SOURCE OF TRUTH** for what we
+  ship — these skill files NEVER copy the set (drift killed 2026-08-25). Read it live:
+  `git -C ~/opencrabs show origin/ci/quick-build-linux:.github/workflows/quick-build-linux.yml | grep -A2 'features:'`
+  Changing the pick later = one-line Editor commit to that yml's `default:` —
+  skills untouched.
+- Dispatch ALWAYS passes the set explicitly: `-f features=<set>` (decision
+  2026-08-25), even though a safe default exists. Artifact name carries the set:
+  `opencrabs-linux-amd64-<set>`; job: `Linux amd64 (<ref>, <set>)`. The binary
+  FILENAME stays `opencrabs-linux-amd64` (swap scripts depend on it). Anything
+  outside the set (local-stt/local-tts voice, whatsapp/discord/slack/trello,
+  pdfium…) is absent from the swapped binary — missing-feature behavior afterward
+  is expected, not a bug.
+- ORDER and dispatch carry sha AND feature set (v0.4.15, proposals P7+P8): a bare
+  sha cannot identify WHICH build is meant under single-flight. The carrier yml has
+  NO `--all-features` path — the build step hardwires `--no-default-features --features "$features"`
+  — optional features order ONLY as `features=<comma-set>`, and a different-set build
+  of the SAME sha is a DISTINCT build, serialized by the single-flight invariant
+  *(2026-08-26: cycle-19 vs cycle-19b, both ordered on sha 2217191c)*.
+- `source_ref` accepts a branch NAME (`main`) or the FULL 40-char commit sha —
+  NEVER an 8-char short form: actions/checkout treats it as a glob and fetches a
+  branch literally named `<sha>*` (war story below). PASS THE FULL SHA ALWAYS —
+  see next rule for why it is now the only auditable record of what was built.
+- The workflow lives ONLY on the carrier branch `ci/quick-build-linux` (moved off
+  fork `main` 2026-08-26, Alexey's call — mirrors upstream dropping it from their
+  main). Dispatch pattern adds `--ref ci/quick-build-linux`. CONSEQUENCE: the run
+  object's `headSha` reports the CARRIER tip, not the built tree — the built
+  commit is verified via the JOB NAME, which embeds `(source_ref, features)`.
+  Carrier branches NEVER merge to `main` (same reservation discipline as `leshchenko1979/*`).
+
+## Upstream relations (v0.4.0, owner-approved 2026-08-26)
+
+Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
+
+1. **Watch = Compiler duty, every build cycle** (Step 1 pre-flight): fetch
+   `adolfousier`, compare upstream tip vs fork merge-base. Small clean delta →
+   run the sync automatically; mass absorption (maintainer took our features)
+   or conflicts beyond trivial → notify Alexey with the delta and WAIT.
+2. **Sync model = REBASE-PORT** (merge-sync retired 2026-08-26): backup ref
+   FIRST → classify fork-only commits (absorbed / superseded / survivor) →
+   port survivors chronologically onto `adolfousier/main` → modum errors=0 →
+   force-push-with-lease. Full procedure: `compiler.md` Step 7.
+3. **Absorption rule**: when upstream merges or reimplements one of OUR
+   features, matching fork-only commits auto-classify DROPPABLE at the next
+   sync (patch-id match or title-twin against his rework). The owning editor
+   gets a "SHIPPED UPSTREAM" notice — fork-side maintenance ends.
+4. **PR lifecycle**: every open upstream PR has an owning editor (the
+   Session-Id trailers of its harvested commits). PR not mergeable → route by
+   blocker class (`editor.md` Phase 7b): our files broken → owning editor;
+   conflicts → owning editor rebases onto fresh upstream main; PRE-EXISTING
+   upstream red → NO editor pings, housekeeping-PR decision escalates to
+   Alexey; maintainer rejects/closes → owning editor reopens linked issues.
+5. **Maintainer behavior (facts, owner briefed 2026-08-26)**: Adolfo AUTO-ASSIGNS
+   new upstream issues to himself — that is a CI workflow, NOT intent to work on
+   them; an assignee is not a worker. He may also CLOSE our upstream PRs (and any
+   legacy upstream issues) — the reason is ALWAYS in the comments. Our NEW issues
+   live on the fork (item routing, owner 2026-08-27) where WE are the assigner. An issue/PR that looks "missing" is almost
+   always CLOSED: find it among closed ones and read the comments BEFORE
+   concluding anything. CLI comment output PAGINATES — later pages may hold the
+   decisive comment (`gh api ... --paginate` / `--page N`); never conclude from
+   the first page alone.
+6. **Fork-local CI = carrier namespace (`ci/*`, v0.4.16)**: local-only workflow
+   files live ONLY on `ci/*` branches (workflow_dispatch-shaped), NEVER on fork
+   `main` — anything under `.github/workflows/` on main rides the next PR diff
+   toward upstream. Dispatch locally via `gh workflow run --ref ci/<name>`.
+   After every upstream merge/port verify parity mechanically:
+   `./tools/oc-ci-parity` (exit 0 identical / 4 DRIFT listing / 6 api-fail) +
+   carrier proof-dispatch (compiler.md Step 7). *(owner order 2026-08-26)* **(c) DRIFT PERMANENT — owner ruling via "Fix all" 2026-08-27:** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by restoring the file.
+7. **Fork branch lifecycle (v0.4.24, owner "clean" sweep 2026-08-27)**: the fork carries
+   PERMANENT refs only — `main` (sync mirror, compiler rebase-port), `ci/quick-build-linux`
+   (carrier), `backup/pre-port-*` (until the port cycle settles) — plus short-lived
+   `leshchenko1979/<slug>` work branches. A work branch dies when its PR merges or the task
+   dies, and ONLY after its landing is PROVEN by one of: tip sha-reachable from upstream or
+   fork `main` · tip contained in `backup/pre-port-*` · exact mirror of a live upstream
+   branch · a MERGED PR (either repo) whose head is the branch. Deletion without proof is
+   forbidden — unproven branches stay and get reported to the owner. Every sweep archives
+   BEFORE deleting: tip tags `archive/<date>/<branch>`, an `--all` bundle, and a manifest,
+   so any deletion is reversible in one command. Sweep 2026-08-27: fork remote 92→13 heads,
+   53 local counterparts (both with full tag archives); branch heads riding OPEN PRs are
+   never deletable.
+
+
+## Hard rules (both roles)
+
+- Reports to Alexey (owner directive 2026-08-26): every issue/PR reference
+  carries the LINK behind the number (issues: `https://github.com/leshchenko1979/opencrabs/issues/N`
+  — the fork is the issues home; PRs: `https://github.com/adolfousier/opencrabs/pull/N`) — a bare `#N` is never enough; identify workers by TOPIC NAME
+  (Mermaid, Push to session, …), never by session UUID. Applies to every role's
+  reports, Supervisor's included.
+- ONLY the Supervisor edits skill files (`SKILL.md` / `editor.md` /
+  `compiler.md` / `supervisor.md`) — including the Compiler (decision 7,
+  2026-08-26). Workers propose via poll format or direct notify; they never
+  write.
+- Relay only PREDICATED claims (v0.4.6, from fabrication deviation #3): any
+  build/deploy/artifact claim you pass onward must carry evidence YOU verified
+  same-turn — run id against the API, sha against `ls-remote`/job-name embed,
+  binary against sha256. A claim verified by someone else's message is
+  unverified.
+- P1 REJECTED (owner verdict 2026-08-26 — "overengineering, don't do this"):
+  NO evidence-parameter mechanism goes into `session_notify` — no mandatory
+  evidence fields, no pattern-triggered enforcement, no tool change. The
+  relay-predication rule above is the SOLE control for fabrication-class
+  claims. Do not re-propose P1 in any form.
+- ISSUE ROUTING (owner directive 2026-08-27 14:08Z): NEW issues NEVER go to
+  `adolfousier/opencrabs` — every new issue (upstream-code bugs and fork-only
+  infra alike) is filed on the FORK `leshchenko1979/opencrabs`. Upstream
+  receives PRs ONLY: the body is a detailed description with the link(s) to the
+  original fork issue(s) at the END (`Original issue: <full fork URL>`) — never
+  `Closes #N`, which on upstream resolves against the WRONG issue space. WE
+  close the fork issue right after filing the PR. Fork issues are NEVER claimed
+  on GitHub (owner directive 2026-08-27 17:07Z): no tackling comments, no
+  assignment, no labels/reactions by any lane — claiming lives in the ledger
+  (`Issue-Ref` trailer + workers-ledger row); uniqueness sweeps stay read-only
+  search. Pre-2026-08-27 upstream issues
+  stay readable for uniqueness sweeps and legacy links; development-time
+  upstream contact is now PR-comments only (supersedes the 2026-08-22
+  issues/comment rule). PR SHIPMENT still gates on the 2026-08-25 directive:
+  feature COMPLETE + smoke evidence OWNER-APPROVED → the Editor harvests
+  fork-only commits and opens the upstream PR (procedure: `editor.md` Phase 7). APPROVAL GATE (v0.4.1): the Editor posts the
+  smoke evidence + an explicit approval request in its forum topic and WAITS —
+  Alexey's approval = his reply or a positive Telegram reaction to that request;
+  silence is NOT consent. Spontaneous / ad-hoc PRs remain forbidden.
+- CONSENT REGISTER (v0.4.17, incident 2026-08-26): an owner denial-ruling was
+  issued from codified text while the live consent sat unread in topic history.
+  Owner go-aheads — approval replies, positive reactions, smoke certifications —
+  are REGISTERED in `workers-ledger.json` `consents[]` ({timestamp, chat/topic,
+  message_id, verbatim quote, lane}) by whichever session sees them; gate checks
+  and rulings CITE register entries, never memory. A ruling that denies a
+  permission MUST first grep the register + chat record for existing consent.
+  Consent binds to the LANE/topic it was issued in unless tagged [ALL]: a bare
+  "smoke passed" formula certifies that lane's state; an explicit "open upstream
+  PR" imperative additionally authorizes shipment of that lane.
+  Machine gate (v0.4.21): `./tools/oc-consent-check --ledger workers-ledger.json
+  --check --msgid <id>` — exit 0 = cite the returned entry; exit 3 = NOT
+  registered → grep the chat record before issuing ANY permission ruling.
+- COMPILER INBOX POLICY (noise audit 2026-08-26, owner "fix all"): the
+  Compiler receives ONLY ORDERs (incl. verified re-deliveries), red-run
+  handoffs, E0308-class fix routing, receipts requests, owner directives,
+  supervisor roster-deltas. Status pings, unsolicited cycle summaries, ACK
+  reminders are FORBIDDEN — ACK bookkeeping is ledger-internal, never
+  messaged to workers.
+- ROLE-SCOPED BROADCASTS: messages reach non-owning roles ONLY when tagged
+  [ALL]; otherwise send strictly to the owning role. CC-everyone is noise.
+- ONE formal SMOKE verdict per editor-feature lane: exactly one PASS/FAIL;
+  duplicate confirmations are noise (#1227 lane double-report, 2026-08-26).
+- SMOKE-EVIDENCE PRECEDENCE (v0.4.18, owner directive 2026-08-27): prefer
+  smoke tests verifiable from LOGS over those requiring human verification.
+  A machine-checkable verdict — CI run conclusion via API, parsed build/test
+  logs, captured runtime or endpoint output — outranks "a human said it
+  passed"; request human confirmation ONLY where logs genuinely cannot cover
+  the claim (visual rendering, interactive UX), and then name EXACTLY what to
+  observe. Design smoke captures to be self-sufficient: every claim cites run
+  id + sha + step evidence, so any verdict is re-derivable from logs alone. Source-precedence ranks EVIDENCE quality only - it never conflates kinds: a green CI/build log stays CODE-TEST/build evidence and substitutes nothing for a behavioral SMOKE pass.
+- UPSTREAM CI GATE (v0.4.22, owner directive 2026-08-27; encodes
+  adolfousier/opencrabs CONTRIBUTING.md): NO upstream PR leaves a lane until
+  the owning worktree passed the exact CI triad with captured exit codes:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --lib --bins --tests --all-features -- -D warnings`
+  - `cargo test --all-features --verbose`
+  All three rc=0 BEFORE `gh pr create`; one red = fix cycle, not a filed
+  PR ("PRs that fail CI will not be reviewed" — their words). Receipts ride
+  the PR prep beside smoke evidence. Gate covers shipworthiness only;
+  owner approval + SMOKE pass remain separate required conditions.
+- Issue-first, no exceptions (2026-08-25): a DISCOVERED problem gets its issue
+  FILED before any fix work starts — on the FORK `leshchenko1979/opencrabs`
+  (owner directive 2026-08-27: ALL new issues, upstream-code bugs and fork-only
+  infra alike; upstream receives PRs only). Discoverer
+  files it (symptom + evidence); fixer claims via `Tackling` comment. Covers
+  task starts (`editor.md` Phase 1) AND mid-loop finds: red-build bugs, failed
+  smoke tests, defects in another editor's feature.
+- Restart scope: **`opencrabs-ops` ONLY.** The `family` and default-profile daemons
+  require Alexey's explicit approval EVERY time.
+- Never trust watcher exit codes alone — read the run's own `conclusion` via API.
+- BUILD TRIGGERS = exactly TWO (v0.4.3): an editor's `ORDER build <full-sha>`
+  to the Compiler, or Alexey's word — the Compiler's autonomous delta-check
+  cycle is RETIRED. Stray unordered commits get reported by the ~2 h watchdog
+  (`compiler.md` Step 1), never built autonomously. Mid-flight ORDER handling
+  = coalesce / ledger-hold — a SECOND dispatch is NEVER created (`compiler.md`
+  Step 1). SINGLE FLIGHT enforced twice: the compiler's own dispatch invariant
+  + the carrier-yml concurrency group (commit `1ae46000`).
+
+## Shared war stories (why these rules exist)
+
+| Rule | Incident |
+|------|----------|
+| Inputs from branch YAML, verify headSha | run #4 dispatched blind; run #2 built main |
+| Distrust watcher exit codes | watchers reported success on failed runs, 3× |
+| Foreign-WIP diff vs merge-base | branch carried another agent's dropped WIP |
+| User-unit awareness | system-scope queries found nothing; wrong restart path nearly used |
+| Inner-match exhaustiveness | E0004 cost one full CI cycle (run #5 fixed it) |
+| Build fork `main`, record headSha at dispatch | 2026-08-25: swapped a binary built from pre-merge `ebf44f69` while the session-notify merge (`10c73644`) landed on fork main mid-build — feature absent from the running bot |
+| `source_ref` = FULL 40-char sha, never short | run #32882515561: short sha → checkout fetched a branch literally named `<sha>*`, dead in 51 s |
+| Conflict-quality gate before push | run #32879949542: a hand-merge shipped E0308 red CI (full prose: `editor.md` Phase 6) |
+| Rebase-port, never resurrect duplicates | 2026-08-26: maintainer absorbed 4 of our PRs overnight (#1207/#1208/#1214/flood-governors); a literal 40-commit rebase would have replayed duplicate implementations against his reviewed rework — classification dropped 20+, ported 9 |
+| ORDER-era triggers + bounded ROLE_EXCEPTION | 2026-08-26 07:20 UTC: compiler authored the governor.rs E0308 fix while its author (61161247) slept through the owner's night window — a silent role breach. Now builds fire only on editor ORDER or owner word (sim-validated — sim = ORDER/queue simulation, paired-seed 600 reps, run 2026-08-26), and the breach is legal only as the bounded ROLE_EXCEPTION (`compiler.md` Step 2) |
+
+*Source of truth for procedure = these skill files. AGENTS.md carries only the pointer.*

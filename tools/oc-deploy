@@ -1,0 +1,1271 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-deploy — fleet ship/poll/swap script (target-process-20260827.md).
+#
+# ONE script for the ship -> build -> deploy loop, run as a background task
+# from the invoking agent (owner directive 2026-08-27 19:17Z: ship 2+3 and
+# poll 8-17 are the SAME script; the agent launches it, the runtime injects
+# the result). Replaces compiler dispatch+poll duties per staged plan:
+#   S0 inert (plan-only) -> S1 shadow ship (dispatch live, swaps stay
+#   compiler) -> S2 pilot swap -> S3 cutover (DONE 2026-08-28: compiler
+#   retired; poll = THE deploy path; runbook = compiler.md archived).
+#
+#   oc-deploy ship [--sha <40-hex>] [--features <set>] [--execute]
+#   oc-deploy poll [--execute]
+#   oc-deploy swap-execute --sha <40-hex> --run <id> [--features F]
+#                          [--artifact-dir D] [--drill]        # Phase B
+#   oc-deploy watch                    # stray-commit tripwire (report-only)
+#   oc-deploy contributors <old>..<new> | --deployed [--repo R]   # issue #24 D1
+#   oc-deploy fanout --run <id> [--dry-run]   # issue #24: mechanical notify fan-out
+#   oc-deploy --selftest
+#
+# S2 WIRING (2026-08-28, per s2-swap-journal-spec.md + owner tool-logging law):
+#   - swap-execute = Phase B body. Runs under a systemd-run --user TRANSIENT
+#     unit (spawned by init, not the opencrabs daemon) so the bounce it
+#     triggers cannot kill its own verifier. poll --execute at S2 hands off
+#     to that unit and exits BEFORE any bounce (Phase A/B split).
+#   - JOURNAL: $STATE_DIR/oc-deploy/journal/swap-<short>-<epoch>.jsonl —
+#     append-only, one fsync'd JSON line per state-changing step BEFORE the
+#     next step starts (auto-swap/backup/verify/install/seal/marker-write/
+#     restart/post-verify/receipt/rollback). Last present line = last
+#     completed step; a crash is reconstructable from the journal alone.
+#   - MARKERS: deployed.sha + deployed.meta.json written by THIS script
+#     between seal and restart (the 03:11Z gap: HQ had to hand-restore).
+#     Rollback restores markers + baseline/orders backups too.
+#   - LEDGER STAMP: every attempt (success OR rollback OR drill) ends with a
+#     flock'd workers-ledger stamp kind=swap-result quoting the journal.
+#   - AUTO-ROLLBACK: post-bounce verify fail = restore backup + restart +
+#     re-verify + stamp ROLLED_BACK + A2A owner ping, automatic.
+#   - NO CONSENT GATE (owner 2026-08-28 18:50Z: consent process ELIMINATED):
+#     GREEN carrier run + artifact verify IS the authorization -> auto-swap.
+#     Post-SMOKE-FAIL rollback stays the owner's call (no auto-rollback there);
+#     the swap-chain auto-rollback on post-bounce verify fail is unchanged.
+#
+# HARD SAFETY RULES (v0.4.27 + S2):
+#   - Plan-only UNLESS --execute. Every planned action prints as "PLAN: ...".
+#     NEVER bare exit 0 — plan mode always prints its full delta.
+#   - Kill file aborts EVERY invocation first (exit 9), selftest included.
+#     Either $STATE_DIR/oc-deploy.kill or /root/oc-work/oc-deploy.disabled.
+#   - Swap actions (poll execute + swap-execute) require stage >= S2.
+#   - Consent gate RETIRED 2026-08-28 (owner order): GREEN run -> auto-swap.
+#   - Shadow journal $STATE_DIR/oc-deploy-shadow.log records every run.
+#   - Bash-only, seconds of runtime, zero cargo.
+#
+# Exit codes: 0 ok/noop | 1 usage | 2 rebase/gate/push/verify/rollback fail
+#             / watch stray | 3 retired (was consent) | 4 stage gate / launch fail
+#             | 9 kill file
+# Deps: git, gh, jq, curl; oc-order-validate (ship execute);
+#       oc-artifact-verify + oc-seal-state (swap-execute real mode)
+# =============================================================================
+set -uo pipefail
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-deploy" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/skills/opencrabs-dev}"
+# Ledger resolution (v0.4.38, owner-approved 2026-08-29 "Go"): live runs MUST
+# hit the CANONICAL ledger. The old $STATE_DIR default kept a second ledger in
+# the skill dir — live swap stamps + fanout reads used it while supervisor
+# stamps went to the canonical file: two-file drift, baseline/orders backup
+# paths pointing at an empty dir, cycle counter reset 25->1 (incident
+# 2026-08-29). OC_LEDGER overrides everything; an explicit OC_DEPLOY_STATE_DIR
+# keeps selftest/battery fixtures isolated on their own ledger file.
+CANONICAL_LEDGER="/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json"
+if [ -n "${OC_LEDGER:-}" ]; then
+  LEDGER="$OC_LEDGER"
+elif [ -n "${OC_DEPLOY_STATE_DIR:-}" ]; then
+  LEDGER="$OC_DEPLOY_STATE_DIR/workers-ledger.json"
+else
+  LEDGER="$CANONICAL_LEDGER"
+fi
+[ -f "$LEDGER" ] && LEDGER="$(readlink -f "$LEDGER")"  # canonical path: never write through a symlink (mv replaces links -> split-brain; drill incident 2026-08-28)
+KILL_FILE="$STATE_DIR/oc-deploy.kill"
+KILL_FILE2="${OC_DEPLOY_KILL_FILE:-/root/oc-work/oc-deploy.disabled}"
+SHADOW="$STATE_DIR/oc-deploy-shadow.log"
+DEPLOYED="$STATE_DIR/deployed.sha"
+DEPLOYED_META="$STATE_DIR/deployed.meta.json"
+JOURNAL_DIR="$STATE_DIR/oc-deploy/journal"
+VALIDATE="${OC_DEPLOY_VALIDATE:-$STATE_DIR/tools/oc-order-validate}"
+# CONSENT tool var retired 2026-08-28 (consent process eliminated by owner order)
+ARTVERIFY="${OC_DEPLOY_ARTVERIFY:-$STATE_DIR/tools/oc-artifact-verify}"
+SEAL="${OC_DEPLOY_SEAL:-$STATE_DIR/tools/oc-seal-state}"
+ATTRIB="${OC_DEPLOY_ATTRIB:-$STATE_DIR/tools/oc-attrib}"   # issue #24 D1: contributors/fanout backend
+REMOTE="${OC_DEPLOY_REMOTE:-https://github.com/leshchenko1979/opencrabs.git}"
+FORK="${OC_DEPLOY_FORK:-leshchenko1979/opencrabs}"
+CARRIER_REF="ci/quick-build-linux"
+WF="quick-build-linux.yml"
+GH="${OC_DEPLOY_GH:-gh}"
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+
+# Phase B swap-target overrides (sandbox/selftest point these elsewhere)
+SWAP_TARGET="${OC_SWAP_TARGET:-/usr/local/bin/opencrabs}"
+BACKUP_DIR="${OC_SWAP_BACKUP_DIR:-/root/opencrabs-binary-backups}"
+RESTART_CMD="${OC_SWAP_RESTART_CMD:-systemctl --user restart opencrabs-ops.service}"
+ACTIVE_CMD="${OC_SWAP_ACTIVE_CMD:-systemctl --user is-active opencrabs-ops.service}"
+PID_CMD="${OC_SWAP_PID_CMD:-systemctl --user show -p MainPID --value opencrabs-ops.service}"
+SKIP_PROC="${OC_SWAP_SKIP_PROC:-0}"
+A2A_URL="${OC_A2A_URL-http://127.0.0.1:18791/a2a/v1}"
+LAUNCH="${OC_SWAP_LAUNCH:-systemd-run --user}"
+
+die() { echo "oc-deploy: $2" >&2; exit "$1"; }
+plan() { echo "PLAN: $*"; }
+stage() { jq -r '.meta.oc_deploy_stage // "S0"' "$LEDGER" 2>/dev/null || echo S0; }
+shadow_log() { # <op> <sha> <features> <result>
+  printf '%s\t%s\t%s\t%s\t%s\tstage=%s\n' \
+    "$(date -u +%FT%TZ)" "$1" "${2:--}" "${3:--}" "${4:--}" "$(stage)" \
+    >> "$SHADOW" 2>/dev/null || true
+}
+
+# ------------------------------------------------------- journal (S2 spec) --
+JF=""; SEQ=0
+journal_init() { # $1 = short label
+  mkdir -p "$JOURNAL_DIR"
+  JF="$JOURNAL_DIR/swap-$1-$(date +%s).jsonl"
+  : > "$JF"; SEQ=0
+}
+jline() { # $1=step  $2=exit(int|null)  $3=extra-json-object (optional)
+  SEQ=$((SEQ+1))
+  jq -cn --arg ts "$(date -u +%FT%TZ)" --argjson seq "$SEQ" --arg step "$1" \
+     --argjson exit "${2:-null}" --argjson extra "${3:-\{\}}" \
+     '{ts:$ts, seq:$seq, step:$step, exit:$exit} + $extra' >> "$JF"
+  sync -f "$JF" 2>/dev/null || sync 2>/dev/null || true
+}
+
+# -------------------------------------------------- ledger stamp (flock'd) --
+ledger_stamp() { # $1=by  $2=what  $3=kind
+  (
+    flock -x 9
+    local n tmp
+    n="$(jq '[.events[].n] | max // 0' "$LEDGER" 2>/dev/null || echo 0)"
+    tmp="$(mktemp)" || exit 4
+    jq --argjson n "$((n+1))" --arg t "$(date -u +%FT%TZ)" --arg by "$1" \
+       --arg what "$2" --arg kind "$3" \
+       '.events += [{n:$n, t:$t, by:$by, what:$what, kind:$kind}]' \
+       "$LEDGER" > "$tmp" && mv "$tmp" "$LEDGER"
+  ) 9>"$LEDGER.lock"
+}
+
+# ------------------------------------------------------------ A2A receipts --
+a2a_notify() { # $1=text ; exit 0 accepted
+  [ -n "$A2A_URL" ] || return 1
+  curl -fsS --max-time 15 -X POST "$A2A_URL" -H 'Content-Type: application/json' \
+    -d "$(jq -cn --arg t "$1" '{jsonrpc:"2.0", id:1, method:"message/send",
+         params:{message:{role:"ROLE_USER", parts:[{kind:"text", text:$t}]}}}')" \
+    >/dev/null 2>&1
+}
+
+a2a_notify_retry() { # $1=text — retry up to OC_A2A_TRIES (default 6), sleeping
+  # OC_A2A_RETRY_SLEEP (default 10s) between tries; returns a2a_notify's rc.
+  # WHY (2026-08-28, journal swap-87d3bcb8-1787916830 seq9 exit=1): the receipt
+  # races the daemon restart the swap itself just triggered — the gateway is
+  # down for several seconds, the single-shot POST died, and the owner never
+  # heard about a successful swap. Retrying makes the receipt survive the gap.
+  [ -n "$A2A_URL" ] || return 1
+  local n=0 max=${OC_A2A_TRIES:-6} s=${OC_A2A_RETRY_SLEEP:-10}
+  while :; do
+    a2a_notify "$1" && return 0
+    n=$((n+1)); [ "$n" -ge "$max" ] && return 1
+    if [ "$s" -gt 0 ]; then sleep "$s"; fi
+  done
+}
+
+# ------------------------------------------------------------------ selftest --
+# Fully offline: sandbox git remote + stub gh/validate/launch + a
+# sandbox swap target for the full DRILL chain (no daemon bounce in selftest).
+selftest() {
+  local T pass=0 fail=0 rc out
+  T="$(mktemp -d)" || return 1
+  export OC_DEPLOY_NO_WATCH=1  # piggyback OFF in selftest (explicit watch tests below run it for real)
+  local SD="$T/state"
+  mkdir -p "$SD/tools" "$SD/backups" "$T/bin"
+  local SELF_BIN="${1:-$SELF}"   # v0.4.38: $SELF is readlink -f'd at top; bare $0 died rc 127 when --selftest was invoked via relative path (re-exec after cd into tmp could not resolve it)
+  local SELF_DIR; SELF_DIR="$(dirname "$SELF_BIN")"
+  check_rc() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "SELFTEST FAIL: $1 rc=$2 want=$3"; fi; }
+  check_has() { case "$2" in *"$3"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "SELFTEST FAIL: $1 missing: $3" ;; esac; }
+  # stubs
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD/tools/val-ok";       chmod +x "$SD/tools/val-ok"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "$SD/tools/val-fail";     chmod +x "$SD/tools/val-fail"
+  # KERNEL D2: carrier features stubs (resolution aborts on read failure)
+  printf '#!/usr/bin/env bash\necho telegram\n' > "$SD/tools/carrier";      chmod +x "$SD/tools/carrier"
+  printf '#!/usr/bin/env bash\nexit 3\n'        > "$SD/tools/carrier-fail"; chmod +x "$SD/tools/carrier-fail"
+  # consent stubs retired 2026-08-28 (consent process eliminated)
+  printf '#!/usr/bin/env bash\necho "launch $*" >> "%s"; exit 0\n' "$T/launch.log" > "$SD/launch"; chmod +x "$SD/launch"
+  # notify shim (verb stub): logs every call; dead uuid bbbb -> rc 2. Created
+  # early so the swap-execute DRILL case (11) can assert zero verb calls.
+  cat > "$SD/notify" <<'NSTUB'
+#!/usr/bin/env bash
+echo "$*" >> "${NOTIFY_LOG:?}"
+for last; do :; done
+[ "$last" = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" ] && exit 2
+exit 0
+NSTUB
+  chmod +x "$SD/notify"
+  export NOTIFY_LOG="$T/notify.log"; : > "$NOTIFY_LOG"
+  cat > "$SD/gh" <<'STUB'
+#!/usr/bin/env bash
+[ -n "${GH_LOG:-}" ] && echo "$*" >> "$GH_LOG"
+case "$*" in
+  *runs?status=failure*) echo '{"workflow_runs":[{"id":888,"status":"completed","conclusion":"failure"}]}' ;;
+  *actions/runs/777/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, telegram)","conclusion":"success"}]}' ;;
+  *actions/runs/777*) echo '{"status":"completed","conclusion":"success"}' ;;
+  *actions/runs/888/jobs*) echo '{"jobs":[{"name":"ORDER gates","conclusion":"success"},{"name":"Linux amd64 (eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9001"}]}' ;;
+  *workflows/quick-build-linux.yml/runs*) echo '{"workflow_runs":[{"id":111}]}' ;;
+  *actions/runs/222/jobs*|*actions/runs/555/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (cccccccccccccccccccccccccccccccccccccccc, telegram)"}]}' ;;
+  *actions/runs/333/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (dddddddddddddddddddddddddddddddddddddddd, telegram)"}]}' ;;
+  *actions/runs/668/jobs*) echo '{"jobs":[{"name":"Linux amd64 (ffffffffffffffffffffffffffffffffffffffff, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9002"}]}' ;;
+  *check-runs/9002/annotations*) echo '[]' ;;
+  *actions/runs/666/jobs*|*actions/runs/667/jobs*|*actions/runs/669/jobs*|*actions/runs/670/jobs*) echo '{"jobs":[{"name":"ORDER gates","conclusion":"success"},{"name":"Linux amd64 (eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9001"}]}' ;;
+  *check-runs/9001/annotations*) echo '[{"path":"bad.txt","start_line":3}]' ;;
+  *actions/runs/444*) echo '{"status":"in_progress","conclusion":null}' ;;
+  *actions/runs/222*|*actions/runs/333*|*actions/runs/555*) echo '{"status":"completed","conclusion":"success"}' ;;
+  *actions/runs/66*|*actions/runs/67*|*actions/runs/77*|*actions/runs/88*)
+    RED=""
+    case "$*" in *actions/runs/66*|*actions/runs/67*|*actions/runs/77*|*actions/runs/88*) RED=1 ;; esac
+    if [ -n "$RED" ] && [ -f "${OC_DEPLOY_STATE_DIR:-}/red-head" ]; then
+      echo "{\"status\":\"completed\",\"conclusion\":\"failure\",\"head_sha\":\"$(cat "${OC_DEPLOY_STATE_DIR}/red-head")\"}"
+    else
+      echo '{"status":"completed","conclusion":"failure"}'
+    fi ;;
+  *runs/111/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, telegram)"}]}' ;;
+  *) echo '{}' ;;
+esac
+STUB
+  chmod +x "$SD/gh"
+  # sandbox git: bare remote at c1, repo ahead at c2 (FF-able)
+  git init -q --bare -b main "$T/remote.git"
+  git init -q -b main "$T/repo"
+  git -C "$T/repo" config user.email t@t; git -C "$T/repo" config user.name t
+  echo one > "$T/repo/f1"; git -C "$T/repo" add f1; git -C "$T/repo" commit -qm one
+  echo two > "$T/repo/f2"; git -C "$T/repo" add f2; git -C "$T/repo" commit -qm two
+  local SHA2; SHA2="$(git -C "$T/repo" rev-parse HEAD)"
+  git -C "$T/repo" push -q "$T/remote.git" HEAD~1:refs/heads/main   # remote main = c1
+  export GH_LOG="$T/gh.log"; : > "$GH_LOG"
+
+  # 1. usage (no mode) -> exit 1
+  "$SELF_BIN" >/dev/null 2>&1; check_rc "usage-no-mode" $? 1
+  # 2. unknown arg -> exit 1
+  "$SELF_BIN" ship --bogus >/dev/null 2>&1; check_rc "unknown-arg" $? 1
+  # 3. kill file -> exit 9 even for valid mode
+  mkdir -p "$T/kills"; printf x > "$T/kills/oc-deploy.kill"
+  OC_DEPLOY_STATE_DIR="$T/kills" "$SELF_BIN" poll >/dev/null 2>&1; check_rc "kill-file" $? 9
+  # 3b. contributors (issue #24 D1): isolated fixture repo — never touches the
+  #     ship sandbox below (its HEAD~ refs would shift if we committed here)
+  git init -q -b main "$T/crepo"
+  git -C "$T/crepo" config user.email t@t; git -C "$T/crepo" config user.name t
+  git -C "$T/crepo" commit -q --allow-empty -m base
+  local C_BASE; C_BASE="$(git -C "$T/crepo" rev-parse HEAD)"
+  git -C "$T/crepo" commit -q --allow-empty -m "feat: trailer commit
+
+Session-Id: 11111111-2222-3333-4444-555555555555
+Issue-Ref: #99"
+  local C_TIP; C_TIP="$(git -C "$T/crepo" rev-parse HEAD)"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_ATTRIB="$SELF_DIR/oc-attrib" \
+    "$SELF_BIN" contributors "$C_BASE..$C_TIP" --repo "$T/crepo" 2>&1)"; rc=$?
+  check_rc "contributors-rc" $rc 0
+  check_has "contributors-uuid" "$out" "11111111-2222-3333-4444-555555555555"
+  check_has "contributors-issue" "$out" "#99"
+  check_has "contributors-sha7" "$out" "$(printf '%.7s' "$C_TIP")"
+  [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: contributors row count != 1"; }
+  "$SELF_BIN" contributors >/dev/null 2>&1; check_rc "contributors-usage" $? 1
+  OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_ATTRIB="$SELF_DIR/oc-attrib" \
+    "$SELF_BIN" contributors --deployed --repo "$T/crepo" >/dev/null 2>&1; check_rc "contributors-deployed-nomarker" $? 5
+  # 4. ship PLAN mode: no mutation, PLAN lines, shadow entry, carrier-default features
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$SHA2" 2>&1)"; rc=$?
+  check_rc "ship-plan-rc" $rc 0
+  check_has "ship-plan-lines" "$out" "would: git push"
+  check_has "ship-plan-ff" "$out" "FF ok"
+  check_has "ship-plan-carrier-features" "$out" "features=telegram"
+  # 4b. carrier read FAIL -> ship aborts (KERNEL D2: no silent fallback set)
+  (cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_CARRIER="$SD/tools/carrier-fail" \
+    "$SELF_BIN" ship --sha "$SHA2" >/dev/null 2>&1); check_rc "carrier-fail-aborts" $? 2
+  check_has "ship-plan-complete" "$out" "plan complete"
+  if [ "$(git -C "$T/remote.git" rev-parse main)" != "$SHA2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "SELFTEST FAIL: plan mode mutated remote"; fi
+  grep -q "ship-plan" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no ship-plan shadow row"; }
+  # 5. ship execute non-FF -> exit 2 (diverge remote main)
+  git -C "$T/repo" checkout -qb div HEAD~1
+  echo div > "$T/repo/f3"; git -C "$T/repo" add f3; git -C "$T/repo" commit -qm div
+  git -C "$T/repo" push -q -f "$T/remote.git" HEAD:refs/heads/main
+  (cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$SHA2" --execute >/dev/null 2>&1); check_rc "ship-nonff" $? 2
+  # 6. ship execute end-to-end: restore FF remote, fake gh + stub validate
+  git -C "$T/repo" push -q -f "$T/remote.git" HEAD~1:refs/heads/main   # back to c1
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$SHA2" --execute 2>&1)"; rc=$?
+  check_rc "ship-exec-rc" $rc 0
+  check_has "ship-exec-gates" "$out" "4/4 PASS"
+  check_has "ship-exec-dispatch" "$out" "dispatched carrier run"
+  if [ "$(git -C "$T/remote.git" rev-parse main)" = "$SHA2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "SELFTEST FAIL: main not pushed"; fi
+  grep -q "workflow run" "$GH_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: gh dispatch not called"; }
+  grep -q "dispatched" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no dispatched shadow row"; }
+  # 7. ship execute gate-fail -> exit 2 (validator stub exits 2; push is no-op)
+  (cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-fail" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$SHA2" --execute >/dev/null 2>&1); check_rc "ship-gate-fail" $? 2
+  grep -q "gate-fail" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no gate-fail shadow row"; }
+  # 8. poll plan mode at S0: swap LOCKED, sha decoded from BUILD job name
+  #    (jobs[0] is the ORDER gates job with no sha embed — decoder must skip it)
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" "$SELF_BIN" poll 2>&1)"; rc=$?
+  check_rc "poll-plan-rc" $rc 0
+  check_has "poll-decodes-sha" "$out" "built sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  check_has "poll-swap-locked" "$out" "swap LOCKED"
+  # 9. poll at S2: stage fixture (consent gate retired 2026-08-28 — GREEN run
+  #    + artifact verify is the authorization now)
+  printf '{"meta":{"oc_deploy_stage":"S2"}}' > "$SD/workers-ledger.json"
+  # 10. poll at S2, --execute -> HANDOFF to launch stub (Phase A
+  #     exits pre-bounce); backup listed explicitly in the plan line
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_SWAP_LAUNCH="$SD/launch" "$SELF_BIN" poll --execute 2>&1)"; rc=$?
+  check_rc "poll-handoff-rc" $rc 0
+  check_has "poll-handoff" "$out" "HANDOFF"
+  check_has "poll-plan-backup" "$out" "backup"
+  grep -q "swap-execute --sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "$T/launch.log" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: launch stub not called with swap-execute"; }
+  grep -q -- "--features telegram" "$T/launch.log" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: carrier-resolved features not handed to swap"; }
+  grep -q "handed-off" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no handed-off shadow row"; }
+  # 11. swap-execute DRILL in sandbox: full auto-swap->backup->install->marker->
+  #     restart->post-verify-FAIL->rollback->re-verify->stamp chain, no bounce
+  printf 'v1-fake-binary' > "$T/bin/oc-fake"; chmod +x "$T/bin/oc-fake"
+  printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD/workers-ledger.json"
+  echo prev > "$SD/deployed.sha"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_TARGET="$T/bin/oc-fake" \
+    OC_SWAP_BACKUP_DIR="$SD/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_A2A_URL="" \
+    OC_DEPLOY_NOTIFY="$SD/notify" \
+    "$SELF_BIN" swap-execute --sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    --run 111 --features telegram --drill 2>&1)"; rc=$?
+  check_rc "drill-rc" $rc 0
+  check_has "drill-verdict" "$out" "DRILL COMPLETE"
+  [ ! -s "$NOTIFY_LOG" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: drill performed verb calls"; }
+  local JFILES; JFILES="$(ls "$SD/oc-deploy/journal/" 2>/dev/null | grep -c '^swap-')"
+  [ "$JFILES" -ge 1 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no drill journal file"; }
+  local JL; JL="$(ls "$SD/oc-deploy/journal/"swap-* | head -1)"
+  local st; for st in auto-swap backup verify install seal marker-write restart post-verify rollback receipt; do
+    grep -q "\"step\":\"$st\"" "$JL" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: journal missing step $st"; }
+  done
+  [ "$(cat "$SD/deployed.sha")" = "prev" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: deployed.sha not restored after rollback"; }
+  jq -e '[.events[] | select(.kind=="swap-result")] | length == 1' "$SD/workers-ledger.json" >/dev/null \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no swap-result ledger stamp"; }
+  grep -lq "v1-fake-binary" "$SD/backups/"* 2>/dev/null && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: backup file missing/wrong content"; }
+  # 12. RETIRED 2026-08-28 (was swap-consent-missing; consent process eliminated)
+  # 13. swap-execute below S2 -> exit 4 (stage gate)
+  printf '{"meta":{"oc_deploy_stage":"S1"}}' > "$SD/workers-ledger.json"
+  OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_TARGET="$T/bin/oc-fake" \
+    "$SELF_BIN" swap-execute --sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    --run 111 --drill >/dev/null 2>&1; check_rc "swap-stage-gate" $? 4
+  # 14. watchdog: CLEAN when fork main tip == deployed.sha
+  local WTIP; WTIP="$(git -C "$T/remote.git" rev-parse main)"
+  printf '%s\n' "$WTIP" > "$SD/deployed.sha"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" "$SELF_BIN" watch 2>&1)"; rc=$?
+  check_rc "watch-clean-rc" $rc 0
+  check_has "watch-clean-line" "$out" "WATCH-CLEAN"
+  # 15. watchdog: ALERT on a stray commit pushed outside the pipeline
+  git -C "$T/repo" fetch -q "$T/remote.git" main
+  git -C "$T/repo" checkout -qB watchtest FETCH_HEAD
+  echo stray > "$T/repo/f-stray"; git -C "$T/repo" add f-stray; git -C "$T/repo" commit -qm stray
+  git -C "$T/repo" push -q "$T/remote.git" HEAD:refs/heads/main
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" OC_DEPLOY_GH="$SD/gh" "$SELF_BIN" watch 2>&1)"; rc=$?
+  check_rc "watch-alert-rc" $rc 2
+  check_has "watch-alert-line" "$out" "WATCH-ALERT"
+  grep -q "ALERT:stray" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no watch alert shadow row"; }
+  # 16. watchdog: a sha this tool dispatched IS covered (shadow log)
+  printf '2026-01-01T00:00:00Z\tship\t%s\ttelegram\tdispatched\tstage=S3\n' "$(git -C "$T/remote.git" rev-parse main)" >> "$SD/oc-deploy-shadow.log"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" "$SELF_BIN" watch 2>&1)"; rc=$?
+  check_rc "watch-covered-rc" $rc 0
+  check_has "watch-covered-line" "$out" "WATCH-CLEAN"
+  # 17. fanout GREEN leg (issue #24): deployed run -> one notify per session,
+  #     dead uuid -> skip journal line; idempotent re-run is a no-op
+  printf 'cccccccccccccccccccccccccccccccccccccccc\n' > "$SD/deployed.sha"
+  printf '{"prev_sha":"0000000000000000000000000000000000000000","features":"telegram"}' > "$SD/deployed.meta.json"
+  printf '#!/usr/bin/env bash\nprintf "aaaaaaaa-1111-2222-3333-444444444444\\t#99\\tabc1234\\nbbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\\t-\\tdef5678\\n(unsigned)\\t-\\t9999999\\n"\n' > "$SD/tools/attrib-stub"
+  chmod +x "$SD/tools/attrib-stub"
+  : > "$NOTIFY_LOG"  # shim created in stubs section; cleared per-case
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 222 2>&1)"; rc=$?
+  check_rc "fanout-green-rc" $rc 0
+  check_has "fanout-green-counts" "$out" "notified=1 skipped=1"
+  grep -q "aaaaaaaa-1111" "$NOTIFY_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: live uuid not notified"; }
+  grep -q "bbbbbbbb-bbbb" "$NOTIFY_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: dead uuid attempt missing"; }
+  grep -q "(unsigned)" "$NOTIFY_LOG" && { fail=$((fail+1)); echo "SELFTEST FAIL: unsigned row notified"; } || pass=$((pass+1))
+  local FJ; FJ="$(ls "$SD/oc-deploy/journal/"fanout-222-*.jsonl 2>/dev/null | head -1)"
+  [ -n "$FJ" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no fanout journal file"; }
+  if [ -n "$FJ" ]; then
+    for st in fanout-start contributors notified skip fanout-end; do
+      grep -q "\"step\":\"$st\"" "$FJ" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: fanout journal missing step $st"; }
+    done
+    grep -q '"reason":"dead"' "$FJ" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no skip reason=dead line"; }
+  fi
+  jq -e '.runs["222"].notified == 1' "$SD/fanout.state" >/dev/null \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: fanout.state not marked"; }
+  # 17b. idempotent re-run: no new notify calls
+  local NL1; NL1="$(wc -l < "$NOTIFY_LOG")"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 222 2>&1)"; rc=$?
+  check_rc "fanout-idempotent-rc" $rc 0
+  check_has "fanout-idempotent-line" "$out" "reason=done"
+  [ "$(wc -l < "$NOTIFY_LOG")" = "$NL1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: re-run sent new notifies"; }
+  # 17c. GREEN run not yet deployed -> noop, NOT marked done
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 333 2>&1)"; rc=$?
+  check_rc "fanout-notdeployed-rc" $rc 0
+  check_has "fanout-notdeployed-line" "$out" "not deployed yet"
+  jq -e '.runs["333"]' "$SD/fanout.state" >/dev/null 2>&1 && { fail=$((fail+1)); echo "SELFTEST FAIL: not-deployed run marked done"; } || pass=$((pass+1))
+  # 17d. non-terminal run -> rc 4
+  OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" \
+    "$SELF_BIN" fanout --run 444 >/dev/null 2>&1; check_rc "fanout-noterminal" $? 4
+  # 17e. dry-run: counts but never calls the verb, never marks done
+  local NL2; NL2="$(wc -l < "$NOTIFY_LOG")"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 555 --dry-run 2>&1)"; rc=$?
+  check_rc "fanout-dry-rc" $rc 0
+  check_has "fanout-dry-counts" "$out" "notified=2 skipped=0"   # verb never consulted in dry-run: dead uuids count as notified
+  [ "$(wc -l < "$NOTIFY_LOG")" = "$NL2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: dry-run called the verb"; }
+  jq -e '.runs["555"]' "$SD/fanout.state" >/dev/null 2>&1 && { fail=$((fail+1)); echo "SELFTEST FAIL: dry-run marked done"; } || pass=$((pass+1))
+  # 17f. RED leg fixture 1 — culprit blamed, innocent run owner untouched, suspect cc
+  git init -q --bare -b main "$T/red1.git"
+  git init -q -b main "$T/redc1"; git -C "$T/redc1" remote add origin "$T/red1.git"; git -C "$T/redc1" config user.email t@t; git -C "$T/redc1" config user.name t
+  printf 'l1\nl2\nv1\nl4\nl5\nl6\nl7\n' > "$T/redc1/bad.txt"
+  git -C "$T/redc1" add bad.txt; git -C "$T/redc1" commit -qm base
+  git -C "$T/redc1" push -q "$T/red1.git" HEAD
+  git clone -q "$T/red1.git" "$T/redw1"; git -C "$T/redw1" config user.email t@t; git -C "$T/redw1" config user.name t
+  sed -i 's/^v1$/v2/' "$T/redw1/bad.txt"
+  git -C "$T/redw1" add bad.txt
+  git -C "$T/redw1" commit -qm "feat: culprit change
+
+Session-Id: cccccccc-1111-2222-3333-444444444444
+Issue-Ref: #101"
+  git -C "$T/redw1" push -q origin HEAD
+  local RHEAD1; RHEAD1="$(git -C "$T/redw1" rev-parse HEAD)"
+  printf '%s\n' "$RHEAD1" > "$SD/red-head"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_REPO="$T/redc1" OC_DEPLOY_REMOTE="$T/red1.git" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 666 2>&1)"; rc=$?
+  check_rc "fanout-red-rc" $rc 0
+  check_has "fanout-red-counts" "$out" "notified=1 skipped=0 unowned=0"
+  grep -q "cccccccc-1111" "$NOTIFY_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: culprit not notified"; }
+  grep -q "bbbbbbbb-bbbb" "$NOTIFY_LOG" && { fail=$((fail+1)); echo "SELFTEST FAIL: innocent owner notified"; } || pass=$((pass+1))
+  local FJ2; FJ2="$(ls "$SD/oc-deploy/journal/"fanout-666-*.jsonl 2>/dev/null | head -1)"
+  grep -q '"step":"attributed"' "$FJ2" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no attributed line"; }
+  grep '"step":"attributed"' "$FJ2" | grep -q "cccccccc-1111" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: attributed missing blamed uuid"; }
+  grep '"step":"attributed"' "$FJ2" | grep -q '"suspect":\[\]' && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: suspect set not empty in fixture 1"; }
+  grep '"step":"notified"' "$FJ2" | grep -q '"role":"blamed"' && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no blamed-role notify line"; }
+  jq -e '.runs["666"].notified == 1' "$SD/fanout.state" >/dev/null && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: red run not marked done"; }
+  # 17g. RED fixture 2 — suspect cc: innocent earlier toucher of the blamed file
+  git init -q --bare -b main "$T/red2.git"
+  git init -q -b main "$T/redc2"; git -C "$T/redc2" remote add origin "$T/red2.git"; git -C "$T/redc2" config user.email t@t; git -C "$T/redc2" config user.name t
+  printf 'l1\nl2\nv1\nl4\nl5\nl6\nl7\n' > "$T/redc2/bad.txt"
+  git -C "$T/redc2" add bad.txt; git -C "$T/redc2" commit -qm base
+  git -C "$T/redc2" push -q "$T/red2.git" HEAD
+  git clone -q "$T/red2.git" "$T/redw2"; git -C "$T/redw2" config user.email t@t; git -C "$T/redw2" config user.name t
+  sed -i 's/^v1$/v1a/' "$T/redw2/bad.txt"; git -C "$T/redw2" add bad.txt
+  git -C "$T/redw2" commit -qm "chore: suspect touches file
+
+Session-Id: dddddddd-1111-2222-3333-444444444444"
+  sed -i 's/^v1a$/v2/' "$T/redw2/bad.txt"; git -C "$T/redw2" add bad.txt
+  git -C "$T/redw2" commit -qm "feat: culprit change
+
+Session-Id: cccccccc-1111-2222-3333-444444444444"
+  git -C "$T/redw2" push -q origin HEAD
+  printf '%s\n' "$(git -C "$T/redw2" rev-parse HEAD)" > "$SD/red-head"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_REPO="$T/redc2" OC_DEPLOY_REMOTE="$T/red2.git" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 670 2>&1)"; rc=$?
+  check_rc "fanout-suspect-rc" $rc 0
+  check_has "fanout-suspect-counts" "$out" "notified=2 skipped=0 unowned=0"
+  grep -q "suspect cc" "$NOTIFY_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no suspect-role notify"; }
+  grep '"step":"attributed"' "$(ls "$SD/oc-deploy/journal/"fanout-670-*.jsonl | head -1)" | grep -q "dddddddd-1111" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: suspect uuid missing from attributed line"; }
+  # 17h. RED fixture 3 — blamed commit has NO trailer: unowned, nothing notified
+  git init -q --bare -b main "$T/red3.git"
+  git init -q -b main "$T/redc3"; git -C "$T/redc3" remote add origin "$T/red3.git"; git -C "$T/redc3" config user.email t@t; git -C "$T/redc3" config user.name t
+  printf 'l1\nl2\nv1\nl4\nl5\nl6\nl7\n' > "$T/redc3/bad.txt"
+  git -C "$T/redc3" add bad.txt; git -C "$T/redc3" commit -qm base
+  git -C "$T/redc3" push -q "$T/red3.git" HEAD
+  git clone -q "$T/red3.git" "$T/redw3"; git -C "$T/redw3" config user.email t@t; git -C "$T/redw3" config user.name t
+  sed -i 's/^v1$/v2/' "$T/redw3/bad.txt"; git -C "$T/redw3" add bad.txt
+  git -C "$T/redw3" commit -qm "chore: change without trailer"
+  git -C "$T/redw3" push -q origin HEAD
+  printf '%s\n' "$(git -C "$T/redw3" rev-parse HEAD)" > "$SD/red-head"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_REPO="$T/redc3" OC_DEPLOY_REMOTE="$T/red3.git" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 667 2>&1)"; rc=$?
+  check_rc "fanout-unowned-rc" $rc 0
+  check_has "fanout-unowned-counts" "$out" "notified=0 skipped=0 unowned=1"
+  [ ! -s "$NOTIFY_LOG" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: unowned commit notified someone"; }
+  grep '"step":"unowned"' "$(ls "$SD/oc-deploy/journal/"fanout-667-*.jsonl | head -1)" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no unowned journal line"; }
+  # 17i. RED fixture 4 — zero annotations: range fallback + HUMAN-FLAG
+  git init -q --bare -b main "$T/red4.git"
+  git init -q -b main "$T/redc4"; git -C "$T/redc4" remote add origin "$T/red4.git"; git -C "$T/redc4" config user.email t@t; git -C "$T/redc4" config user.name t
+  echo x > "$T/redc4/f.txt"; git -C "$T/redc4" add f.txt; git -C "$T/redc4" commit -qm base
+  git -C "$T/redc4" commit -q --allow-empty -m "feat: trailer commit
+
+Session-Id: 99999999-8888-7777-6666-555555555555"
+  git -C "$T/redc4" push -q "$T/red4.git" HEAD
+  printf '%s\n' "$(git -C "$T/redc4" rev-parse HEAD)" > "$SD/red-head"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_REPO="$T/redc4" OC_DEPLOY_REMOTE="$T/red4.git" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 668 2>&1)"; rc=$?
+  check_rc "fanout-nosite-rc" $rc 0
+  grep -q "99999999-8888" "$NOTIFY_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: fallback did not notify range session"; }
+  grep -q "HUMAN-FLAG" "$NOTIFY_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: fallback text missing HUMAN-FLAG"; }
+  # 17j. RED fixture 5 — culprit session DEAD: skip journal, run still completes
+  git init -q --bare -b main "$T/red5.git"
+  git init -q -b main "$T/redc5"; git -C "$T/redc5" remote add origin "$T/red5.git"; git -C "$T/redc5" config user.email t@t; git -C "$T/redc5" config user.name t
+  printf 'l1\nl2\nv1\nl4\nl5\nl6\nl7\n' > "$T/redc5/bad.txt"
+  git -C "$T/redc5" add bad.txt; git -C "$T/redc5" commit -qm base
+  git -C "$T/redc5" push -q "$T/red5.git" HEAD
+  git clone -q "$T/red5.git" "$T/redw5"; git -C "$T/redw5" config user.email t@t; git -C "$T/redw5" config user.name t
+  sed -i 's/^v1$/v2/' "$T/redw5/bad.txt"; git -C "$T/redw5" add bad.txt
+  git -C "$T/redw5" commit -qm "feat: dead-session change
+
+Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+  git -C "$T/redw5" push -q origin HEAD
+  printf '%s\n' "$(git -C "$T/redw5" rev-parse HEAD)" > "$SD/red-head"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_REPO="$T/redc5" OC_DEPLOY_REMOTE="$T/red5.git" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 669 2>&1)"; rc=$?
+  check_rc "fanout-deadculprit-rc" $rc 0
+  check_has "fanout-deadculprit-counts" "$out" "notified=0 skipped=1 unowned=0"
+  grep '"step":"skip"' "$(ls "$SD/oc-deploy/journal/"fanout-669-*.jsonl | head -1)" | grep -q '"reason":"dead"' \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: dead culprit not skip-journaled"; }
+  # 17k. wiring GREEN tail (issue #24): non-drill swap driven to GREEN
+  #      completion in sandbox -> fanout fired EXACTLY ONCE, fanout-end
+  #      journaled BEFORE the swap-result ledger stamp.
+  local SD2="$T/state2" FJ2 N_FJ2 FETS LETS
+  mkdir -p "$SD2/tools" "$SD2/backups" "$T/art"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD2/tools/oc-artifact-verify"; chmod +x "$SD2/tools/oc-artifact-verify"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD2/tools/oc-seal-state";     chmod +x "$SD2/tools/oc-seal-state"
+  printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD2/workers-ledger.json"
+  echo prev > "$SD2/deployed.sha"
+  printf 'v1-artifact' > "$T/art/opencrabs"; chmod +x "$T/art/opencrabs"
+  printf 'v0-current' > "$T/bin/oc-fake2"; chmod +x "$T/bin/oc-fake2"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD2" OC_SWAP_TARGET="$T/bin/oc-fake2" \
+    OC_SWAP_BACKUP_DIR="$SD2/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+    OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_REPO="$T/crepo" OC_DEPLOY_REMOTE="$T/remote.git" \
+    "$SELF_BIN" swap-execute --sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    --run 777 --features telegram --artifact-dir "$T/art" 2>&1)"; rc=$?
+  check_rc "wire-green-rc" $rc 0
+  check_has "wire-green-complete" "$out" "SWAP COMPLETE"
+  N_FJ2="$(ls "$SD2/oc-deploy/journal/"fanout-777-*.jsonl 2>/dev/null | wc -l)"
+  [ "$N_FJ2" = "1" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: fanout not invoked exactly once (journals=$N_FJ2)"; }
+  FJ2="$(ls "$SD2/oc-deploy/journal/"fanout-777-*.jsonl 2>/dev/null | head -1)"
+  grep -q '"step":"fanout-end"' "$FJ2" 2>/dev/null \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: wiring fanout no fanout-end"; }
+  FETS="$(grep '"step":"fanout-end"' "$FJ2" 2>/dev/null | tail -1 | jq -r '.ts' 2>/dev/null)"
+  LETS="$(jq -r '[.events[] | select(.kind=="swap-result")][-1].t' "$SD2/workers-ledger.json" 2>/dev/null)"
+  if [ -n "$FETS" ] && [ -n "$LETS" ] && { [ "$FETS" \< "$LETS" ] || [ "$FETS" = "$LETS" ]; }; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1)); echo "SELFTEST FAIL: fanout-end not before ledger stamp (FETS=$FETS LETS=$LETS)"
+  fi
+  grep -q "aaaaaaaa-1111" "$NOTIFY_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: wiring fanout did not notify live uuid"; }
+  jq -e '.runs["777"]' "$SD2/fanout.state" >/dev/null 2>&1 \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: wiring fanout.state unmarked"; }
+  # 17l. NOFANOUT guard: swap completes, fan-out suppressed entirely.
+  local SD3="$T/state3"
+  mkdir -p "$SD3/tools" "$SD3/backups"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD3/tools/oc-artifact-verify"; chmod +x "$SD3/tools/oc-artifact-verify"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD3/tools/oc-seal-state";     chmod +x "$SD3/tools/oc-seal-state"
+  printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD3/workers-ledger.json"
+  echo prev > "$SD3/deployed.sha"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD3" OC_SWAP_TARGET="$T/bin/oc-fake2" \
+    OC_SWAP_BACKUP_DIR="$SD3/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+    OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_NOFANOUT=1 \
+    "$SELF_BIN" swap-execute --sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    --run 777 --features telegram --artifact-dir "$T/art" 2>&1)"; rc=$?
+  check_rc "wire-nofanout-rc" $rc 0
+  check_has "wire-nofanout-complete" "$out" "SWAP COMPLETE"
+  [ -z "$(ls "$SD3/oc-deploy/journal/"fanout-777-*.jsonl 2>/dev/null)" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: NOFANOUT still ran fanout"; }
+  [ ! -f "$SD3/fanout.state" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: NOFANOUT marked state"; }
+  [ ! -s "$NOTIFY_LOG" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: NOFANOUT notified"; }
+  # 17m. poll RED scan (issue #24 wiring): latest failed carrier run fans out
+  #      (blame path via 9001 annotations); second poll is idempotent no-op.
+  rm -f "$SD/oc-deploy/journal/"fanout-888-*.jsonl   # clear piggyback noise from earlier poll cases
+  printf '%s\n' "$(git -C "$T/redw1" rev-parse HEAD)" > "$SD/red-head"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_REPO="$T/redc1" OC_DEPLOY_REMOTE="$T/red1.git" \
+    OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" "$SELF_BIN" poll 2>&1)"; rc=$?
+  check_rc "poll-redscan-rc" $rc 0
+  check_has "poll-redscan-line" "$out" "RED scan: run=888"
+  check_has "poll-redscan-notified" "$out" "notified=1"
+  grep -q "cccccccc-1111" "$NOTIFY_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: RED scan did not notify culprit"; }
+  jq -e '.runs["888"]' "$SD/fanout.state" >/dev/null 2>&1 \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: RED scan state unmarked"; }
+  local NJ1; NJ1="$(ls "$SD/oc-deploy/journal/"fanout-888-*.jsonl 2>/dev/null | wc -l)"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_REPO="$T/redc1" OC_DEPLOY_REMOTE="$T/red1.git" \
+    OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" "$SELF_BIN" poll 2>&1)"; rc=$?
+  check_rc "poll-redscan-idem-rc" $rc 0
+  check_has "poll-redscan-idem" "$out" "reason=done"
+  [ "$(ls "$SD/oc-deploy/journal/"fanout-888-*.jsonl 2>/dev/null | wc -l)" = "$NJ1" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: idempotent RED scan made a new journal"; }
+  echo "oc-deploy selftest: $pass pass, $fail fail"
+  rm -rf "$T"
+  [ "$fail" = 0 ]
+}
+
+# ----------------------------------------------------- contributors (#24) --
+# issue #24 D1: DISTINCT Session-Id set over a commit range, machine-parseable
+# TSV: uuid <TAB> issue_refs <TAB> sha7s. Thin wrapper over oc-attrib (the
+# range->lane joiner); rc INHERITED from oc-attrib: 0 ok | 2 usage | 3 git-fail
+# | 4 empty-range | 5 markers-missing (--deployed). The GREEN fan-out leg
+# consumes this set. (unsigned) rows pass through — never dropped.
+contributors_run() { # <old>..<new> | --deployed  [--repo <path>]
+  local repo="${OC_DEPLOY_REPO:-$HOME/opencrabs}" range=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --deployed) range="--deployed" ;;
+      --repo) repo="${2:-}"; shift ;;
+      *) [ -z "$range" ] || die 1 "contributors: one range argument only"; range="$1" ;;
+    esac
+    shift || true
+  done
+  [ -n "$range" ] || die 1 "contributors: needs <old>..<new> or --deployed"
+  if [ "$range" = "--deployed" ]; then
+    "$ATTRIB" --repo "$repo" --deployed --ledger "$LEDGER" | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}'
+  else
+    echo "$range" | grep -Eq '^[0-9a-fA-F]{4,40}\.\.[0-9a-fA-F]{4,40}$' \
+      || die 1 "contributors: range not <old>..<new>: $range"
+    "$ATTRIB" --repo "$repo" --range "$range" --ledger "$LEDGER" | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}'
+  fi
+}
+
+# ------------------------------------------------------------- fan-out (#24) --
+# issue #24: mechanical post-CI notifications, zero LLM. GREEN leg: one notify
+# per contributing session post-swap (oc-attrib --deployed is the compute).
+# RED leg: blame attribution + suspect cc (plan task 4). Idempotent via
+# $FANOUT_STATE (re-run = no-op); standalone re-runnable. Verb rc != 0 (dead
+# uuid) journals skip and moves on — never resurrects, never reaps (#17 class).
+# Journal vocabulary fixed in the issue body. Exit: 0 done/noop | 2 usage
+# | 3 gh/attrib fetch fail | 4 run not terminal.
+FANOUT_STATE="$STATE_DIR/fanout.state"
+NOTIFY_CMD="${OC_DEPLOY_NOTIFY:-opencrabs}"
+NOTIFY_PROFILE="${OC_DEPLOY_PROFILE:-ops}"
+REPO_DIR="${OC_DEPLOY_REPO:-$HOME/opencrabs}"
+
+fanout_journal_init() { # $1 = run id
+  mkdir -p "$JOURNAL_DIR"
+  JF="$JOURNAL_DIR/fanout-$1-$(date +%s).jsonl"
+  : > "$JF"; SEQ=0
+}
+
+notify_session() { # $1=uuid $2=title $3=text -> verb rc (0 delivered)
+  if [ "${DRYRUN:-0}" = 1 ]; then return 0; fi
+  # --profile MANDATORY: without it the call hits the default-profile gateway
+  # which predates the verb (Method not found, rc 4) — probed live 2026-08-28.
+  # Dead uuid -> verb rc 2 (no_route), journaled as skip by the caller.
+  $NOTIFY_CMD session notify --profile "$NOTIFY_PROFILE" --sender "oc-deploy fan-out" \
+    --title "$2" --text "$3" "$1" >/dev/null 2>&1
+}
+
+fanout_mark_done() { # $1=run $2=verdict $3=notified $4=skipped $5=unowned
+  local tmp
+  tmp="$(mktemp)" || return 1
+  if [ -f "$FANOUT_STATE" ]; then
+    jq --arg id "$1" --arg v "$2" --arg at "$(date -u +%FT%TZ)" \
+       --argjson n "$3" --argjson s "$4" --argjson u "$5" \
+       '.runs[$id] = {verdict:$v, at:$at, notified:$n, skipped:$s, unowned:$u}' \
+       "$FANOUT_STATE" > "$tmp" && mv "$tmp" "$FANOUT_STATE"
+  else
+    jq -cn --arg id "$1" --arg v "$2" --arg at "$(date -u +%FT%TZ)" \
+       --argjson n "$3" --argjson s "$4" --argjson u "$5" \
+       '{runs:{($id):{verdict:$v, at:$at, notified:$n, skipped:$s, unowned:$u}}}' \
+       > "$tmp" && mv "$tmp" "$FANOUT_STATE"
+  fi
+}
+
+decode_built_sha() { # $1=run id -> echoes 40-hex sha from BUILD job name; rc 0/3
+  local jn
+  jn="$("$GH" api "repos/$FORK/actions/runs/$1/jobs" 2>/dev/null \
+    | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')" || return 3
+  printf '%s' "$jn" | sed -n 's/.*(\([0-9a-f]\{40\}\).*/\1/p'
+}
+
+notify_one() { # $1=uuid $2=role $3=title $4=text $5=run -> journals notified|skip
+  local nrc
+  if [ "${DRYRUN:-0}" = 1 ]; then
+    jline notified 0 "{\"uuid\":\"$1\",\"run\":\"$5\",\"role\":\"$2\",\"dry_run\":true}"
+    NOTIFIED=$((NOTIFIED+1)); return 0
+  fi
+  notify_session "$1" "$3" "$4"; nrc=$?
+  if [ "$nrc" = 0 ]; then
+    jline notified 0 "{\"uuid\":\"$1\",\"run\":\"$5\",\"role\":\"$2\"}"
+    NOTIFIED=$((NOTIFIED+1))
+  else
+    jline skip 0 "{\"uuid\":\"$1\",\"reason\":\"dead\",\"verb_rc\":$nrc}"
+    SKIPPED=$((SKIPPED+1))
+  fi
+}
+
+attrib_at() { # $1=repo $2=sha $3=file $4=line -> culprit sha (empty if unowned)
+  local out
+  out="$(git -C "$1" blame -L "$4,$4" --porcelain "$2" -- "$3" 2>/dev/null | head -1 | cut -d' ' -f1)" || return 0
+  case "$out" in
+    *[!0-9a-f]*|"") return 0 ;;
+    *) printf '%s' "$out" ;;
+  esac
+}
+
+green_leg() { # $1=run id $2=built sha — one notify per contributing session
+  local run="$1" bsha="$2" prev feat range rows sessions uuid title text nrc
+  prev="$(jq -r '.prev_sha // empty' "$DEPLOYED_META" 2>/dev/null)"
+  feat="$(jq -r '.features // "-"' "$DEPLOYED_META" 2>/dev/null)"
+  range="${prev:-?}..${bsha}"
+  rows="$("$ATTRIB" --repo "$REPO_DIR" --deployed --ledger "$LEDGER" 2>/dev/null \
+    | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}')" || true
+  [ -n "$rows" ] || { jline contributors 3 "{\"range\":\"$range\",\"error\":\"attrib-fail-or-empty\"}"; die 3 "fanout: oc-attrib returned nothing for deployed range $range"; }
+  sessions="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$/ {print $1}' | LC_ALL=C sort -u)"
+  jline contributors 0 "{\"range\":\"$range\",\"sessions\":[$(printf '%s\n' "$sessions" | sed '/^$/d' | sed 's/.*/"&"/' | paste -sd, -)]}"
+  if [ -z "$sessions" ]; then
+    echo "fanout green: no session-attributed commits in $range — nothing to notify"
+    return 0
+  fi
+  title="post-swap: ${bsha:0:8} live"
+  while IFS= read -r uuid; do
+    [ -n "$uuid" ] || continue
+    text="oc-deploy fan-out: run $run built ${bsha:0:8} is DEPLOYED (features=$feat, range $range). Your commits landed in this ship — please smoke-test your part on the live box. (issue #24 mechanical notify)"
+    notify_one "$uuid" contributor "$title" "$text" "$run"
+  done <<< "$sessions"
+}
+
+red_leg() { # $1=run id $2=run json — RED blame attribution + suspect cc (issue #24)
+  local run="$1" runjson="$2"
+  local head sha range sites site f l cs culprit cu uuid s title text
+  local blamed_json suspect_json suspects cap tot
+  head="$(printf '%s' "$runjson" | jq -r '.head_sha // empty')"
+  echo "$head" | grep -Eq '^[0-9a-f]{40}$' || die 3 "fanout red: no usable head_sha for run $run"
+  git -C "$REPO_DIR" fetch -q "$REMOTE" main 2>/dev/null || true
+  git -C "$REPO_DIR" fetch -q "$REMOTE" "$head" 2>/dev/null || true   # PR head shas live off-main
+  range="$(git -C "$REPO_DIR" rev-list --first-parent -n 21 "$head" 2>/dev/null | tail -1)" || true
+  [ -n "$range" ] || die 3 "fanout red: cannot resolve commit range for $head"
+  range="${range}..${head}"
+  # sites from check-run annotations (file:line pairs)
+  sites="$("$GH" api "repos/$FORK/actions/runs/$run/jobs" 2>/dev/null \
+    | jq -r '.jobs[] | select(.conclusion=="failure") | .check_run_url' \
+    | while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        "$GH" api "${u#https://api.github.com/}/annotations" 2>/dev/null || printf '[]'
+      done \
+    | jq -r '.[]? | "\(.path):\(.start_line)"' 2>/dev/null | LC_ALL=C sort -u)" || true
+  if [ -z "$sites" ]; then
+    # zero-site fallback: every session in the run range + HUMAN-FLAG
+    jline attributed 0 "{\"run\":\"$run\",\"owner\":\"-\",\"blamed\":[],\"suspect\":[],\"fallback\":\"no-sites\"}"
+    title="CI RED: run $run — human review needed"
+    text="oc-deploy fan-out: run $run FAILED with no parseable file:line annotations (HUMAN-FLAG). Sessions active in range ${range:0:19}…: $(git -C "$REPO_DIR" log --format='%b' "$range" 2>/dev/null | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | LC_ALL=C sort -u | paste -sd' ' -). Blame attribution impossible from annotations — inspect the run manually. (issue #24 mechanical notify)"
+    while IFS= read -r uuid; do
+      [ -n "$uuid" ] || continue
+      notify_one "$uuid" contributor "$title" "$text" "$run"
+    done <<< "$(git -C "$REPO_DIR" log --format='%b' "$range" 2>/dev/null | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | LC_ALL=C sort -u)"
+    return 0
+  fi
+  # blame each site at head_sha -> culprit sha -> Session-Id trailer
+  blamed_json="{}"; UNOWNED_JSON="[]"
+  while IFS= read -r site; do
+    [ -n "$site" ] || continue
+    f="${site%:*}"; l="${site##*:}"
+    culprit="$(attrib_at "$REPO_DIR" "$head" "$f" "$l")"
+    if [ -z "$culprit" ]; then
+      jline unowned 0 "{\"site\":\"$site\",\"run\":\"$run\"}"
+      UNOWNED=$((UNOWNED+1)); continue
+    fi
+    cu="$(git -C "$REPO_DIR" log -1 --format='%b' "$culprit" 2>/dev/null \
+      | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)"
+    if [ -z "$cu" ]; then
+      jline unowned 0 "{\"site\":\"$site\",\"run\":\"$run\",\"commit\":\"$culprit\"}"
+      UNOWNED=$((UNOWNED+1)); continue
+    fi
+    blamed_json="$(jq -c --arg u "$cu" --arg s "$site" --arg c "${culprit:0:8}" \
+      '.[$u] = ((.[$u] // {sites:[],commits:[]}) | .sites += [$s] | .commits += [$c])' <<< "$blamed_json")"
+  done <<< "$sites"
+  # suspect cc ON: sessions with OTHER commits touching any blamed file in the run range
+  suspect_json="{}"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    suspects="$(git -C "$REPO_DIR" log --format='%H' "$range" -- "$f" 2>/dev/null | while IFS= read -r cs; do
+      git -C "$REPO_DIR" log -1 --format='%b' "$cs" 2>/dev/null \
+        | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1
+    done | sed '/^$/d' | LC_ALL=C sort -u)"
+    while IFS= read -r s; do
+      [ -n "$s" ] || continue
+      suspect_json="$(jq -c --arg u "$s" --arg f "$f" '.[$u] = ((.[$u] // []) + [$f])' <<< "$suspect_json")"
+    done <<< "$suspects"
+  done <<< "$(jq -r 'keys[] as $k | (.[$k].sites[] | split(":")[0])' <<< "$blamed_json" 2>/dev/null | LC_ALL=C sort -u)"
+  suspect_json="$(jq -c --argjson b "$blamed_json" 'with_entries(.key as $k | select($b | has($k) | not))' <<< "$suspect_json")"
+  jline attributed 0 "{\"run\":\"$run\",\"owner\":\"-\",\"blamed\":[$(jq -r 'keys[]' <<< "$blamed_json" | sed 's/.*/"&"/' | paste -sd, -)],\"suspect\":[$(jq -r 'keys[]' <<< "$suspect_json" | sed 's/.*/"&"/' | paste -sd, -)],\"detail\":$blamed_json,\"suspect_files\":$suspect_json}"
+  # notify culprits (sites capped at 10 in the message; full list is in the journal)
+  while IFS= read -r uuid; do
+    [ -n "$uuid" ] || continue
+    cap="$(jq -r --arg u "$uuid" '.[$u].sites[:10] | join(", ")' <<< "$blamed_json")"
+    tot="$(jq -r --arg u "$uuid" '.[$u].sites | length' <<< "$blamed_json")"
+    if [ "${tot:-0}" -gt 10 ] 2>/dev/null; then cap="$cap (+$((tot-10)) more — full list in journal)"; fi
+    cs="$(jq -r --arg u "$uuid" '.[$u].commits | unique | join(", ")' <<< "$blamed_json")"
+    title="CI RED: run $run — your commits are blamed"
+    text="oc-deploy fan-out: run $run FAILED. git blame at head points at your commit(s) $cs for: $cap. Fix-forward or respond in your lane. (issue #24 mechanical notify)"
+    notify_one "$uuid" blamed "$title" "$text" "$run"
+  done <<< "$(jq -r 'keys[]' <<< "$blamed_json")"
+  while IFS= read -r uuid; do
+    [ -n "$uuid" ] || continue
+    fs="$(jq -r --arg u "$uuid" '.[$u] | unique | join(", ")' <<< "$suspect_json")"
+    title="CI RED: run $run — suspect cc"
+    text="oc-deploy fan-out: run $run FAILED. Blame points elsewhere, but your commits touched the blamed file(s): $fs. cc only — no action needed unless the culprit is unreachable. (issue #24 mechanical notify)"
+    notify_one "$uuid" suspect "$title" "$text" "$run"
+  done <<< "$(jq -r 'keys[]' <<< "$suspect_json")"
+  return 0
+}
+
+fanout_run() { # $1=run id $2=dry-run(0/1)
+  local run="${1:-}" runjson status conclusion bsha dep suffix=""
+  DRYRUN="${2:-0}"
+  [ -n "$run" ] || die 2 "fanout: needs --run <id>"
+  echo "$run" | grep -Eq '^[0-9]+$' || die 2 "fanout: run id not numeric: $run"
+  # idempotence: a completed fan-out for this run is a no-op
+  if [ -f "$FANOUT_STATE" ] && jq -e --arg id "$run" '.runs[$id]' "$FANOUT_STATE" >/dev/null 2>&1; then
+    echo "fanout-skip run=$run reason=done (idempotent)"
+    exit 0
+  fi
+  fanout_journal_init "$run"
+  runjson="$("$GH" api "repos/$FORK/actions/runs/$run" 2>/dev/null)" \
+    || { jline fanout-start 3 "{\"run\":\"$run\",\"error\":\"gh-api-fail\"}"; die 3 "fanout: gh api run fetch failed for $run"; }
+  status="$(printf '%s' "$runjson" | jq -r '.status // empty')"
+  conclusion="$(printf '%s' "$runjson" | jq -r '.conclusion // empty')"
+  [ "$status" = completed ] || { jline fanout-start 4 "{\"run\":\"$run\",\"status\":\"$status\"}"; die 4 "fanout: run $run not terminal (status=$status)"; }
+  jline fanout-start 0 "{\"run\":\"$run\",\"conclusion\":\"$conclusion\"}"
+  NOTIFIED=0; SKIPPED=0; UNOWNED=0
+  case "$conclusion" in
+    success)
+      bsha="$(decode_built_sha "$run")"
+      [ -n "$bsha" ] || { jline fanout-end 3 "{\"run\":\"$run\",\"error\":\"built-sha-decode-fail\"}"; die 3 "fanout: cannot decode built sha for run $run"; }
+      dep="$(head -1 "$DEPLOYED" 2>/dev/null || echo none)"
+      if [ "$bsha" != "$dep" ]; then
+        jline fanout-end 0 "{\"run\":\"$run\",\"reason\":\"not-deployed-yet\",\"built\":\"$bsha\",\"deployed\":\"$dep\"}"
+        echo "fanout noop: run $run built ${bsha:0:8} not deployed yet (deployed=${dep:0:8}) — re-run after swap (not marked done)"
+        exit 0
+      fi
+      green_leg "$run" "$bsha"
+      ;;
+    failure) red_leg "$run" "$runjson" ;;
+    *)
+      jline fanout-end 0 "{\"run\":\"$run\",\"conclusion\":\"$conclusion\",\"reason\":\"non-build-conclusion\"}"
+      echo "fanout noop: run $run conclusion=$conclusion (not success/failure)"
+      exit 0
+      ;;
+  esac
+  jline fanout-end 0 "{\"run\":\"$run\",\"notified\":$NOTIFIED,\"skipped\":$SKIPPED,\"unowned\":$UNOWNED}"
+  [ "$DRYRUN" = 1 ] || fanout_mark_done "$run" "$conclusion" "$NOTIFIED" "$SKIPPED" "$UNOWNED"
+  [ "$DRYRUN" = 1 ] && suffix=" (dry-run: not marked done)"
+  echo "fanout-end run=$run verdict=$conclusion notified=$NOTIFIED skipped=$SKIPPED unowned=$UNOWNED$suffix"
+}
+
+# ------------------------------------------------------------- swap-execute --
+# Phase B body (spec: s2-swap-journal-spec.md). Runs under a systemd transient
+# in prod; env overrides sandbox every side effect for selftest.
+swap_execute() {
+  local SHA="$1" RUN_ID="$2" FEATURES="$3" DRILL="$4" ARTDIR="$5"
+  local SHORT="${SHA:0:8}"
+  local STAGE; STAGE="$(stage)"
+  [ "$STAGE" = "S2" ] || [ "$STAGE" = "S3" ] || { shadow_log swap "$SHA" "$FEATURES" "stage-gate"; die 4 "swap requires stage >= S2 (current: $STAGE)"; }
+  journal_init "$SHORT"
+  local BASE_DIR; BASE_DIR="$(dirname "$(readlink -f "$LEDGER")")"
+  local BASELINE="$BASE_DIR/baseline.json" ORDERS="$BASE_DIR/orders.json"
+
+  echo "oc-deploy swap-execute: sha=$SHA run=$RUN_ID features=$FEATURES drill=$DRILL stage=$STAGE"
+  echo "journal: $JF"
+
+  # --- 1. auto-swap authorization (owner 2026-08-28 18:50Z: consent process
+  #     ELIMINATED — GREEN carrier run + artifact verify IS the authorization;
+  #     safety = ORDER gates + containment + sha-bound + backup chain. Post-
+  #     smoke-FAIL rollback stays the owner's call: NO auto-rollback there.) ---
+  jline auto-swap 0 "$(jq -cn --arg s "$SHA" --arg r "$RUN_ID" '{sha:$s, run_id:$r, reason:"green-run", consent:"eliminated-owner-2026-08-28"}')"
+
+  # --- 2. artifact + verify ---
+  local WORKDIR BIN EXPECTED SRC_FLAG
+  WORKDIR="$(mktemp -d)" || die 2 "mktemp failed"
+  if [ "$DRILL" = "1" ]; then
+    # dummy artifact = byte-copy of the RUNNING binary; expected sha set
+    # deliberately wrong so post-verify fails and exercises the rollback leg.
+    cp "$SWAP_TARGET" "$WORKDIR/opencrabs" || die 2 "drill: cannot copy target"
+    BIN="$WORKDIR/opencrabs"
+    EXPECTED="deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    jline verify 0 "$(jq -cn '{drill:true, note:"dummy artifact = copy of running binary; expected sha deliberately wrong; provenance skipped"}')"
+  else
+    if [ -n "$ARTDIR" ] && [ -d "$ARTDIR" ]; then
+      cp -r "$ARTDIR/." "$WORKDIR/" || die 2 "artifact-dir copy failed"
+    else
+      "$GH" run download "$RUN_ID" --repo "$FORK" -n "opencrabs-linux-amd64-$FEATURES" -D "$WORKDIR" \
+        || { jline verify 1 "$(jq -cn --arg r "$RUN_ID" '{run_id:$r, reason:"download-fail"}')"; die 2 "artifact download failed (run $RUN_ID)"; }
+    fi
+    BIN="$(find "$WORKDIR" -type f -name opencrabs | head -1)"
+    [ -n "$BIN" ] || { jline verify 1 "$(jq -cn '{reason:"binary-not-in-artifact"}')"; die 2 "no 'opencrabs' binary inside artifact"; }
+    EXPECTED="$(sha256sum "$BIN" | cut -d' ' -f1)"
+    SRC_FLAG="$(grep -m1 '^source_ref=' "$WORKDIR/build-flags.txt" 2>/dev/null | cut -d= -f2 || true)"
+    local AV_OUT AV_RC
+    AV_OUT="$(OC_REPO="$FORK" "$ARTVERIFY" "$BIN" --source "$SHA" --run-id "$RUN_ID" --repo "$FORK" --json 2>&1)"; AV_RC=$?
+    if [ "$AV_RC" -ne 0 ] || [ -n "$SRC_FLAG" ] && [ "$SRC_FLAG" != "$SHA" ]; then
+      jline verify "${AV_RC:-1}" "$(jq -cn --arg r "$RUN_ID" --arg s "$SRC_FLAG" --arg o "${AV_OUT:0:400}" '{run_id:$r, source_ref:$s, artifact_sha256:$o, reason:"artifact-verify-fail"}')"
+      die 2 "oc-artifact-verify FAILED (exit $AV_RC) or source_ref mismatch ($SRC_FLAG != $SHA) — nothing touched"
+    fi
+    jline verify 0 "$(jq -cn --arg r "$RUN_ID" --arg s "$SHA" --arg a "$EXPECTED" --arg f "$FEATURES" --arg sf "$SRC_FLAG" '{run_id:$r, source_ref:$s, artifact_sha256:$a, features:$f, build_flags_ref:$sf, provenance:"oc-artifact-verify PASS"}')"
+  fi
+
+  # --- 3. backup (MUST land before install; skip aborts the swap) ---
+  local TS BAK BAK_SHA BAK_BYTES
+  TS="$(date -u +%Y%m%d-%H%M%S)"
+  mkdir -p "$BACKUP_DIR" || die 2 "backup dir missing"
+  BAK="$BACKUP_DIR/opencrabs-${TS}-pre-$SHORT"
+  cp -p "$SWAP_TARGET" "$BAK" 2>/dev/null || { jline backup 1 "$(jq -cn '{reason:"copy-fail"}')"; die 2 "backup FAILED — swap aborted before install"; }
+  BAK_SHA="$(sha256sum "$BAK" | cut -d' ' -f1)"
+  BAK_BYTES="$(stat -c %s "$BAK")"
+  jline backup 0 "$(jq -cn --arg p "$BAK" --arg s "$BAK_SHA" --argjson b "$BAK_BYTES" '{backup_path:$p, backup_sha256:$s, bytes:$b}')"
+
+  # --- 4. state backups for rollback (markers + baseline + orders) ---
+  mkdir -p "$WORKDIR/state-backup"
+  [ -f "$DEPLOYED" ] && cp -p "$DEPLOYED" "$WORKDIR/state-backup/deployed.sha"
+  local HAD_META=0; [ -f "$DEPLOYED_META" ] && HAD_META=1
+  [ -f "$DEPLOYED_META" ] && cp -p "$DEPLOYED_META" "$WORKDIR/state-backup/deployed.meta.json"
+  [ -f "$BASELINE" ] && cp -p "$BASELINE" "$WORKDIR/state-backup/baseline.json"
+  [ -f "$ORDERS" ] && cp -p "$ORDERS" "$WORKDIR/state-backup/orders.json"
+  local PREV_SHA; PREV_SHA="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
+
+  # --- 5. install (cp to .new, then atomic rename over target) ---
+  local OLD_SHA NEW_SHA
+  OLD_SHA="$(sha256sum "$SWAP_TARGET" | cut -d' ' -f1)"
+  cp "$BIN" "$SWAP_TARGET.new" && chmod +x "$SWAP_TARGET.new" && mv -f "$SWAP_TARGET.new" "$SWAP_TARGET" \
+    || { jline install 1 "$(jq -cn '{reason:"install-fail"}')"; die 2 "install failed — backup intact, target untouched or restored manually"; }
+  NEW_SHA="$(sha256sum "$SWAP_TARGET" | cut -d' ' -f1)"
+  jline install 0 "$(jq -cn --arg o "$OLD_SHA" --arg n "$NEW_SHA" --argjson b "$(stat -c %s "$SWAP_TARGET")" '{old_sha256:$o, new_sha256:$n, bytes:$b, method:"install+mv"}')"
+
+  # --- 6. seal (baseline merge; drill skips) ---
+  if [ "$DRILL" = "1" ]; then
+    jline seal 0 "$(jq -cn '{drill:true, note:"seal skipped in drill"}')"
+  else
+    local CYC SEAL_RC
+    CYC="$(jq -r '.cycle // 0' "$BASELINE" 2>/dev/null || echo 0)"
+    "$SEAL" --sha "$SHA" --run-id "$RUN_ID" --binary-sha "$EXPECTED" --features "$FEATURES" --cycle "$((CYC+1))" --set-note "oc-deploy S2 swap" >/dev/null 2>&1; SEAL_RC=$?
+    jline seal "$SEAL_RC" "$(jq -cn --arg b "$BASELINE" --argjson c "$((CYC+1))" --argjson e "$SEAL_RC" '{baseline_path:$b, cycle:$c, seal_exit:$e}')"
+    [ "$SEAL_RC" -eq 0 ] || die 2 "seal FAILED — new binary on disk, NOT restarted; markers NOT written; manual attention (rollback source: $BAK)"
+  fi
+
+  # --- 7. marker writes (between seal and restart — the 03:11Z gap) ---
+  printf '%s\n' "$SHA" > "$DEPLOYED.tmp" && mv -f "$DEPLOYED.tmp" "$DEPLOYED" || { jline marker-write 1 "$(jq -cn '{reason:"write-fail"}')"; die 2 "marker write failed"; }
+  jq -cn --arg s "$SHA" --arg r "$RUN_ID" --arg a "$EXPECTED" --arg f "$FEATURES" \
+     --arg t "$(date -u +%FT%TZ)" --arg p "$PREV_SHA" \
+     '{sha:$s, run_id:$r, artifact_sha256:$a, features:$f, swapped_at:$t, auth:"auto-swap", prev_sha:$p}' \
+     > "$DEPLOYED_META.tmp" && mv -f "$DEPLOYED_META.tmp" "$DEPLOYED_META" || { jline marker-write 1 "$(jq -cn '{reason:"meta-write-fail"}')"; die 2 "meta marker write failed"; }
+  jline marker-write 0 "$(jq -cn --arg p "$DEPLOYED" --arg s "$SHA" '{deployed_sha_path:$p, deployed_sha:$s, wrote:"deployed.sha+deployed.meta.json"}')"
+
+  # --- 8. restart ---
+  local RRC
+  $RESTART_CMD >/dev/null 2>&1; RRC=$?
+  jline restart "$RRC" "$(jq -cn --arg u "opencrabs-ops.service" --argjson e "$RRC" '{unit:$u, systemd_run_exit:$e}')"
+
+  # --- post-verify helper: active + disk + proc + markers ---
+  post_verify() { # $1=expected_sha  $2=expected_marker_sha  $3=expect_meta(0/1) ; sets PV_MATCH/PV_DETAIL
+    local i ACTIVE DISK_SHA PID PROC_SHA MARK_MARKER MARK_META META_OK
+    PV_MATCH=0
+    sleep "${OC_SWAP_SETTLE:-5}"
+    for i in $(seq 1 "${OC_SWAP_TRIES:-30}"); do
+      ACTIVE="$($ACTIVE_CMD 2>/dev/null || echo unknown)"
+      DISK_SHA="$(sha256sum "$SWAP_TARGET" 2>/dev/null | cut -d' ' -f1)"
+      MARK_MARKER="$(cat "$DEPLOYED" 2>/dev/null || echo MISSING)"
+      MARK_META="absent"; [ -f "$DEPLOYED_META" ] && MARK_META="present"
+      META_OK=0; if [ "$3" = "1" ]; then [ "$MARK_META" = "present" ] && META_OK=1; else [ "$MARK_META" = "absent" ] && META_OK=1; fi
+      if [ "$ACTIVE" = "active" ] && [ "$DISK_SHA" = "$1" ] && [ "$MARK_MARKER" = "$2" ] && [ "$META_OK" = "1" ]; then
+        if [ "$SKIP_PROC" = "1" ]; then PV_MATCH=1; break; fi
+        PID="$($PID_CMD 2>/dev/null || echo 0)"
+        if [ -n "$PID" ] && [ "$PID" != "0" ] && [ -r "/proc/$PID/exe" ]; then
+          PROC_SHA="$(sha256sum "/proc/$PID/exe" 2>/dev/null | cut -d' ' -f1)"
+          [ "$PROC_SHA" = "$1" ] && { PV_MATCH=1; break; }
+        fi
+      fi
+      sleep 2
+    done
+    PV_DETAIL="$(jq -cn --arg a "$ACTIVE" --arg d "${DISK_SHA:-}" --arg e "$1" --arg mm "$MARK_MARKER" --arg mt "$MARK_META" --argjson x "$3" --argjson m "$PV_MATCH" '{is_active:$a, disk_sha256:$d, expected_sha256:$e, marker_sha:$mm, marker_meta:$mt, meta_expect:($x==1), match:($m==1)}')"
+  }
+
+  # --- 9. post-verify ---
+  post_verify "$EXPECTED" "$SHA" 1
+  if [ "$PV_MATCH" = 1 ]; then
+    jline post-verify 0 "$PV_DETAIL"
+    local BY_LBL="oc-deploy swap-execute"; [ "$DRILL" = "1" ] && BY_LBL="oc-deploy swap-execute DRILL"
+    if [ "$DRILL" = "1" ]; then
+      ledger_stamp "$BY_LBL" "swap-result DEPLOYED sha=$SHA run=$RUN_ID features=$FEATURES: install(seq5)+post-verify(seq$SEQ match=true)+marker-write; journal=$JF backup=$BAK auth=auto-swap" "swap-result"
+      # drill with a match means the deliberately-wrong expected matched —
+      # impossible by construction; treat as drill anomaly
+      jline receipt 1 "$(jq -cn '{note:"drill expected a rollback but verify matched — anomaly"}')"
+      die 2 "drill anomaly: post-verify matched a deliberately wrong expected sha"
+    fi
+      A2A_RC=1; a2a_notify_retry "[oc-deploy PHASE B RECEIPT] DEPLOYED sha=$SHA run=$RUN_ID — post-verify match, markers written, backup $BAK. Journal: $JF" && A2A_RC=0
+    jline receipt "$A2A_RC" "$(jq -cn --argjson a "$A2A_RC" '{topics:[30220], a2a_accepted:($a==0), note:"stamp follows fanout (issue #24 wiring)"}')"
+    # --- GREEN fan-out (issue #24 wiring): notify contributor sessions of the
+    #     live swap. Fires AFTER receipt seal + marker writes (design §5) and
+    #     BEFORE the swap-result ledger stamp, so fanout-end is journaled first
+    #     and the stamp lands last. Suppressed by OC_DEPLOY_NOFANOUT=1 (--drill
+    #     never reaches this branch). Subshell: fanout_run exits on its own
+    #     paths — must never leak into the swap's rc or skip the stamp.
+    local FO_RC=0 FO_OUT="" FO_NOTE="skipped"
+    if [ "${OC_DEPLOY_NOFANOUT:-0}" != "1" ]; then
+      FO_OUT="$( ( fanout_run "$RUN_ID" 0 ) 2>&1 )" || FO_RC=$?
+      FO_NOTE="rc=$FO_RC"
+      [ "$FO_RC" = 0 ] || { echo "oc-deploy: GREEN fan-out rc=$FO_RC — swap stands; re-run 'oc-deploy fanout --run $RUN_ID'" >&2; printf '%s\n' "$FO_OUT" >&2; }
+    fi
+    ledger_stamp "$BY_LBL" "swap-result DEPLOYED sha=$SHA run=$RUN_ID features=$FEATURES: install(seq5)+post-verify(seq$SEQ match=true)+marker-write+receipt; journal=$JF backup=$BAK auth=auto-swap fanout=$FO_NOTE" "swap-result"
+    shadow_log swap "$SHA" "$FEATURES" "deployed"
+    echo "SWAP COMPLETE: sha=$SHA run=$RUN_ID verified disk==proc, markers written, fanout=$FO_NOTE, ledger stamped"
+    exit 0
+  fi
+  jline post-verify 1 "$PV_DETAIL"
+
+  # --- 10. AUTO-ROLLBACK ---
+  echo "oc-deploy: post-verify FAILED — auto-rollback engaged (backup $BAK)" >&2
+  cp "$BAK" "$SWAP_TARGET.new" && chmod +x "$SWAP_TARGET.new" && mv -f "$SWAP_TARGET.new" "$SWAP_TARGET"
+  # restore markers + baseline + orders to pre-swap truth
+  if [ -f "$WORKDIR/state-backup/deployed.sha" ]; then cp -p "$WORKDIR/state-backup/deployed.sha" "$DEPLOYED"; else rm -f "$DEPLOYED"; fi
+  if [ -f "$WORKDIR/state-backup/deployed.meta.json" ]; then cp -p "$WORKDIR/state-backup/deployed.meta.json" "$DEPLOYED_META"; else rm -f "$DEPLOYED_META"; fi
+  [ -f "$WORKDIR/state-backup/baseline.json" ] && cp -p "$WORKDIR/state-backup/baseline.json" "$BASELINE"
+  [ -f "$WORKDIR/state-backup/orders.json" ] && cp -p "$WORKDIR/state-backup/orders.json" "$ORDERS"
+  jline rollback 0 "$(jq -cn --arg b "$BAK" --arg s "$BAK_SHA" --arg r "post-verify mismatch after bounce" '{restored_backup:$b, restored_sha256:$s, reason:$r, also_restored:"deployed.sha+meta+baseline+orders"}')"
+  local RRC2
+  $RESTART_CMD >/dev/null 2>&1; RRC2=$?
+  jline restart "$RRC2" "$(jq -cn --arg u "opencrabs-ops.service" --argjson e "$RRC2" '{note:"post-rollback restart", unit:$u, systemd_run_exit:$e}')"
+  post_verify "$BAK_SHA" "$PREV_SHA" "$HAD_META"
+  jline post-verify "$([ "$PV_MATCH" = 1 ] && echo 0 || echo 1)" "$PV_DETAIL"
+  local BY_LBL2="oc-deploy swap-execute"; [ "$DRILL" = "1" ] && BY_LBL2="oc-deploy swap-execute DRILL"
+  ledger_stamp "$BY_LBL2" "swap-result ROLLED_BACK sha=$SHA run=$RUN_ID: post-verify mismatch after bounce (seq8 exit=1); backup $BAK restored + re-verified match=$([ "$PV_MATCH" = 1 ] && echo true || echo false); markers+baseline restored; journal=$JF" "swap-result"
+  A2A_RC=1; a2a_notify_retry "[oc-deploy PHASE B] ROLLBACK sha=$SHA run=$RUN_ID — post-verify failed after bounce, backup restored, re-verify match=$([ "$PV_MATCH" = 1 ] && echo true || echo false). DRILL=$DRILL. Journal: $JF" && A2A_RC=0
+  jline receipt "$A2A_RC" "$(jq -cn --argjson a "$A2A_RC" '{result:"rolled-back", a2a_accepted:($a==0)}')"
+  shadow_log swap "$SHA" "$FEATURES" "rolled-back"
+  if [ "$DRILL" = "1" ]; then
+    if [ "$PV_MATCH" = 1 ]; then
+      echo "DRILL COMPLETE: rollback path exercised end-to-end — install, failed verify, backup restore, re-verify CLEAN, markers restored, ledger stamped"
+      exit 0
+    fi
+    die 2 "DRILL FAILED: rollback re-verify did not match — manual attention"
+  fi
+  die 2 "AUTO-ROLLBACK executed for sha=$SHA — prod restored to $BAK_SHA; investigate journal $JF"
+}
+
+# ------------------------------------------------------------------ watchdog --
+# S3 replacement for the archived compiler.md Step 1 WATCHDOG duty (owner
+# directive 2026-08-28 16:26Z: NO cron — oc-deploy fires often enough, so the
+# check piggybacks every ship/poll invocation; explicit run = `oc-deploy watch`).
+# Tripwire semantics: fork main tip must be covered by deployed.sha OR a
+# ship/swap event in this tool's own shadow log / ledger. Uncovered tip =
+# stray commits on the branch production is built from. REPORT-ONLY: the watch
+# never blocks the host invocation and NEVER builds autonomously.
+watch_covered() { # $1=sha ; echoes reason, rc 0 covered / 1 uncovered
+  local S="$1" DEP
+  DEP="$(cat "$DEPLOYED" 2>/dev/null || true)"
+  [ -n "$DEP" ] || DEP="$(jq -r '.sha // empty' "$(dirname "$LEDGER")/baseline.json" 2>/dev/null || true)"
+  if [ -n "$DEP" ] && [ "$S" = "$DEP" ]; then echo "deployed-sha"; return 0; fi
+  if [ -f "$SHADOW" ] && grep -F "$S" "$SHADOW" 2>/dev/null | grep -Eq '(dispatched|deployed|handed-off)'; then
+    echo "ship-event"; return 0
+  fi
+  if jq -e --arg s "$S" '[ (.events // [])[] | select(.kind != null and ((.kind|tostring) | test("ship|swap")) and (((.what // "")|tostring) | contains($s))) ] | length > 0' "$LEDGER" >/dev/null 2>&1; then
+    echo "ledger-event"; return 0
+  fi
+  return 1
+}
+
+watch_precheck() { # $1=tip-sha ; piggyback, report-only, never fails the host
+  [ "${OC_DEPLOY_NO_WATCH:-0}" = "1" ] && return 0
+  local REASON
+  if REASON="$(watch_covered "$1")"; then
+    shadow_log watch "$1" "-" "clean:$REASON"
+    echo "WATCH-CLEAN: fork main ${1:0:8} covered ($REASON)"
+  else
+    shadow_log watch "$1" "-" "ALERT:stray"
+    echo "WATCH-ALERT: fork main ${1:0:8} NOT covered (deployed=$(cut -c1-8 "$DEPLOYED" 2>/dev/null || echo none)) — run 'oc-deploy watch' for the stray list"
+  fi
+  return 0
+}
+
+watch_run() { # explicit `oc-deploy watch` ; exit 0 clean | 2 stray (report-only)
+  local TIP DEP REASON
+  TIP="$(git ls-remote "$REMOTE" refs/heads/main 2>/dev/null | awk '{print $1}')"
+  [ -n "$TIP" ] || die 2 "watch: cannot read fork main tip from $REMOTE"
+  DEP="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
+  if REASON="$(watch_covered "$TIP")"; then
+    shadow_log watch "$TIP" "-" "clean:$REASON"
+    echo "WATCH-CLEAN: fork main ${TIP:0:8} covered ($REASON); deployed=${DEP:0:8}"
+    exit 0
+  fi
+  shadow_log watch "$TIP" "-" "ALERT:stray"
+  echo "WATCH-ALERT: fork main ${TIP:0:8} NOT covered by deployed sha (${DEP:0:8}) nor any ship/swap event"
+  if [ "$DEP" != "none" ]; then
+    "$GH" api "repos/$FORK/compare/$DEP...$TIP" 2>/dev/null \
+      | jq -r '.commits[]? | "  \(.sha[0:8]) \(.commit.author.date) \(.commit.author.name): \(.commit.message | split("\n")[0])"' 2>/dev/null \
+      || true
+  fi
+  echo "report-only: attribute via Session-Id trailers; oc-deploy NEVER builds autonomously"
+  exit 2
+}
+
+# KILL FILE: first line of EVERY invocation (before arg parsing).
+[ -f "$KILL_FILE" ] && die 9 "KILL FILE present ($KILL_FILE) — all oc-deploy invocations abort"
+[ -f "$KILL_FILE2" ] && die 9 "KILL FILE present ($KILL_FILE2) — all oc-deploy invocations abort"
+
+MODE="${1:-}"; [ $# -gt 0 ] && shift
+# issue #24 D1: contributors takes its own arg shape (positional range /
+# --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
+# positional range survives. Kill-file check already ran above.
+if [ "$MODE" = contributors ]; then contributors_run "$@"; exit $?; fi
+SHA=""; FEATURES=""; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sha)      SHA="${2:-}"; shift ;;
+    --features) FEATURES="${2:-}"; shift ;;
+    --execute)  EXECUTE=1 ;;
+    --run)      RUN_ID="${2:-}"; shift ;;
+    --drill)    DRILL=1 ;;
+    --dry-run)  DRYRUN=1 ;;   # issue #24: fanout rehearsal — never marks done
+    --artifact-dir) ARTDIR="${2:-}"; shift ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 1 ;;
+    *)          die 1 "unknown arg: $1" ;;
+  esac
+  shift || true
+done
+
+# KERNEL D2 (2026-08-28): --features omitted -> resolve the carrier's
+# features default via oc-carrier-features. A carrier read FAILURE ABORTS —
+# the hardcoded fallback set was deleted, never silently ship a wrong set.
+if [ -z "$FEATURES" ]; then
+  CARRIER_TOOL="${OC_DEPLOY_CARRIER:-$(cd "$(dirname "$0")" && pwd)/oc-carrier-features}"
+  case "$MODE" in
+    ship|poll)
+      FEATURES="$("$CARRIER_TOOL" --fetch 2>/dev/null)" \
+        || die 2 "carrier features read FAILED (tool: $CARRIER_TOOL) — aborting, no silent fallback set"
+      shadow_log features-resolve "-" "$FEATURES" "carrier-default"
+      ;;
+    swap-execute) : ;;  # stage-gate in swap_execute decides first; empty FEATURES fails loudly downstream, never silently
+  esac
+fi
+
+case "$MODE" in
+  # ------------------------------------------------------------------ ship --
+  ship)
+    if [ -z "$SHA" ]; then
+      SHA="$(git rev-parse HEAD 2>/dev/null)" \
+        || die 1 "no --sha given and CWD is not a git repo"
+    fi
+    echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
+    plan "ship sha=$SHA features=$FEATURES stage=$(stage) execute=$EXECUTE"
+    git fetch -q "$REMOTE" +refs/heads/main:refs/oc-deploy/main 2>/dev/null \
+      || git fetch -q "$REMOTE" main \
+      || { shadow_log ship "$SHA" "$FEATURES" "fetch-fail"; die 2 "cannot fetch fork main from $REMOTE"; }
+    MAIN_TIP="$(git rev-parse FETCH_HEAD 2>/dev/null || git rev-parse refs/oc-deploy/main 2>/dev/null)" \
+      || die 2 "cannot resolve fork main tip"
+    plan "fork main tip = $MAIN_TIP"
+    watch_precheck "$MAIN_TIP"
+    if git merge-base --is-ancestor "$MAIN_TIP" "$SHA" 2>/dev/null; then
+      plan "FF ok: main is ancestor of sha — push would fast-forward"
+    else
+      shadow_log ship "$SHA" "$FEATURES" "rebase-needed"
+      die 2 "rebase needed: $SHA does not fast-forward main ($MAIN_TIP)"
+    fi
+    if [ "$EXECUTE" = 1 ]; then
+      git push -q "$REMOTE" "$SHA:refs/heads/main" \
+        || { shadow_log ship "$SHA" "$FEATURES" "push-fail"; die 2 "push to fork main failed"; }
+      echo "pushed $SHA -> fork main"
+      OC_REPO="$FORK" OC_LEDGER="$LEDGER" "$VALIDATE" --repo "$FORK" --ledger "$LEDGER" "$SHA" \
+        || { shadow_log ship "$SHA" "$FEATURES" "gate-fail"; die 2 "ORDER gates failed post-push (see validator exit code)"; }
+      echo "ORDER gates 4/4 PASS ($SHA)"
+      "$GH" workflow run "$WF" --repo "$FORK" --ref "$CARRIER_REF" \
+        -f source_repository="$FORK" -f source_ref="$SHA" -f features="$FEATURES" \
+        || { shadow_log ship "$SHA" "$FEATURES" "dispatch-fail"; die 2 "carrier dispatch failed"; }
+      echo "dispatched carrier run for $SHA (features=$FEATURES)"
+      shadow_log ship "$SHA" "$FEATURES" "dispatched"
+      echo "NEXT: fanout auto-notifies contributors on swap; poll --execute drives the swap chain"
+    else
+      plan "would: git push $REMOTE $SHA:refs/heads/main"
+      plan "would: $VALIDATE --repo $FORK --ledger <ledger> $SHA   # 4 ORDER gates vs live remote"
+      plan "would: $GH workflow run $WF --repo $FORK --ref $CARRIER_REF -f source_ref=$SHA -f features=$FEATURES"
+      plan "would: shadow journal appended; fanout notifies contributors on swap"
+      shadow_log ship-plan "$SHA" "$FEATURES" "planned"
+      echo "plan complete — nothing executed (pass --execute to ship)"
+    fi
+    ;;
+  # ------------------------------------------------------------------ poll --
+  poll)
+    STAGE="$(stage)"
+    plan "poll stage=$STAGE execute=$EXECUTE"
+    W_TIP="$(git ls-remote "$REMOTE" refs/heads/main 2>/dev/null | awk '{print $1}')"
+    [ -n "$W_TIP" ] && watch_precheck "$W_TIP"
+    # --- RED scan (issue #24 wiring): latest FAILED carrier run -> fanout.
+    #     Piggyback on every poll (same pattern family as the success query);
+    #     idempotent via fanout.state; suppressed by OC_DEPLOY_NOFANOUT=1.
+    #     Subshell: fanout_run's own exits must not kill the poll.
+    if [ "${OC_DEPLOY_NOFANOUT:-0}" != "1" ]; then
+      RED_JSON="$("$GH" api "repos/$FORK/actions/workflows/$WF/runs?status=failure&per_page=3" 2>/dev/null || true)"
+      RED_ID="$(printf '%s' "$RED_JSON" | jq -r '.workflow_runs[0].id // empty' 2>/dev/null || true)"
+      if [ -n "$RED_ID" ]; then
+        FO_RC=0; FO_OUT=""
+        FO_OUT="$( ( fanout_run "$RED_ID" 0 ) 2>&1 )" || FO_RC=$?
+        echo "RED scan: run=$RED_ID fanout rc=$FO_RC $(printf '%s' "$FO_OUT" | tail -1)"
+      fi
+    fi
+    RUNS_JSON="$("$GH" api "repos/$FORK/actions/workflows/$WF/runs?status=success&per_page=3" 2>/dev/null)" \
+      || { shadow_log poll "-" "-" "api-fail"; die 2 "gh api runs query failed"; }
+    RUN_ID="$(printf '%s' "$RUNS_JSON" | jq -r '.workflow_runs[0].id // empty')"
+    [ -n "$RUN_ID" ] || die 2 "no successful carrier runs found"
+    # Built sha comes from the BUILD job name "Linux amd64 (<sha>, <features>)"
+    # — select the job whose name embeds a 40-hex sha (the ORDER gates job
+    # carries no embed; jobs[0] is NOT assumed — oc-artifact-verify regression
+    # lesson 2026-08-28).
+    JOB_NAME="$("$GH" api "repos/$FORK/actions/runs/$RUN_ID/jobs" 2>/dev/null \
+      | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')"
+    B_SHA="$(printf '%s' "$JOB_NAME" | sed -n 's/.*(\([0-9a-f]\{40\}\).*/\1/p')"
+    [ -n "$B_SHA" ] || die 2 "cannot decode built sha from job name: $JOB_NAME"
+    DEP="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
+    plan "latest green run=$RUN_ID built sha=$B_SHA deployed=$DEP"
+    if [ "$B_SHA" = "$DEP" ]; then
+      echo "nothing to do: $B_SHA already deployed"
+      exit 0
+    fi
+    if [ "$STAGE" = S2 ] || [ "$STAGE" = S3 ]; then
+      plan "auto-swap armed: GREEN run + artifact verify -> swap (consent eliminated owner 2026-08-28)"
+      if [ "$EXECUTE" = 1 ]; then
+        plan "swap chain: download artifact run=$RUN_ID -> oc-artifact-verify -> backup to $BACKUP_DIR -> atomic install -> seal -> marker writes -> bounce -> disk==proc verify -> ledger stamp -> receipt (auto-rollback on verify fail)"
+        UNIT="oc-swap-${B_SHA:0:8}-$(date +%s)"
+        $LAUNCH --unit="$UNIT" --collect "$SELF" swap-execute --sha "$B_SHA" --run "$RUN_ID" --features "$FEATURES" \
+          || { shadow_log swap "$B_SHA" "$FEATURES" "launch-fail"; die 4 "systemd-run handoff failed — nothing touched"; }
+        shadow_log swap "$B_SHA" "$FEATURES" "handed-off:$UNIT"
+        echo "HANDOFF: Phase B transient unit $UNIT owns the swap (sha=$B_SHA run=$RUN_ID) — poll (Phase A) exits pre-bounce by design"
+        exit 0
+      fi
+      plan "swap path armed at stage $STAGE — pass --execute when S2 pilot authorized"
+    else
+      plan "stage $STAGE < S2: swap LOCKED (shadow mode — set ledger meta.oc_deploy_stage to S2 to unlock)"
+      plan "would (at S2): artifact verify + auto-swap chain for $B_SHA, receipt"
+    fi
+    shadow_log poll "$B_SHA" "-" "planned"
+    echo "plan complete — nothing executed"
+    ;;
+  # ------------------------------------------------------------ swap-execute --
+  swap-execute)
+    [ -n "$SHA" ] && [ -n "$RUN_ID" ] || die 1 "swap-execute needs --sha <40-hex> and --run <id>"
+    echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
+    swap_execute "$SHA" "$RUN_ID" "$FEATURES" "$DRILL" "$ARTDIR"
+    ;;
+  # ---------------------------------------------------------------- fanout --
+  fanout)
+    fanout_run "$RUN_ID" "${DRYRUN:-0}"
+    ;;
+  # ----------------------------------------------------------------- watch --
+  watch)
+    watch_run
+    ;;
+  --selftest) selftest "$@" ;;
+  *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest" ;;
+esac
