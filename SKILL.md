@@ -8,7 +8,7 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.46
+version: 0.4.47
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -43,7 +43,7 @@ register + test source of truth (archived compiler-step anchors stripped
 | `./tools/oc-artifact-verify <run-id> <bin> <marker>` | EXECUTION SANITY SIGNAL + FEATURE-PRESENCE CHECK inside `oc-deploy` swap path | 0 ok / 3 marker-missing(no swap) / 4 fail |
 | `./tools/oc-seal-state <sha> [...]` | baseline/orders seal inside `oc-deploy` swap path; order vocabulary QUEUED…VOID, per-row `--order-evidence`, `--purge-order`; matches legacy `order_sha` rows | 0 ok / 1 invocation / 2 scan-fail / 3 write-fail |
 | `./tools/oc-post-receipts ...` | Phase A/B receipts inside `oc-deploy` swap path | 0 ok / 1 no-token / 2 send-failed / 3 bad-args |
-| `./tools/oc-index-worktree <path>` | worktree codegraph index (editor Phase 2) | 0 ok / 4 index-failed / 5 bad-input |
+| `./tools/oc-index-worktree <path>` | INTERNAL since v0.4.47 — chained automatically by `oc-wt add` (worktrees inherit NO index; standalone call = legacy fallback) | 0 ok / 4 index-failed / 5 bad-input |
 | `./tools/oc-ci-parity` | workflows parity fork↔upstream post-merge (live: editor Phase 7 parity) | 0 identical / 4 DRIFT / 5 usage / 6 api |
 | `./tools/oc-contributors --repo <path> --range <A..B>` | Session-Id trailer extraction + contributor dedup over a commit range (post-swap fan-out targeting — [#24](https://github.com/leshchenko1979/opencrabs/issues/24) LIVE via `oc-deploy fanout` since v0.4.37; Duty reviews) | 0 ok / 2 usage / 3 git-fail / 4 empty-range |
 | `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>]` | commit-range → worker-lane attribution via Session-Id join against roster (`(unsigned)`/`(unmapped)` rows never dropped); `--deployed` composes the range from `deployed.sha` + `deployed.meta.json` `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) | 0 ok / 2 usage / 3 git-fail / 4 empty-range / 5 marker-missing |
