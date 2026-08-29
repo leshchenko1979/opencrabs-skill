@@ -79,7 +79,10 @@ shared disk the moment it ships, and every worker already re-reads SKILL.md +
 its role file at turn start — propagation happens with ZERO pings. Freeze #2
 proved the mechanism: two lanes absorbed v0.4.18 straight off disk, one citing
 it unprompted. On any version bump the Supervisor's notify work is now:
-stamp ONE ledger event (version published, no per-worker notify rows), then
+stamp ONE ledger event (version published, no per-worker notify rows) AND
+commit BOTH git repos — skill-dir repo: one commit per bump; state-dir repo:
+one commit per ledger stamp, inside the same flock as the write (git-history
+regime, v0.4.41) — then
 target ONLY (a) lanes actively MID-CYCLE at publish time whose duties the
 change touches and which would hit the gap within THIS cycle, and (b) workers
 more than THREE versions behind who act substantively while stale (skew-chase
