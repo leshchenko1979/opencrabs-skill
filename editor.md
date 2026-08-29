@@ -12,8 +12,7 @@ swap containing your commits you TEST what shipped (test-on-notify loop at the
 bottom). The Editor NEVER dispatches BUILD runs (`quick-build-linux.yml`), NEVER
 watches build runs, and NEVER touches binaries — all automation territory via
 `oc-deploy` (NO dispatch exceptions: BUILD TRIGGERS = exactly TWO with no
-exceptions — SKILL.md §Hard rules, A3 ruling 2026-08-29; the PR-head gate is
-the step-2c pr-checks dispatch, a lint/test gate, not a build trigger).
+exceptions — SKILL.md §Hard rules, A3 ruling 2026-08-29).
 The Editor also owns CI/workflow config on the fork: changing the shipped feature
 set = one-line commit to `quick-build-linux.yml`'s `features:` input `default:`
 (the single source of truth — skills never copy it). When a feature is COMPLETE
@@ -104,12 +103,11 @@ editor-facing duties:
    reason for any close is always in the comments — read with `--paginate`).
 2. None fits → open ONE issue ON THE FORK:
    `gh issue create -R leshchenko1979/opencrabs` (symptom + evidence: error
-   text, run link, sha). NEVER file a new issue on `adolfousier/opencrabs`
-   (owner directive 2026-08-27 — upstream receives PRs only).
-3. **NO CLAIMING ON THE FORK** (owner directive 2026-08-27 17:07Z): no
-   "Tackling this" comments, no self-assignment, no labels/reactions on fork
-   issues — the owner's notification surface stays clean. Claim record =
-   `Issue-Ref: #N` trailer on commits/PR + your feature row in
+   text, run link, sha). Routing + body rules: SKILL.md §ISSUE ROUTING.
+3. **NO CLAIMING ON THE FORK** (SKILL.md §ISSUE ROUTING, owner directive
+   2026-08-27 17:07Z): no tackling comments, self-assignment, labels/reactions
+   on fork issues — the owner's notification surface stays clean. Claim
+   record = `Issue-Ref: #N` trailer on commits/PR + your feature row in
    `workers-ledger.json` (first ledger timestamp wins; conflicts are supervisor
    rulings, never GitHub chatter). The uniqueness sweep in step 1 stays
    read-only search.
@@ -189,7 +187,7 @@ re-dispatch pr-checks, read the run log — that loop replaces every local lint 
 ```bash
 git -C ~/oc-wt-<task> push -u origin <branch>
 # GATE (decision 2026-08-27, rewired 2026-08-28 per owner "1 ok"): the
-# all-tests evidence is the GREEN `pr-checks.yml` CI run on the branch — it
+# CODE TESTS evidence is the GREEN `pr-checks.yml` CI run on the branch — it
 # runs `cargo test --locked --all-features` upstream of any build. NO local
 # test runs on this box (box law — §Box law, top of this file: cargo
 # forbidden in ANY form).
@@ -403,8 +401,8 @@ rule for completed features) — but it fires ONLY on owner approval.
 ```bash
 # 0. OWNER APPROVAL GATE (v0.4.1): post the smoke-test EVIDENCE + an explicit
 #    approval request in YOUR forum topic (what you drove, what you saw,
-#    run id + built sha). Then WAIT. Proceed ONLY on Alexey's approval —
-#    his reply or a positive reaction to the request counts; silence does NOT.
+#    run id + built sha). Then WAIT. APPROVAL definition = SKILL.md §ISSUE
+#    ROUTING (reply or positive reaction counts; silence does NOT).
 
 # 1. list fork-only commits, pick THIS feature's (trailers + touched files)
 git -C ~/opencrabs fetch adolfousier
@@ -417,8 +415,8 @@ git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
 # Phase 5 gate: pr-checks GREEN on the PR branch — zero errors in ported lines
 
 # 2b. RETIRED (A3 owner ruling 2026-08-29): the direct quick-build PR-head
-#     dispatch is GONE — BUILD TRIGGERS = exactly TWO, no exceptions; carrier
-#     Gate 3 (containment in fork main) rejects any PR-head sha. PR-head
+#     dispatch is GONE — BUILD TRIGGERS = exactly TWO, no exceptions; ORDER
+#     gate 3 (CONTAINMENT, oc-order-validate) rejects any PR-head sha. PR-head
 #     compile+lint evidence = step 2c's pr-checks dispatch (runs on ANY
 #     branch ref).
 

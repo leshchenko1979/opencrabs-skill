@@ -116,8 +116,11 @@ SKILL.md hard rules 2026-08-29).
   RETIRED at S3 2026-08-28: the Compiler is gone, and oc-deploy reads
   registry/ledger state DIRECTLY at invocation — no propagation needed.
 - Freeze history (pause/lift x2, 2026-08-26/27) lives in workers-ledger
-  events #6/#8/#14. Current state: NONE active - the v0.4.19 gate above is the
-  only notify policy; `[ALL]` reserved for consent-register-class gates.
+  events #6/#8/#14 + `meta.notification_freeze` (reconciled at n=1326: the
+  08-27 second freeze was never lifted but is SUPERSEDED by the v0.4.19 gate
+  + mechanical fanout — historical record only). Current state: NONE active -
+  the v0.4.19 gate above is the only notify policy; `[ALL]` reserved for
+  consent-register-class gates.
 
 ## Duty 4 — Poll workers for skill input
 
@@ -222,7 +225,19 @@ moment it happens; no waiting for a poll.
    `idea-verdict` ledger event:
    - ACCEPT-MECHANICAL → queued into the next skill version batch.
    - KERNEL-SEMANTIC → batched to the owner with a verdict table; ships ONLY
-     on his word (diagram gate applies).
+     on his word.
    - REJECT → reason journaled, never silently dropped.
 4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
    (convergence beats volume); duplicate ideas stamp ONE event, not N.
+
+**Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: the violation pattern
+is caught from evidence, not intuition. On suspicion, grep the ops daily log —
+`grep -a "TOOL_ACCUM" ~/.opencrabs/profiles/ops/logs/opencrabs.<date>` — filtered
+by the accused session id + telegram tool name (telegram_send / tg_send_message /
+tg_edit_message / telegram_edit). A matching row → notify the rule (SKILL.md
+§Telegram surface law); repeat → review toggle.
+
+**Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) and
+fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
+canonical text stays in SKILL.md §Upstream relations; this line is the
+supervisor-side ownership pointer.

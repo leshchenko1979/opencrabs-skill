@@ -19,8 +19,10 @@ the tool is NOT DONE. Chat-scroll archaeology is failure.
 
 ## Journal location
 
-`STATE_DIR/oc-deploy/journal/swap-<short-sha>.jsonl` — one file per swap attempt,
-append-only, every line fsync'd before the next step starts. STATE_DIR = the state
+`STATE_DIR/oc-deploy/journal/swap-<sha>-<epoch>.jsonl` — one file per swap attempt,
+append-only, every line fsync'd before the next step starts. (Live oc-deploy
+writes the FULL 40-char sha + an epoch suffix — never a short sha: two swaps of
+the same sha would collide on a short form.) STATE_DIR = the state
 dir oc-deploy already owns for `deployed.sha`.
 
 ## Line shape (one JSON object per line)
@@ -54,7 +56,7 @@ The swap tooling itself writes, between `seal` and `restart` (so markers reflect
 intent even if the restart crashes):
 
 - `STATE_DIR/deployed.sha` — the full 40-char source sha + newline
-- `STATE_DIR/deployed.meta.json` — `{sha, run_id, artifact_sha256, features, swapped_at, consent_msgid, prev_sha}`
+- `STATE_DIR/deployed.meta.json` — `{sha, run_id, artifact_sha256, features, swapped_at, auth:"auto-swap", prev_sha}` (live marker shape — no `consent_msgid`, consent eliminated 2026-08-28)
 
 `post-verify` re-reads both; any mismatch or absence → its journal line carries
 exit=1 and the swap is reported UNSEALED even if the binary answers health.

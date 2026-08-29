@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-shadow-rotate — second-copy rotation for the oc-deploy shadow journal
+# (v0.4.43, Duty-6 run-2 D12 + owner item 6, 2026-08-29)
+#
+# The live shadow log ($STATE_DIR/oc-deploy-shadow.log) is gitignored —
+# a SINGLE copy on disk. Rotation APPENDS the live content to the git-tracked
+# archive copy, then truncates the live file. Run at bump cadence
+# (supervisor.md bump steps). oc-deploy itself only ever appends to the live
+# file, so truncate-after-archive loses nothing.
+#
+# Exit codes: 0 ok/noop | 1 usage | 2 io-fail
+# =============================================================================
+set -uo pipefail
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-shadow-rotate" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/skills/opencrabs-dev}"
+LIVE="$STATE_DIR/oc-deploy-shadow.log"
+ARCHIVE="$STATE_DIR/oc-deploy-shadow.archive.log"
+
+case "${1:-}" in
+  --help|-h) echo "usage: oc-shadow-rotate [--dry-run]"; exit 1 ;;
+esac
+
+[ -f "$LIVE" ] || { echo "oc-shadow-rotate: no live shadow log ($LIVE) — noop"; exit 0; }
+[ -s "$LIVE" ] || { echo "oc-shadow-rotate: live shadow log empty — noop"; exit 0; }
+
+lines=$(wc -l < "$LIVE")
+if [ "${1:-}" = "--dry-run" ]; then
+  echo "PLAN: append $lines lines to $ARCHIVE, then truncate $LIVE"
+  exit 0
+fi
+
+cat "$LIVE" >> "$ARCHIVE" || { echo "oc-shadow-rotate: archive append failed" >&2; exit 2; }
+: > "$LIVE" || { echo "oc-shadow-rotate: live truncate failed" >&2; exit 2; }
+echo "oc-shadow-rotate: appended $lines lines to $(basename "$ARCHIVE"), live truncated"
+exit 0

@@ -11,7 +11,7 @@ guilty committers. Every artifact compiles ALL editors' merged changes together;
 individual branch builds happen only on Alexey's explicit ask. Standing order applies (Step 3 Green path). The Compiler NEVER writes, commits, or fixes code, NEVER touches
 FEATURE branches/worktrees — TWO sanctioned touches, both bounded in their own
 steps: the Step 6 integration sweep and Step 7 rebase-port fixups
-(SKILL.md §Role router).
+(SKILL.md §STEP ZERO — Roles DO NOT intersect).
 `session_notify` calls are coordination duty, not code — they belong
 here. Dispatch IS Compiler territory — the Editor only pushes, merges into main,
 and reports the sha. Builds fire ONLY on a valid editor ORDER or Alexey's word
@@ -41,7 +41,7 @@ now, never from skill text or session memory *(the yml evolved twice in one day,
 
 The autonomous delta-check cycle is RETIRED. Intake protocol:
 
-1. VALIDATE the ordered sha with the canonical tool — `./tools/oc-order-validate <full-sha> [--features <set>]`. The ORDER carries TWO dimensions (v0.4.15 P7/P8): sha AND feature set — pass the set through (`--features`), it becomes the dispatch `features=` input; a bare sha is ambiguous under single-flight (same sha, different set = DISTINCT build). The tool checks merge-base containment vs `origin/main` + Session-Id trailer scan; exit 0 = LGTM with evidence JSON, 2 = UNMERGED, 4 = UNSIGNED. No manual `git merge-base` / trailer hand-scan on the happy path — signing is self-enforcing: an unsigned author cannot order a build.
+1. VALIDATE the ordered sha with the canonical tool — `./tools/oc-order-validate <full-sha> [--features <set>]`. The ORDER carries TWO dimensions (v0.4.15 P7/P8): sha AND feature set — pass the set through (`--features`), it becomes the dispatch `features=` input; a bare sha is ambiguous under single-flight (same sha, different set = DISTINCT build). The tool checks merge-base containment vs `origin/main` + Session-Id trailer scan; exit codes = the register (0 VALID / 1 invocation / 2 UNMERGED / 3 UNSIGNED / 4 UNKNOWN-REF, SKILL.md §Tool table). No manual `git merge-base` / trailer hand-scan on the happy path — signing is self-enforcing: an unsigned author cannot order a build.
 2. SINGLE-DISPATCH INVARIANT (owner directive 2026-08-26: ONE CI flight, ever —
    GitHub Actions budget): at most ONE quick-build dispatch exists at any moment.
    - ordered sha ⊆ F's recorded source_ref R → **COALESCE**: sender becomes a
@@ -146,8 +146,9 @@ mechanical class (missing import / fmt / typo — never feature logic or design)
 The commit carries the COMPILER'S OWN Session-Id trailer + `[role-exception]`
 tag, disclosed in the next report and the ledger. Anything beyond → waits for
 the author or Alexey.
-*(Founding case: governor.rs E0308 compiled by dark author 61161247,
-2026-08-26 07:20 UTC — full story in SKILL.md §Shared war stories.)*
+*(Founding case: governor.rs E0308 compiled by an unreachable author
+(61161247 — asleep through the owner's night window), 2026-08-26 07:20 UTC —
+full story in SKILL.md §Shared war stories.)*
 
 Exception: if the run is merely still RUNNING (`status != completed`), waiting is
 fine — polling once after a reasonable interval is not a protocol violation.
@@ -285,7 +286,7 @@ which may already be ahead of what the binary holds):
    or PINGED-SILENT → one retry → `a2a_send` fallback → still nothing: record
    UNREACHABLE in the closing report, never block. No ledger "pinged" entries
    without wake evidence.
-4. Seal the state with the canonical tool — `./tools/oc-seal-state <full-sha> --run-id <id> --binary-sha <artifact-sha> --features <set> [--contributors <uuid1,uuid2>...] [--marker <marker> --found <1|0> --evidence '<line>']`. Writes/rewrites `baseline.json` + appends `orders.json` (if the ledger is non-empty) in ONE atomic call, exit-coded (0 = sealed, 4 = invariant broke mid-write, 5 = missing input). Contributor list is trailer-derived (Step 5 item 3); a `--marker` group carries the FEATURE-PRESENCE evidence (`feature_presence:{marker,found,evidence}`) from Step 3 item 2 into the schema. Never hand-edit baseline/orders via `jq` inline — the tool owns the write (read-back verified).
+4. Seal the state with the canonical tool — `./tools/oc-seal-state <full-sha> --run-id <id> --binary-sha <artifact-sha> --features <set> [--contributors <uuid1,uuid2>...] [--marker <marker> --found <1|0> --evidence '<line>']`. Writes/rewrites `baseline.json` + appends `orders.json` (if the ledger is non-empty) in ONE atomic call, exit codes = the register (0 ok / 1 invocation / 2 scan-fail / 3 write-fail, SKILL.md §Tool table). Contributor list is trailer-derived (Step 5 item 3); a `--marker` group carries the FEATURE-PRESENCE evidence (`feature_presence:{marker,found,evidence}`) from Step 3 item 2 into the schema. Never hand-edit baseline/orders via `jq` inline — the tool owns the write (read-back verified).
 
 Failure attribution (red CI logs, or an editor's smoke-test report came back
 FAIL — the two failure kinds, SKILL.md Test ontology):
