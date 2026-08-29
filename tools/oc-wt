@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-wt — worktree add/remove with the UN-SKIPPABLE index chain (KERNEL C7,
+# 2026-08-29 four-lens review run-2; design: /root/oc-work/oc-wt-design-20260829.md).
+#
+# add:    prune -> fetch origin -> validate local branch -> behind-base gate
+#         -> worktree add -> CHAINED oc-index-worktree (the forgettable step
+#         that silently breaks codegraph becomes impossible to skip).
+# remove: dirty-tree gate (porcelain must be empty; --force journals the
+#         destroyed listing FIRST — Lens-D deletion-safety posture).
+#
+# oc-wt validates branches, it NEVER creates them (lanes own branch naming
+# per the /opencrabs-dev skill). Worktree paths stay frozen at ~/oc-wt-<task>.
+#
+# Usage:
+#   oc-wt add <task> <branch> [--base origin/main] [--force] [--repo P] [--no-log]
+#   oc-wt remove <task> [--force] [--repo P] [--no-log]
+#   oc-wt --selftest          offline fixture repo (no network)
+#
+# Exit: 0 ok / 2 usage (slug, verb, args) / 3 add:path-exists · remove:dirty
+#       4 index failed (tree KEPT, warning verbatim) / 5 repo/branch not found
+#       6 branch behind --base (no --force)
+# =============================================================================
+set -u
+for _a in "$@"; do [ "$_a" = "--no-log" ] && export OC_TOOLS_NOLOG=1; done
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-wt" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="$(basename "$0")"
+GIT_BIN="${OC_GIT:-git}"
+INDEX_TOOL="${OC_INDEX_WORKTREE:-$(cd "$(dirname "$0")" && pwd)/oc-index-worktree}"
+REPO="${HOME}/opencrabs"
+BASE="origin/main"
+FORCE=0
+
+usage() {
+  cat >&2 <<EOS
+Usage: $PROG add <task> <branch> [--base origin/main] [--force] [--repo P] [--no-log]
+       $PROG remove <task> [--force] [--repo P] [--no-log]
+Exit: 0 ok / 2 usage / 3 path-exists-or-dirty / 4 index-failed / 5 repo-or-branch-missing / 6 behind-base
+EOS
+  exit 2
+}
+
+slug_ok() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$'; }
+
+# ---------- selftest (real git, local bare fixture, index tool shimmed) -------
+do_selftest() {
+  local pass=0 fail=0 RC OUT
+  local SELF; SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+  t_ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
+  t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
+  D="$(mktemp -d)"; trap '_rc=$?; rm -rf "$D"; oc_log_finish "$_rc"' EXIT
+  export HOME="$D/home"; mkdir -p "$HOME"
+
+  # fixture: bare origin + clone repo with main/feat-x/feat-behind
+  git init -q --bare -b main "$D/origin.git" || { echo "fixture fail"; exit 1; }
+  git clone -q "$D/origin.git" "$D/repo" 2>/dev/null
+  git -C "$D/repo" config user.email t@t; git -C "$D/repo" config user.name t
+  echo one > "$D/repo/f.txt"; git -C "$D/repo" add f.txt; git -C "$D/repo" commit -qm one
+  git -C "$D/repo" push -q origin main
+  echo two >> "$D/repo/f.txt"; git -C "$D/repo" commit -qam two   # main advances FIRST
+  git -C "$D/repo" push -q origin main
+  git -C "$D/repo" branch feat-x HEAD                             # level with origin/main
+  git -C "$D/repo" branch feat-behind HEAD~1                      # 1 behind origin/main
+  git -C "$D/repo" push -q origin feat-x feat-behind
+
+  # index shims
+  printf '#!/usr/bin/env bash\necho called >> "%s/idx-calls"\nexit 0\n' "$D" > "$D/idx-ok"; chmod +x "$D/idx-ok"
+  printf '#!/usr/bin/env bash\necho "codegraph index exploded" >&2\nexit 4\n' > "$D/idx-fail"; chmod +x "$D/idx-fail"
+  local E="OC_GIT=$GIT_BIN OC_INDEX_WORKTREE=$D/idx-ok OC_TOOLS_NOLOG=1"
+
+  # 1. add happy -> 0, indexed exactly once
+  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t1 feat-x --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  if [ "$RC" -eq 0 ] && [ -d "$HOME/oc-wt-t1" ] && [ "$(wc -l < "$D/idx-calls")" -eq 1 ]; then
+    t_ok "add happy: tree created + index chained exactly once"
+  else t_bad "add happy (rc=$RC idx=$(wc -l < "$D/idx-calls" 2>/dev/null))"; fi
+  # 2. add twice -> 3
+  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t1 feat-x --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 3 ] && t_ok "add existing path -> 3" || t_bad "add twice (rc=$RC)"
+  # 3. bad slug -> 2
+  "$SELF" add "Bad_Slug" feat-x --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 2 ] && t_ok "bad slug -> 2" || t_bad "bad slug (rc=$RC)"
+  # 4. unknown branch -> 5
+  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t2 nope --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 5 ] && t_ok "unknown branch -> 5" || t_bad "unknown branch (rc=$RC)"
+  # 5. behind base -> 6
+  OUT="$(env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t3 feat-behind --repo "$D/repo" 2>&1)"; RC=$?
+  if [ "$RC" -eq 6 ] && case "$OUT" in *behind*) true ;; *) false ;; esac; then
+    t_ok "behind --base -> 6 with counts"
+  else t_bad "behind-base (rc=$RC out=$OUT)"; fi
+  # 6. behind base --force -> 0
+  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t3 feat-behind --force --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && t_ok "behind-base --force -> 0" || t_bad "behind-base force (rc=$RC)"
+  # 7. index fail -> 4 + tree KEPT
+  env OC_INDEX_WORKTREE="$D/idx-fail" OC_TOOLS_NOLOG=1 "$SELF" add t4 feat-x --repo "$D/repo" >/dev/null 2>&1
+  # feat-x already checked out in t1 -> worktree add itself fails first; use a fresh branch
+  git -C "$D/repo" branch feat-y feat-x
+  OUT="$(env OC_INDEX_WORKTREE="$D/idx-fail" OC_TOOLS_NOLOG=1 "$SELF" add t4 feat-y --repo "$D/repo" 2>&1)"; RC=$?
+  if [ "$RC" -eq 4 ] && [ -d "$HOME/oc-wt-t4" ] && case "$OUT" in *"codegraph index exploded"*) true ;; *) false ;; esac; then
+    t_ok "index fail -> 4, tree kept, warning verbatim"
+  else t_bad "index fail (rc=$RC dir=$([ -d "$HOME/oc-wt-t4" ] && echo yes || echo no))"; fi
+  # 8. remove clean -> 0 + gone
+  env OC_TOOLS_NOLOG=1 "$SELF" remove t3 --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && [ ! -d "$HOME/oc-wt-t3" ] && t_ok "remove clean -> 0, dir gone" || t_bad "remove clean (rc=$RC)"
+  # 9. remove dirty -> 3 + listing on stderr
+  echo dirty >> "$HOME/oc-wt-t1/untracked.txt"
+  OUT="$(env OC_TOOLS_NOLOG=1 "$SELF" remove t1 --repo "$D/repo" 2>&1)"; RC=$?
+  if [ "$RC" -eq 3 ] && case "$OUT" in *"untracked.txt"*) true ;; *) false ;; esac; then
+    t_ok "remove dirty -> 3 with porcelain listing"
+  else t_bad "remove dirty (rc=$RC out=$OUT)"; fi
+  # 10. remove dirty --force -> 0 + journal carries the destroyed listing
+  env OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" remove t1 --force --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  if [ "$RC" -eq 0 ] && [ -f "$D/tools.log" ] && grep -q "untracked.txt" "$D/tools.log"; then
+    t_ok "remove dirty --force -> 0 + listing journaled"
+  else t_bad "remove dirty force (rc=$RC log=$( [ -f "$D/tools.log" ] && cat "$D/tools.log" ))"; fi
+  # 11. remove nonexistent -> 5
+  env OC_TOOLS_NOLOG=1 "$SELF" remove ghost --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 5 ] && t_ok "remove nonexistent -> 5" || t_bad "remove nonexistent (rc=$RC)"
+  # 12. --no-log suppresses
+  rm -f "$D/tools.log"
+  env OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" remove t4 --force --repo "$D/repo" --no-log >/dev/null 2>&1
+  [ ! -s "$D/tools.log" ] && t_ok "--no-log suppresses journal" || t_bad "--no-log leaked"
+
+  echo "selftest: $pass/$((pass+fail)) passed"
+  [ "$fail" -eq 0 ]
+}
+[ "${1:-}" = "--selftest" ] && { do_selftest; exit $?; }
+
+# ---------- arg parse ----------------------------------------------------------
+VERB="${1:-}"; shift 2>/dev/null || true
+case "$VERB" in add|remove) : ;; *) usage ;; esac
+TASK="${1:-}"; shift 2>/dev/null || true
+[ -n "$TASK" ] || usage
+slug_ok "$TASK" || { echo "$PROG: bad task slug '$TASK' (^[a-z0-9][a-z0-9-]{0,40}$)" >&2; exit 2; }
+BRANCH=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base)  shift; BASE="${1:-}"; [ -n "$BASE" ] || usage ;;
+    --force) FORCE=1 ;;
+    --repo)  shift; REPO="${1:-}"; [ -n "$REPO" ] || usage ;;
+    --no-log) : ;;
+    -*) usage ;;
+    *) [ "$VERB" = "add" ] && [ -z "$BRANCH" ] && BRANCH="$1" || usage ;;
+  esac
+  shift
+done
+case "$REPO" in "~"|"~/"*) REPO="${HOME}${REPO#\~}" ;; esac
+WT="$HOME/oc-wt-$TASK"
+oc_log_extra "verb" "$VERB"; oc_log_extra "task" "$TASK"
+[ -d "$REPO" ] && "$GIT_BIN" -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || {
+  echo "$PROG: repo not found: $REPO" >&2; exit 5; }
+
+if [ "$VERB" = "add" ]; then
+  [ -n "$BRANCH" ] || usage
+  oc_log_extra "branch" "$BRANCH"; oc_log_extra "base" "$BASE"
+  # 1. prune stale entries from crashed sessions — every time
+  "$GIT_BIN" -C "$REPO" worktree prune 2>/dev/null || true
+  # 2. fresh base (ref-only fetch) + branch validation
+  "$GIT_BIN" -C "$REPO" fetch --quiet origin 2>/dev/null || {
+    echo "$PROG: fetch origin failed on $REPO" >&2; exit 5; }
+  "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || {
+    echo "$PROG: no local branch '$BRANCH' (oc-wt never creates branches — lane owns naming)" >&2; exit 5; }
+  "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || {
+    echo "$PROG: base ref '$BASE' not found" >&2; exit 5; }
+  BEHIND_N="$("$GIT_BIN" -C "$REPO" rev-list --count "$BRANCH..$BASE" 2>/dev/null)" || BEHIND_N=0
+  AHEAD_N="$("$GIT_BIN" -C "$REPO" rev-list --count "$BASE..$BRANCH" 2>/dev/null)" || AHEAD_N=0
+  if [ "$BEHIND_N" -gt 0 ]; then
+    if [ "$FORCE" -eq 1 ]; then
+      echo "$PROG: WARNING — $BRANCH is $BEHIND_N commit(s) behind $BASE (--force continues)" >&2
+    else
+      echo "$PROG: $BRANCH is $BEHIND_N commit(s) behind $BASE (ahead $AHEAD_N) — rebase or --force" >&2
+      exit 6
+    fi
+  fi
+  # 3. add
+  [ -e "$WT" ] && { echo "$PROG: path exists: $WT (remove it first)" >&2; exit 3; }
+  "$GIT_BIN" -C "$REPO" worktree add "$WT" "$BRANCH" 2>&1 || { echo "$PROG: worktree add failed" >&2; exit 3; }
+  # 4. INDEX CHAIN — the point of the tool: un-skippable
+  IDX_OUT="$("$INDEX_TOOL" "$WT" 2>&1)"; IDX_RC=$?
+  if [ "$IDX_RC" -ne 0 ]; then
+    printf '%s\n' "$IDX_OUT" >&2
+    echo "$PROG: index FAILED (rc=$IDX_RC) — worktree KEPT at $WT, codegraph broken until indexed" >&2
+    oc_log_extra "indexed" "failed"
+    exit 4
+  fi
+  oc_log_extra "indexed" "ok"
+  BASE_SHA="$("$GIT_BIN" -C "$REPO" rev-parse "$BASE" 2>/dev/null)"
+  echo "ADDED $WT branch=$BRANCH base=${BASE_SHA:0:7} indexed=yes"
+  exit 0
+fi
+
+# ---------- remove ---------------------------------------------------------------
+[ -d "$WT" ] || { echo "$PROG: no worktree at $WT" >&2; exit 5; }
+DIRTY="$("$GIT_BIN" -C "$WT" status --porcelain 2>/dev/null)"
+if [ -n "$DIRTY" ]; then
+  if [ "$FORCE" -eq 1 ]; then
+    # audit trail of what gets destroyed — journaled BEFORE the remove
+    oc_log_extra "destroyed" "$(printf '%s' "$DIRTY" | tr '\n' ';')"
+    printf '%s\n' "$DIRTY" >&2
+    echo "$PROG: WARNING — destroying the dirty tree above (--force)" >&2
+  else
+    echo "$PROG: dirty tree at $WT — commit/push first (or --force journals the destruction):" >&2
+    printf '%s\n' "$DIRTY" >&2
+    exit 3
+  fi
+fi
+"$GIT_BIN" -C "$REPO" worktree remove ${FORCE:+--force} "$WT" 2>&1 || { echo "$PROG: worktree remove failed" >&2; exit 3; }
+"$GIT_BIN" -C "$REPO" worktree prune 2>/dev/null || true
+echo "REMOVED $WT"
+exit 0

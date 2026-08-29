@@ -461,6 +461,28 @@ else
 fi
 rm -rf "$d"
 
+# ---- 13. oc-prchecks (KERNEL C5 — one-command PR lint gate) ----------------
+section "oc-prchecks"
+run_selftest oc-prchecks
+if tool oc-prchecks; then
+  "$TOOLS_DIR/oc-prchecks" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/oc-prchecks" abc123 >/dev/null 2>&1; [ $? -eq 2 ] && ok "short sha -> 2 (FULL-sha shape gate)" || bad "short sha -> expected 2"
+fi
+
+# ---- 14. oc-upstream-delta (KERNEL C6 — watch-cycle arithmetic) ------------
+section "oc-upstream-delta"
+run_selftest oc-upstream-delta
+if tool oc-upstream-delta; then
+  "$TOOLS_DIR/oc-upstream-delta" --repo /nonexistent-repo-path >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad repo path -> 2" || bad "bad repo path -> expected 2"
+fi
+
+# ---- 15. oc-wt (KERNEL C7 — worktree add/remove, un-skippable index chain) -
+section "oc-wt"
+run_selftest oc-wt
+if tool oc-wt; then
+  "$TOOLS_DIR/oc-wt" add "Bad_Slug" some-branch >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad slug -> 2 (usage)" || bad "bad slug -> expected 2"
+fi
+
 # ---- battery receipt (oc-ledger sync gate reads this; the file itself rides --
 # ---- the skill repo via commit-pending --bundle) ------------------------------
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL

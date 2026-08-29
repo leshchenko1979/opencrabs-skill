@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-prchecks — one-command PR-lane lint gate over pr-checks.yml (KERNEL C5,
+# 2026-08-29 four-lens review run-2; design: /root/oc-work/oc-prchecks-design-20260829.md).
+#
+# Kills the 4-step flag-sensitive hand ritual of editor.md Phase 5:
+#   shape gate (full sha only) -> LOUD yml-on-carrier check -> dispatch ->
+#   sha-bound run resolve -> watch -> per-step report with the fmt soft-fail
+#   EXPOSED (job-green hides fmt failures; this tool reads the STEP).
+#
+# Usage:
+#   oc-prchecks <branch-or-sha> [--wait N] [--repo R] [--carrier C] [--no-log]
+#   oc-prchecks --selftest          offline, gh-shim injected (zero network)
+#
+# Defaults: --repo leshchenko1979/opencrabs, --carrier ci/quick-build-linux,
+# --wait 600 (15s poll). Env: OC_GH (gh shim), OC_PRCHECKS_POLL,
+# OC_PRCHECKS_RESOLVE_WAIT, OC_PRCHECKS_RESOLVE_POLL (tests).
+#
+# Exit: 0 GREEN (terminal, all jobs+steps ok, fmt explicit)
+#       2 usage / sha-shape / unknown ref
+#       3 RED (terminal with a failure, or fmt step missing/skipped/failed)
+#       4 dispatch-or-api failure (incl. yml-missing-on-carrier, resolve timeout)
+#       5 still in flight after --wait (run id + URL on stdout for resume)
+# =============================================================================
+set -u
+# --no-log must win before the lib sees argv
+for _a in "$@"; do [ "$_a" = "--no-log" ] && export OC_TOOLS_NOLOG=1; done
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-prchecks" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="$(basename "$0")"
+GH_BIN="${OC_GH:-gh}"
+REPO="leshchenko1979/opencrabs"
+CARRIER="ci/quick-build-linux"
+WAIT_SECS=600
+POLL="${OC_PRCHECKS_POLL:-15}"
+RESOLVE_WAIT="${OC_PRCHECKS_RESOLVE_WAIT:-60}"
+RESOLVE_POLL="${OC_PRCHECKS_RESOLVE_POLL:-5}"
+
+usage() {
+  cat >&2 <<EOS
+Usage: $PROG <branch-or-sha> [--wait N] [--repo R] [--carrier C] [--no-log]
+Exit: 0 GREEN / 2 usage-or-shape / 3 RED / 4 dispatch-or-api / 5 in-flight-timeout
+EOS
+  exit 2
+}
+
+# ---------- selftest (offline, injectable gh shim) ---------------------------
+mk_shim() { # $1=path $2=scenario — emits a gh stub serving canned fixtures
+  cat > "$1" <<EOS
+#!/usr/bin/env bash
+S="$2"
+case "\$*" in
+  *"api repos/"*"/commits/"*)
+    [ "\$S" = "unknown_ref" ] && exit 1
+    printf '%s\n' "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
+  *"api repos/"*"contents/"*)
+    [ "\$S" = "yml_missing" ] && exit 1
+    printf '{"name":"pr-checks.yml"}\n' ;;
+  *"workflow run"*)
+    [ "\$S" = "dispatch_fail" ] && exit 1
+    exit 0 ;;
+  *"run list"*)
+    case "\$S" in
+      resolve_timeout) printf '[{"databaseId":222,"headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","createdAt":"%s"}]\n' "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" ;;
+      *) printf '[{"databaseId":222,"headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","createdAt":"%s"},{"databaseId":111,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","createdAt":"%s"}]\n' \
+           "\$(date -u -d '+9 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" ;;
+    esac ;;
+  *"run view"*"--json jobs"*)
+    case "\$S" in
+      fmt_failed)  printf '{"jobs":[{"name":"lint","conclusion":"success","steps":[{"name":"cargo fmt","conclusion":"failure"}]},{"name":"test","conclusion":"success","steps":[]}]}\n' ;;
+      fmt_skipped) printf '{"jobs":[{"name":"lint","conclusion":"success","steps":[{"name":"cargo fmt","conclusion":"skipped"}]}]}\n' ;;
+      job_failed)  printf '{"jobs":[{"name":"lint","conclusion":"failure","steps":[{"name":"cargo fmt","conclusion":"success"}]}]}\n' ;;
+      *)           printf '{"jobs":[{"name":"lint","conclusion":"success","steps":[{"name":"cargo fmt","conclusion":"success"}]},{"name":"test","conclusion":"success","steps":[]}]}\n' ;;
+    esac ;;
+  *"run view"*)
+    [ "\$S" = "inflight" ] && printf '{"status":"in_progress","conclusion":null}\n' && exit 0
+    printf '{"status":"completed","conclusion":"success"}\n' ;;
+  *) printf '{}\n' ;;
+esac
+EOS
+  chmod +x "$1"
+}
+
+do_selftest() {
+  D="$(mktemp -d)"; trap '_rc=$?; rm -rf "$D"; oc_log_finish "$_rc"' EXIT
+  local pass=0 fail=0 SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  local E="OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1"
+  t_ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
+  t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
+  run_t() { # $1=scenario $2..=args ; echoes rc in $T_RC, out in $T_OUT
+    mk_shim "$D/gh" "$1"; shift
+    T_OUT="$(OC_GH="$D/gh" OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+      OC_TOOLS_NOLOG=1 "$SELF" "$@" 2>&1)"; T_RC=$?
+  }
+  SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+
+  run_t none abc123;                 [ "$T_RC" -eq 2 ] && t_ok "short sha -> 2" || t_bad "short sha (rc=$T_RC)"
+  run_t unknown_ref some-branch;     [ "$T_RC" -eq 2 ] && t_ok "unknown ref -> 2" || t_bad "unknown ref (rc=$T_RC)"
+  run_t yml_missing "$SHA";          [ "$T_RC" -eq 4 ] && t_ok "yml missing on carrier -> 4 (LOUD)" || t_bad "yml missing (rc=$T_RC)"
+  run_t dispatch_fail "$SHA";        [ "$T_RC" -eq 4 ] && t_ok "dispatch fail -> 4" || t_bad "dispatch fail (rc=$T_RC)"
+  run_t green "$SHA"
+  if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"VERDICT GREEN"*"runs/111"*) true ;; *) false ;; esac; then
+    t_ok "sha-bound resolve picks OUR run (111, decoy 222 ignored) -> GREEN"
+  else t_bad "resolve/GREEN (rc=$T_RC out=$T_OUT)"; fi
+  run_t resolve_timeout "$SHA";      [ "$T_RC" -eq 4 ] && t_ok "resolve timeout (decoy-only) -> 4" || t_bad "resolve timeout (rc=$T_RC)"
+  run_t fmt_failed "$SHA"
+  if [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"cargo fmt"*) true ;; *) false ;; esac; then
+    t_ok "fmt soft-fail EXPOSED: job success + fmt failure -> 3 RED"
+  else t_bad "fmt soft-fail (rc=$T_RC out=$T_OUT)"; fi
+  run_t fmt_skipped "$SHA";          [ "$T_RC" -eq 3 ] && t_ok "fmt skipped -> 3 RED" || t_bad "fmt skipped (rc=$T_RC)"
+  run_t job_failed "$SHA";           [ "$T_RC" -eq 3 ] && t_ok "job failed -> 3 RED" || t_bad "job failed (rc=$T_RC)"
+  run_t inflight "$SHA" --wait 1
+  if [ "$T_RC" -eq 5 ] && case "$T_OUT" in *"runs/111"*) true ;; *) false ;; esac; then
+    t_ok "in-flight timeout -> 5 with run URL for resume"
+  else t_bad "in-flight (rc=$T_RC out=$T_OUT)"; fi
+  # journal line present (extra.verdict)
+  mk_shim "$D/gh" green
+  OC_GH="$D/gh" OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+    OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" "$SHA" >/dev/null 2>&1
+  if [ -f "$D/tools.log" ] && jq -e 'select(.tool=="oc-prchecks" and .exit==0 and .extra.verdict=="GREEN")' "$D/tools.log" >/dev/null 2>&1; then
+    t_ok "journal line with extra.verdict=GREEN"
+  else t_bad "journal line missing/wrong"; fi
+  # --no-log suppresses
+  rm -f "$D/tools.log"
+  OC_GH="$D/gh" OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+    OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" "$SHA" --no-log >/dev/null 2>&1
+  [ ! -s "$D/tools.log" ] && t_ok "--no-log suppresses journal" || t_bad "--no-log leaked a journal line"
+
+  echo "selftest: $pass/$((pass+fail)) passed"
+  [ "$fail" -eq 0 ]
+}
+[ "${1:-}" = "--selftest" ] && { do_selftest; exit $?; }
+
+# ---------- arg parse ---------------------------------------------------------
+REF=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --wait)    shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage ;; esac ;;
+    --repo)    shift; REPO="${1:-}"; [ -n "$REPO" ] || usage ;;
+    --carrier) shift; CARRIER="${1:-}"; [ -n "$CARRIER" ] || usage ;;
+    --no-log)  : ;;
+    -*)        usage ;;
+    *)         [ -z "$REF" ] || usage; REF="$1" ;;
+  esac
+  shift
+done
+[ -n "$REF" ] || usage
+
+# ---------- step 1: SHAPE gate (carrier inputs are sha-bound, Gate 1 3349cf7e)
+case "$REF" in
+  *[!0-9a-fA-F]*) : ;;  # not pure hex -> branch name, resolve below
+  *)
+    if [ "${#REF}" -lt 40 ]; then
+      echo "$PROG: short sha refused (carrier inputs are FULL-sha-bound; got ${#REF} chars)" >&2
+      exit 2
+    fi ;;
+esac
+SHA="$(printf '%s' "$REF" | tr 'A-F' 'a-f')"
+if [ "${#SHA}" -ne 40 ] || case "$SHA" in *[!0-9a-f]*) true ;; *) false ;; esac; then
+  # branch name -> resolve to tip sha
+  SHA="$("$GH_BIN" api "repos/$REPO/commits/$REF" --jq '.sha' 2>/dev/null)" || {
+    echo "$PROG: unknown ref '$REF' on $REPO" >&2; exit 2; }
+  [ -n "$SHA" ] || { echo "$PROG: empty sha for '$REF'" >&2; exit 2; }
+else
+  # full sha -> verify it exists
+  "$GH_BIN" api "repos/$REPO/commits/$SHA" --jq '.sha' >/dev/null 2>&1 || {
+    echo "$PROG: sha $SHA not found on $REPO" >&2; exit 2; }
+fi
+oc_log_extra "sha" "$SHA"
+
+# ---------- step 2: LOUD yml-on-carrier check, then dispatch -----------------
+"$GH_BIN" api "repos/$REPO/contents/.github/workflows/pr-checks.yml?ref=$CARRIER" >/dev/null 2>&1 || {
+  echo "$PROG: pr-checks.yml NOT FOUND on carrier '$CARRIER' — dispatch would silently no-op" >&2
+  oc_log_extra "yml_check" "missing"
+  exit 4
+}
+oc_log_extra "yml_check" "ok"
+DISPATCH_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+"$GH_BIN" workflow run pr-checks.yml --repo "$REPO" --ref "$CARRIER" -f "ref=$SHA" >/dev/null 2>&1 || {
+  echo "$PROG: dispatch failed (repo=$REPO carrier=$CARRIER)" >&2
+  oc_log_extra "dispatch" "failed"
+  exit 4
+}
+oc_log_extra "dispatch" "ok"
+oc_log_extra "dispatch_ts" "$DISPATCH_TS"
+
+# ---------- step 3: sha-bound run resolve (concurrent-lane safe) --------------
+RUN_ID=""
+deadline=$(( $(date +%s) + RESOLVE_WAIT ))
+while [ -z "$RUN_ID" ]; do
+  LIST="$("$GH_BIN" run list --workflow pr-checks.yml --repo "$REPO" --limit 30 \
+    --json databaseId,headSha,createdAt 2>/dev/null)" || LIST="[]"
+  RUN_ID="$(printf '%s' "$LIST" | jq -r --arg sha "$SHA" --arg ts "$DISPATCH_TS" \
+    '[.[] | select(.headSha==$sha and .createdAt >= $ts)] | sort_by(.createdAt) | .[0].databaseId // empty' 2>/dev/null)"
+  [ -n "$RUN_ID" ] && break
+  [ "$(date +%s)" -ge "$deadline" ] && {
+    echo "$PROG: no run for $SHA appeared within ${RESOLVE_WAIT}s (dispatch ts $DISPATCH_TS)" >&2
+    oc_log_extra "resolve" "timeout"
+    exit 4
+  }
+  sleep "$RESOLVE_POLL"
+done
+oc_log_extra "run_id" "$RUN_ID"
+RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
+
+# ---------- step 4: watch ------------------------------------------------------
+deadline=$(( $(date +%s) + WAIT_SECS ))
+while :; do
+  ST="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json status,conclusion 2>/dev/null)" || {
+    echo "$PROG: run view $RUN_ID failed" >&2; exit 4; }
+  STATUS="$(printf '%s' "$ST" | jq -r '.status')"
+  [ "$STATUS" = "completed" ] && break
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "IN-FLIGHT run=$RUN_ID $RUN_URL (still $STATUS after ${WAIT_SECS}s — resume: gh run view $RUN_ID)"
+    oc_log_extra "watch" "timeout"
+    exit 5
+  fi
+  sleep "$POLL"
+done
+CONCLUSION="$(printf '%s' "$ST" | jq -r '.conclusion')"
+oc_log_extra "conclusion" "$CONCLUSION"
+
+# ---------- step 5: per-step report, fmt soft-fail EXPOSED ---------------------
+JOBS="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json jobs 2>/dev/null)" || {
+  echo "$PROG: jobs fetch failed for run $RUN_ID" >&2; exit 4; }
+printf '%s' "$JOBS" | jq -r '.jobs[] | "JOB\t\(.name)\t\(.conclusion)"'
+FMT_LINES="$(printf '%s' "$JOBS" | jq -r '.jobs[].steps[]? | select(.name | test("fmt";"i")) | "STEP\t\(.name)\t\(.conclusion)"')"
+[ -n "$FMT_LINES" ] && printf '%s\n' "$FMT_LINES"
+
+VERDICT="GREEN"
+REASONS=""
+# every job must be success
+BAD_JOBS="$(printf '%s' "$JOBS" | jq -r '[.jobs[] | select(.conclusion != "success") | .name] | join(",")')"
+if [ -n "$BAD_JOBS" ]; then VERDICT="RED"; REASONS="jobs failed: $BAD_JOBS"; fi
+# fmt step must exist and be success (the soft-fail the job conclusion hides)
+if [ -z "$FMT_LINES" ]; then
+  VERDICT="RED"; REASONS="${REASONS:+$REASONS; }fmt step MISSING"
+elif printf '%s\n' "$FMT_LINES" | awk -F'\t' '$3 != "success" { found=1 } END { exit !found }'; then
+  VERDICT="RED"; REASONS="${REASONS:+$REASONS; }fmt step not success (soft-fail exposed)"
+fi
+oc_log_extra "fmt" "$(printf '%s' "$FMT_LINES" | awk -F'\t' '{print $3}' | sort -u | tr '\n' ',' | sed 's/,$//')"
+oc_log_extra "verdict" "$VERDICT"
+
+echo "VERDICT $VERDICT"
+echo "RUN $RUN_URL"
+if [ "$VERDICT" = "GREEN" ]; then exit 0; fi
+echo "$PROG: RED — ${REASONS:-run conclusion $CONCLUSION}" >&2
+exit 3

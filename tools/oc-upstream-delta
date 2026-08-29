@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-upstream-delta — watch-cycle arithmetic for SKILL.md §Upstream relations
+# (KERNEL C6, 2026-08-29 four-lens review run-2; design:
+# /root/oc-work/oc-upstream-delta-design-20260829.md).
+#
+# Replaces the hand-derived fetch/merge-base/rev-list sequence two lanes had
+# started drifting on. READ-ONLY: fetch + plumbing only. NEVER merges, pushes,
+# or rebases. PROPOSE/WAIT judgment stays HUMAN (owner-word gates, AGENTS.md
+# upstream-relations cluster) — exit 1 is a VERDICT, not an error.
+#
+# Usage:
+#   oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R] [--no-log]
+#   oc-upstream-delta --selftest      offline fixtures (local remotes only)
+#
+# Output: TSV lines on stdout —
+#   BASE <sha7> / AHEAD <n> / BEHIND <n>
+#   C <sha7> <subject>          (BEHIND list first, then AHEAD list)
+#   ABSORBED-CANDIDATE <fork-sha7> <upstream-sha7>   (patch-id match)
+# Human summary on stderr: "clean" or "delta ahead=N behind=M absorbed=K".
+#
+# Exit: 0 clean (0/0) / 1 delta present / 2 usage / 3 fetch-or-git failure
+# =============================================================================
+set -u
+for _a in "$@"; do [ "$_a" = "--no-log" ] && export OC_TOOLS_NOLOG=1; done
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-upstream-delta" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="$(basename "$0")"
+GIT_BIN="${OC_GIT:-git}"
+REPO="${HOME}/opencrabs"
+FORK_REMOTE="origin"
+UP_REMOTE="adolfousier"
+
+usage() {
+  cat >&2 <<EOS
+Usage: $PROG [--repo P] [--fork-origin R] [--upstream R] [--no-log]
+Exit: 0 clean / 1 delta (verdict) / 2 usage / 3 fetch-or-git failure
+EOS
+  exit 2
+}
+
+# ---------- selftest (offline fixture repos, real git, no network) ------------
+mkfix() { # emits fixture root on stdout: w repo with origin->fork.git, adolfousier->up.git
+  local F; F="$(mktemp -d)"
+  git init -q --bare -b main "$F/up.git"   || return 1
+  git init -q --bare -b main "$F/fork.git" || return 1
+  git init -q -b main "$F/w"               || return 1
+  git -C "$F/w" config user.email t@t; git -C "$F/w" config user.name t
+  git -C "$F/w" remote add origin "$F/fork.git"
+  git -C "$F/w" remote add adolfousier "$F/up.git"
+  echo base > "$F/w/f.txt"
+  git -C "$F/w" add f.txt; git -C "$F/w" commit -qm base
+  git -C "$F/w" push -q origin main; git -C "$F/w" push -q adolfousier main
+  printf '%s\n' "$F"
+}
+
+do_selftest() {
+  local pass=0 fail=0 F OUT RC
+  local SELF; SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+  t_ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
+  t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
+  D="$(mktemp -d)"; trap '_rc=$?; rm -rf "$D"; oc_log_finish "$_rc"' EXIT
+
+  # 1. clean 0/0 -> rc 0 + "clean"
+  F="$(mkfix)"
+  OUT="$(OC_TOOLS_NOLOG=1 "$SELF" --repo "$F/w" 2>"$D/err1")"; RC=$?
+  if [ "$RC" -eq 0 ] && case "$OUT" in BASE*) true ;; *) false ;; esac && grep -q "clean" "$D/err1"; then
+    t_ok "clean 0/0 -> 0 + clean summary"
+  else t_bad "clean (rc=$RC out=$OUT err=$(cat "$D/err1"))"; fi
+  rm -rf "$F"
+
+  # 2. ahead-only -> rc 1 + AHEAD 1 + C row
+  F="$(mkfix)"
+  echo ahead >> "$F/w/f.txt"; git -C "$F/w" commit -qam "fork-only change"
+  git -C "$F/w" push -q origin main
+  OUT="$(OC_TOOLS_NOLOG=1 "$SELF" --repo "$F/w" 2>"$D/err2")"; RC=$?
+  if [ "$RC" -eq 1 ] && printf '%s\n' "$OUT" | awk '$1=="AHEAD" && $2==1 {f=1} END{exit !f}' \
+     && printf '%s\n' "$OUT" | grep -q "^C	[a-f0-9]\{7\}	fork-only change"; then
+    t_ok "ahead-only -> 1 + AHEAD 1 + C row"
+  else t_bad "ahead-only (rc=$RC out=$OUT)"; fi
+  rm -rf "$F"
+
+  # 3. behind-only -> rc 1 + BEHIND 1
+  F="$(mkfix)"
+  echo up >> "$F/w/f.txt"; git -C "$F/w" commit -qam "upstream-only change"
+  git -C "$F/w" push -q adolfousier main
+  OUT="$(OC_TOOLS_NOLOG=1 "$SELF" --repo "$F/w" 2>&1)"; RC=$?
+  if [ "$RC" -eq 1 ] && printf '%s\n' "$OUT" | awk '$1=="BEHIND" && $2==1 {f=1} END{exit !f}'; then
+    t_ok "behind-only -> 1 + BEHIND 1"
+  else t_bad "behind-only (rc=$RC)"; fi
+  rm -rf "$F"
+
+  # 4. mixed -> both counts
+  F="$(mkfix)"
+  echo up >> "$F/w/f.txt"; git -C "$F/w" commit -qam "up change"; git -C "$F/w" push -q adolfousier main
+  git -C "$F/w" reset -q --hard HEAD~1
+  echo fork >> "$F/w/f.txt"; git -C "$F/w" commit -qam "fork change"; git -C "$F/w" push -q origin main
+  OUT="$(OC_TOOLS_NOLOG=1 "$SELF" --repo "$F/w" 2>/dev/null)"; RC=$?
+  if [ "$RC" -eq 1 ] && printf '%s\n' "$OUT" | awk '$1=="AHEAD" && $2==1 {a=1} $1=="BEHIND" && $2==1 {b=1} END{exit !(a&&b)}'; then
+    t_ok "mixed -> AHEAD 1 + BEHIND 1"
+  else t_bad "mixed (rc=$RC out=$OUT)"; fi
+  rm -rf "$F"
+
+  # 5. absorbed pair: same diff, different message/sha -> ABSORBED-CANDIDATE
+  F="$(mkfix)"
+  echo v2 > "$F/w/f.txt"; git -C "$F/w" commit -qam "upstream rework of feature X"
+  git -C "$F/w" push -q adolfousier main
+  git -C "$F/w" reset -q --hard HEAD~1
+  echo v2 > "$F/w/f.txt"; git -C "$F/w" commit -qam "fork feature X (totally different message)"
+  git -C "$F/w" push -q origin main
+  OUT="$(OC_TOOLS_NOLOG=1 "$SELF" --repo "$F/w" 2>/dev/null)"; RC=$?
+  if [ "$RC" -eq 1 ] && printf '%s\n' "$OUT" | grep -q "^ABSORBED-CANDIDATE	"; then
+    t_ok "patch-id absorbed pair -> ABSORBED-CANDIDATE row"
+  else t_bad "absorbed pair (rc=$RC out=$OUT)"; fi
+  rm -rf "$F"
+
+  # 6. different content -> NO candidate row
+  F="$(mkfix)"
+  echo v2 > "$F/w/f.txt"; git -C "$F/w" commit -qam "upstream change"; git -C "$F/w" push -q adolfousier main
+  git -C "$F/w" reset -q --hard HEAD~1
+  echo SOMETHING-ELSE > "$F/w/f.txt"; git -C "$F/w" commit -qam "fork different change"; git -C "$F/w" push -q origin main
+  OUT="$(OC_TOOLS_NOLOG=1 "$SELF" --repo "$F/w" 2>/dev/null)"; RC=$?
+  if [ "$RC" -eq 1 ] && ! printf '%s\n' "$OUT" | grep -q "^ABSORBED-CANDIDATE"; then
+    t_ok "different diff -> no ABSORBED-CANDIDATE"
+  else t_bad "non-absorbed false positive (rc=$RC)"; fi
+  rm -rf "$F"
+
+  # 7. missing remote -> 3
+  F="$(mkfix)"
+  git -C "$F/w" remote remove adolfousier
+  OC_TOOLS_NOLOG=1 "$SELF" --repo "$F/w" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 3 ] && t_ok "missing remote -> 3" || t_bad "missing remote (rc=$RC)"
+  rm -rf "$F"
+
+  # 8. bad repo path -> 2
+  OC_TOOLS_NOLOG=1 "$SELF" --repo "$D/nonexistent" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 2 ] && t_ok "bad repo path -> 2" || t_bad "bad repo path (rc=$RC)"
+
+  # 9. journal line present (extra.ahead)
+  F="$(mkfix)"
+  echo j >> "$F/w/f.txt"; git -C "$F/w" commit -qam j; git -C "$F/w" push -q origin main
+  OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" --repo "$F/w" >/dev/null 2>&1
+  if [ -f "$D/tools.log" ] && jq -e 'select(.tool=="oc-upstream-delta" and .extra.ahead=="1")' "$D/tools.log" >/dev/null 2>&1; then
+    t_ok "journal line with extra.ahead=1"
+  else t_bad "journal line missing/wrong"; fi
+  rm -rf "$F"
+
+  # 10. --no-log suppresses
+  F="$(mkfix)"
+  OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools2.log" "$SELF" --repo "$F/w" --no-log >/dev/null 2>&1
+  [ ! -s "$D/tools2.log" ] && t_ok "--no-log suppresses journal" || t_bad "--no-log leaked"
+  rm -rf "$F"
+
+  echo "selftest: $pass/$((pass+fail)) passed"
+  [ "$fail" -eq 0 ]
+}
+[ "${1:-}" = "--selftest" ] && { do_selftest; exit $?; }
+
+# ---------- arg parse ----------------------------------------------------------
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)        shift; REPO="${1:-}"; [ -n "$REPO" ] || usage ;;
+    --fork-origin) shift; FORK_REMOTE="${1:-}"; [ -n "$FORK_REMOTE" ] || usage ;;
+    --upstream)    shift; UP_REMOTE="${1:-}"; [ -n "$UP_REMOTE" ] || usage ;;
+    --no-log)      : ;;
+    *)             usage ;;
+  esac
+  shift
+done
+case "$REPO" in "~"|"~/"*) REPO="${HOME}${REPO#\~}" ;; esac
+[ -d "$REPO" ] && "$GIT_BIN" -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || {
+  echo "$PROG: not a git repo: $REPO" >&2; exit 2; }
+
+# ---------- fetch + arithmetic --------------------------------------------------
+"$GIT_BIN" -C "$REPO" fetch --quiet "$FORK_REMOTE" 2>/dev/null || {
+  echo "$PROG: fetch $FORK_REMOTE failed" >&2; exit 3; }
+"$GIT_BIN" -C "$REPO" fetch --quiet "$UP_REMOTE" 2>/dev/null || {
+  echo "$PROG: fetch $UP_REMOTE failed" >&2; exit 3; }
+FORK_REF="$FORK_REMOTE/main"; UP_REF="$UP_REMOTE/main"
+"$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$FORK_REF" >/dev/null || {
+  echo "$PROG: ref $FORK_REF not found" >&2; exit 3; }
+"$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$UP_REF" >/dev/null || {
+  echo "$PROG: ref $UP_REF not found" >&2; exit 3; }
+
+BASE="$("$GIT_BIN" -C "$REPO" merge-base "$FORK_REF" "$UP_REF")" || {
+  echo "$PROG: merge-base failed (unrelated histories?)" >&2; exit 3; }
+AHEAD="$("$GIT_BIN" -C "$REPO" rev-list --count "$UP_REF..$FORK_REF")" || exit 3
+BEHIND="$("$GIT_BIN" -C "$REPO" rev-list --count "$FORK_REF..$UP_REF")" || exit 3
+
+printf 'BASE\t%s\n' "${BASE:0:7}"
+printf 'AHEAD\t%s\n' "$AHEAD"
+printf 'BEHIND\t%s\n' "$BEHIND"
+
+emit_commits() { # $1=range $2=tag — C rows, sha7 + subject
+  "$GIT_BIN" -C "$REPO" log --format='%H%x09%s' "$1" 2>/dev/null | while IFS="$(printf '\t')" read -r sha subj; do
+    [ -n "$sha" ] && printf 'C\t%s\t%s\n' "${sha:0:7}" "$subj"
+  done
+}
+emit_commits "$FORK_REF..$UP_REF" behind   # what upstream gained, first
+emit_commits "$UP_REF..$FORK_REF" ahead    # our fork-only delta
+
+# ---------- ABSORBED-CANDIDATE via patch-id (skip when nothing to compare) -----
+ABSORBED=0
+if [ "$AHEAD" -gt 0 ] && [ "$BEHIND" -gt 0 ]; then
+  UP_IDS="$(mktemp)"
+  "$GIT_BIN" -C "$REPO" rev-list "$FORK_REF..$UP_REF" | while read -r c; do
+    pid="$("$GIT_BIN" -C "$REPO" show "$c" 2>/dev/null | "$GIT_BIN" patch-id --stable 2>/dev/null | awk '{print $1}')"
+    [ -n "$pid" ] && printf '%s\t%s\n' "$pid" "$c"
+  done > "$UP_IDS"
+  if [ -s "$UP_IDS" ]; then
+    for c in $("$GIT_BIN" -C "$REPO" rev-list "$UP_REF..$FORK_REF"); do
+      pid="$("$GIT_BIN" -C "$REPO" show "$c" 2>/dev/null | "$GIT_BIN" patch-id --stable 2>/dev/null | awk '{print $1}')"
+      [ -n "$pid" ] || continue
+      twin="$(awk -F'\t' -v p="$pid" '$1==p {print $2; exit}' "$UP_IDS")"
+      if [ -n "$twin" ]; then
+        printf 'ABSORBED-CANDIDATE\t%s\t%s\n' "${c:0:7}" "${twin:0:7}"
+        ABSORBED=$((ABSORBED+1))
+      fi
+    done
+  fi
+  rm -f "$UP_IDS"
+fi
+
+oc_log_extra "base" "${BASE:0:7}"
+oc_log_extra "ahead" "$AHEAD"
+oc_log_extra "behind" "$BEHIND"
+oc_log_extra "absorbed" "$ABSORBED"
+
+if [ "$AHEAD" -eq 0 ] && [ "$BEHIND" -eq 0 ]; then
+  echo "$PROG: clean (fork $FORK_REF at upstream merge point)" >&2
+  exit 0
+fi
+echo "$PROG: delta ahead=$AHEAD behind=$BEHIND absorbed=$ABSORBED — PROPOSE/WAIT is the supervisor's call (owner-word gates)" >&2
+exit 1
