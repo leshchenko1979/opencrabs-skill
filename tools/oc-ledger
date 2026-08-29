@@ -18,8 +18,12 @@
 #   ack <uuid> <version> [--at <ts>]       worker last_acked + ack event
 #   enroll <uuid> <role> [--topic N] [--feature X]   roster row creation
 #   commit-pending [--bundle]              sweep: commit uncommitted stamps /
-#                                          runtime artifacts (B1–B4 option b)
-#   --selftest                             fixture suite (36 cases)
+#                                          runtime artifacts (B1–B4 option b);
+#                                          --bundle also sweeps state receipts:
+#                                          tools.log baseline.json orders.json
+#                                          (v0.4.49 — seal-state writes them,
+#                                          swap chain never self-commits)
+#   --selftest                             fixture suite (45 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -296,8 +300,19 @@ cmd_commit_pending() {
         && { echo "sweep: state ledger committed (n=$((head_n+1))..$disk_n)"; did=1; }
     fi
     if [ "$bundle" -eq 1 ]; then
-      git -C "$sd" add tools.log 2>/dev/null
-      git -C "$sd" commit -q -m "state sweep: tools.log (oc-ledger commit-pending --bundle)" 2>/dev/null && did=1
+      # v0.4.49: seal-state receipts (baseline.json / orders.json) join the
+      # sweep — the swap chain writes them but never self-commits (the 6a2e66e
+      # manual-commit gap; owner "Go with 1" 2026-08-29).
+      local state_hits=""
+      for p in tools.log baseline.json orders.json; do
+        [ -n "$(git -C "$sd" status --porcelain -- "$p" 2>/dev/null)" ] && state_hits="$state_hits $p"
+      done
+      if [ -n "$state_hits" ]; then
+        # shellcheck disable=SC2086
+        git -C "$sd" add -- $state_hits \
+          && git -C "$sd" commit -q -m "state sweep:$state_hits (oc-ledger commit-pending --bundle)" \
+          && { echo "sweep: state runtime files committed:$state_hits"; did=1; }
+      fi
     fi
   fi
   # skill repo: whitelisted runtime artifacts only (never doc edits)
@@ -316,7 +331,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (36 cases) ------------------------------------------------------
+# ---- selftest (45 cases) ------------------------------------------------------
 cmd_selftest() {
   export OC_TOOLS_NOLOG=1
   local T P=0 F=0
@@ -402,6 +417,9 @@ EOF
   git -C "$T/state" status --porcelain workers-ledger.json | grep -q . && bad "commit-pending-left-dirty" || ok
   echo artifact > "$T/skill/deployed.sha"
   bash "$ME" commit-pending --bundle | grep -q "runtime artifacts" && ok || bad "commit-pending-bundle"
+  echo '{"sha":"fixture"}' > "$T/state/baseline.json"
+  bash "$ME" commit-pending --bundle | grep -q "baseline.json" && ok || bad "commit-pending-baseline-sweep"
+  git -C "$T/state" status --porcelain baseline.json | grep -q . && bad "commit-pending-baseline-left-dirty" || ok
   # 33: concurrent race
   local before; before="$(jq '([.events[].n] | max)' "$OC_LEDGER")"
   for i in 1 2 3 4 5; do bash "$ME" stamp note "race-a-$i" >/dev/null 2>&1 & bash "$ME" stamp note "race-b-$i" >/dev/null 2>&1 & done
