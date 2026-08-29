@@ -114,11 +114,13 @@ editor-facing duties:
 ## Phase 2 — Worktree per task, before any edits
 
 ```bash
-git -C ~/opencrabs worktree add ~/oc-wt-<task> <branch>
-# then index the tree so codegraph works inside it — worktrees inherit NO
-# per-tree index (.codegraph is per-tree; a worktree's .git is only a gitdir:
-# pointer), so queries return empty until indexed (v0.4.12):
-~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-index-worktree ~/oc-wt-<task>
+~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-wt add <task> <branch>
+# oc-wt chains prune -> fetch origin -> worktree add -> oc-index-worktree.
+# The index step is UN-SKIPPABLE: worktrees inherit NO per-tree index
+# (.codegraph is per-tree; a worktree's .git is only a gitdir: pointer), so an
+# unindexed tree silently returns empty codegraph queries (the incident class
+# oc-wt exists to kill, v0.4.12 -> v0.4.46). Teardown:
+#   tools/oc-wt remove <task>   (dirty-tree gate; --force journals the listing)
 ```
 
 Branch name = `<type>/<slug>` (type ∈ `feat|fix|ci|chore`) per the reserved
@@ -168,6 +170,11 @@ evidence is the GREEN `pr-checks.yml` run on your branch: fmt + clippy +
 `cargo test --locked --all-features`. Iterate on code locally, push the branch,
 re-dispatch pr-checks, read the run log — that loop replaces every local lint run.
 
+- **One command (v0.4.46):** `tools/oc-prchecks <branch>` runs the whole ritual —
+  FULL-sha shape gate, LOUD yml-on-carrier check, dispatch, sha-bound run resolve,
+  watch, per-step report with the fmt soft-fail EXPOSED. Exit 0 GREEN / 3 RED /
+  5 still-in-flight (prints the run URL for resume). The manual 4-step form stays
+  in SKILL.md's tool table as fallback.
 - Gate your BRANCH state, not the shared checkout: the run proves what CI saw on
   your branch (your commits on top of the branch base).
 - Push after every fix-round; the NEWEST green run URL is the evidence
@@ -429,6 +436,8 @@ git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
 #     branch out from the fork), then dispatch:
 gh workflow run pr-checks.yml --repo leshchenko1979/opencrabs \
   --ref ci/quick-build-linux -f ref=leshchenko1979/<feature>
+#   (v0.4.46: one command does all of it — tools/oc-prchecks leshchenko1979/<feature>;
+#    prints the GREEN/RED verdict + run URL for the PR-body citation below)
 #   fmt (soft-fail, mirrors upstream) + clippy --locked --lib --bins --tests
 #   --all-features -D warnings + cargo test --locked --profile ci
 #   --all-features — flags VERBATIM from adolfousier's ci.yml, so green here
