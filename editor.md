@@ -4,13 +4,14 @@
 
 Scope: work from an issue filed on the FORK (`leshchenko1979/opencrabs` — the issues home;
 upstream receives PRs only, owner directive 2026-08-27), fix the code in a
-worktree, gate it with modum,
+worktree, gate it via the CI lint gate (pr-checks),
 SIGN every commit with the session trailer, push, FAST-FORWARD fork `main` onto it,
-hand off branch + shas, then ORDER the build (Phase 6 final beat, v0.4.3).
+hand off branch + shas, then ship via `oc-deploy ship` (Phase 6).
 After any
 swap containing your commits you TEST what shipped (test-on-notify loop at the
 bottom). The Editor NEVER dispatches BUILD runs (`quick-build-linux.yml`), NEVER
-watches build runs, and NEVER touches binaries — all Compiler territory (SOLE
+watches build runs, and NEVER touches binaries — all automation territory via
+`oc-deploy` (SOLE
 sanctioned exception: the Phase 7 step 2b pre-flight gate).
 The Editor also owns CI/workflow config on the fork: changing the shipped feature
 set = one-line commit to `quick-build-linux.yml`'s `features:` input `default:`
@@ -31,10 +32,12 @@ rustfmt wrapper), and its compile binaries were DISABLED 2026-08-28
 (`/root/toolchain-disabled-20260828/` — manifest + `restore.sh`). A local
 invocation that WORKS is still a ruling violation (observed and killed
 2026-08-28: editor lanes running `cargo test` in worktrees). Sanctioned local
-tools ONLY: `modum` (lint gate, Phase 5) + `/usr/local/bin/rustfmt` wrapper
-(fmt only — `--edition 2024` + entrypoint walk for exact CI parity). Everything
+tools ONLY: `/usr/local/bin/rustfmt` wrapper (fmt only — `--edition 2024`
++ entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, Phase 5;
+modum retired from the process 2026-08-28 by owner order). Everything
 else — build, test, clippy — is CI dispatch: `pr-checks.yml` (fmt/clippy/test,
-Phase 7 step 2c) or the Compiler's quick-build. Need `cargo test`? Dispatch CI.
+Phase 7 step 2c) or quick-build-linux dispatched via `oc-deploy ship`. Need
+`cargo test`? Dispatch CI.
 Iterating clippy fixes? Edit code, re-dispatch pr-checks, read the run log.
 Never compile locally.
 
@@ -53,16 +56,19 @@ git -C ~/opencrabs fetch adolfousier main && git -C ~/opencrabs merge --ff-only 
   still carried it — the regression was live on main)*
 - Before building on an existing branch: diff it against its merge-base to confirm no
   foreign WIP rode along from parallel agents. Take a backup branch ref before any
-  `rebase --onto`. *(learned 2026-08-25: branch carried another agent's dropped WIP)*
+  `rebase --onto`. *(SKILL.md war story: foreign-WIP diff vs merge-base, 2026-08-25)*
 
 ## Telegram surface law — inter-role = session_notify ONLY (v0.4.31, owner 2026-08-28)
+
+Full law + audit history: SKILL.md §Telegram surface law (canonical). Your
+editor-facing duties:
 
 - You NEVER use telegram send/edit tools (`telegram_send`, `tg_send_message`,
   `tg_edit_message`, `telegram_edit`) — for ANY destination, including your own
   topic. Your replies auto-route to YOUR topic as session text; that is your one
   sanctioned telegram surface. Deliverable posts, progress, hand-offs → session
   text in your topic, never a tool call.
-- Talking to another session (Compiler, supervisor, other editors, any lane) =
+- Talking to another session (supervisor, other editors, any lane) =
   `session_notify` with `target_session` taken from the mechanical
   `[session-notify from=<uuid>]` header or `session_search` — never a telegram
   tool aimed at their topic/thread or at the owner DM.
@@ -70,10 +76,6 @@ git -C ~/opencrabs fetch adolfousier main && git -C ~/opencrabs merge --ff-only 
   cross-chat/list probing. Reactions allowed (owner consent signal).
 - The `/tq-approve` forum-topic flow and Gatus DM reports are OTHER lanes'
   documented jobs — not yours.
-- Violation = supervisor notifies with this law; repeat = review toggled.
-  *(2026-08-28: day audit found ~1.3k telegram_send calls, all own-lane
-  destinations, but tool-sends escaping the own topic read as board-wide
-  broadcast — this law closes the gap)*
 
 ## Phase 1 — Claim on the fork BEFORE editing
 
@@ -154,29 +156,17 @@ Before adding: `git -C ~/opencrabs worktree list` — prune stale entries first
   fn-signature tail — only direct re-reads caught both; the gate would have
   waved the signature-eaten file through to red CI)*
 
-## Phase 5 — modum gate before every commit (CLI pinned v0.4.5)
+## Phase 5 — lint gate before every commit (CI-only since v0.4.34; modum retired 2026-08-28 by owner order)
 
-modum = our Rust lint/static-analysis CLI; the gate form is the `check`
-subcommand with exit-code semantics pinned below.
+No local lint tooling on this box — modum is OUT of the process. The lint/static-analysis
+evidence is the GREEN `pr-checks.yml` run on your branch: fmt + clippy +
+`cargo test --locked --all-features`. Iterate on code locally, push the branch,
+re-dispatch pr-checks, read the run log — that loop replaces every local lint run.
 
-The gate is CONTENT-ADDRESSED — a run proves something about exactly ONE tree state.
-Therefore run gates ONLY inside your sha-pinned task worktree, NEVER against the
-shared checkout's working tree (another session may hold a different branch there —
-the verdict would be about the wrong tree entirely).
-
-```bash
-cd ~/oc-wt-<task> && modum check --root . --include '<your globs>'
-```
-
-- **Exit codes** (probed from the binary 2026-08-26): `0` = clean · `2` = findings
-  present but ZERO errors — pass-with-warnings, not failure · `1` = invocation error
-  (`unknown argument`: bare paths without `--include`; also `modum lint` does not
-  exist — subcommand is `check`). If a code surprises you, re-run and read the
-  `diagnostics:` line instead of interpreting from memory.
-- Full-repo runs exceed the 120 s tool timeout — scope `--include` to your changed
-  files, or use the BUILT-IN delta mechanism:
-  `modum check --write-baseline` at the parent sha → `modum check --baseline
-  .modum-baseline.json` after your change → only new findings are yours.
+- Gate your BRANCH state, not the shared checkout: the run proves what CI saw on
+  your branch (your commits on top of the branch base).
+- Push after every fix-round; the NEWEST green run URL is the evidence
+  (`gh run view` / checks API). A run from before your last push proves nothing.
 - Classify every finding delta vs the parent sha: same count = pre-existing (line
   shifts); any genuinely NEW finding must be named and justified or the commit does
   not leave the editor. Zero errors required in YOUR changed lines; pre-existing
@@ -190,20 +180,24 @@ cd ~/oc-wt-<task> && modum check --root . --include '<your globs>'
 
 ```bash
 git -C ~/oc-wt-<task> push -u origin <branch>
-# GATE (decision 2026-08-27): `cargo test --all-features --verbose` rc=0 in the
-# worktree BEFORE the main push — gated dev builds are fine, but a gated change
-# can still break other parts; all-features regression gate runs before main.
+# GATE (decision 2026-08-27, rewired 2026-08-28 per owner "1 ok"): the
+# all-tests evidence is the GREEN `pr-checks.yml` CI run on the branch — it
+# runs `cargo test --locked --all-features` upstream of any build. NO local
+# test runs on this box (box law, AGENTS.md: cargo forbidden in ANY form).
+# Read the conclusion via `gh run view` / checks API: GREEN → push to main;
+# RED → fix before merge. A gated change can still break other parts — CI is
+# where that surfaces now.
 git -C ~/oc-wt-<task> push origin <branch>:main   # fast-forward fork main — non-ff rejected
 ```
 
-EVERY commit's destination is fork `main`: the Compiler builds `main`, compiling
-ALL editors' changes together (decision 2026-08-25) — an unmerged branch silently
+EVERY commit's destination is fork `main`: the build (`oc-deploy ship`) compiles
+fork `main` — ALL editors' changes together
+(decision 2026-08-25) — an unmerged branch silently
 never ships. Non-ff rejection = another editor landed first; integrate and retry:
 
 ```bash
 git -C ~/oc-wt-<task> fetch origin
 git -C ~/oc-wt-<task> rebase origin/main   # your commits only — safe to rebase
-cd ~/oc-wt-<task> && modum check           # gate again after rebase
 git -C ~/oc-wt-<task> push --force-with-lease origin <branch>
 # gate re-applies after any rebase: re-dispatch pr-checks.yml on the rebased
 # branch (fmt/clippy/test); the green run URL is the evidence — never local cargo (Box law)
@@ -219,7 +213,8 @@ crate's aliased `Result<T>` — five E0308s, red CI, a 15-minute round-trip)*:
    usually locked by the alias.
 3. Grep the tree for duplicate imports and doubled tests the resolution may
    have left behind.
-4. `modum check` once MORE, after the final resolution (Phase 5).
+4. Phase 5 gate once MORE after the final resolution (re-dispatch pr-checks;
+   the green run URL is the evidence).
 
 Report to the ops chat: branch name + pushed sha + post-merge `main` tip — code
 locations cited STRUCTURALLY (function name + matching pattern, e.g. "stash-empty
@@ -227,25 +222,25 @@ warn in agent.rs handle_followup_callback"), never bare line numbers: main moves
 hourly under multi-editor concurrency and line anchors rot same-day *(#1205's line
 anchors were already stale when posted; one editor watched :281→:287→:297 across
 three builds in ~4 h)*. The hand-off ends the Editor's part — dispatching,
-watching, reading conclusions are Compiler work (SKILL.md router).
+watching, reading conclusions are automation territory (`oc-deploy ship/poll`;
+SKILL.md router).
 
-The hand-off is not silent (v0.4.3): after ff-merge + worktree removal send the
-Compiler exactly ONE message — `ORDER build <full-40-char sha> features=<comma-set>`
-(ONE ORDER carries BOTH dimensions v0.4.15 P7/P8: full-40 sha + `features=<comma-set>`;
-there is NO `--all-features` vocabulary in the carrier yml; a different-set build of the
-same sha is a DISTINCT build under single-flight). Possible answers:
-- **COALESCED** — a running flight already contains your sha; you are its
-  customer, await the go-signal.
-- **QUEUED** — served by the next drain; your order HOLDS — never re-ORDER
-  (queue discipline: `compiler.md` Step 1; the fix commit's own order rebuilds).
-- bounce **UNMERGED** / **UNSIGNED** — fix what it names (merge didn't land /
-  trailer missing) and ORDER again.
-Ordering is a request, not a dispatch — CI stays Compiler territory. **ORDER intake is not assumed (v0.4.14, proposal P1)**: after sending the ORDER, VERIFY the Compiler recorded it — an `orders.json` entry for your sha, or `oc-order-validate` accepting it — BEFORE annotating the issue "awaiting Compiler"; if absent, re-deliver. *(2026-08-26: an ORDER for 04f64d8a never reached the compiler while the issue was already annotated "awaiting Compiler" — the hand-off failed silently; only a state sweep caught it)*
+The hand-off is not silent (v0.4.3): after ff-merge + worktree removal the lane
+runs the S3 SHIP PATH below (`oc-deploy ship`) — one call carries BOTH dimensions
+(full-40 sha + `features=<comma-set>`; there is NO `--all-features` vocabulary in
+the carrier yml; a different-set build of the same sha is a DISTINCT build under
+single-flight).
+*(ARCHIVED at S3 cutover 2026-08-28 — ordering is deleted; kept for history.)*
+Pre-S3 the hand-off was an ORDER message to the Compiler with answers COALESCED /
+QUEUED / UNMERGED / UNSIGNED, verified against `orders.json`. The failure mode
+that killed ordering: an ORDER for 04f64d8a never reached the compiler while the
+issue was already annotated "awaiting Compiler" — the hand-off failed silently;
+that is why `oc-deploy ship` now runs the gates itself and returns GREEN/RED to
+the invoking session.
 
-**S1 SHIP PATH — oc-deploy replaces the Compiler ORDER (Phase 1, live 2026-08-27).**
-From stage S1 the hand-off above changes: the lane runs its own ship as an
-agent-launched BACKGROUND task (timer retired per owner 19:21Z) instead of
-ORDERing the Compiler:
+**S3 SHIP PATH — oc-deploy IS the ship path (S3 cutover, live 2026-08-28; compiler retired).**
+The lane runs its own ship as an agent-launched BACKGROUND task (timer retired
+per owner 19:21Z):
 
 ```bash
 /root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-deploy ship \
@@ -256,23 +251,23 @@ The script performs the chain Phase 6 does by hand — fork-main fetch +
 fast-forward check → push → 4 ORDER gates (oc-order-validate) → carrier
 dispatch on `ci/quick-build-linux` — appends every verdict to the shadow
 journal (`oc-deploy-shadow.log` in the skill dir), and returns RED + failing
-gate or GREEN + run id to the invoking session. **Shadow semantics: dispatch
-is real, deploys are not — the Compiler keeps ALL swaps at S1** (poll mode is
-inert below S2: ledger `meta.oc_deploy_stage` gates it, exit 4). Plan-only
+gate or GREEN + run id to the invoking session. **Ship semantics: dispatch
+is real always; deploys are real from S2 (poll mode, sha-bound, auto-swap on
+GREEN — consent eliminated owner 2026-08-28 18:50Z; journaled, auto-rollback on
+post-bounce verify fail stays, smoke-FAIL rollback = owner call; ledger `meta.oc_deploy_stage` gates it, exit 4 below
+S2 — the stage is S3 since 2026-08-28).** Plan-only
 default: omit `--execute` → full delta printed, nothing touched. Brake:
 `touch /root/.opencrabs/profiles/ops/skills/opencrabs-dev/oc-deploy.kill` (or
 `/root/oc-work/oc-deploy.disabled`) aborts every invocation, exit 9. The
-ORDER vocabulary (COALESCED / QUEUED / intake-verify) remains the S2+
-reference until compiler retirement at S3.
-
-What you apply when the Compiler hands a red run back (diagnosis heuristics —
+ORDER vocabulary (COALESCED / QUEUED / intake-verify) is superseded — the
+gates now run inside `oc-deploy ship` itself (compiler.md archived runbook).
 E0425-first, brace-depth counting, match-arm narrowing — live in SKILL.md
 §Red-run triage heuristics, shared core, one location):
 
 - Red run returned → start a fix round (Phase 6c): NEW worktree every time →
-  fix on the SAME branch → commit → push → report the NEW sha. The Compiler
-  re-dispatches.
-- Once the Compiler confirms the green run, post the fix evidence to the upstream
+  fix on the SAME branch → commit → push → report the NEW sha. Re-ship via
+  `oc-deploy ship --execute`; the RED run lives on until the new green.
+- Once the new run is green, post the fix evidence to the upstream
   issue (the Editor owns the issue thread end to end).
 
 ## Worktree lifecycle — delete early, recreate on demand
@@ -302,7 +297,9 @@ task; `git worktree prune` cleans stale entries.
 
 ## Phase 6b — Smoke-test-on-notify (your features, after any swap)
 
-A `[session-notify from=<compiler uuid>]` announcing a new binary means your
+A post-swap notify announcing a new binary (mechanical fan-out — `oc-deploy
+fanout`, [#24](https://github.com/leshchenko1979/opencrabs/issues/24) LIVE
+since v0.4.37; `[session-notify from=<uuid>]` header) means your
 commits are in it — prove the FEATURE works. This phase produces SMOKE TEST
 evidence (SKILL.md Test ontology): behavioral, against the RUNNING binary,
 zero cargo. CODE TESTS (fmt/clippy/cargo test) are a different kind, CI-only —
@@ -324,9 +321,11 @@ no cargo needed.
    (APPROVAL GATE — Phase 7 step 0).
 4. FAIL → FILE THE ISSUE FIRST (Phase 1 procedure: symptom + evidence — you
    found it, you file it). Then send raw evidence + the issue link to the
-   Compiler — do NOT attribute, do NOT fix another editor's feature;
-   attribution via Session-Id trailers is ITS job (decision 2026-08-25, 2a).
-5. SHIPPED UPSTREAM notice (v0.4.0): if the Compiler reports your feature was
+   supervisor lane (`session_notify`) — do NOT attribute, do NOT fix another
+   editor's feature; attribution via Session-Id trailers is MECHANICAL
+   (`oc-attrib`; decision 2026-08-25 2a, fan-out per issue #24).
+5. SHIPPED UPSTREAM notice (v0.4.0): if the supervisor (or the post-swap
+   fan-out) reports your feature was
    absorbed by upstream (maintainer merged or reimplemented it), your fork-side
    duty for it ENDS — no further fork maintenance, no fix rounds. Future work
    on that feature happens upstream only: new claim via Phase 1, normal rules.
@@ -338,19 +337,20 @@ until Alexey fixes it otherwise. If a bounce kills your smoke mid-run: re-arm to
 schemas (step 1), re-run from scratch — NEVER report the bounce itself as a feature
 FAIL.
 
-## Phase 6c — Fix request from the Compiler (red build or failed smoke)
+## Phase 6c — Fix request from a RED run (red build or failed smoke)
 
-The Compiler attributes failures and notifies guilty editors WITH evidence.
+A RED `oc-deploy ship`/poll run or a failed smoke attributes the failure (via
+`oc-attrib` Session-Id trailers) and routes the fix to the guilty editor WITH evidence.
 Your answer is always the SAME sequence (decision 2026-08-25):
 
-0. GATE — the bug must already HAVE an issue; the Compiler's fix request names
+0. GATE — the bug must already HAVE an issue; the red-run hand-off names
    it. Missing? File it first (Phase 1 procedure). Fixing before filing
    violates the issue-first hard rule (SKILL.md).
 
 ```bash
 # 1. fresh worktree at the relevant sha (lifecycle rules below)
 git -C ~/opencrabs worktree add ~/oc-wt-<task> <branch>
-# 2. reproduce → fix → modum gate (Phase 5) → SIGNED commit
+# 2. reproduce → fix → Phase 5 CI gate → SIGNED commit
 git -C ~/oc-wt-<task> commit --trailer "Session-Id: <full session uuid>" --trailer "Issue-Ref: #<issue-n>"
 #    (Session-Id = you; Issue-Ref = the ONE issue this change fixes — atomicity,
 #     v0.4.15: every commit links to exactly one issue, matching the PR that will carry it)
@@ -361,9 +361,7 @@ git -C ~/oc-wt-<task> push origin <branch>:main
 git -C ~/opencrabs worktree remove ~/oc-wt-<task>
 ```
 
-5. Notify the Compiler: branch + NEW head sha (+ post-merge `main` tip). It
-   re-dispatches fork `main`, which now carries your fix alongside every other
-   editor's merged work.
+5. Re-ship fork `main` via oc-deploy: `oc-deploy ship --sha <NEW-head-sha> --features <comma-set> --execute` (S3 2026-08-28 — the compiler role is retired; shipping is the editor's own background task, it dispatches fork `main`, which now carries your fix alongside every other editor's merged work).
 
 **Branch-attached HEAD before signing (v0.4.14, proposal P5)**: confirm
 `git symbolic-ref -q HEAD` resolves (non-empty) BEFORE committing + signing — a
@@ -410,7 +408,7 @@ git -C ~/opencrabs log --format='%H%x09%s%x09%(trailers:key=Session-Id,valueonly
 # 2. harvest onto a branch off UPSTREAM main — NEW worktree, usual hygiene
 git -C ~/opencrabs worktree add ~/oc-wt-up-<feature> -b leshchenko1979/<feature> adolfousier/main
 git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
-cd ~/oc-wt-up-<feature> && modum check          # zero errors
+# Phase 5 gate: pr-checks GREEN on the PR branch — zero errors in ported lines
 
 # 2b. PRE-FLIGHT GATE: PR-HEAD COMPILE GATE — the PR head compiles GREEN
 #     on the carrier BEFORE opening the PR.
@@ -464,7 +462,7 @@ git -C ~/opencrabs worktree remove ~/oc-wt-up-<feature>
 Rules:
 - Fork-only commits means EXACTLY that: no adolfousier sync merges, no other
   feature's commits, no bare CI-config churn unless it IS the feature.
-- Cherry-pick conflicts → resolve, re-run modum, continue. NEVER merge fork
+- Cherry-pick conflicts → resolve, re-run the Phase 5 gate (pr-checks), continue. NEVER merge fork
   `main` into the PR branch — upstream gets clean commits only.
 - The PR body MUST reference THE issue as a FULL FORK URL at the END of the
   description (`Original issue: https://github.com/leshchenko1979/opencrabs/issues/N`
@@ -500,7 +498,7 @@ harvested commits. When a PR is not mergeable, route by BLOCKER CLASS:
 
 | Blocker | Who acts | Action |
 |---|---|---|
-| fmt/clippy/test failure in THIS feature's files | Owning editor (Compiler notifies with log evidence) | fresh worktree off the PR head → fix → modum + conflict-quality gate → signed push to the head |
+| fmt/clippy/test failure in THIS feature's files | Owning editor (notified with log evidence via the mechanical post-swap fan-out — `oc-deploy fanout`, LIVE since v0.4.37) | fresh worktree off the PR head → fix → Phase 5 gate (pr-checks) + conflict-quality gate → signed push to the head |
 | Merge conflicts with new upstream `main` | Owning editor | rebase / re-cherry-pick onto fresh `adolfousier/main`, force-push head |
 | PRE-EXISTING upstream red (base fails in files we never touched) | ❌ NO editor pings — our code is innocent | housekeeping-PR candidate: issue filed + ledger-registered first (v0.3.8), Alexey decides |
 | Maintainer rejects/closes the PR | Owning editor | REOPEN the linked issues with a pointer comment; record the outcome |

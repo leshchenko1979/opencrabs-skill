@@ -2,53 +2,94 @@
 name: opencrabs-dev
 description: >
   OpenCrabs source ops (~/opencrabs): roles EDITOR (fork issues, per-task
-  worktrees, modum gate, signed commits, push + sha hand-off, ORDER build,
-  smoke-test-on-notify, upstream PR), COMPILER (quick-build dispatch, artifact
-  fetch, binary swap, health check, contributor notification, failure
-  attribution, red-build protocol), SUPERVISOR (skill set + worker ledger).
+  worktrees, CI lint gate (pr-checks), signed commits, push + sha hand-off, oc-deploy ship,
+  smoke-test-on-notify, upstream PR), COMPILER (RETIRED at S3 cutover
+  2026-08-28 — quick-build dispatch/swap now automated in tools/oc-deploy;
+  compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.31
+version: 0.4.38
 author: leshchenko1979
 metadata:
-  tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, modum, session-notify]
+  tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
   references:
     - https://github.com/adolfousier/opencrabs (upstream — PRs only; new issues NEVER filed here, owner 2026-08-27)
     - https://github.com/leshchenko1979/opencrabs (fork — push target + ISSUES HOME, owner 2026-08-27)
+  provenance:
+    - "S3 cutover 2026-08-28 (owner msgid 34717: 'let's go to S3'): COMPILER role RETIRED; duties automated into tools/oc-deploy (ship/poll/swap-execute); compiler.md archived as re-enable runbook; ledger meta.oc_deploy_stage = S3, event 1282"
+    - "v0.4.32: compiler retirement landing pas (this bump)"
+    - "v0.4.33: post-swap editor-notify + attribution duty re-owned to SUPERVISOR (Review B finding B9; compiler retired at S3) — Phase 6b trigger, FAIL routing, session-notify loop retargeted; supervisor.md Duty 7 added"
+    - "v0.4.34 (owner 2026-08-28 17:2xZ, two orders): (1) modum RETIRED from the process — lint/static-analysis evidence = GREEN pr-checks.yml only; Phase 5 rewritten CI-only; editor.md scope/box-law/inline mentions, SKILL.md, AGENTS.md synced; rustfmt wrapper stays, modum binary stays installed. (2) The v0.4.33 post-swap-notify rewiring REVERTED per owner ('revert the previous change about post swap notifications') — Phase 6b trigger, FAIL routing, SKILL.md notify loop, supervisor.md Duty 7 back to pre-0.4.33 text; the notify duty is homeless again pending a process-first re-proposal (this bump)"
+    - "v0.4.35: self-review 2026-08-28-r2 fixes — stale Compiler-role anchors re-anchored to oc-deploy (editor.md/SKILL.md/supervisor.md/compiler.md); telegram law deduped; PROCESS-TOOL guard S3-rewired; versions listed"
+    - "v0.4.36: KERNEL CLI batch (owner 'Go' 2026-08-28 21:16Z) — 5 new tools: oc-carrier-features, oc-issue-sweep, oc-skew-scan, oc-ping-proof, oc-watchdog-check; oc-attrib gains --deployed (range from deployed markers, fan-out compute backend for issue #24); oc-deploy ship/poll resolves EMPTY --features from carrier YAML via oc-carrier-features (loud fail, no silent fallback); unified tools.log via tools/lib/oc-log.sh (JSONL, filterable with jq); battery 64 PASS / 0 FAIL; AGENTS.md interim post-swap notify bridge RETIRED (#23 session-notify verb live in 49125f8c)"
+    - "v0.4.37: issue #24 mechanical notify fan-out (owner 'Go' 2026-08-28 22:42Z, design doc oc-work/oc-deploy-fanout-issue24-20260828.md) — oc-deploy gains TWO modes: 'contributors' (thin wrapper over oc-attrib --deployed/--range, TSV session+issue+sha7) and 'fanout --run <id> [--dry-run]' (GREEN leg: notify live-swap contributor sessions via 'opencrabs session notify --profile ops'; RED leg: gh annotations -> git blame -> culprit Session-Id trailer notified as blamed + suspect cc, zero-sites fallback HUMAN-FLAGs all range sessions; dead uuids skipped verb-rc-2, unowned counted, idempotent via fanout.state, per-run JSONL journal under STATE_DIR/oc-deploy/journal/fanout-<run>-*.jsonl); auto-wired: GREEN fires at swap_execute tail after receipt seal + markers, poll gains failed-run RED scan (both OC_DEPLOY_NOFANOUT=1-suppressed, subshell-isolated); selftest 128 cases, battery 76 PASS / 0 FAIL"
+    - "v0.4.38: ledger unification + process re-anchoring (owner 'Also fix' + 'Go' 2026-08-29 07:32Z) — oc-deploy + oc-order-validate LEDGER defaults now point DIRECTLY at canonical opencrabs-dev/workers-ledger.json (the old $STATE_DIR default silently kept a second ledger in the skill dir: two-file drift, baseline/orders backup paths at an empty dir, cycle counter reset 25->1; incident 2026-08-29); OC_LEDGER overrides, explicit OC_DEPLOY_STATE_DIR keeps test fixtures isolated; skill-dir duplicate + orphaned lock deleted; oc-deploy --selftest re-exec moved from bare $0 to readlink -f'd $SELF (relative invocations no longer die rc 127); stale 'supervisor bridge until #23/#24' pointers re-anchored to LIVE mechanical fan-out in editor.md/SKILL.md/supervisor.md + AGENTS.md; selftest 128 cases green in all three invocation forms, battery 76 PASS / 0 FAIL"
 ---
 
 # opencrabs-dev — OpenCrabs source procedure
 
 **Owns:** everything touching `~/opencrabs` source, its GitHub Actions runs, or the
 installed `opencrabs` binary. This file = shared facts + role router only. Actual
-procedures live in THREE role files (`editor.md` / `compiler.md` / `supervisor.md`);
+procedures live in TWO role files (`editor.md` / `supervisor.md`) + one
+ARCHIVED runbook (`compiler.md` — retired at S3 cutover 2026-08-28, re-enable
+= one notify);
 load ONLY the one matching the session's role.
 
 ## Canonical tooling (v0.4.12, PROCESS-TOOL ownership)
 
 Mechanical rituals the roles once hand-ran are now single commands in `tools/`
 (owner-aware: CLI-tool creation/fix is the Supervisor's scope). Canonical
-commands are wired into `compiler.md` — this section is the register + test
+commands run INSIDE `oc-deploy` (ship/poll/swap-execute) — the `compiler.md`
+step anchors below are ARCHIVED slots; this section is the register + test
 source of truth:
 
 | Tool | Slot | Exit-coded |
 |---|---|---|
-| `./tools/oc-order-validate <sha>` | ORDER intake (compiler Step 1) | 0 ok / 2 UNMERGED / 4 UNSIGNED |
-| `./tools/oc-job-verify <run-id> <source-ref> [--features]` | run identity (Step 1) | 0 VERIFIED / 2 IN-FLIGHT / 3 FAILED / 4 REF-MISMATCH / 5 NOT-FOUND |
-| `./tools/oc-artifact-verify <run-id> <bin> <marker>` | EXECUTION SANITY SIGNAL + FEATURE-PRESENCE CHECK (Step 3) | 0 ok / 3 marker-missing(no swap) / 4 fail |
-| `./tools/oc-seal-state <sha> [...]` | baseline/orders seal (Step 5); order vocabulary QUEUED…VOID, per-row `--order-evidence`, `--purge-order`; matches legacy `order_sha` rows | 0 ok / 1 invocation / 2 scan-fail / 3 write-fail |
-| `./tools/oc-post-receipts ...` | Phase A/B receipts | 0 ok / 1 no-token / 2 send-failed / 3 bad-args |
+| `./tools/oc-order-validate <sha>` | ORDER gates inside `oc-deploy ship` (archived: compiler Step 1) | 0 ok / 2 UNMERGED / 4 UNSIGNED |
+| `./tools/oc-job-verify <run-id> <source-ref> [--features]` | run identity inside `oc-deploy ship/poll` (archived: Step 1) | 0 VERIFIED / 2 IN-FLIGHT / 3 FAILED / 4 REF-MISMATCH / 5 NOT-FOUND |
+| `./tools/oc-artifact-verify <run-id> <bin> <marker>` | EXECUTION SANITY SIGNAL + FEATURE-PRESENCE CHECK inside `oc-deploy` swap path (archived: Step 3) | 0 ok / 3 marker-missing(no swap) / 4 fail |
+| `./tools/oc-seal-state <sha> [...]` | baseline/orders seal inside `oc-deploy` swap path (archived: Step 5); order vocabulary QUEUED…VOID, per-row `--order-evidence`, `--purge-order`; matches legacy `order_sha` rows | 0 ok / 1 invocation / 2 scan-fail / 3 write-fail |
+| `./tools/oc-post-receipts ...` | Phase A/B receipts inside `oc-deploy` swap path (archived: Step 4) | 0 ok / 1 no-token / 2 send-failed / 3 bad-args |
 | `./tools/oc-index-worktree <path>` | worktree codegraph index (editor Phase 2) | 0 ok / 4 index-failed / 5 bad-input |
-| `./tools/oc-ci-parity` | workflows parity fork↔upstream post-merge (Step 7) | 0 identical / 4 DRIFT / 5 usage / 6 api |
-| `./tools/oc-contributors --repo <path> --range <A..B>` | Session-Id trailer extraction + contributor dedup over a commit range (compiler notification targeting, Duty reviews) | 0 ok / 2 usage / 3 git-fail / 4 empty-range |
-| `./tools/oc-attrib --repo <path> --range <A..B> [--ledger <f>]` | commit-range → worker-lane attribution via Session-Id join against roster (`(unsigned)`/`(unmapped)` rows never dropped) | 0 ok / 2 usage / 3 git-fail / 4 empty-range |
-| `./tools/oc-consent-check --ledger <f> list\|--check\|--add` | CONSENT REGISTER machine gate: cite-before-ruling, atomic add, exit 3 = grep chat first | 0 ok / 2 usage / 3 not-registered / 4 malformed |
+| `./tools/oc-ci-parity` | workflows parity fork↔upstream post-merge (archived: Step 7; live: editor Phase 7 parity) | 0 identical / 4 DRIFT / 5 usage / 6 api |
+| `./tools/oc-contributors --repo <path> --range <A..B>` | Session-Id trailer extraction + contributor dedup over a commit range (post-swap fan-out targeting — [#24](https://github.com/leshchenko1979/opencrabs/issues/24) LIVE via `oc-deploy fanout` since v0.4.37; Duty reviews) | 0 ok / 2 usage / 3 git-fail / 4 empty-range |
+| `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>]` | commit-range → worker-lane attribution via Session-Id join against roster (`(unsigned)`/`(unmapped)` rows never dropped); `--deployed` composes the range from `deployed.sha` + `deployed.meta.json` `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) | 0 ok / 2 usage / 3 git-fail / 4 empty-range / 5 marker-missing |
+| `./tools/oc-deploy contributors (<old>..<new> or --deployed) [--repo <path>]` | [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24): thin wrapper over `oc-attrib` printing 3-col TSV `session-uuid \t issue_refs \t sha7s` for a range (or the deployed range) — the human-readable fan-out target list | 0 ok / 1 usage or range-shape / attrib rc passthrough |
+| `./tools/oc-deploy fanout --run <id> [--dry-run]` | [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24): mechanical notify fan-out for one carrier run. GREEN (success + built sha == `deployed.sha`): notify contributor sessions via `opencrabs session notify --profile ops` (dead uuids: verb rc 2 → journal `skip`, never fatal). RED (failure): gh annotations → `git blame` → culprit `Session-Id` trailer notified (`role=blamed`), suspect cc on same-file later touchers, zero-sites fallback HUMAN-FLAGs all range sessions. Idempotent via `fanout.state`; `--dry-run` journals but never notifies or marks done. Journal: `STATE_DIR/oc-deploy/journal/fanout-<run>-*.jsonl` steps `fanout-start / contributors / attributed / notified / skip / unowned / fanout-end`. Auto-wired: GREEN fires at `swap_execute` tail (after receipt seal + markers, before ledger stamp); `poll` scans latest FAILED run → fanout. Both suppressed by `OC_DEPLOY_NOFANOUT=1` (drills) and subshell-isolated (fanout rc never leaks into swap/poll rc) | 0 done-or-noop / 2 usage / 3 gh-or-attrib-fail / 4 run-not-terminal |
+| `./tools/oc-carrier-features [--fetch] [--repo <path>] [--ref <branch>]` | reads the `workflow_dispatch` `features` default from `.github/workflows/quick-build-linux.yml` at `origin/<ref>` (default `ci/quick-build-linux`); `oc-deploy ship/poll` resolves EMPTY `--features` through this — carrier read failure aborts the ship loudly, no silent fallback | 0 set-printed / 2 usage / 3 yml-unfetchable / 4 no-or-invalid-features-input |
+| `./tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | closed-issue hygiene sweep: fork open + fork closed + upstream closed, harvests `close-reason:` lines from comments (falls back to state_reason); pure TSV, no header, deduped by repo#num (supervisor duty) | 0 no-candidates / 1 candidates-listed / 2 usage / 3 api-failure |
+| `./tools/oc-skew-scan [--ledger f] [--current v]` | ledger worker-version skew vs current skill version (default: frontmatter `version:`); buckets CHASE (>3 behind) / GRACE (>1) / OK, `-` marks a missing ack field; summary line to stderr (supervisor roster review) | 0 clean / 1 skew / 2 usage / 3 parse-failure |
+| `./tools/oc-ping-proof <uuid> <ping-ts> [--ledger f]` | post-swap notify proof: WOKEN / SILENT / UNREACHABLE verdict from ledger `last_acked` + `events[]` stamps (`last_notified` excluded by design — broadcast, not worker activity); evidence stamp to stderr; accepts ISO and bare `HH:MMZ` stamps | 0 WOKEN / 1 SILENT / 2 usage / 3 UNREACHABLE / 4 parse-failure |
+| `./tools/oc-watchdog-check [watch]` | thin cron-friendly alias over `oc-deploy watch`: accepts optional leading `watch`, strips no-op `--baseline`, passes verdict + rc through | passthrough: 0 WATCH-CLEAN / 2 WATCH-ALERT |
+| `./tools/oc-consent-check` | **RETIRED 2026-08-28 18:50Z** (owner order: deploy consent ELIMINATED — GREEN carrier run + artifact verify IS the authorization). Archived at `tools/archive/oc-consent-check`, audit history only; ledger `consents[]` rows kept as record. Upstream-PR owner-word gate unaffected. | — |
 | `./tools/oc-pr-atomicity <pr-number>` | atomicity gate (editor Phase 7 / issue triage) | 0 ok / 2 atomicity-violation / 4 api |
 | `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) | CI run green/red — dispatch via `gh workflow run`, watch with `gh run watch` |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (incl. the
 `oc-seal-state` IFS-join regression guard). Must stay green before any version
 bump; tools are never edited without re-running it.
+
+### Unified tools log (v0.4.36)
+
+Every tool in `tools/` sources `tools/lib/oc-log.sh` and appends ONE JSONL line
+on exit — the fleet-analysis aggregate (per-tool journals remain the per-run
+record).
+
+- **Path:** `/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log` (override with `OC_TOOLS_LOG`).
+- **Schema:** `{"ts":"…Z","tool":"oc-…","args":"…","exit":N,"secs":N.N,"extra":{}}` — tools add fields via `oc_log_extra key value`.
+- **Suppression:** `--selftest` in argv or `OC_TOOLS_NOLOG=1` (the battery exports it — synthetic runs never pollute the log). Missing `jq` → no write; logging NEVER changes the host tool's exit code.
+
+Recipes (verified live):
+
+```bash
+# failing invocations (note: rc≠0 is often a VERDICT, not a crash —
+# oc-skew-scan 1 = skew found, oc-ping-proof 1 = SILENT; filter .tool first)
+jq -r 'select(.exit!=0) | [.ts,.tool,.exit,.args] | @tsv' tools.log
+# usage per tool
+jq -r '.tool' tools.log | sort | uniq -c | sort -rn
+# newest line
+tail -1 tools.log | jq -c .
+```
 
 ## STEP ZERO — establish the role (mandatory on every load)
 
@@ -58,20 +99,22 @@ Ask the operator which role this session employs before doing anything:
 
 | Role | Owns | Procedure file |
 |------|------|----------------|
-| **EDITOR** | Commits + error fixes: claim issue → worktree → code → modum → sign → push → ff-merge into fork `main` → ORDER build → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
-| **COMPILER** | Turning ORDERs into the running binary: validate order → single dispatch → watch run → swap → health → go-signals; attribution + red protocol | `compiler.md` |
+| **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
+| **COMPILER** | **RETIRED 2026-08-28 (S3 cutover, owner "let's go to S3" msgid 34717)** — duties now `tools/oc-deploy` (ship/poll/swap-execute) + supervisor watch. Re-enable = one notify per archived runbook | `compiler.md` (ARCHIVED runbook) |
 | **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input | `supervisor.md` |
 
 Roles **DO NOT intersect**:
 
 - The Editor NEVER installs/swaps binaries, NEVER restarts daemons, NEVER dispatches
-- The Compiler NEVER writes, commits, or fixes code, NEVER touches editor feature
-  branches or worktrees — TWO sanctioned touches, both bounded in their own
-  steps: the Step 6 integration sweep over fork `main` AND Step 7 rebase-port
-  fixups (`compiler.md` Steps 6 + 7).
+  BUILD runs — shipping goes through `oc-deploy ship` (S3; the one sanctioned
+  exception is the editor's own Phase 7 step 2b/2c CI-gate dispatch).
+- (Archived role, pre-S3) The Compiler NEVER wrote, committed, or fixed code, NEVER
+  touched editor feature branches or worktrees — two sanctioned touches, both
+  bounded in their own steps: the Step 6 integration sweep over fork `main` AND
+  Step 7 rebase-port fixups (`compiler.md` Steps 6 + 7).
 - Hand-off point: the Editor produces (branch pushed AND fast-forwarded into fork
-  `main` + reported shas); the Compiler takes it from there (dispatch `main` →
-  watch → swap). If the run is RED, the Compiler
+  `main` + reported shas); `oc-deploy ship` takes it from there (dispatch → poll
+  → swap-execute, consent eliminated 2026-08-28). If the run is RED, `oc-deploy`
   reports evidence and stops — fixing code is always Editor work.
 
 If the request mixes both (e.g. "fix X and deploy it"), split into two sessions/two
@@ -86,18 +129,27 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   (`git commit --trailer "Session-Id: <uuid>"`). FULL uuid — the 8-char display
   form cannot drive routing. Each session READS ITS OWN UUID straight from its
   runtime prompt/session context — no lookup tool needed (correction
-  2026-08-25); the Compiler takes notification targets from these trailers.
-- After a healthy swap the Compiler extracts contributors over
+  2026-08-25); the post-swap fan-out takes notification targets from these
+  trailers (`oc-attrib` / `oc-contributors`).
+- After a healthy swap the fan-out extracts contributors over
   `<prev-swapped-sha>..<verified-run-headSha>` (right edge = the run's VERIFIED
   headSha, never "current main" — a merge landing mid-build leaves main ahead of
   the binary), notifies each contributing editor's session
   about the new binary, then records `{sha, run_id, contributors}` to the
-  baseline state file — its `sha` is the left edge of the next attribution range.
+  baseline state file (`oc-seal-state`) — its `sha` is the left edge of the next
+  attribution range. LIVE since v0.4.37: `oc-deploy fanout --run <id>` (issue
+  [#24](https://github.com/leshchenko1979/opencrabs/issues/24), on top of the
+  [#23](https://github.com/leshchenko1979/opencrabs/issues/23) session-notify
+  verb `49125f8c`): git-range → trailers → `opencrabs session notify
+  --profile ops`, dead uuid = journal `skip` + note; auto-fired at the
+  `swap_execute` tail, idempotent via `fanout.state`.
 - Editors own testing THEIR features on notification: SMOKE TESTS against the
   swapped binary running on this box — no cargo, no compile, ever
-  (decision 2026-08-25). Failures funnel back to the COMPILER, which attributes
-  them via Session-Id trailers and asks the guilty editors for fixes.
-- Separation holds inside the loop: Compiler notifies + attributes but NEVER
+  (decision 2026-08-25). Failures funnel back through blame attribution
+  (issue #24: `oc-attrib` over Session-Id trailers — mechanical via
+  `oc-deploy fanout` since v0.4.37),
+  which asks the guilty editors for fixes.
+- Separation holds inside the loop: the fan-out notifies + attributes but NEVER
   fixes code; Editors fix + re-push but NEVER attribute others' failures.
 
 ### session_notify mechanics (upstream #1203, commit 13a24f25)
@@ -146,18 +198,18 @@ board-wide broadcast and duplicate the session's auto-routed text.)*
 | Answers | does my feature WORK for a user right now? | is the code correct by analysis standards? | is the feature actually INSIDE the artifact we are about to deploy? |
 | What | behavioral drive of ONE shipped feature | compile/run verification: cargo fmt, clippy, cargo test | static markers: binary strings/symbols, sha256 identity vs artifact, source-tree grep |
 | Where | live `opencrabs-ops` unit, its real surfaces (Telegram, cron, MCP) | GitHub Actions ONLY — carrier compile pre-flight, upstream Lint/Test checks (fork `ci.yml` removed 2026-08-26) | this box, against the DOWNLOADED artifact + its source tree — nothing running |
-| When | after a swap notify (`editor.md` Phase 6b) | pre-flight gate before PRs (Phase 7 step 2b); every CI run | pre-swap, every cycle (`compiler.md` Steps 3+5) |
-| Who | owning Editor | Editor dispatches the gate; Compiler reads build/lint conclusions | Compiler alone |
+| When | after a swap notify (`editor.md` Phase 6b) | pre-flight gate before PRs (Phase 7 step 2b); every CI run | pre-swap, every cycle (`oc-deploy` swap path; archived: `compiler.md` Steps 3+5) |
+| Who | owning Editor | Editor dispatches the gate and reads conclusions; `oc-deploy` reads build conclusions | `oc-deploy` swap path (pre-S3: Compiler alone) |
 | Toolchain | none — local cargo FORBIDDEN in any form (binaries disabled 2026-08-28; editor.md §Box law) | CI's own — never local | `strings`, `sha256sum`, `git grep` — none compile anything |
 | Evidence | one line: drove X, observed Y (+ run id / sha) | job/step conclusions read via API | marker found/not-found + checksum line in baseline.json |
-| On FAIL | issue FIRST, then evidence to Compiler | fix before merge / PR | NO swap — feature missing from build; regression stated plainly |
+| On FAIL | issue FIRST, then evidence to the supervisor lane (`session_notify`) | fix before merge / PR | NO swap — feature missing from build; regression stated plainly |
 
 The table above carries the content; what remains prose:
 
 - **SMOKE TEST** is the ONLY evidence that may back an upstream PR approval
   request (hard rule + `editor.md` Phase 7 step 0).
-- **EXECUTION SANITY SIGNAL** — the swap-path `--version` run (`compiler.md`
-  Step 3) — is NONE of the three kinds: it proves only "this file is a
+- **EXECUTION SANITY SIGNAL** — the swap-path `--version` run (`oc-deploy` swap
+  path; archived anchor: `compiler.md` Step 3) — is NONE of the three kinds: it proves only "this file is a
   runnable opencrabs binary". Not behavioral, not analytical, not presence
   evidence; never cite it as any kind of test result.
 
@@ -167,9 +219,10 @@ nothing about behavior.
 
 ## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
 
-ONE location for BOTH roles: the Compiler diagnoses with these in Step 2; the
-Editor applies the same ones in its fix round (editor.md Phase 6c). Neither
-role uses them as a licence to fix outside its scope.
+ONE location: red-run diagnosis reads these (pre-S3: Compiler Step 2; now:
+`oc-deploy` RED reports + supervisor triage); the
+Editor applies the same ones in its fix round (editor.md Phase 6c). No lane
+uses them as a licence to fix outside its scope.
 
 - Fix unresolved-name/import errors FIRST (E0425/E0433...) — later errors are
   usually poisoned fallout. When scopes look shifted, count brace DEPTH, not
@@ -178,8 +231,8 @@ role uses them as a licence to fix outside its scope.
   needs its own exhaustive arms regardless of the outer guard.
 - **Contradictory INCOMING verdicts → settle via live GH API before acting**
   (v0.4.14, proposal P3): when two claims about the SAME run/sha disagree (e.g.
-  a RED report vs a Compiler ACK calling that run "in_progress"), resolve with
-  `gh run view <id> --json status,conclusion` FIRST — even Compiler ACKs can be
+  a RED report vs an ACK calling that run "in_progress"), resolve with
+  `gh run view <id> --json status,conclusion` FIRST — even ACKs can be
   stale. v0.4.6 predicates govern claims WE pass on; nothing sanitizes claims
   that ARRIVE — the receiver checks. *(2026-08-26 cycle-18: run 32999957533
   concluded `failure` at 18:36:56Z while a Compiler ACK still called it
@@ -190,7 +243,7 @@ role uses them as a licence to fix outside its scope.
 - Checkout `~/opencrabs`: remote **`origin`** = fork `leshchenko1979/opencrabs`
   (push target) · remote **`adolfousier`** = sync source (upstream).
 - BUILD SOURCE = fork `main`. Editors fast-forward their signed commits into
-  `leshchenko1979/opencrabs@main`; the Compiler dispatches THAT ref — every
+  `leshchenko1979/opencrabs@main`; `oc-deploy ship` dispatches THAT ref — every
   artifact compiles all editors' merged changes TOGETHER (decision 2026-08-25).
   Building upstream/adolfousier refs is the exception, explicit ask only.
 - Branch NAMESPACES are reserved so any role can tell development from upstream
@@ -198,7 +251,7 @@ role uses them as a licence to fix outside its scope.
   `feat|fix|ci|chore` = DEVELOPMENT — fork-only, ff-merged into fork `main`
   (editor Phase 6), archived after merge · `leshchenko1979/<slug>` = UPSTREAM PR HEADS ONLY (renamed from `up/*`, decision 2026-08-27)
   — created solely in editor Phase 7 off `adolfousier/main`, never merged into
-  fork `main`, never a dispatch source. The Compiler reads the prefix, knows
+  fork `main`, never a dispatch source. Any lane reads the prefix and knows
   what it is looking at.
 - This box has **no sanctioned Rust toolchain** — CI is the compiler (ruling
   2026-06-16, hardened owner-GO 2026-08-28). Never install cargo/rustc here —
@@ -208,8 +261,9 @@ role uses them as a licence to fix outside its scope.
   manifest + `restore.sh`), and the BLOCKED stubs in `/usr/local/bin` are the
   floor of the rule, not the rule. Any invocation in any form — PATH, login
   shell, PATH-prepend, explicit path — is a violation even when it exits 0.
-  Sanctioned local tools: `modum` (lint) + `/usr/local/bin/rustfmt` wrapper
-  (fmt only); build/test/clippy = CI dispatch (pr-checks.yml / quick-build).
+  Sanctioned local tools: `/usr/local/bin/rustfmt` wrapper (fmt only) — modum
+  RETIRED from the process 2026-08-28 (owner order); lint evidence = GREEN
+  pr-checks.yml run. build/test/clippy = CI dispatch (pr-checks.yml / quick-build).
   Full text: editor.md §Box law.
 - Live binary: `/usr/local/bin/opencrabs`. Daemons run as systemd **user** units
   (`systemctl --user`) — system-scope queries (`systemctl`, `/etc/systemd`) find nothing.
@@ -257,13 +311,15 @@ codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing 
 
 Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
 
-1. **Watch = Compiler duty, every build cycle** (Step 1 pre-flight): fetch
+1. **Watch = supervisor duty (`oc-deploy` watch), every build cycle**
+   (archived anchor: Step 1 pre-flight): fetch
    `adolfousier`, compare upstream tip vs fork merge-base. Small clean delta →
    run the sync automatically; mass absorption (maintainer took our features)
    or conflicts beyond trivial → notify Alexey with the delta and WAIT.
 2. **Sync model = REBASE-PORT** (merge-sync retired 2026-08-26): backup ref
    FIRST → classify fork-only commits (absorbed / superseded / survivor) →
-   port survivors chronologically onto `adolfousier/main` → modum errors=0 →
+   port survivors chronologically onto `adolfousier/main` → pr-checks green
+   (zero errors in ported lines) →
    force-push-with-lease. Full procedure: `compiler.md` Step 7.
 3. **Absorption rule**: when upstream merges or reimplements one of OUR
    features, matching fork-only commits auto-classify DROPPABLE at the next
@@ -290,9 +346,9 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    toward upstream. Dispatch locally via `gh workflow run --ref ci/<name>`.
    After every upstream merge/port verify parity mechanically:
    `./tools/oc-ci-parity` (exit 0 identical / 4 DRIFT listing / 6 api-fail) +
-   carrier proof-dispatch (compiler.md Step 7). *(owner order 2026-08-26)* **(c) DRIFT PERMANENT — owner ruling via "Fix all" 2026-08-27:** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by restoring the file.
+   carrier proof-dispatch (archived: compiler.md Step 7). *(owner order 2026-08-26)* **(c) DRIFT PERMANENT — owner ruling via "Fix all" 2026-08-27:** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by restoring the file.
 7. **Fork branch lifecycle (v0.4.24, owner "clean" sweep 2026-08-27)**: the fork carries
-   PERMANENT refs only — `main` (sync mirror, compiler rebase-port), `ci/quick-build-linux`
+   PERMANENT refs only — `main` (sync mirror; pre-S3: compiler rebase-port), `ci/quick-build-linux`
    (carrier), `backup/pre-port-*` (until the port cycle settles) — plus short-lived
    `leshchenko1979/<slug>` work branches. A work branch dies when its PR merges or the task
    dies, and ONLY after its landing is PROVEN by one of: tip sha-reachable from upstream or
@@ -313,8 +369,8 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
   (Mermaid, Push to session, …), never by session UUID. Applies to every role's
   reports, Supervisor's included.
 - ONLY the Supervisor edits skill files (`SKILL.md` / `editor.md` /
-  `compiler.md` / `supervisor.md`) — including the Compiler (decision 7,
-  2026-08-26). Workers propose via poll format or direct notify; they never
+  `compiler.md` / `supervisor.md`) — including all worker lanes (decision 7,
+  2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
   write.
 - Relay only PREDICATED claims (v0.4.6, from fabrication deviation #3): any
   build/deploy/artifact claim you pass onward must carry evidence YOU verified
@@ -345,20 +401,22 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
   smoke evidence + an explicit approval request in its forum topic and WAITS —
   Alexey's approval = his reply or a positive Telegram reaction to that request;
   silence is NOT consent. Spontaneous / ad-hoc PRs remain forbidden.
-- CONSENT REGISTER (v0.4.17, incident 2026-08-26): an owner denial-ruling was
-  issued from codified text while the live consent sat unread in topic history.
-  Owner go-aheads — approval replies, positive reactions, smoke certifications —
-  are REGISTERED in `workers-ledger.json` `consents[]` ({timestamp, chat/topic,
-  message_id, verbatim quote, lane}) by whichever session sees them; gate checks
-  and rulings CITE register entries, never memory. A ruling that denies a
-  permission MUST first grep the register + chat record for existing consent.
-  Consent binds to the LANE/topic it was issued in unless tagged [ALL]: a bare
-  "smoke passed" formula certifies that lane's state; an explicit "open upstream
-  PR" imperative additionally authorizes shipment of that lane.
-  Machine gate (v0.4.21): `./tools/oc-consent-check --ledger workers-ledger.json
-  --check --msgid <id>` — exit 0 = cite the returned entry; exit 3 = NOT
-  registered → grep the chat record before issuing ANY permission ruling.
-- COMPILER INBOX POLICY (noise audit 2026-08-26, owner "fix all"): the
+- CONSENT REGISTER — **RETIRED 2026-08-28 (owner order 18:50Z: the deploy
+  consent process is ELIMINATED).** GREEN carrier run + artifact verify IS the
+  authorization now: oc-deploy auto-swaps (journal line `auto-swap
+  reason=green-run`), no register check pre-swap, no human GO in the pipeline.
+  The `oc-consent-check` machine gate (v0.4.21) is archived at
+  `tools/archive/oc-consent-check`; ledger `consents[]` rows stay as historical
+  record. Incident history (kept, non-deploy lesson still binds): v0.4.17,
+  2026-08-26 — an owner denial-ruling was issued from codified text while the
+  live consent sat unread in topic history. Before denying ANY permission, grep
+  the actual record (chat history / ledger); never rule from codified memory.
+  The UPSTREAM-PR owner-word gate is UNTOUCHED by this retirement: PR shipment
+  still gates on owner approval = reply or positive Telegram reaction to the
+  explicit request; silence is NOT consent; spontaneous/ad-hoc PRs remain
+  forbidden.
+- COMPILER INBOX POLICY (**RETIRED with the role 2026-08-28; kept as inbox
+  discipline for any re-enabled build lane** — noise audit 2026-08-26, owner "fix all"): the
   Compiler receives ONLY ORDERs (incl. verified re-deliveries), red-run
   handoffs, E0308-class fix routing, receipts requests, owner directives,
   supervisor roster-deltas. Status pings, unsolicited cycle summaries, ACK
@@ -396,13 +454,15 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
 - Restart scope: **`opencrabs-ops` ONLY.** The `family` and default-profile daemons
   require Alexey's explicit approval EVERY time.
 - Never trust watcher exit codes alone — read the run's own `conclusion` via API.
-- BUILD TRIGGERS = exactly TWO (v0.4.3): an editor's `ORDER build <full-sha>`
-  to the Compiler, or Alexey's word — the Compiler's autonomous delta-check
+- BUILD TRIGGERS = exactly TWO (v0.4.3, S3-rewired 2026-08-28): an editor's
+  `oc-deploy ship <full-sha>` background task (the ORDER-to-Compiler notify is
+  RETIRED), or Alexey's word — the Compiler's autonomous delta-check
   cycle is RETIRED. Stray unordered commits get reported by the ~2 h watchdog
-  (`compiler.md` Step 1), never built autonomously. Mid-flight ORDER handling
-  = coalesce / ledger-hold — a SECOND dispatch is NEVER created (`compiler.md`
-  Step 1). SINGLE FLIGHT enforced twice: the compiler's own dispatch invariant
-  + the carrier-yml concurrency group (commit `1ae46000`).
+  (`oc-deploy` watch; archived anchor: `compiler.md` Step 1), never built
+  autonomously. A SECOND dispatch of the same sha+set is NEVER created —
+  `oc-deploy ship` serializes (single-flight). SINGLE FLIGHT enforced twice:
+  `oc-deploy`'s dispatch invariant + the carrier-yml concurrency group
+  (commit `1ae46000`).
 
 ## Shared war stories (why these rules exist)
 

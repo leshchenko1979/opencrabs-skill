@@ -15,10 +15,14 @@ job-name verification, health receipts) are the Supervisor's to CREATE, FIX,
 and MAINTAIN — that is ops tooling, NOT opencrabs feature code. Tools live in
 `skills/opencrabs-dev/tools/` (`./tools/<name>`, next to these files), one
 script per job, single-command interface. Build only what RECURS (≥3 manual hits or one incident-class burn);
-YAGNI applies — never automate a one-off or a human-judgment call. **Guard:** the
-Supervisor authors/maintains these tools but NEVER runs them inside a build
-cycle — the Compiler validates any adopted tool against `compiler.md` Step 1/3/4
-invariants before it may use it.
+YAGNI applies — never automate a one-off or a human-judgment call. **Guard
+(S3-rewired 2026-08-28):** the Supervisor authors/maintains these tools. Since
+S3 the build-cycle tools (`oc-deploy` ship/poll/swap-execute) RUN the cycle
+themselves — the old guard ("Supervisor never runs tools inside a build cycle;
+the Compiler validates before adoption") retired WITH the Compiler role.
+Current invariants instead of Compiler validation: `oc-deploy --selftest`
+(50 checks, must stay green before any version bump), the append-only journal,
+and ledger receipts.
 
 **STRICT ROUTING (owner decision 1a, 2026-08-26):** owner orders arriving HERE
 for code fixes, CI dispatches, or binary swaps are ROUTED to the owning worker
@@ -39,7 +43,9 @@ simulations, and skill work stay here. Expected reply shape: "routed to
 
 ## Duty 2 — Worker registry: identity + versions, NEVER live status
 
-`workers-ledger.json` lives next to this skill. It stores ONLY slow-changing
+`workers-ledger.json` — canonical path `/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json`
+(NOT next to this skill: a skill-dir duplicate drifted and was deleted 2026-08-29;
+`oc-deploy` defaults to the canonical file since v0.4.38). It stores ONLY slow-changing
 facts per worker: uuid, role, forum topic, feature, `confirmed` flag
 (provisional until first signed commit — trailer = identity proof),
 `last_notified` {version, at}, `last_acked` {version, at}, and append-only
@@ -76,9 +82,10 @@ stamp ONE ledger event (version published, no per-worker notify rows), then
 target ONLY (a) lanes actively MID-CYCLE at publish time whose duties the
 change touches and which would hit the gap within THIS cycle, and (b) workers
 more than THREE versions behind who act substantively while stale (skew-chase
-below stands). An `[ALL]` broadcast survives solely for breaking-gate changes
-of the CONSENT-REGISTER class — rules whose absence produces wrong rulings the
-same day. Everything else waits for each lane's next boundary.
+below stands). An `[ALL]` broadcast survives solely for breaking
+security/deploy-gate changes — rules whose absence produces wrong rulings the
+same day. (The former "CONSENT-REGISTER class" name retired with the consent
+process 2026-08-28.) Everything else waits for each lane's next boundary.
 
 > Delivery discipline for any supervised ping (see the v0.4.19 gate above):
 live roster check in the SAME turn; silent target -> one retry -> record the
@@ -90,9 +97,11 @@ FULL UUID - partial ids rejected at parse time.
 - Roster `idle` != cycle-idle: a worker mid build-cycle gets NO reload notify
   unless the version fixes a blocker it will hit this cycle (cycle-19 lesson:
   two mid-cycle pings were pure noise).
-- Any registry change propagates to the Compiler as a ONE-LINE [roster-delta]
-  notify immediately — on 2026-08-26 the compiler re-litigated freshly
-  registered workers for hours because corrections never reached it.
+- Registry changes USED TO propagate to the Compiler as a ONE-LINE
+  [roster-delta] notify (2026-08-26: the compiler re-litigated freshly
+  registered workers for hours because corrections never reached it).
+  RETIRED at S3 2026-08-28: the Compiler is gone, and oc-deploy reads
+  registry/ledger state DIRECTLY at invocation — no propagation needed.
 - Freeze history (pause/lift x2, 2026-08-26/27) lives in workers-ledger
   events #6/#8/#14. Current state: NONE active - the v0.4.19 gate above is the
   only notify policy; `[ALL]` reserved for consent-register-class gates.
@@ -122,7 +131,9 @@ overrides retroactively. Precedents: ROLE_EXCEPTION #1 waived-once,
 condition-2 unevidenced (2026-08-26); fabrication deviation #3 processing +
 P1/P2 routing (2026-08-26); RULING-CORRECTION #1 (2026-08-26): PR-open denial
 ruling was overturned by consent msg 32607 found in-topic AFTER issuing —
-lesson codified as the SKILL.md CONSENT REGISTER hard rule.
+lesson lives in SKILL.md §CONSENT REGISTER (deploy gate retired 2026-08-28;
+the lesson survives for NON-deploy ruling discipline: never deny from codified
+text without checking the live record).
 
 ## Duty 6 — Periodic subagent skill review (owner directive 2026-08-26)
 
@@ -164,7 +175,7 @@ Method:
    ONE version batch. Anything SEMANTIC (protocol behavior, authority
    boundaries) goes to the owner as proposals — a review never widens the
    Supervisor's own authority by itself.
-6. Verdict table posts to owner topic <hq-topic>; registry notes updated.
+6. Verdict table posts to owner topic 30220; registry notes updated.
 
 Rationale: the Supervisor authors most rules — author-blindness is structural
 (owner caveat, 2026-08-26). Independent subagent eyes + the owner gate keep
