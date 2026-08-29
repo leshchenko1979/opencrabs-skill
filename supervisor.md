@@ -83,6 +83,12 @@ stamp ONE ledger event (version published, no per-worker notify rows) AND
 commit BOTH git repos — skill-dir repo: one commit per bump; state-dir repo:
 one commit per ledger stamp, inside the same flock as the write (git-history
 regime, v0.4.41) — then
+BEND (v0.4.42, ruling event 1323): TOOL-written stamps (oc-deploy swap-execute
+etc. — flock write happens in a tool subprocess no session can commit from)
+are committed by the HOSTING session — the turn that observes the stamp on
+disk — bundling the tool stamp with its own adjacent stamp in one commit if
+both are pending (message names all stamps); oc-ledger self-commit code
+(oc-work/oc-ledger-design-20260829.md) is the end state.
 target ONLY (a) lanes actively MID-CYCLE at publish time whose duties the
 change touches and which would hit the gap within THIS cycle, and (b) workers
 more than THREE versions behind who act substantively while stale (skew-chase
