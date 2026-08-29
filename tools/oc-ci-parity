@@ -4,7 +4,7 @@
 # Why: fork-local CI lives ONLY on ci/* carrier branches (never main) so it can
 # never ride a PR diff. Therefore anything differing under .github/workflows on
 # main is either an upstream change we have not merged or fork-local leakage —
-# both are findings. Run after every upstream merge/port (compiler.md Step 7,
+# both are findings. Run after every upstream merge/port (tools/archive/compiler.md Step 7,
 # SKILL.md §Upstream relations "carrier namespace").
 #
 # Usage:

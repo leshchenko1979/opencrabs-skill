@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # oc-artifact-verify — the SWAP GATE. Verify a downloaded quick-build artifact
-# before it may replace the live binary (compiler.md Step 3 items 2-3).
+# before it may replace the live binary (tools/archive/compiler.md Step 3 items 2-3).
 #
 # Checks (each a hard gate):
 #   1. EXISTS     — file present, readable, size > 0                   (else 2)

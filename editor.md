@@ -33,8 +33,7 @@ rustfmt wrapper), and its compile binaries were DISABLED 2026-08-28
 invocation that WORKS is still a ruling violation (observed and killed
 2026-08-28: editor lanes running `cargo test` in worktrees). Sanctioned local
 tools ONLY: `/usr/local/bin/rustfmt` wrapper (fmt only — `--edition 2024`
-+ entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, Phase 5;
-modum retired from the process 2026-08-28 by owner order). Everything
++ entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, Phase 5). Everything
 else — build, test, clippy — is CI dispatch: `pr-checks.yml` (fmt/clippy/test,
 Phase 7 step 2c) or quick-build-linux dispatched via `oc-deploy ship`. Need
 `cargo test`? Dispatch CI.
@@ -162,9 +161,9 @@ Before adding: `git -C ~/opencrabs worktree list` — prune stale entries first
   fn-signature tail — only direct re-reads caught both; the gate would have
   waved the signature-eaten file through to red CI)*
 
-## Phase 5 — lint gate before every commit (CI-only since v0.4.34; modum retired 2026-08-28 by owner order)
+## Phase 5 — lint gate before every commit (CI-only since v0.4.34)
 
-No local lint tooling on this box — modum is OUT of the process. The lint/static-analysis
+No local lint tooling on this box. The lint/static-analysis
 evidence is the GREEN `pr-checks.yml` run on your branch: fmt + clippy +
 `cargo test --locked --all-features`. Iterate on code locally, push the branch,
 re-dispatch pr-checks, read the run log — that loop replaces every local lint run.
@@ -264,7 +263,7 @@ default: omit `--execute` → full delta printed, nothing touched. Brake:
 `touch /root/.opencrabs/profiles/ops/skills/opencrabs-dev/oc-deploy.kill` (or
 `/root/oc-work/oc-deploy.disabled`) aborts every invocation, exit 9. The
 ORDER vocabulary (COALESCED / QUEUED / intake-verify) is superseded — the
-gates now run inside `oc-deploy ship` itself (compiler.md archived runbook).
+gates now run inside `oc-deploy ship` itself (tools/archive/compiler.md archived runbook).
 
 - Red run returned → start a fix round (Phase 6c): NEW worktree every time →
   fix on the SAME branch → commit → push → report the NEW sha. Re-ship via

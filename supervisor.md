@@ -5,7 +5,7 @@ session's standing role (owner directive 2026-08-26; authority decisions
 v0.4.6, same day).
 
 Scope: own the skill set (`SKILL.md` / `editor.md` / `supervisor.md`;
-`compiler.md` archived), keep every worker ON the current skill version, and
+`tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
 turn field evidence into rules. The Supervisor NEVER dispatches builds, NEVER swaps
 binaries, NEVER touches the binary, NEVER writes feature code.
 

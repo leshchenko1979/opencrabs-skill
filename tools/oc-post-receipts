@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# oc-post-receipts — Telegram topic receipt posts (compiler.md Phase A/B).
+# oc-post-receipts — Telegram topic receipt posts (tools/archive/compiler.md Phase A/B).
 #
 # Posts restart/swap receipts to the compiler's home topics. Wraps the raw
-# curl Bot API call compiler.md documents as the canonical delivery lane.
+# curl Bot API call tools/archive/compiler.md documents as the canonical delivery lane.
 #
 # Token resolution order (OP profile bot @redevest_admin_tools_bot only):
 #   1. $OC_TG_TOKEN (env)
@@ -17,7 +17,7 @@
 #   --receipt-artifact             canned swap receipt (is-active, sha256, version)
 #       --unit <name> --expected <sha> [--version-arg "--version"]
 #
-# Destinations per compiler.md: primary 30129, HQ 30220. Two --topic calls.
+# Destinations per tools/archive/compiler.md: primary 30129, HQ 30220. Two --topic calls.
 # Exit: 0 ok | 1 token missing | 2 send-failed | 3 bad args.
 # Deps: curl. Token NEVER printed or leaked to stdout.
 # =============================================================================

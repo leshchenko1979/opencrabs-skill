@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# oc-seal-state — pre-restart state seal (compiler.md Step 5 / Phase A).
+# oc-seal-state — pre-restart state seal (tools/archive/compiler.md Step 5 / Phase A).
 #
 # Merges this swap's facts into baseline.json (schema-preserving: unknown keys
 # are kept) and optionally records order ledger transitions in orders.json.

@@ -8,7 +8,7 @@
 # the result). Replaces compiler dispatch+poll duties per staged plan:
 #   S0 inert (plan-only) -> S1 shadow ship (dispatch live, swaps stay
 #   compiler) -> S2 pilot swap -> S3 cutover (DONE 2026-08-28: compiler
-#   retired; poll = THE deploy path; runbook = compiler.md archived).
+#   retired; poll = THE deploy path; runbook = tools/archive/compiler.md archived).
 #
 #   oc-deploy ship [--sha <40-hex>] [--features <set>] [--execute]
 #   oc-deploy poll [--execute]
@@ -1057,7 +1057,7 @@ swap_execute() {
 }
 
 # ------------------------------------------------------------------ watchdog --
-# S3 replacement for the archived compiler.md Step 1 WATCHDOG duty (owner
+# S3 replacement for the archived tools/archive/compiler.md Step 1 WATCHDOG duty (owner
 # directive 2026-08-28 16:26Z: NO cron — oc-deploy fires often enough, so the
 # check piggybacks every ship/poll invocation; explicit run = `oc-deploy watch`).
 # Tripwire semantics: fork main tip must be covered by deployed.sha OR a

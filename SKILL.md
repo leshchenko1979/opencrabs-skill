@@ -5,10 +5,10 @@ description: >
   worktrees, CI lint gate (pr-checks), signed commits, push + sha hand-off, oc-deploy ship,
   smoke-test-on-notify, upstream PR), COMPILER (RETIRED at S3 cutover
   2026-08-28 — quick-build dispatch/swap now automated in tools/oc-deploy;
-  compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
+  tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.43
+version: 0.4.44
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -24,7 +24,7 @@ metadata:
 **Owns:** everything touching `~/opencrabs` source, its GitHub Actions runs, or the
 installed `opencrabs` binary. This file = shared facts + role router only. Actual
 procedures live in TWO role files (`editor.md` / `supervisor.md`) + one
-ARCHIVED runbook (`compiler.md` — retired at S3 cutover 2026-08-28, re-enable
+ARCHIVED runbook (`tools/archive/compiler.md` — retired at S3 cutover 2026-08-28, re-enable
 = one notify);
 load ONLY the one matching the session's role.
 
@@ -34,7 +34,7 @@ Mechanical rituals the roles once hand-ran are now single commands in `tools/`
 (owner-aware: CLI-tool creation/fix is the Supervisor's scope). Canonical
 commands run INSIDE `oc-deploy` (ship/poll/swap-execute); this section is the
 register + test source of truth (archived compiler-step anchors stripped
-2026-08-29 — `compiler.md` carries the old numbering for re-enable context):
+2026-08-29 — `tools/archive/compiler.md` carries the old numbering for re-enable context):
 
 | Tool | Slot | Exit-coded |
 |---|---|---|
@@ -89,12 +89,12 @@ tail -1 tools.log | jq -c .
 
 Ask the operator which role this session employs before doing anything:
 
-> **Editor or Supervisor?** (Compiler: archived — say "re-enable compiler" to load `compiler.md`.)
+> **Editor or Supervisor?** (Compiler: archived — say "re-enable compiler" to load `tools/archive/compiler.md`.)
 
 | Role | Owns | Procedure file |
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
-| **COMPILER** | **RETIRED 2026-08-28 (S3 cutover, owner "let's go to S3" msgid 34717)** — duties now `tools/oc-deploy` (ship/poll/swap-execute) + supervisor watch. Re-enable = one notify per archived runbook | `compiler.md` (ARCHIVED runbook) |
+| **COMPILER** | **RETIRED 2026-08-28 (S3 cutover, owner "let's go to S3" msgid 34717)** — duties now `tools/oc-deploy` (ship/poll/swap-execute) + supervisor watch. Re-enable = one notify per archived runbook | `tools/archive/compiler.md` (ARCHIVED runbook) |
 | **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), triage the idea box (Duty 7 — workers push `IDEA:` notifies; ledger kinds `idea` / `idea-verdict`), 4-lens skill review (Duty 6, incl. Reviewer D deletion safety) | `supervisor.md` |
 
 Roles **DO NOT intersect**:
@@ -106,7 +106,7 @@ Roles **DO NOT intersect**:
 - (Archived role, pre-S3) The Compiler NEVER wrote, committed, or fixed code, NEVER
   touched editor feature branches or worktrees — two sanctioned touches, both
   bounded in their own steps: the Step 6 integration sweep over fork `main` AND
-  Step 7 rebase-port fixups (`compiler.md` Steps 6 + 7).
+  Step 7 rebase-port fixups (`tools/archive/compiler.md` Steps 6 + 7).
 - Hand-off point: the Editor produces (branch pushed AND fast-forwarded into fork
   `main` + reported shas); `oc-deploy ship` takes it from there (dispatch → poll
   → swap-execute, consent eliminated 2026-08-28). If the run is RED, `oc-deploy`
@@ -212,7 +212,7 @@ The table above carries the content; what remains prose:
 - **SMOKE TEST** is the ONLY evidence that may back an upstream PR approval
   request (hard rule + `editor.md` Phase 7 step 0).
 - **EXECUTION SANITY SIGNAL** — the swap-path `--version` run (`oc-deploy` swap
-  path; archived anchor: `compiler.md` Step 3) — is NONE of the three kinds: it proves only "this file is a
+  path; archived anchor: `tools/archive/compiler.md` Step 3) — is NONE of the three kinds: it proves only "this file is a
   runnable opencrabs binary". Not behavioral, not analytical, not presence
   evidence; never cite it as any kind of test result.
 
@@ -318,7 +318,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    FIRST → classify fork-only commits (absorbed / superseded / survivor) →
    port survivors chronologically onto `adolfousier/main` → pr-checks green
    (zero errors in ported lines) →
-   force-push-with-lease. The old procedure home (`compiler.md` Step 7) is
+   force-push-with-lease. The old procedure home (`tools/archive/compiler.md` Step 7) is
    ARCHIVED — until the port procedure is re-homed as a supervisor duty, the
    sync runs ONLY on owner word.
 3. **Absorption rule**: when upstream merges or reimplements one of OUR
@@ -346,7 +346,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    toward upstream. Dispatch locally via `gh workflow run --ref ci/<name>`.
    After every upstream merge/port verify parity mechanically:
    `./tools/oc-ci-parity` (exit 0 identical / 4 DRIFT listing / 6 api-fail) +
-   carrier proof-dispatch (archived: compiler.md Step 7). *(owner order 2026-08-26)* **(c) DRIFT PERMANENT — owner ruling via "Fix all" 2026-08-27:** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by restoring the file.
+   carrier proof-dispatch (archived: tools/archive/compiler.md Step 7). *(owner order 2026-08-26)* **(c) DRIFT PERMANENT — owner ruling via "Fix all" 2026-08-27:** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by restoring the file.
 7. **Fork branch lifecycle (v0.4.24, owner "clean" sweep 2026-08-27)**: the fork carries
    PERMANENT refs only — `main` (sync mirror; pre-S3: compiler rebase-port), `ci/quick-build-linux`
    (carrier), `backup/pre-port-*` (until the port cycle settles) — plus short-lived
@@ -369,7 +369,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
   (Mermaid, Push to session, …), never by session UUID. Applies to every role's
   reports, Supervisor's included.
 - ONLY the Supervisor edits skill files (`SKILL.md` / `editor.md` /
-  `compiler.md` / `supervisor.md`) — including all worker lanes (decision 7,
+  `tools/archive/compiler.md` / `supervisor.md`) — including all worker lanes (decision 7,
   2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
   write.
 - Relay only PREDICATED claims (v0.4.6, from fabrication deviation #3): any
@@ -459,7 +459,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
 | `source_ref` = FULL 40-char sha, never short | run #32882515561: short sha → checkout fetched a branch literally named `<sha>*`, dead in 51 s |
 | Conflict-quality gate before push | run #32879949542: a hand-merge shipped E0308 red CI (full prose: `editor.md` Phase 6) |
 | Rebase-port, never resurrect duplicates | 2026-08-26: maintainer absorbed 4 of our PRs overnight (#1207/#1208/#1214/flood-governors); a literal 40-commit rebase would have replayed duplicate implementations against his reviewed rework — classification dropped 20+, ported 9 |
-| ORDER-era triggers + bounded ROLE_EXCEPTION | 2026-08-26 07:20 UTC: compiler authored the governor.rs E0308 fix while its author (61161247) slept through the owner's night window — a silent role breach. Now builds fire only via `oc-deploy ship` or owner word (sim-validated — sim = ORDER/queue simulation, paired-seed 600 reps, run 2026-08-26), and the breach is legal only as the bounded ROLE_EXCEPTION (archived: `compiler.md` Step 2) |
+| ORDER-era triggers + bounded ROLE_EXCEPTION | 2026-08-26 07:20 UTC: compiler authored the governor.rs E0308 fix while its author (61161247) slept through the owner's night window — a silent role breach. Now builds fire only via `oc-deploy ship` or owner word (sim-validated — sim = ORDER/queue simulation, paired-seed 600 reps, run 2026-08-26), and the breach is legal only as the bounded ROLE_EXCEPTION (archived: `tools/archive/compiler.md` Step 2) |
 | Two-file ledger drift | 2026-08-29: `oc-deploy` default LEDGER hit a skill-dir copy while supervisor stamped canonical; the "stale duplicate" deletion proved LIVE (fresh swap stamp + fan-out reads) — restored in 6 min, zero data lost. Fix A (v0.4.38) points every tool at canonical; Reviewer D born from this |
 
 *Source of truth for procedure = these skill files. AGENTS.md carries only the pointer.*
