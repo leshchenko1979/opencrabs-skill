@@ -211,14 +211,14 @@ case "$*" in
   *actions/runs/777*) echo '{"status":"completed","conclusion":"success"}' ;;
   *actions/runs/888/jobs*) echo '{"jobs":[{"name":"ORDER gates","conclusion":"success"},{"name":"Linux amd64 (eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9001"}]}' ;;
   *workflows/quick-build-linux.yml/runs*) echo '{"workflow_runs":[{"id":111}]}' ;;
-  *actions/runs/222/jobs*|*actions/runs/555/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (cccccccccccccccccccccccccccccccccccccccc, telegram)"}]}' ;;
+  *actions/runs/222/jobs*|*actions/runs/555/jobs*|*actions/runs/789/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (cccccccccccccccccccccccccccccccccccccccc, telegram)"}]}' ;;
   *actions/runs/333/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (dddddddddddddddddddddddddddddddddddddddd, telegram)"}]}' ;;
   *actions/runs/668/jobs*) echo '{"jobs":[{"name":"Linux amd64 (ffffffffffffffffffffffffffffffffffffffff, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9002"}]}' ;;
   *check-runs/9002/annotations*) echo '[]' ;;
   *actions/runs/666/jobs*|*actions/runs/667/jobs*|*actions/runs/669/jobs*|*actions/runs/670/jobs*) echo '{"jobs":[{"name":"ORDER gates","conclusion":"success"},{"name":"Linux amd64 (eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9001"}]}' ;;
   *check-runs/9001/annotations*) echo '[{"path":"bad.txt","start_line":3}]' ;;
   *actions/runs/444*) echo '{"status":"in_progress","conclusion":null}' ;;
-  *actions/runs/222*|*actions/runs/333*|*actions/runs/555*) echo '{"status":"completed","conclusion":"success"}' ;;
+  *actions/runs/222*|*actions/runs/333*|*actions/runs/555*|*actions/runs/789*) echo '{"status":"completed","conclusion":"success"}' ;;
   *actions/runs/66*|*actions/runs/67*|*actions/runs/77*|*actions/runs/88*)
     RED=""
     case "$*" in *actions/runs/66*|*actions/runs/67*|*actions/runs/77*|*actions/runs/88*) RED=1 ;; esac
@@ -628,13 +628,51 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
   grep -q "cccccccc-1111" "$NOTIFY_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: RED scan did not notify culprit"; }
   jq -e '.runs["888"]' "$SD/fanout.state" >/dev/null 2>&1 \
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: RED scan state unmarked"; }
-  local NJ1; NJ1="$(ls "$SD/oc-deploy/journal/"fanout-888-*.jsonl 2>/dev/null | wc -l)"
+  local NJ1 NJ2 NEWJ
+  NJ1="$(ls "$SD/oc-deploy/journal/"fanout-888-*.jsonl 2>/dev/null | wc -l)"
   out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_REPO="$T/redc1" OC_DEPLOY_REMOTE="$T/red1.git" \
     OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" "$SELF_BIN" poll 2>&1)"; rc=$?
   check_rc "poll-redscan-idem-rc" $rc 0
   check_has "poll-redscan-idem" "$out" "reason=done"
-  [ "$(ls "$SD/oc-deploy/journal/"fanout-888-*.jsonl 2>/dev/null | wc -l)" = "$NJ1" ] \
-    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: idempotent RED scan made a new journal"; }
+  # issue #42: every invocation journals its outcome — the no-op re-run writes
+  # exactly ONE new journal (the skip line), never a duplicate sweep
+  NJ2="$(ls "$SD/oc-deploy/journal/"fanout-888-*.jsonl 2>/dev/null | wc -l)"
+  NEWJ="$(ls -t "$SD/oc-deploy/journal/"fanout-888-*.jsonl 2>/dev/null | head -1)"
+  { [ "$NJ2" = "$((NJ1+1))" ] && grep -q '"reason":"done"' "$NEWJ"; } \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: idempotent RED scan journal wrong (before=$NJ1 after=$NJ2 skipline=$(grep -c '"reason":"done"' "$NEWJ" 2>/dev/null || echo na))"; }
+  # 17g. concurrent fanouts (issue #42 flock): two sweeps on the same run
+  #      -> exactly one delivery set; the loser exits 0 reason=inflight.
+  #      notify-slow sleeps 1s per call so the winner's lock hold (~2s)
+  #      overlaps the loser's flock attempt.
+  : > "$NOTIFY_LOG"
+  cat > "$SD/notify-slow" <<'NSTUB'
+#!/usr/bin/env bash
+echo "$*" >> "${NOTIFY_LOG:?}"
+sleep 1
+for last; do :; done
+[ "$last" = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" ] && exit 2
+exit 0
+NSTUB
+  chmod +x "$SD/notify-slow"
+  local FOUTA FOUTB PA PB RCA RCB
+  OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" \
+    OC_DEPLOY_NOTIFY="$SD/notify-slow" "$SELF_BIN" fanout --run 789 >"$T/fanout-a.out" 2>&1 & PA=$!
+  OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" \
+    OC_DEPLOY_NOTIFY="$SD/notify-slow" "$SELF_BIN" fanout --run 789 >"$T/fanout-b.out" 2>&1 & PB=$!
+  wait "$PA"; RCA=$?
+  wait "$PB"; RCB=$?
+  FOUTA="$T/fanout-a.out"; FOUTB="$T/fanout-b.out"
+  if [ "$RCA" = 0 ] && [ "$RCB" = 0 ] \
+     && [ "$(grep -l 'reason=inflight' "$FOUTA" "$FOUTB" | wc -l)" = 1 ] \
+     && [ "$(wc -l < "$NOTIFY_LOG")" = 2 ] \
+     && jq -e '.runs["789"].notified == 1' "$SD/fanout.state" >/dev/null 2>&1 \
+     && [ "$(ls "$SD/oc-deploy/journal/"fanout-789-*.jsonl 2>/dev/null | wc -l)" = 2 ] \
+     && grep -lq '"step":"lock-busy"' "$SD/oc-deploy/journal/"fanout-789-*.jsonl; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1)) \
+      ; echo "SELFTEST FAIL: concurrent fanouts not single-flight (rcA=$RCA rcB=$RCB inflight=$(grep -l 'reason=inflight' "$FOUTA" "$FOUTB" | wc -l) notifylines=$(wc -l < "$NOTIFY_LOG"))"
+  fi
   echo "oc-deploy selftest: $pass pass, $fail fail"
   rm -rf "$T"
   [ "$fail" = 0 ]
@@ -673,7 +711,10 @@ contributors_run() { # <old>..<new> | --deployed  [--repo <path>]
 # $FANOUT_STATE (re-run = no-op); standalone re-runnable. Verb rc != 0 (dead
 # uuid) journals skip and moves on — never resurrects, never reaps (#17 class).
 # Journal vocabulary fixed in the issue body. Exit: 0 done/noop | 2 usage
-# | 3 gh/attrib fetch fail | 4 run not terminal.
+# | 3 gh/attrib fetch fail | 4 run not terminal. issue #42: single-flight
+# flock per run (acquired BEFORE the idempotence guard, held through the
+# mark) — a concurrent sweep exits 0 reason=inflight, never re-notifies.
+# Lock files are never unlinked: unlink-while-held splits the lock.
 FANOUT_STATE="$STATE_DIR/fanout.state"
 NOTIFY_CMD="${OC_DEPLOY_NOTIFY:-opencrabs}"
 NOTIFY_PROFILE="${OC_DEPLOY_PROFILE:-ops}"
@@ -681,7 +722,7 @@ REPO_DIR="${OC_DEPLOY_REPO:-$HOME/opencrabs}"
 
 fanout_journal_init() { # $1 = run id
   mkdir -p "$JOURNAL_DIR"
-  JF="$JOURNAL_DIR/fanout-$1-$(date +%s).jsonl"
+  JF="$JOURNAL_DIR/fanout-$1-$(date +%s)-$$.jsonl"
   : > "$JF"; SEQ=0
 }
 
@@ -854,12 +895,31 @@ fanout_run() { # $1=run id $2=dry-run(0/1)
   DRYRUN="${2:-0}"
   [ -n "$run" ] || die 2 "fanout: needs --run <id>"
   echo "$run" | grep -Eq '^[0-9]+$' || die 2 "fanout: run id not numeric: $run"
+  fanout_journal_init "$run"
+  # issue #42: single-flight flock per run. Advisory lock acquired BEFORE the
+  # idempotence guard so guard+deliver+mark are atomic vs. other sweep
+  # invocations — a mid-sweep re-run used to pass the guard and re-notify
+  # everyone (13:21Z TOCTOU, 12 sessions double-carded). Held on fd 9 through
+  # fanout_mark_done; released on process exit on every path (crash-safe,
+  # no stale marker, no reaper). exec 9<> = no-truncate open so the holder
+  # record survives; flock -n -E 4 = non-blocking, EWOULDBLOCK -> rc 4.
+  local lockfile="$STATE_DIR/fanout.lock.$run"
+  exec 9<>"$lockfile" || die 3 "fanout: cannot open lock $lockfile"
+  if ! flock -n -E 4 9; then
+    local holder
+    holder="$(cat "$lockfile" 2>/dev/null || echo unknown)"
+    jline lock-busy 0 "{\"run\":\"$run\",\"holder\":\"$holder\"}"
+    echo "fanout-skip run=$run reason=inflight (lock held by $holder)"
+    exit 0
+  fi
+  printf 'pid=%s ts=%s run=%s\n' "$$" "$(date -u +%FT%TZ)" "$run" > "$lockfile"
+  jline lock-acquired 0 "{\"run\":\"$run\",\"pid\":$$}"
   # idempotence: a completed fan-out for this run is a no-op
   if [ -f "$FANOUT_STATE" ] && jq -e --arg id "$run" '.runs[$id]' "$FANOUT_STATE" >/dev/null 2>&1; then
+    jline skip 0 "{\"run\":\"$run\",\"reason\":\"done\"}"
     echo "fanout-skip run=$run reason=done (idempotent)"
     exit 0
   fi
-  fanout_journal_init "$run"
   runjson="$("$GH" api "repos/$FORK/actions/runs/$run" 2>/dev/null)" \
     || { jline fanout-start 3 "{\"run\":\"$run\",\"error\":\"gh-api-fail\"}"; die 3 "fanout: gh api run fetch failed for $run"; }
   status="$(printf '%s' "$runjson" | jq -r '.status // empty')"
