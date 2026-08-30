@@ -12,7 +12,8 @@
 #   sync --version <v> [--why <text>]      ONE atomic write: 3 version fields
 #                                          + skill-bump event; battery-receipt
 #                                          gate; skill-repo commit + tag; tail
-#                                          step: oc-shadow-rotate (merge A)
+#                                          steps: oc-shadow-rotate (merge A) +
+#                                          mirror push to origin (v0.4.50)
 #   check-version                          SKILL.md vs 3 ledger fields (RO)
 #   cadence                                skill-bumps since last review (RO)
 #   ack <uuid> <version> [--at <ts>]       worker last_acked + ack event
@@ -22,8 +23,11 @@
 #                                          --bundle also sweeps state receipts:
 #                                          tools.log baseline.json orders.json
 #                                          (v0.4.49 — seal-state writes them,
-#                                          swap chain never self-commits)
-#   --selftest                             fixture suite (45 cases)
+#                                          swap chain never self-commits);
+#                                          any configured origin gets a mirror
+#                                          push tail step (v0.4.50, off-box
+#                                          durability — attach ruling)
+#   --selftest                             fixture suite (47 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -79,6 +83,28 @@ git_state_commit() { # $1=message — inside lock; never fatal
   else
     echo "commit-lag: state commit deferred — $1" >&2
   fi
+}
+
+push_mirror() { # $1=repo dir, $2=label — off-box durability tail step (v0.4.50)
+  # Push current branch + v0.4.* tags to origin IF one is configured; no
+  # origin = silent no-op (state repo activates the moment one is added).
+  # Durability, not a gate: failure WARNs, never fails the bump/sweep.
+  # Branch push is NON-FORCE — a diverged remote is reported, not
+  # overwritten; local stays the single source of truth.
+  # (Attach ruling, owner 2026-08-30 00:23Z: leshchenko1979/opencrabs-skill
+  # wired as live mirror of the skill repo.)
+  local dir="$1" name="$2"
+  [ -d "$dir/.git" ] || return 0
+  git -C "$dir" remote get-url origin >/dev/null 2>&1 || return 0
+  local out rc
+  out="$(git -C "$dir" push -q origin HEAD "+refs/tags/v0.4.*:refs/tags/v0.4.*" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "mirror: $name pushed to $(git -C "$dir" remote get-url origin)"
+  else
+    echo "WARN: mirror push failed for $name rc=$rc (local unaffected): $out" >&2
+  fi
+  oc_log_extra "mirror_push_$name" "rc=$rc"
+  return 0
 }
 
 # ---- atomic mutation core (call under lock) --------------------------------
@@ -199,6 +225,11 @@ cmd_sync() {
     echo "WARN: shadow-rotate tail step rc=$ROT_RC (bump unaffected): $ROT_OUT" >&2
   fi
   oc_log_extra "shadow_rotate" "rc=$ROT_RC"
+
+  # Mirror tail step (v0.4.50): push both repos to origin if configured —
+  # off-box durability rides the bump cadence exactly like rotate does.
+  push_mirror "$SKILL_DIR" skill
+  push_mirror "$(STATE_DIR)" state
 
   cmd_cadence || true
 }
@@ -328,10 +359,14 @@ cmd_commit_pending() {
         && { echo "sweep: skill runtime artifacts committed:$hits"; did=1; }
     fi
   fi
+  # mirror tail step (v0.4.50): push whatever moved (and catch up any earlier
+  # commit-lag) — runs regardless of $did, up-to-date pushes are rc 0 no-ops
+  push_mirror "$sd" state
+  push_mirror "$SKILL_DIR" skill
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (45 cases) ------------------------------------------------------
+# ---- selftest (47 cases) ------------------------------------------------------
 cmd_selftest() {
   export OC_TOOLS_NOLOG=1
   local T P=0 F=0
@@ -420,6 +455,13 @@ EOF
   echo '{"sha":"fixture"}' > "$T/state/baseline.json"
   bash "$ME" commit-pending --bundle | grep -q "baseline.json" && ok || bad "commit-pending-baseline-sweep"
   git -C "$T/state" status --porcelain baseline.json | grep -q . && bad "commit-pending-baseline-left-dirty" || ok
+  # 32c: mirror push (v0.4.50) — a configured origin receives branch + tags;
+  # bare fixture remote stands in for GitHub (offline selftest rule)
+  git init -q --bare "$T/mirror.git"
+  git -C "$T/skill" remote add origin "$T/mirror.git"
+  echo '{"verdict":"PASS","fail":0,"mirror":"probe"}' > "$T/skill/tools/tests/battery-last.json"
+  bash "$ME" commit-pending --bundle | grep -q "mirror: skill pushed" && ok || bad "commit-pending-mirror-push"
+  git -C "$T/mirror.git" rev-parse --verify HEAD >/dev/null 2>&1 && ok || bad "commit-pending-mirror-received"
   # 33: concurrent race
   local before; before="$(jq '([.events[].n] | max)' "$OC_LEDGER")"
   for i in 1 2 3 4 5; do bash "$ME" stamp note "race-a-$i" >/dev/null 2>&1 & bash "$ME" stamp note "race-b-$i" >/dev/null 2>&1 & done
