@@ -108,6 +108,25 @@ pull-check is YOUR duty; supervisor notifies stay targeted per Duty 3.
 investigation — stale rituals are suspected to survive in sessions that never
 re-check, not on disk.)*
 
+## CI-wait discipline & actor attribution (owner 2026-08-30 — fix batch)
+
+1. **Raw `gh run watch` / `gh watch` are BANNED.** The 3s default refresh across
+   concurrent sessions caused the overnight gh flood (704 refs 08-29 + 126 on
+   08-30, ≥7 sessions). Lane waits go through `oc-prchecks` (15s poll,
+   single-flight dispatch lock + headSha adoption); carrier waits through
+   `oc-deploy watch` or a DETACHED ≥60s poller (proven `/tmp/swap-*.sh`
+   pattern). Never hand-roll a short-interval `gh run watch` loop.
+2. **`OC_ACTOR=<session-uuid>` MUST be exported on every `oc-*` tool
+   invocation** — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
+   making floods and behavior attributable after the fact and feeding the
+   ledger-beats-memory guard. This session's uuid is named in its ROSETTE; a
+   lane that cannot recall its own uuid reads it from its Session-Id trailer /
+   the HQ roster before running any tool.
+3. Re-running the same CI because the head moved is inherent to a fix loop, but
+   only via oc-prchecks re-dispatch (never a second raw watcher) — pr-checks.yml
+   now carries a concurrency group (`cancel-in-progress: true`, owner fix) so
+   the superseded run is auto-cancelled and minutes stop burning.
+
 ## Phase 1 — Claim on the fork BEFORE editing
 
 0. **Claim-time fresh re-read (v0.4.14, proposal P2)**: FIRST action after
@@ -487,8 +506,14 @@ git -C ~/oc-wt-up-<feature> push -u origin leshchenko1979/<feature>
 #    original fork issue rides AT THE END of the body (owner directive
 #    2026-08-27). NEVER `Closes #N` — on upstream that resolves against the
 #    WRONG issue space. (atomicity gate: `oc-pr-atomicity <pr>` after filing)
+#    PR TITLE TYPE PREFIX (owner 2026-08-30 — release triage): every upstream
+#    AND fork PR title starts with fix: / fix(scope): (bug fix), feat: /
+#    feat(scope): (new capability), or chore: (tooling/CI/docs/deps — zero
+#    user-visible change). The head-branch slug mirrors the type:
+#    leshchenko1979/fix/<slug> | feat/<slug> | chore/<slug> (existing branches
+#    untouched).
 gh pr create -R adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/<feature> \
-  --title "<concise feature title>" \
+  --title "<fix:|feat:|chore:> <concise feature title>" \
   --body "<detailed what/why, implementation notes, green run link, smoke-test evidence. Original issue: https://github.com/leshchenko1979/opencrabs/issues/N (exactly one)>"
 
 # 5. close the tracked FORK issue with a pointer comment

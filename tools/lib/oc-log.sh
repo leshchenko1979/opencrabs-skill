@@ -9,7 +9,12 @@
 #
 # ONE JSONL line per invocation is appended at exit to $OC_TOOLS_LOG
 # (default: /root/.opencrabs/profiles/ops/opencrabs-dev/tools.log):
-#     {"ts":"…Z","tool":"oc-x","args":"…","exit":0,"secs":1.2,"extra":{}}
+#     {"ts":"…Z","tool":"oc-x","actor":"<uuid>","args":"…","exit":0,"secs":1.2,"extra":{}}
+#
+# actor — $OC_ACTOR (a session/role uuid) when set, else "unknown". Every
+# oc-* invocation must carry OC_ACTOR=<session-uuid> (owner rule 2026-08-30)
+# so floods/behavior stay attributable after the fact (ledger-beats-memory
+# guard); an unset tool logs "unknown" so gaps are visible, never silent.
 #
 # Filterable/searchable by design — jq recipes live in SKILL.md §Unified
 # tools log. Per-tool journals (the logging law) are UNTOUCHED: journals stay
@@ -65,11 +70,12 @@ oc_log_finish() {
   line="$(jq -cn \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg tool "$OC_LOG_TOOL" \
+    --arg actor "${OC_ACTOR:-unknown}" \
     --arg args "${OC_LOG_ARGS:0:500}" \
     --argjson exit "$rc" \
     --arg secs "$secs" \
     --argjson extra "${OC_LOG_EXTRA:-{\}}" \
-    '{ts:$ts, tool:$tool, args:$args, exit:$exit, secs:($secs|tonumber), extra:$extra}' 2>/dev/null)" || return 0
+    '{ts:$ts, tool:$tool, actor:$actor, args:$args, exit:$exit, secs:($secs|tonumber), extra:$extra}' 2>/dev/null)" || return 0
   [ -n "$line" ] || return 0
   logf="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
   mkdir -p "$(dirname "$logf")" 2>/dev/null

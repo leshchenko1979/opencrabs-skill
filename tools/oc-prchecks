@@ -11,11 +11,14 @@
 #
 # v0.4.48 Duty-7 rebuild (field lesson, run 33277921811): workflow_dispatch
 # runs set headSha to the DISPATCH REF (the carrier branch head), NEVER to the
-# `-f ref=<sha>` input — the old sha-bound filter could never match. Adoption
-# is now: event==workflow_dispatch AND headBranch==carrier AND
-# createdAt>=dispatch_ts, earliest-wins, under a dispatch lock so two lanes
-# dispatching concurrently cannot adopt each other's run. `--repo` also accepts
-# a repo/worktree PATH (resolved via its origin remote).
+# `-f ref=<sha>` input — an old sha-bound filter on the INPUT could never match.
+# v0.4.53 (owner-approved headSha adoption, rebuilt after a phantom): the
+# selector now matches headSha==RESOLVED-CARRIER-HEAD (verified: every run lists
+# the same carrier head, so this is a hard always-true gate for valid carrier
+# dispatches, not a per-input discriminator), with a -5s-buffered window floor
+# and LATEST-wins, all under the shared dispatch lock held through adoption.
+# Cross-lane decoy adoption is impossible because the lock serializes
+# dispatch+adopt and the newest run in window is always this lane's own.
 #
 # Usage:
 #   oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
@@ -62,10 +65,14 @@ EOS
 
 # ---------- selftest (offline, injectable gh shim) ---------------------------
 mk_shim() { # $1=path $2=scenario — emits a gh stub serving canned fixtures.
-  # run list is CARRIER-SHAPED like reality (v0.4.48 field lesson): headSha on
-  # workflow_dispatch runs is the carrier ref, so adoption filters on
-  # event/headBranch/createdAt. Decoys: wrong event (333), wrong branch (444),
-  # createdAt before dispatch (555), later eligible run (222).
+  # run list is CARRIER-SHAPED like reality (v0.4.48 field lesson + v0.4.53):
+  # headSha on workflow_dispatch runs IS the carrier ref (all runs share the
+  # carrier head), so the selector hard-matches headSha==carrier head and the
+  # window discriminates (buffered floor + LATEST-wins: under the shared lock a
+  # newer carrier run can only be this lane's own). Decoys: wrong event (333),
+  # wrong branch (444), createdAt before the buffered floor (555); 222 = the
+  # lane's own newly-created run (newest — must be adopted); 111 = an older run
+  # the OLD earliest-wins rule would decoy-adopt.
   cat > "$1" <<EOS
 #!/usr/bin/env bash
 S="$2"
@@ -76,16 +83,19 @@ case "\$*" in
   *"api repos/"*"contents/"*)
     [ "\$S" = "yml_missing" ] && exit 1
     printf '{"name":"pr-checks.yml"}\n' ;;
+  *"api repos/"*"git/ref/heads/"*)
+    # emulate gh api --jq: the tool asks for '.object.sha', gh returns ONLY the sha
+    printf '%s\n' 'ffffffffffffffffffffffffffffffffffffffff' ;;
   *"workflow run"*)
     [ "\$S" = "dispatch_fail" ] && exit 1
     exit 0 ;;
   *"run list"*)
     case "\$S" in
       resolve_timeout)
-        printf '[{"databaseId":333,"event":"push","headBranch":"ci/quick-build-linux","createdAt":"%s"},{"databaseId":555,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","createdAt":"%s"}]\n' \
+        printf '[{"databaseId":333,"event":"push","headBranch":"ci/quick-build-linux","headSha":"ffffffffffffffffffffffffffffffffffffffff","createdAt":"%s"},{"databaseId":555,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","headSha":"ffffffffffffffffffffffffffffffffffffffff","createdAt":"%s"}]\n' \
           "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '-60 seconds' +%Y-%m-%dT%H:%M:%SZ)" ;;
       *)
-        printf '[{"databaseId":222,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","createdAt":"%s"},{"databaseId":111,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","createdAt":"%s"},{"databaseId":333,"event":"push","headBranch":"ci/quick-build-linux","createdAt":"%s"},{"databaseId":444,"event":"workflow_dispatch","headBranch":"main","createdAt":"%s"},{"databaseId":555,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","createdAt":"%s"}]\n' \
+        printf '[{"databaseId":222,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","headSha":"ffffffffffffffffffffffffffffffffffffffff","createdAt":"%s"},{"databaseId":111,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","headSha":"ffffffffffffffffffffffffffffffffffffffff","createdAt":"%s"},{"databaseId":333,"event":"push","headBranch":"ci/quick-build-linux","headSha":"ffffffffffffffffffffffffffffffffffffffff","createdAt":"%s"},{"databaseId":444,"event":"workflow_dispatch","headBranch":"main","headSha":"ffffffffffffffffffffffffffffffffffffffff","createdAt":"%s"},{"databaseId":555,"event":"workflow_dispatch","headBranch":"ci/quick-build-linux","headSha":"ffffffffffffffffffffffffffffffffffffffff","createdAt":"%s"}]\n' \
           "\$(date -u -d '+9 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '+5 seconds' +%Y-%m-%dT%H:%M:%SZ)" "\$(date -u -d '-30 seconds' +%Y-%m-%dT%H:%M:%SZ)" ;;
     esac ;;
   *"run view"*"--json jobs"*)
@@ -123,8 +133,8 @@ do_selftest() {
   run_t yml_missing "$SHA";          [ "$T_RC" -eq 4 ] && t_ok "yml missing on carrier -> 4 (LOUD)" || t_bad "yml missing (rc=$T_RC)"
   run_t dispatch_fail "$SHA";        [ "$T_RC" -eq 4 ] && t_ok "dispatch fail -> 4" || t_bad "dispatch fail (rc=$T_RC)"
   run_t green "$SHA"
-  if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"adopted run=111"*"VERDICT GREEN"*"runs/111"*) true ;; *) false ;; esac; then
-    t_ok "time-window adoption picks earliest eligible (111; decoys 222/333/444/555 ignored) -> GREEN"
+  if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"adopted run=222"*"VERDICT GREEN"*"runs/222"*) true ;; *) false ;; esac; then
+    t_ok "headSha+window adoption picks own newest run (222; headSha==carrier, 333/444/555 decoys + old 111 ignored) -> GREEN"
   else t_bad "adoption/GREEN (rc=$T_RC out=$T_OUT)"; fi
   run_t resolve_timeout "$SHA";      [ "$T_RC" -eq 4 ] && t_ok "adoption timeout (decoys only) -> 4" || t_bad "adoption timeout (rc=$T_RC)"
   run_t fmt_failed "$SHA"
@@ -134,7 +144,7 @@ do_selftest() {
   run_t fmt_skipped "$SHA";          [ "$T_RC" -eq 3 ] && t_ok "fmt skipped -> 3 RED" || t_bad "fmt skipped (rc=$T_RC)"
   run_t job_failed "$SHA";           [ "$T_RC" -eq 3 ] && t_ok "job failed -> 3 RED" || t_bad "job failed (rc=$T_RC)"
   run_t inflight "$SHA" --wait 1
-  if [ "$T_RC" -eq 5 ] && case "$T_OUT" in *"runs/111"*) true ;; *) false ;; esac; then
+  if [ "$T_RC" -eq 5 ] && case "$T_OUT" in *"runs/222"*) true ;; *) false ;; esac; then
     t_ok "in-flight timeout -> 5 with run URL for resume"
   else t_bad "in-flight (rc=$T_RC out=$T_OUT)"; fi
   # journal line present (extra.verdict)
@@ -252,12 +262,27 @@ oc_log_extra "dispatch" "ok"
 oc_log_extra "dispatch_ts" "$DISPATCH_TS"
 
 RUN_ID=""
+# Adoption, headSha-corrected (owner-approved fix 2026-08-30, rebuilt after the
+# phantom): on a workflow_dispatch run headSha is ALWAYS the carrier ref
+# (v0.4.48 field lesson, re-verified 2026-08-30 — every run lists the same
+# carrier head fc1dc955), never the `-f ref=` input. So the selector matches
+# headSha==RESOLVED-CARRIER-HEAD (a hard, always-true gate for valid dispatches;
+# filters non-carrier events). The real cross-lane discriminator is the SHARED
+# dispatch lock, already held through dispatch+adoption (flock -u 8 after the
+# loop) so no two lanes interleave here. Two guards against the documented decoy
+# (00:38:38Z race where both lanes adopted one run): (a) window floor buffered
+# -5s — GitHub createdAt jitter can round a just-dispatched run below a strict
+# `>= DISPATCH_TS` floor and self-exclude it; (b) LATEST-wins (.[-1]) not
+# earliest — under the lock the newest carrier dispatch IS this lane's own run,
+# so a stale older lane's run is never adopted.
+CARRIER_HEAD="$("$GH_BIN" api "repos/$REPO/git/ref/heads/$CARRIER" --jq '.object.sha' 2>/dev/null || true)"
+TS_FLOOR="$(date -u -d "$DISPATCH_TS -5 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$DISPATCH_TS")"
 deadline=$(( $(date +%s) + RESOLVE_WAIT ))
 while [ -z "$RUN_ID" ]; do
   LIST="$("$GH_BIN" run list --workflow pr-checks.yml --repo "$REPO" --limit 30 \
-    --json databaseId,createdAt,event,headBranch 2>/dev/null)" || LIST="[]"
-  RUN_ID="$(printf '%s' "$LIST" | jq -r --arg br "$CARRIER" --arg ts "$DISPATCH_TS" \
-    '[.[] | select(.event=="workflow_dispatch" and .headBranch==$br and .createdAt >= $ts)] | sort_by(.createdAt) | .[0].databaseId // empty' 2>/dev/null)"
+    --json databaseId,createdAt,event,headBranch,headSha 2>/dev/null)" || LIST="[]"
+  RUN_ID="$(printf '%s' "$LIST" | jq -r --arg br "$CARRIER" --arg ch "${CARRIER_HEAD:-}" --arg ft "$TS_FLOOR" \
+    '[.[] | select(.event=="workflow_dispatch" and .headBranch==$br and ($ch=="" or .headSha==$ch) and .createdAt >= $ft)] | sort_by(.createdAt) | .[-1].databaseId // empty' 2>/dev/null)"
   [ -n "$RUN_ID" ] && break
   [ "$(date +%s)" -ge "$deadline" ] && {
     echo "$PROG: no run adopted within ${RESOLVE_WAIT}s (dispatch ts $DISPATCH_TS, carrier $CARRIER)" >&2
