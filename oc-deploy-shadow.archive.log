@@ -155,3 +155,9 @@
 2026-08-30T09:23:26Z	ship	68e92c1f51fe31c18320d7084f4a9a107d6ba221	telegram	fetch-fail	stage=S3
 2026-08-30T09:23:50Z	watch	68e92c1f51fe31c18320d7084f4a9a107d6ba221	-	ALERT:stray	stage=S3
 2026-08-30T09:23:55Z	ship	68e92c1f51fe31c18320d7084f4a9a107d6ba221	telegram	dispatched	stage=S3
+2026-08-30T09:50:10Z	features-resolve	-	telegram	carrier-default	stage=S3
+2026-08-30T09:50:10Z	watch	68e92c1f51fe31c18320d7084f4a9a107d6ba221	-	ALERT:stray	stage=S3
+2026-08-30T09:50:13Z	swap	68e92c1f51fe31c18320d7084f4a9a107d6ba221	telegram	handed-off:oc-swap-68e92c1f-1788083413	stage=S3
+2026-08-30T09:51:26Z	swap	68e92c1f51fe31c18320d7084f4a9a107d6ba221	telegram	deployed	stage=S3
+2026-08-30T09:51:29Z	features-resolve	-	telegram	carrier-default	stage=S3
+2026-08-30T09:51:30Z	watch	68e92c1f51fe31c18320d7084f4a9a107d6ba221	-	clean:deployed-sha	stage=S3
