@@ -95,7 +95,10 @@ ruling 2026-08-29 (design: oc-work/oc-ledger-design-20260829.md).
 target ONLY (a) lanes actively MID-CYCLE at publish time whose duties the
 change touches and which would hit the gap within THIS cycle, and (b) workers
 more than THREE versions behind who act substantively while stale (skew-chase
-below stands). An `[ALL]` broadcast survives solely for breaking
+below stands). **Drift tracking is mechanical (v0.4.52):** each lane's
+`oc-ledger ack <uuid> <version>` row records its last-acked skill version —
+the ">3 versions behind" test reads those rows, not memory — and the
+lane-side pull protocol lives in editor.md §Mid-cycle skill drift. An `[ALL]` broadcast survives solely for breaking
 security/deploy-gate changes — rules whose absence produces wrong rulings the
 same day. (The former "CONSENT-REGISTER class" name retired with the consent
 process 2026-08-28.) Everything else waits for each lane's next boundary.

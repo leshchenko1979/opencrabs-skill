@@ -83,6 +83,31 @@ editor-facing duties:
 - The `/tq-approve` forum-topic flow and Gatus DM reports are OTHER lanes'
   documented jobs — not yours.
 
+## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52, owner Go 2026-08-30)
+
+Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep
+shipping mid-flight (cadence is FIRE territory). Skill files are plain disk
+files read on demand — nothing is cached in-session — so "reload" = re-read:
+
+1. On every turn that resumes from a detached long command (result injection)
+   or wakes to a `session_notify`, FIRST compare
+   `grep -m1 '^version:' SKILL.md` against the version recorded at your claim.
+2. Drift → re-read SKILL.md + editor.md in full from disk, then stamp
+   `oc-ledger ack <your-roster-uuid> <new-version>` — the ack row is the
+   mechanical adoption record (supervisor Duty 3 reads it for skew-chase).
+3. Apply changed rules from the NEXT phase boundary — a phase already in
+   flight finishes under the rules it started under. Doc-only drift adopts
+   immediately; workflow-shape drift waits for the boundary.
+4. `tools/*` need NO reload: every invocation is a fresh process off disk,
+   always the newest version — that is also why tool-level fixes (vocabulary,
+   sweep lists) never strand a running lane.
+
+No reload volley is owed to you (v0.4.19 disk absorption stands) — the
+pull-check is YOUR duty; supervisor notifies stay targeted per Duty 3.
+*(Commissioned 2026-08-30 with the overnight gh-flood / CI-re-run
+investigation — stale rituals are suspected to survive in sessions that never
+re-check, not on disk.)*
+
 ## Phase 1 — Claim on the fork BEFORE editing
 
 0. **Claim-time fresh re-read (v0.4.14, proposal P2)**: FIRST action after
