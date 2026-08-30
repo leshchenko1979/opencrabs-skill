@@ -22,12 +22,13 @@
 #                                          runtime artifacts (B1–B4 option b);
 #                                          --bundle also sweeps state receipts:
 #                                          tools.log baseline.json orders.json
-#                                          (v0.4.49 — seal-state writes them,
-#                                          swap chain never self-commits);
+#                                          journal (v0.4.49/51 — seal-state and
+#                                          the swap chain write them but never
+#                                          self-commit);
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
-#   --selftest                             fixture suite (47 cases)
+#   --selftest                             fixture suite (48 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -333,9 +334,11 @@ cmd_commit_pending() {
     if [ "$bundle" -eq 1 ]; then
       # v0.4.49: seal-state receipts (baseline.json / orders.json) join the
       # sweep — the swap chain writes them but never self-commits (the 6a2e66e
-      # manual-commit gap; owner "Go with 1" 2026-08-29).
+      # manual-commit gap; owner "Go with 1" 2026-08-29). v0.4.51: journal/
+      # joins too — smoke journals land here, git-tracked since 1232ccd; the
+      # overnight cbc77058 swap (smoke-34) proved the gap live.
       local state_hits=""
-      for p in tools.log baseline.json orders.json; do
+      for p in tools.log baseline.json orders.json journal; do
         [ -n "$(git -C "$sd" status --porcelain -- "$p" 2>/dev/null)" ] && state_hits="$state_hits $p"
       done
       if [ -n "$state_hits" ]; then
@@ -366,7 +369,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (47 cases) ------------------------------------------------------
+# ---- selftest (48 cases) ------------------------------------------------------
 cmd_selftest() {
   export OC_TOOLS_NOLOG=1
   local T P=0 F=0
@@ -455,6 +458,11 @@ EOF
   echo '{"sha":"fixture"}' > "$T/state/baseline.json"
   bash "$ME" commit-pending --bundle | grep -q "baseline.json" && ok || bad "commit-pending-baseline-sweep"
   git -C "$T/state" status --porcelain baseline.json | grep -q . && bad "commit-pending-baseline-left-dirty" || ok
+  # journal/ sweep (v0.4.51) — smoke journals land in the state dir, tracked
+  # since 1232ccd; the overnight cbc77058 swap proved the gap
+  mkdir -p "$T/state/journal"
+  echo '{"probe":true}' > "$T/state/journal/sweep-probe.json"
+  bash "$ME" commit-pending --bundle | grep -q "state runtime files committed.*journal" && ok || bad "commit-pending-journal-sweep"
   # 32c: mirror push (v0.4.50) — a configured origin receives branch + tags;
   # bare fixture remote stands in for GitHub (offline selftest rule)
   git init -q --bare "$T/mirror.git"
