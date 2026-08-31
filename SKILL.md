@@ -8,7 +8,7 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.56
+version: 0.4.57
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -57,16 +57,17 @@ register + test source of truth (archived compiler-step anchors stripped
 | `./tools/oc-watchdog-check [watch]` | thin cron-friendly alias over `oc-deploy watch`: accepts optional leading `watch`, strips no-op `--baseline`, passes verdict + rc through | passthrough: 0 WATCH-CLEAN / 2 WATCH-ALERT |
 | `./tools/oc-consent-check` | **RETIRED 2026-08-28 18:50Z** (owner order: deploy consent ELIMINATED — GREEN carrier run + artifact verify IS the authorization). Archived at `tools/archive/oc-consent-check`, audit history only; ledger `consents[]` rows kept as record. Upstream-PR owner-word gate unaffected. | — |
 | `./tools/oc-pr-atomicity <pr-number>` | atomicity gate (editor Phase 7 / issue triage) | 0 ok / 2 atomicity-violation / 4 api |
-| `./tools/oc-ledger <verb>` | atomic ledger writes under flock: `stamp <kind> --what ...` (ruling/idea/idea-verdict/design-feedback/design-locked/review-battery/incident/note/ack/**claim** — v1.1 vocabulary since v0.4.48: `claim` is the fork-issue claiming row, Duty-7 IDEA fix), `sync --version v --why ...` (version-bump sync, battery-gated, commits both repos + tag; **chains `oc-shadow-rotate` as its tail step** — merge A, v0.4.48; **mirror push tail step since v0.4.50** — pushes branch + `v0.4.*` tags to `origin` when one is configured, WARN-only never gates; off-box durability: `leshchenko1979/opencrabs-skill` wired as live mirror of the skill repo per owner Attach 2026-08-30; STATE repo mirrored to `leshchenko1979/opencrabs-dev-state` (private, owner Go 2026-08-30) — both pushed mechanically by this tail step), `check-version`, `cadence`, `ack` (ack rows double as skill-drift adoption records, v0.4.52 — editor.md §Mid-cycle skill drift), `enroll`, `commit-pending [--bundle]` (pending-stamp commit sweep — item-2(b), Duty-3/4 cadence; `--bundle` also sweeps STATE receipts `tools.log`/`baseline.json`/`orders.json`/`journal/` — v0.4.49/51: seal-state and the swap chain write them per swap, never self-commit) | 0 ok / 1 verdict-fail / 2 usage / 3 ledger / 4 write / 5 battery-gate / 6 version |
+| `./tools/oc-ledger <verb>` | atomic ledger writes under flock: `stamp <kind> --what ...` (ruling/idea/idea-verdict/design-feedback/design-locked/review-battery/incident/note/ack/roster-enroll/**claim** — v1.1 vocabulary since v0.4.48: `claim` is the fork-issue claiming row, Duty-7 IDEA fix), `sync --version v --why ...` (version-bump sync, battery-gated, commits both repos + tag; **chains `oc-shadow-rotate` as its tail step** — merge A, v0.4.48; **mirror push tail step since v0.4.50** — pushes branch + `v0.4.*` tags to `origin` when one is configured, WARN-only never gates; off-box durability: `leshchenko1979/opencrabs-skill` wired as live mirror of the skill repo per owner Attach 2026-08-30; STATE repo mirrored to `leshchenko1979/opencrabs-dev-state` (private, owner Go 2026-08-30) — both pushed mechanically by this tail step), `check-version`, `cadence`, `ack` (ack rows double as skill-drift adoption records, v0.4.52 — editor.md §Mid-cycle skill drift), `enroll`, `commit-pending [--bundle]` (pending-stamp commit sweep — item-2(b), Duty-3/4 cadence; `--bundle` also sweeps STATE receipts `tools.log`/`baseline.json`/`orders.json`/`journal/` — v0.4.49/51: seal-state and the swap chain write them per swap, never self-commit) | 0 ok / 1 verdict-fail / 2 usage / 3 ledger / 4 write / 5 battery-gate / 6 version |
 | `./tools/oc-shadow-rotate [--dry-run]` | INTERNAL tail step of `oc-ledger sync` since v0.4.48 (merge A) — appends the live (gitignored) `oc-deploy-shadow.log` to the git-tracked `oc-deploy-shadow.archive.log`, then truncates the live file; bump cadence IS the rotation cadence now. Standalone invocation = manual fallback | 0 ok-or-noop / 1 usage / 2 io-fail |
-| `./tools/oc-review-persist <lens> <text\|@file\|->` | lens report → disk at `oc-work/skill-review-<lens>-<YYYYMMDD>.md` + index receipt line (sha256 + bytes, re-read verified) — the ghost-incident cure: no review leaves a session as chat-only text | 0 persisted / 2 usage / 3 re-read-mismatch / 4 write-fail |
+| `./tools/oc-review-persist <lens> <text\|@file\|->` | lens report → disk at `${OC_REVIEW_DIR:-/tmp}/skill-review-<lens>-<YYYYMMDD>.md` + index receipt line (sha256 + bytes, re-read verified) — the ghost-incident cure: no review leaves a session as chat-only text | 0 persisted / 2 usage / 3 re-read-mismatch / 4 write-fail |
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C]` | one-command PR-lane lint gate (editor.md Phase 5): FULL-sha shape gate → LOUD yml-on-carrier check → dispatch under a state-dir dispatch LOCK → **time-window run adoption** (v0.4.48 Duty-7 fix: workflow_dispatch headSha is the carrier ref, never the `-f ref` input, so adoption filters `event==workflow_dispatch + headBranch==carrier + createdAt>=dispatch_ts` earliest-wins, under the lock — concurrent-lane safe) → watch → per-job/per-step report with the **fmt soft-fail exposed**; wraps the raw `gh` row below; `--repo` accepts a slug or a repo/worktree PATH (resolved via its origin remote) | 0 GREEN / 2 usage-or-shape / 3 RED / 4 dispatch-or-api-or-lock-timeout / 5 in-flight-timeout |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic for §Upstream relations item 1: fetch + merge-base + `AHEAD`/`BEHIND` TSV + patch-id `ABSORBED-CANDIDATE` rows; READ-ONLY (never merges/pushes/rebases) — PROPOSE/WAIT judgment stays human | 0 clean / 1 delta (verdict) / 2 usage / 3 fetch-or-git-fail |
 | `./tools/oc-wt add\|remove <task> ...` | editor Phase 2 worktree ritual: `add` = prune → fetch → validate local branch → behind-base gate → worktree add → CHAINED `oc-index-worktree` (un-skippable); `remove` = dirty-tree gate, `--force` journals the destroyed listing FIRST; validates branches, never creates them | 0 ok / 2 usage / 3 path-exists-or-dirty / 4 index-failed / 5 repo-or-branch-missing / 6 behind-base |
 | `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | **manual fallback — prefer `./tools/oc-prchecks`** (row above). PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) | CI run green/red — dispatch via `gh workflow run`, watch with `gh run watch` |
 
-Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (incl. the
-`oc-seal-state` IFS-join regression guard). Must stay green before any version
+Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (a CODE
+TESTS-class battery; the `oc-seal-state` IFS-join case is one guard inside it).
+Must stay green before any version
 bump; tools are never edited without re-running it.
 
 ### Unified tools log (v0.4.36)
@@ -265,7 +266,11 @@ uses them as a licence to fix outside its scope.
 - This box has **no sanctioned Rust toolchain** — CI is the compiler (ruling
   2026-06-16, hardened owner-GO 2026-08-28). No cargo/rustc/clippy in ANY form —
   install, PATH-prepend, explicit path, even an invocation that exits 0 is a
-  violation. Sanctioned local: `/usr/local/bin/rustfmt` wrapper (fmt only); modum
+  violation. Sanctioned local: `/usr/local/bin/rustfmt` wrapper (fmt only) —
+  **the wrapper is NEWER than CI's rustfmt: cosmetic diffs it flags on
+  CI-green committed code are KEPT AS-IS, not applied; fix only formatting
+  artifacts you introduced yourself** (Duty-4 2026-08-31, hit ×2: ed126fcb
+  re-round + #30 port lane); modum
   RETIRED 2026-08-28; lint evidence = GREEN pr-checks.yml run. Full ban list:
   editor.md §Box law.
 - Live binary: `/usr/local/bin/opencrabs`. Daemons run as systemd **user** units
@@ -354,7 +359,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    toward upstream. Dispatch locally via `gh workflow run --ref ci/<name>`.
    After every upstream merge/port verify parity mechanically:
    `./tools/oc-ci-parity` (exit 0 identical / 4 DRIFT listing / 6 api-fail) +
-   carrier proof-dispatch (archived: tools/archive/compiler.md Step 7). *(owner order 2026-08-26)* **(c) DRIFT PERMANENT — owner ruling via "Fix all" 2026-08-27:** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by restoring the file.
+   carrier proof-dispatch (archived: tools/archive/compiler.md Step 7). *(owner order 2026-08-26)* **DRIFT PERMANENT — owner ruling via "Fix all" 2026-08-27:** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by restoring the file.
 7. **Fork branch lifecycle (v0.4.24, owner "clean" sweep 2026-08-27)**: the fork carries
    PERMANENT refs only — `main` (sync mirror; pre-S3: compiler rebase-port), `ci/quick-build-linux`
    (carrier), `backup/pre-port-*` (until the port cycle settles) — plus short-lived
@@ -409,8 +414,8 @@ links; development-time upstream contact is PR-comments only (supersedes the
   (chat / ledger) before denying any permission** (v0.4.17 lesson, 2026-08-26).
   Deploy consent RETIRED 2026-08-28 (owner 18:50Z): GREEN carrier run + artifact
   verify IS the authorization; `oc-consent-check` archived at `tools/archive/`;
-  ledger `consents[]` historical only. Upstream-PR owner-word gate UNTOUCHED:
-  silence is NOT consent; ad-hoc PRs forbidden.
+  ledger `consents[]` historical only. Upstream-PR owner-word gate UNTOUCHED
+  (APPROVAL row above is the single statement of it — silence is NOT consent).
 - ROLE-SCOPED BROADCASTS: messages reach non-owning roles ONLY when tagged
   [ALL]; otherwise send strictly to the owning role. CC-everyone is noise.
 - ONE formal SMOKE verdict per editor-feature lane: exactly one PASS/FAIL;
@@ -425,11 +430,11 @@ links; development-time upstream contact is PR-comments only (supersedes the
   id + sha + step evidence, so any verdict is re-derivable from logs alone. Source-precedence ranks EVIDENCE quality only - it never conflates kinds: a green CI/build log stays CODE-TEST/build evidence and substitutes nothing for a behavioral SMOKE pass.
 - UPSTREAM CI GATE (v0.4.22, owner directive 2026-08-27; encodes
   adolfousier/opencrabs CONTRIBUTING.md): NO upstream PR leaves a lane until
-  the owning worktree passed the exact CI triad with captured exit codes:
-  - `cargo fmt --all -- --check`
-  - `cargo clippy --lib --bins --tests --all-features -- -D warnings`
-  - `cargo test --all-features --verbose`
-  All three rc=0 BEFORE `gh pr create`; one red = fix cycle, not a filed
+  the owning worktree passed the CI gate — and since v0.4.28 the compiler is
+  CI, never local (Box law; local cargo in ANY form is a violation). The
+  evidence is the GREEN `pr-checks.yml` run on the PR head branch (fmt/clippy/
+  `cargo test --locked --all-features`) — canonical procedure:
+  editor.md §Phase 7 step 2c. One red = fix cycle, not a filed
   PR ("PRs that fail CI will not be reviewed" — their words). Receipts ride
   the PR prep beside smoke evidence. Gate covers shipworthiness only;
   owner approval + SMOKE pass remain separate required conditions.
@@ -437,7 +442,10 @@ links; development-time upstream contact is PR-comments only (supersedes the
   FILED before any fix work starts — on the FORK `leshchenko1979/opencrabs`
   (owner directive 2026-08-27: ALL new issues, upstream-code bugs and fork-only
   infra alike; upstream receives PRs only). Discoverer
-  files it (symptom + evidence); fixer claims via `Tackling` comment. Covers
+  files it (symptom + evidence); fixer claims via a `gh` comment on the issue +
+  an `oc-ledger claim` row (the `Tackling`-comment instruction is RETIRED —
+  upstream issue comments on OUR fork issues are the owner's lane only,
+  2026-08-27). Covers
   task starts (`editor.md` Phase 1) AND mid-loop finds: red-build bugs, failed
   smoke tests, defects in another editor's feature.
 - Restart scope: **`opencrabs-ops` ONLY.** The `family` and default-profile daemons
