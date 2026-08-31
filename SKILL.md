@@ -8,7 +8,7 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.57
+version: 0.4.58
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -63,6 +63,11 @@ register + test source of truth (archived compiler-step anchors stripped
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C]` | one-command PR-lane lint gate (editor.md Phase 5): FULL-sha shape gate → LOUD yml-on-carrier check → dispatch under a state-dir dispatch LOCK → **time-window run adoption** (v0.4.48 Duty-7 fix: workflow_dispatch headSha is the carrier ref, never the `-f ref` input, so adoption filters `event==workflow_dispatch + headBranch==carrier + createdAt>=dispatch_ts` earliest-wins, under the lock — concurrent-lane safe) → watch → per-job/per-step report with the **fmt soft-fail exposed**; wraps the raw `gh` row below; `--repo` accepts a slug or a repo/worktree PATH (resolved via its origin remote) | 0 GREEN / 2 usage-or-shape / 3 RED / 4 dispatch-or-api-or-lock-timeout / 5 in-flight-timeout |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic for §Upstream relations item 1: fetch + merge-base + `AHEAD`/`BEHIND` TSV + patch-id `ABSORBED-CANDIDATE` rows; READ-ONLY (never merges/pushes/rebases) — PROPOSE/WAIT judgment stays human | 0 clean / 1 delta (verdict) / 2 usage / 3 fetch-or-git-fail |
 | `./tools/oc-wt add\|remove <task> ...` | editor Phase 2 worktree ritual: `add` = prune → fetch → validate local branch → behind-base gate → worktree add → CHAINED `oc-index-worktree` (un-skippable); `remove` = dirty-tree gate, `--force` journals the destroyed listing FIRST; validates branches, never creates them | 0 ok / 2 usage / 3 path-exists-or-dirty / 4 index-failed / 5 repo-or-branch-missing / 6 behind-base |
+| `./tools/oc-drift-check <uuid> <claimed-ver> [--ack]` | editor §Mid-cycle skill drift step 1-2, mechanical: claimed vs live SKILL.md version; `--ack` delegates oc-ledger ack on drift | 0 no-drift / 1 DRIFT / 2 usage / 3 ledger |
+| `./tools/oc-toolaccum <uuid> [--days N]` | TOOL_ACCUM scan + repeat-offense arithmetic (per-tool failure counts in window, threshold 3) from tools.log | 0 clean / 1 repeat-offense / 2 usage / 3 log |
+| `./tools/oc-branch-sweep --repo <p> [--dry-run]` | branch-death proof (MERGED/ABSORBED/STALE/ACTIVE) + archive-then-delete for MERGED only; protected: base/HEAD/--keep regex | 0 nothing-deleted / 1 deletions / 2 usage / 3 git |
+| `./tools/oc-pr-fault-scope <pr#> --run <id>` | failing-files ∩ PR-files = IN-SCOPE/BASE-FAULT (2026-08-26 clippy-wall misattribution lesson, mechanical) | 0 IN-SCOPE / 1 BASE-FAULT / 2 usage / 3 gh |
+| `./tools/oc-ledger confirm <uuid>` | lens C #5: verifies the worker's latest claim (#N ref resolvable on the live fork) then flips workers[].confirmed=true — first verb to flip it (was unsanctioned hand-edit) | 0 confirmed / 2 usage / 3 verify-fail |
 | `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | **manual fallback — prefer `./tools/oc-prchecks`** (row above). PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) | CI run green/red — dispatch via `gh workflow run`, watch with `gh run watch` |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (a CODE
