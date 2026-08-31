@@ -91,11 +91,12 @@ SHADOW="$STATE_DIR/oc-deploy-shadow.log"
 DEPLOYED="$STATE_DIR/deployed.sha"
 DEPLOYED_META="$STATE_DIR/deployed.meta.json"
 JOURNAL_DIR="$STATE_DIR/oc-deploy/journal"
-VALIDATE="${OC_DEPLOY_VALIDATE:-$STATE_DIR/tools/oc-order-validate}"
+TOOLS_DIR="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")"   # script-relative (Duty-6 P0 fix 2026-08-31: $STATE_DIR/tools/ never existed post-split — latent ship breaker, lenses B+E)
+VALIDATE="${OC_DEPLOY_VALIDATE:-$TOOLS_DIR/oc-order-validate}"
 # CONSENT tool var retired 2026-08-28 (consent process eliminated by owner order)
-ARTVERIFY="${OC_DEPLOY_ARTVERIFY:-$STATE_DIR/tools/oc-artifact-verify}"
-SEAL="${OC_DEPLOY_SEAL:-$STATE_DIR/tools/oc-seal-state}"
-ATTRIB="${OC_DEPLOY_ATTRIB:-$STATE_DIR/tools/oc-attrib}"   # issue #24 D1: contributors/fanout backend
+ARTVERIFY="${OC_DEPLOY_ARTVERIFY:-$TOOLS_DIR/oc-artifact-verify}"
+SEAL="${OC_DEPLOY_SEAL:-$TOOLS_DIR/oc-seal-state}"
+ATTRIB="${OC_DEPLOY_ATTRIB:-$TOOLS_DIR/oc-attrib}"   # issue #24 D1: contributors/fanout backend
 REMOTE="${OC_DEPLOY_REMOTE:-https://github.com/leshchenko1979/opencrabs.git}"
 FORK="${OC_DEPLOY_FORK:-leshchenko1979/opencrabs}"
 CARRIER_REF="ci/quick-build-linux"
