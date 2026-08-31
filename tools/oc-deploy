@@ -615,6 +615,61 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: NOFANOUT still ran fanout"; }
   [ ! -f "$SD3/fanout.state" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: NOFANOUT marked state"; }
   [ ! -s "$NOTIFY_LOG" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: NOFANOUT notified"; }
+  # 17n. sidecar sync (#47): GREEN swap restarts STALE non-ops units, leaves
+  #      in-sync units untouched; sandbox systemctl shims + OC_SWAP_SIDECARS=2.
+  local SD4="$T/state4" SCJ
+  mkdir -p "$SD4/tools" "$SD4/backups" "$SD4/proc/111" "$SD4/proc/222" "$SD4/bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD4/tools/oc-artifact-verify"; chmod +x "$SD4/tools/oc-artifact-verify"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD4/tools/oc-seal-state";     chmod +x "$SD4/tools/oc-seal-state"
+  printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD4/workers-ledger.json"
+  echo prev > "$SD4/deployed.sha"
+  printf 'v1-artifact' > "$T/art/opencrabs"          # restamp: 17l consumed prior artifact
+  printf 'v0-current'  > "$T/bin/oc-fake2"; chmod +x "$T/bin/oc-fake2"
+  printf 'v1-artifact' > "$SD4/bin/fresh"            # sidecar binary after its restart == deployed content
+  printf 'v0-stale'    > "$SD4/bin/stale"
+  ln -sf "$SD4/bin/stale"  "$SD4/proc/111/exe"       # opencrabs.service        -> STALE
+  ln -sf "$T/bin/oc-fake2" "$SD4/proc/222/exe"       # opencrabs-family.service -> in-sync AFTER install
+  printf '#!/usr/bin/env bash\ncase "$1" in opencrabs.service) echo 111;; opencrabs-family.service) echo 222;; *) echo 0;; esac\n' > "$SD4/sc-show";   chmod +x "$SD4/sc-show"
+  printf '#!/usr/bin/env bash\necho opencrabs.service\necho opencrabs-family.service\necho opencrabs-ops.service\n' > "$SD4/sc-lister"; chmod +x "$SD4/sc-lister"
+  printf '#!/usr/bin/env bash\necho active\n' > "$SD4/sc-active"; chmod +x "$SD4/sc-active"
+  printf '#!/usr/bin/env bash\necho "$@" >> %s/sc-restarts.log\n[ "$1" = opencrabs.service ] && ln -sf %s/bin/fresh %s/proc/111/exe\nexit 0\n' "$SD4" "$SD4" "$SD4" > "$SD4/sc-restart"; chmod +x "$SD4/sc-restart"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD4" OC_SWAP_TARGET="$T/bin/oc-fake2" \
+    OC_SWAP_BACKUP_DIR="$SD4/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_SWAP_SIDECARS=2 OC_SWAP_PRIMARY_UNIT=opencrabs-ops.service \
+    OC_SWAP_SIDECAR_LISTER="$SD4/sc-lister" OC_SWAP_SIDECAR_SHOW="$SD4/sc-show" \
+    OC_SWAP_SIDECAR_ACTIVE="$SD4/sc-active" OC_SWAP_SIDECAR_RESTART="$SD4/sc-restart" \
+    OC_SWAP_PROC_PREFIX="$SD4/proc" \
+    OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+    OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_REPO="$T/crepo" OC_DEPLOY_REMOTE="$T/remote.git" \
+    "$SELF_BIN" swap-execute --sha cccccccccccccccccccccccccccccccccccccccc \
+    --run 778 --features telegram --artifact-dir "$T/art" 2>&1)"; rc=$?
+  check_rc "sidecar-green-rc" $rc 0
+  check_has "sidecar-complete" "$out" "SWAP COMPLETE"
+  check_has "sidecar-summary" "$out" "SIDECAR SYNC: restarted=1 in_sync=1 failed=0"
+  grep -q "opencrabs.service" "$SD4/sc-restarts.log" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: stale sidecar not restarted"; }
+  grep -q "opencrabs-family.service" "$SD4/sc-restarts.log" \
+    && { fail=$((fail+1)); echo "SELFTEST FAIL: in-sync sidecar was restarted"; } || pass=$((pass+1))
+  SCJ="$(grep -l '"step":"sidecar-sync"' "$SD4"/oc-deploy/journal/*.jsonl 2>/dev/null | head -1)"
+  [ -n "$SCJ" ] && grep -q '"action":"restarted"' "$SCJ" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: sidecar-sync journal line missing"; }
+  # 17o. sidecar guard: sandbox default (SIDECARS unset) => sidecars SKIPPED,
+  #      zero restarts even though units would look stale.
+  out="$(OC_DEPLOY_STATE_DIR="$SD4" OC_SWAP_TARGET="$T/bin/oc-fake2" \
+    OC_SWAP_BACKUP_DIR="$SD4/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+    OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_REPO="$T/crepo" OC_DEPLOY_REMOTE="$T/remote.git" \
+    "$SELF_BIN" swap-execute --sha cccccccccccccccccccccccccccccccccccccccc \
+    --run 779 --features telegram --artifact-dir "$T/art" 2>&1)"; rc=$?
+  check_rc "sidecar-guard-rc" $rc 0
+  N_SC="$(grep -h '"step":"sidecar-sync"' "$SD4"/oc-deploy/journal/*.jsonl 2>/dev/null | grep -c 'drill-or-sandbox-or-disabled')"
+  [ "$N_SC" -ge 1 ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: sandbox sidecar guard did not skip"; }
+  [ "$(wc -l < "$SD4/sc-restarts.log")" = "1" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: guard run performed sidecar restarts"; }
   # 17m. poll RED scan (issue #24 wiring): latest failed carrier run fans out
   #      (blame path via 9001 annotations); second poll is idempotent no-op.
   rm -f "$SD/oc-deploy/journal/"fanout-888-*.jsonl   # clear piggyback noise from earlier poll cases
@@ -1054,6 +1109,73 @@ swap_execute() {
   $RESTART_CMD >/dev/null 2>&1; RRC=$?
   jline restart "$RRC" "$(jq -cn --arg u "opencrabs-ops.service" --argjson e "$RRC" '{unit:$u, systemd_run_exit:$e}')"
 
+  # --- sidecar sync (#47): the default/family daemons run the SAME binary as
+  #     ops; a swap that bounces only ops leaves them stale (found live
+  #     2026-08-31: default+family were 2 days behind after 3 swaps). After a
+  #     GREEN ops post-verify, every active opencrabs-*.service user unit
+  #     (primary excluded) whose MainPID exe sha != deployed sha is restarted
+  #     and re-verified. NON-FATAL by design: a sidecar that refuses to bounce
+  #     is journaled (sidecar-unit exit=1), never fails the swap.
+  #     Gates: DRILL -> off; sandbox (non-default SWAP_TARGET) -> off unless
+  #     OC_SWAP_SIDECARS=2 (selftest force); OC_SWAP_SIDECARS=0 -> always off.
+  #     Selftest shims: OC_SWAP_SIDECAR_LISTER/SHOW/ACTIVE/RESTART (command per
+  #     unit) + OC_SWAP_PROC_PREFIX (fake /proc) + OC_SWAP_PRIMARY_UNIT.
+  sidecar_sync() { # $1 = deployed binary sha ; GREEN path only
+    local EXP="$1" EN=1 U PID PSHA ACT RRC NPID NSHA
+    local RESTARTED=0 INSYNC=0 FAILED=0 DETAIL="[]"
+    [ "$DRILL" = "1" ] && EN=0
+    [ "${OC_SWAP_SIDECARS:-1}" = "0" ] && EN=0
+    if [ "$SWAP_TARGET" != "/usr/local/bin/opencrabs" ] && [ "${OC_SWAP_SIDECARS:-1}" != "2" ]; then EN=0; fi
+    if [ "$EN" != "1" ]; then
+      jline sidecar-sync 0 '{"skipped":"drill-or-sandbox-or-disabled"}'
+      return 0
+    fi
+    local LIST
+    LIST="$( { if [ -n "${OC_SWAP_SIDECAR_LISTER:-}" ]; then "$OC_SWAP_SIDECAR_LISTER"; else systemctl --user list-units --plain --no-legend --all 'opencrabs-*.service' 2>/dev/null | awk '{print $1}'; fi; } 2>/dev/null || true)"
+    while IFS= read -r U; do
+      [ -n "$U" ] || continue
+      [ "$U" = "${OC_SWAP_PRIMARY_UNIT:-opencrabs-ops.service}" ] && continue
+      ACT="$( { if [ -n "${OC_SWAP_SIDECAR_ACTIVE:-}" ]; then "$OC_SWAP_SIDECAR_ACTIVE" "$U"; else systemctl --user is-active "$U" 2>/dev/null; fi; } 2>/dev/null || echo unknown)"
+      if [ "$ACT" != "active" ]; then
+        DETAIL="$(jq -cn --argjson d "$DETAIL" --arg u "$U" --arg a "$ACT" '$d + [{unit:$u, action:"skip-inactive", active:$a}]')"
+        continue
+      fi
+      PID="$( { if [ -n "${OC_SWAP_SIDECAR_SHOW:-}" ]; then "$OC_SWAP_SIDECAR_SHOW" "$U"; else systemctl --user show -p MainPID --value "$U" 2>/dev/null; fi; } 2>/dev/null || echo 0)"
+      PSHA=""
+      if [ -n "$PID" ] && [ "$PID" != "0" ] && [ -r "${OC_SWAP_PROC_PREFIX:-/proc}/$PID/exe" ]; then
+        PSHA="$(sha256sum "${OC_SWAP_PROC_PREFIX:-/proc}/$PID/exe" 2>/dev/null | cut -d' ' -f1)"
+      fi
+      if [ -z "$PSHA" ]; then
+        DETAIL="$(jq -cn --argjson d "$DETAIL" --arg u "$U" --arg p "$PID" '$d + [{unit:$u, action:"skip-no-proc", mainpid:$p}]')"
+        continue
+      fi
+      if [ "$PSHA" = "$EXP" ]; then
+        INSYNC=$((INSYNC+1))
+        DETAIL="$(jq -cn --argjson d "$DETAIL" --arg u "$U" '$d + [{unit:$u, action:"in-sync"}]')"
+        continue
+      fi
+      # stale sidecar: bounce + re-verify, journal both ways, never fatal
+      if [ -n "${OC_SWAP_SIDECAR_RESTART:-}" ]; then "$OC_SWAP_SIDECAR_RESTART" "$U" >/dev/null 2>&1; RRC=$?; else systemctl --user restart "$U" >/dev/null 2>&1; RRC=$?; fi
+      NSHA=""
+      sleep "${OC_SWAP_SETTLE:-5}"
+      NPID="$( { if [ -n "${OC_SWAP_SIDECAR_SHOW:-}" ]; then "$OC_SWAP_SIDECAR_SHOW" "$U"; else systemctl --user show -p MainPID --value "$U" 2>/dev/null; fi; } 2>/dev/null || echo 0)"
+      if [ -n "$NPID" ] && [ "$NPID" != "0" ] && [ -r "${OC_SWAP_PROC_PREFIX:-/proc}/$NPID/exe" ]; then
+        NSHA="$(sha256sum "${OC_SWAP_PROC_PREFIX:-/proc}/$NPID/exe" 2>/dev/null | cut -d' ' -f1)"
+      fi
+      if [ "$RRC" -eq 0 ] && [ -n "$NSHA" ] && [ "$NSHA" = "$EXP" ]; then
+        RESTARTED=$((RESTARTED+1))
+        DETAIL="$(jq -cn --argjson d "$DETAIL" --arg u "$U" --arg o "$PSHA" --arg n "$NSHA" '$d + [{unit:$u, action:"restarted", old_sha:$o, new_sha:$n}]')"
+        jline sidecar-unit 0 "$(jq -cn --arg u "$U" --arg o "$PSHA" --arg n "$NSHA" '{unit:$u, action:"restarted", old_sha256:$o, new_sha256:$n}')"
+      else
+        FAILED=$((FAILED+1))
+        DETAIL="$(jq -cn --argjson d "$DETAIL" --arg u "$U" --argjson e "$RRC" --arg n "$NSHA" '$d + [{unit:$u, action:"failed", restart_exit:$e, new_sha:$n}]')"
+        jline sidecar-unit 1 "$(jq -cn --arg u "$U" --argjson e "$RRC" --arg n "$NSHA" '{unit:$u, action:"failed", restart_exit:$e, new_sha256:$n}')"
+      fi
+    done <<< "$LIST"
+    jline sidecar-sync 0 "$(jq -cn --argjson d "$DETAIL" --argjson r "$RESTARTED" --argjson c "$INSYNC" --argjson f "$FAILED" '{restarted:$r, in_sync:$c, failed:$f, detail:$d}')"
+    echo "SIDECAR SYNC: restarted=$RESTARTED in_sync=$INSYNC failed=$FAILED"
+  }
+
   # --- post-verify helper: active + disk + proc + markers ---
   post_verify() { # $1=expected_sha  $2=expected_marker_sha  $3=expect_meta(0/1) ; sets PV_MATCH/PV_DETAIL
     local i ACTIVE DISK_SHA PID PROC_SHA MARK_MARKER MARK_META META_OK
@@ -1090,6 +1212,7 @@ swap_execute() {
       jline receipt 1 "$(jq -cn '{note:"drill expected a rollback but verify matched — anomaly"}')"
       die 2 "drill anomaly: post-verify matched a deliberately wrong expected sha"
     fi
+    sidecar_sync "$EXPECTED"
       A2A_RC=1; a2a_notify_retry "[oc-deploy PHASE B RECEIPT] DEPLOYED sha=$SHA run=$RUN_ID — post-verify match, markers written, backup $BAK. Journal: $JF" && A2A_RC=0
     jline receipt "$A2A_RC" "$(jq -cn --argjson a "$A2A_RC" '{topics:[30220], a2a_accepted:($a==0), note:"stamp follows fanout (issue #24 wiring)"}')"
     # --- GREEN fan-out (issue #24 wiring): notify contributor sessions of the
