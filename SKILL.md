@@ -8,7 +8,7 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.60
+version: 0.4.61
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -383,9 +383,20 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
 
 - Reports to Alexey (owner directive 2026-08-26): every issue/PR reference
   carries the LINK behind the number (issues: `https://github.com/leshchenko1979/opencrabs/issues/N`
-  — the fork is the issues home; PRs: `https://github.com/adolfousier/opencrabs/pull/N`) — a bare `#N` is never enough; identify workers by TOPIC NAME
-  (Mermaid, Push to session, …), never by session UUID. Applies to every role's
-  reports, Supervisor's included.
+  — the fork is the issues home; PRs: `https://github.com/adolfousier/opencrabs/pull/N`) — a bare `#N` is never enough.
+- Refer to workers by TOPIC/CHAT NAME only (owner 2026-08-31): Mermaid, Push to
+  session, Vector memory, … — NEVER by session uuid. Applies to EVERY surface:
+  owner reports, inter-lane advisories, session_notify text, verdict tables,
+  ledger commentary. Uuids are for ROUTING fields only (`target_session`,
+  `OC_ACTOR`, `Session-Id` trailers, tool arguments) — never prose. Test: an
+  owner reading the message must know WHICH chat to open without a lookup.
+- Stick to the OFFICIAL ONTOLOGY (owner 2026-08-31): all roles use the
+  vocabulary this SKILL defines — test ontology (§Test ontology: selftest /
+  battery / CI gate + smoke), roles (Editor / Supervisor / Reviewer lenses),
+  gate colors (GREEN/RED with run receipt), phases, tool names. No ad-hoc
+  synonyms for existing concepts; a NEW concept gets proposed via the poll
+  format and named on owner word — never improvised mid-report. Reviewer A
+  (REDUNDANCY + ONTOLOGY) enforces this lens-side.
 - ONLY the Supervisor edits skill files (`SKILL.md` / `editor.md` /
   `tools/archive/compiler.md` / `supervisor.md`) — including all worker lanes (decision 7,
   2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never

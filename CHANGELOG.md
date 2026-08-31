@@ -42,3 +42,8 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 - **Gap fix (two orphaned GREEN ships 2026-08-31):** `ship --execute` dispatch leg now journals `leg=dispatch, next="watch+swap REQUIRED", shipped=NO` via tools.log extra — a dispatch-only rc=0 exit can never again read as a shipped build; absence of a swap row for the sha is alarmable from the journal alone.
 - **Sweep lists:** oc-ledger skill RUNTIME_ARTIFACTS shrinks to the battery receipt; moved set joined the state sweep (git-tracked in the state repo).
 - **Live-verified post-migration:** `poll` reads deployed=d730e9ca from the new path; `fanout --run 33359092769` → skip reason=done (idempotency preserved). oc-deploy selftest 145/0, oc-ledger 66/0, battery **97/0**. Skill `1469b1bc`+`471ca33b`; rc=2-first-attempt pattern (2 ships) noted as dispatch-lock suspect — rc vocabulary documented, no code change.
+
+## v0.4.61 — naming + ontology hard rules; editor tool reference (owner 2026-08-31)
+- SKILL.md Hard rules: worker-naming rule SHARPENED — topic/chat name only on EVERY surface (was: owner reports only; tonight's uuid-laden fleet board was the live violation). Uuids = routing fields only.
+- SKILL.md Hard rules: NEW official-ontology rule — SKILL-defined vocabulary only; new concepts named via poll on owner word; Reviewer A enforces.
+- editor.md: NEW "Tool reference — editor's quick table" (invocation forms + rc contracts + the three rules that outlive any table). Doc-only bump; no tool code touched.
