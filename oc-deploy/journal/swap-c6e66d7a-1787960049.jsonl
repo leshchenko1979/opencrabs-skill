@@ -1,1 +1,0 @@
-{"ts":"2026-08-28T23:34:11Z","seq":1,"step":"manual-install","exit":0,"sha":"c6e66d7abf8f647a2d0473391dd603bfaeea8039","run_id":"33214577431","artifact_sha256":"9d979ee94c649b99c3c0af7b915ae85cdc527e4f958749052d3b140b317d5347","features":"telegram","backup_path":"/root/opencrabs-binary-backups/opencrabs-20260828-233409-pre-49125f8c","reason":"recovery-oc-deploy-flake-drain-step"}

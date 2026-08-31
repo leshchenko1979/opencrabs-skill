@@ -1,5 +1,0 @@
-{"ts":"2026-08-29T20:13:57Z","seq":1,"step":"fanout-start","exit":0,"run":"33272017568","conclusion":"success"}
-{"ts":"2026-08-29T20:13:58Z","seq":2,"step":"contributors","exit":0,"range":"ad6d9505b2ff55389f7c3585e81b39c49511cfda..2d0615ec02bd60387b8728b58360e3546e54d445","sessions":["329bf3a3-6299-4173-b991-7ea0427563e3","61161247-5b1d-4efe-979b-bf46ffc85c48"]}
-{"ts":"2026-08-29T20:14:26Z","seq":3,"step":"notified","exit":0,"uuid":"329bf3a3-6299-4173-b991-7ea0427563e3","run":"33272017568","role":"contributor"}
-{"ts":"2026-08-29T20:14:51Z","seq":4,"step":"notified","exit":0,"uuid":"61161247-5b1d-4efe-979b-bf46ffc85c48","run":"33272017568","role":"contributor"}
-{"ts":"2026-08-29T20:14:51Z","seq":5,"step":"fanout-end","exit":0,"run":"33272017568","notified":2,"skipped":0,"unowned":0}

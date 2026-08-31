@@ -1,4 +1,0 @@
-{"ts":"2026-08-30T09:50:59Z","seq":1,"step":"fanout-start","exit":0,"run":"33303960466","conclusion":"success"}
-{"ts":"2026-08-30T09:51:00Z","seq":2,"step":"contributors","exit":0,"range":"cbc770585bf77a38a64e95780e126b59937dddb2..68e92c1f51fe31c18320d7084f4a9a107d6ba221","sessions":["462181e9-ad99-4163-bd3d-c983c48049a8"]}
-{"ts":"2026-08-30T09:51:26Z","seq":3,"step":"notified","exit":0,"uuid":"462181e9-ad99-4163-bd3d-c983c48049a8","run":"33303960466","role":"contributor"}
-{"ts":"2026-08-30T09:51:26Z","seq":4,"step":"fanout-end","exit":0,"run":"33303960466","notified":1,"skipped":0,"unowned":0}
