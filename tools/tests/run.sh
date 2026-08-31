@@ -75,8 +75,12 @@ if tool oc-attrib; then
   WL="$wd/tools.log"
   OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$WL" "$TOOLS_DIR/oc-attrib" --repo /root/opencrabs --deployed >/dev/null 2>&1
   wrc=$?
-  [ $wrc -eq 0 ] && [ -f "$WL" ] && [ "$(wc -l < "$WL")" -eq 1 ] \
-    && jq -e 'select(.tool=="oc-attrib" and .exit==0 and (.args|contains("--deployed")))' "$WL" >/dev/null 2>&1 \
+  # rc=0 normal; rc=4 = empty range (prev_sha==deployed or no commits in range) —
+  # tool-correct on degenerate live marker state (seen 2026-08-31, double swap-execute)
+  case $wrc in 0|4) wrc_ok=1;; *) wrc_ok=0;; esac
+  wjq='select(.tool=="oc-attrib" and .exit=='"$wrc"' and (.args|contains("--deployed")))'
+  [ $wrc_ok -eq 1 ] && [ -f "$WL" ] && [ "$(wc -l < "$WL")" -eq 1 ] \
+    && jq -e "$wjq" "$WL" >/dev/null 2>&1 \
     && ok "wire: 1 JSONL line, tool/exit/args correct" || bad "wire test: rc=$wrc lines=$([ -f "$WL" ] && wc -l < "$WL" || echo none)"
   rm -rf "$wd"
 fi
