@@ -4,7 +4,7 @@
 
 Scope: work from an issue filed on the FORK (`leshchenko1979/opencrabs` — the issues home;
 upstream receives PRs only, owner directive 2026-08-27), fix the code in a
-worktree, gate it via the CI lint gate (pr-checks),
+worktree, gate it via the CI gate (pr-checks),
 SIGN every commit with the session trailer, push, FAST-FORWARD fork `main` onto it,
 hand off branch + shas, then ship via `oc-deploy ship` (Phase 6).
 After any
@@ -271,11 +271,12 @@ Before adding: `git -C ~/opencrabs worktree list` — prune stale entries first
   fn-signature tail — only direct re-reads caught both; the gate would have
   waved the signature-eaten file through to red CI)*
 
-## Phase 5 — lint gate before every commit (CI-only since v0.4.34)
+## Phase 5 — CI gate before every commit (CI-only since v0.4.34)
 
 No local lint tooling on this box. The lint/static-analysis
 evidence is the GREEN `pr-checks.yml` run on your branch: fmt + clippy +
-`cargo test --locked --all-features`. Iterate on code locally, push the branch,
+`cargo test --locked --profile ci --all-features` (flags VERBATIM from
+pr-checks.yml). Iterate on code locally, push the branch,
 re-dispatch pr-checks, read the run log — that loop replaces every local lint run.
 
 - **One command (v0.4.46; adoption fixed v0.4.48):** `tools/oc-prchecks <branch> [--repo SLUG-or-PATH]`
@@ -307,7 +308,9 @@ re-dispatch pr-checks, read the run log — that loop replaces every local lint 
 git -C ~/oc-wt-<task> push -u origin <branch>
 # GATE (decision 2026-08-27, rewired 2026-08-28 per owner "1 ok"): the
 # CODE TESTS evidence is the GREEN `pr-checks.yml` CI run on the branch — it
-# runs `cargo test --locked --all-features` upstream of any build. NO local
+# runs `cargo test --locked --profile ci --all-features` (the CI gate is the
+# only test locus — the carrier ship path runs pure-git ORDER gates, no test
+# leg since 2026-08-31 `e71dba58`). NO local
 # test runs on this box (box law — §Box law, top of this file: cargo
 # forbidden in ANY form).
 # Read the conclusion via `gh run view` / checks API: GREEN → push to main;
@@ -382,14 +385,14 @@ per owner 19:21Z):
 The script performs the chain Phase 6 does by hand — fork-main fetch +
 fast-forward check → push → 4 ORDER gates (oc-order-validate) → carrier
 dispatch on `ci/quick-build-linux` — appends every verdict to the shadow
-journal (`oc-deploy-shadow.log` in the skill dir), and returns RED + failing
+journal (`oc-deploy-shadow.log` in the state dir), and returns RED + failing
 gate or GREEN + run id to the invoking session. **Ship semantics: dispatch
 is real always; deploys are real from S2 (poll mode, sha-bound, auto-swap on
 GREEN — consent eliminated owner 2026-08-28 18:50Z; journaled, auto-rollback on
 post-bounce verify fail stays, smoke-FAIL rollback = owner call; ledger `meta.oc_deploy_stage` gates it, exit 4 below
 S2 — the stage is S3 since 2026-08-28).** Plan-only
 default: omit `--execute` → full delta printed, nothing touched. Brake:
-`touch /root/.opencrabs/profiles/ops/skills/opencrabs-dev/oc-deploy.kill` (or
+`touch /root/.opencrabs/profiles/ops/opencrabs-dev/oc-deploy.kill` (or
 `/root/oc-work/oc-deploy.disabled`) aborts every invocation, exit 9. The
 ORDER vocabulary (COALESCED / QUEUED / intake-verify) is superseded — the
 gates now run inside `oc-deploy ship` itself (tools/archive/compiler.md archived runbook).

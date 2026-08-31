@@ -20,7 +20,7 @@ YAGNI applies — never automate a one-off or a human-judgment call. **Guard
 S3 the build-cycle tools (`oc-deploy` ship/poll/swap-execute) RUN the cycle
 themselves — the old guard ("Supervisor never runs tools inside a build cycle;
 the Compiler validates before adoption") retired WITH the Compiler role.
-Current invariants instead of Compiler validation: `oc-deploy --selftest`
+Current invariants instead of the retired Compiler's validation: `oc-deploy --selftest`
 green + battery `tools/tests/run.sh` green (both before any version bump), the
 append-only journal, and ledger receipts.
 
@@ -174,10 +174,24 @@ Method:
    with the prompt narrowed to that single lens; a second hollow result unlocks
    inline fallback, which must be flagged as such in the review record.
    Split lenses for independence:
-   - Reviewer A — REDUNDANCY + ONTOLOGY: same rule stated twice across files,
-     duplicated war stories, terms violating the SKILL.md test ontology
-     (SMOKE TEST / CODE TESTS / FEATURE-PRESENCE CHECK / EXECUTION SANITY
-     SIGNAL), undefined coinages, stale ref names.
+   - Reviewer A — REDUNDANCY + ONTOLOGY (STRENGTHENED owner 2026-08-31,
+     after the v0.4.61 stale-terms review found 22 defects hours after
+     bumps): same rule stated twice across files; duplicated war stories;
+     terms violating the SKILL.md test ontology (SMOKE TEST / CODE TESTS /
+     FEATURE-PRESENCE CHECK / EXECUTION SANITY SIGNAL); undefined coinages;
+     stale ref names. PLUS the churn-drift checklist, EVERY lens-A pass:
+     (a) ONE CONCEPT = ONE NAME — sweep for synonyms of the same
+     gate/tool/artifact (v0.4.61 found ≥5 names for the CI gate);
+     (b) GLOSSARY CONFORMANCE — every load-bearing term in a rule must
+     resolve in SKILL.md §Glossary or §Test ontology; (c) POST-MIGRATION
+     PATH SWEEP — after any artifact/path migration grep the ROOT literal
+     of the OLD location (not the artifact name — v0.4.60 lesson: the
+     oc-attrib default hid behind the artifact name) across all three
+     skill files; (d) ENUMERATION CONSISTENCY — counts of lenses/tools/
+     gates/phases in prose must match their defining sections (found:
+     "4-lens" vs five reviewers); (e) RETIRED CONCEPTS MARKED — any
+     mention of a retired role/tool carries RETIRED + date, never
+     present-tense.
    - Reviewer B — LLM EFFICIENCY + RESPONSIBILITY CREEP: token weight of each
      role's required reading (a worker must not need another role's
      procedures), prose that should be tables, dead references, duties
