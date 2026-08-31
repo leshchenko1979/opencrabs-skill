@@ -27,7 +27,10 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 Issue-Ref: #56
 
 ## Entries
+## v0.4.70 (2026-08-31) — lens G regroup + notify delivery-mode terminology
 
+- Owner corrections: interrupt=true is the #13 FAILSAFE (mid-turn operational wake), NOT deferred mode; deferred/queued delivery = acks + low-urgency (SKILL.md DELIVERY MODES, editor.md, supervisor.md, AGENTS.md).
+- Lens G regroup (fork #57, owner "Lens G go"): HIGH 13 per-commit laws → detached-HEAD+signing Phase 4, writer-exclusivity Phase 2 (6c pointers); standing-laws band reordered (Box→Telegram→CI-wait→drift); Ship — oc-deploy (S3 path) promoted out of Phase 6; CI-wait items 4-9 → supervisor.md §CI-wait & waiter discipline; worktree lifecycle → Phase 2; test placement → Phase 4; oc-issue-log row; SKILL.md gh-run-watch fallback row aligned with the ban; 8 LOW/MED pointer fixes. Verdict: REGROUP, no split.
 ## v0.4.66 (2026-08-31) — editor requirement-intake rule (owner 2026-08-31 14:51Z)
 
 - editor.md Phase 1 step 5: NEW/updated requirements persist in a fork issue BEFORE execution — processed actionable form, never verbatim; extends the in-flight issue or opens a new one; Issue-Ref discipline applies. Origin: owner correction of the supervisor-scoped draft; live issue leshchenko1979/opencrabs#51.

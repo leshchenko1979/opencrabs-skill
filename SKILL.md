@@ -8,7 +8,7 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.69
+version: 0.4.70
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -75,7 +75,7 @@ register + test source of truth (archived compiler-step anchors stripped
 | `./tools/oc-branch-sweep --repo <p> [--dry-run]` | branch-death proof (MERGED/ABSORBED/STALE/ACTIVE) + archive-then-delete for MERGED only; protected: base/HEAD/--keep regex | 0 nothing-deleted / 1 deletions / 2 usage / 3 git |
 | `./tools/oc-pr-fault-scope <pr#> --run <id>` | failing-files ∩ PR-files = IN-SCOPE/BASE-FAULT (2026-08-26 clippy-wall misattribution lesson, mechanical) | 0 IN-SCOPE / 1 BASE-FAULT / 2 usage / 3 gh |
 | `./tools/oc-ledger confirm <uuid>` | lens C #5: verifies the worker's latest claim (#N ref resolvable on the live fork) then flips workers[].confirmed=true — first verb to flip it (was unsanctioned hand-edit) | 0 confirmed / 2 usage / 3 verify-fail |
-| `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | **manual fallback — prefer `./tools/oc-prchecks`** (row above). PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) | CI run green/red — dispatch via `gh workflow run`, watch with `gh run watch` |
+| `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | **manual fallback — prefer `./tools/oc-prchecks`** (row above). PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) | CI run green/red — dispatch via `gh workflow run`, watch via `./tools/oc-prchecks` resume (exit 5) or a detached ≥60s poller — raw `gh run watch` BANNED (editor.md §CI-wait) |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (a CODE
 TESTS-class battery; the `oc-seal-state` IFS-join case is one guard inside it).
@@ -190,14 +190,16 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   sessions — no polling anywhere.
 - DELIVERY MODES (v0.4.69, binary behavior review 2026-08-31 — owner order):
   - **immediate** — target idle: a plain send wakes it now. Default for FYI / courtesy.
-  - **deferred** — `interrupt: true` (CLI `--interrupt`) on a mid-turn target: the
-    message QUEUES and drains at that turn's next tool-loop boundary
-    ("arrived-during-work"). The ONLY reliable operational wake (gate GREEN,
-    build done, action needed) to a working lane: a default send REFUSES
-    mid-turn and the wake is LOST unless retried (2026-08-31 evidence: 24
-    refusals in one day, 19 bounced off a single HQ mid-turn stretch — lanes
-    went comatose). Never interrupt=true for courtesy pings — that is the
-    derail the gate exists to prevent.
+  - **failsafe** — `interrupt: true` (CLI `--interrupt`, labeled "#13 failsafe")
+    on a mid-turn target: the message QUEUES and drains at that turn's next
+    tool-loop boundary ("arrived-during-work"). The ONLY reliable operational
+    wake (gate GREEN, build done, action needed) to a working lane: a default
+    send REFUSES mid-turn and the wake is LOST unless retried (2026-08-31
+    evidence: 24 refusals in one day, 19 bounced off a single HQ mid-turn
+    stretch — lanes went comatose). NOT "deferred mode" (owner correction
+    2026-08-31): deferred/queued delivery is the pattern for ACKs and
+    LOW-URGENCY messages — never spend the failsafe on courtesy pings; that is
+    the derail the gate exists to prevent.
   - **redirect** — target no longer owns its channel: delivery is steered
     AUTOMATICALLY to the occupying session with provenance framing (fork #19);
     the reply names where it went. Follow the redirect — continue with the

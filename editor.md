@@ -8,8 +8,8 @@ worktree, gate it via the CI gate (pr-checks),
 SIGN every commit with the session trailer, push, FAST-FORWARD fork `main` onto it,
 hand off branch + shas, then ship via `oc-deploy ship` (Phase 6).
 After any
-swap containing your commits you TEST what shipped (test-on-notify loop at the
-bottom). The Editor NEVER dispatches BUILD runs (`quick-build-linux.yml`), NEVER
+swap containing your commits you TEST what shipped (test-on-notify loop,
+Phase 6b). The Editor NEVER dispatches BUILD runs (`quick-build-linux.yml`), NEVER
 watches build runs, and NEVER touches binaries — all automation territory via
 `oc-deploy` (NO dispatch exceptions: BUILD TRIGGERS = exactly TWO with no
 exceptions — SKILL.md §Hard rules, A3 ruling 2026-08-29).
@@ -33,55 +33,14 @@ rustfmt wrapper), and its compile binaries were DISABLED 2026-08-28
 invocation that WORKS is still a ruling violation (observed and killed
 2026-08-28: editor lanes running `cargo test` in worktrees). Sanctioned local
 tools ONLY: `/usr/local/bin/rustfmt` wrapper (fmt only — `--edition 2024`
-+ entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, Phase 5). Everything
-else — build, test, clippy — is CI dispatch: `pr-checks.yml` (fmt/clippy/test,
-Phase 7 step 2c) or quick-build-linux dispatched via `oc-deploy ship`. Need
++ entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, Phase 5 —
+the generic CI ritual; Phase 7 step 2c reuses it on upstream PR heads).
+Everything
+else — build, test, clippy — is CI dispatch: `pr-checks.yml` (Phase 5) or
+quick-build-linux dispatched via `oc-deploy ship`. Need
 `cargo test`? Dispatch CI.
 Iterating clippy fixes? Edit code, re-dispatch pr-checks, read the run log.
 Never compile locally.
-
-## Tool reference — editor's quick table (owner 2026-08-31)
-
-Canonical descriptions + selftest contracts: SKILL.md tool table. The
-editor-relevant subset, invocation forms only (all paths relative to the skill
-dir; `OC_ACTOR=<your full uuid>` on every call):
-
-| Tool | Invocation | For | rc |
-|------|-----------|-----|-----|
-| `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add→oc-index-worktree | 0 ok / dirty-tree gate on remove |
-| `oc-index-worktree` | `tools/oc-index-worktree` (inside worktree) | codegraph index — un-skippable step 2 | 0 ok |
-| `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume | 0 GREEN / 2 usage / 3 RED / 5 resume |
-| `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) | 0 no-candidates / 1 candidates / 2 usage / 3 api |
-| `oc-ledger` | `stamp claim --what "…"` (canonical: `--what`; bare positional also accepted) · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack | 0 ok / 2 usage |
-| `oc-drift-check` | `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` | §Mid-cycle skill drift step 1–2 | 0 no-drift / 1 DRIFT |
-| `oc-deploy` | `ship --execute` · `poll` · `watch` · `fanout` | ship chain (dispatch → watch → swap); ship dispatch is leg 1 ONLY — watch+swap REQUIRED | see SKILL.md |
-| `oc-upstream-delta` | `tools/oc-upstream-delta` | fork vs upstream divergence read | 0 ok |
-| `oc-attrib` | `tools/oc-attrib --deployed` | who owns the deployed range (fanout targeting) | 0 ok |
-| `oc-branch-sweep` | `tools/oc-branch-sweep --repo <path>` | merged/stale branch proof; deletes MERGED only | 0 nothing-deleted / 1 deletions / 2 usage / 3 git |
-| `oc-pr-fault-scope` | `tools/oc-pr-fault-scope <pr> --run <id>` | failing-files ∩ PR-files (blame hygiene) | 0 in-scope / base-fault |
-
-Rules that outlive any table: journal read-back after every state-changing
-call (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
-a tool's exit code alone; the ≥60s detached-poll floor (§CI-wait discipline).
-
-## Phase 0 — Fresh base
-
-```bash
-git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
-```
-
-- Branch off fresh `origin/main`; merge-sync RETIRED (2026-08-26, REBASE-PORT —
-  SKILL.md §Upstream relations): NEVER `merge --ff-only adolfousier/main` into
-  the shared checkout.
-- **The shared `~/opencrabs` checkout is NEVER evidence** (v0.4.5): it may sit on any
-  session's leftover branch. Verify shipped behavior against `origin/main`
-  explicitly (`git fetch origin && git show origin/main:<path>`) or in a fresh
-  worktree — never by grepping the shared tree. *(learned 2026-08-26: a grep into the
-  shared checkout surfaced OUR dropped fix and nearly concluded the maintainer's build
-  still carried it — the regression was live on main)*
-- Before building on an existing branch: diff it against its merge-base to confirm no
-  foreign WIP rode along from parallel agents. Take a backup branch ref before any
-  `rebase --onto`. *(SKILL.md war story: foreign-WIP diff vs merge-base, 2026-08-25)*
 
 ## Telegram surface law — inter-role = session_notify ONLY (v0.4.31, owner 2026-08-28)
 
@@ -107,6 +66,31 @@ editor-facing duties:
 - The `/tq-approve` forum-topic flow and Gatus DM reports are OTHER lanes'
   documented jobs — not yours.
 
+## CI-wait discipline & actor attribution (owner 2026-08-30 — fix batch)
+
+*(Waiter-discipline items 4–9 — poll floor, --wait ceiling, invocation
+verify, notify wiring, log-window cuts, REST casing — are SUPERVISOR-scoped:
+supervisor.md §CI-wait & waiter discipline. Lens G regroup v0.4.70.)*
+
+1. **Raw `gh run watch` / `gh watch` are BANNED.** The 3s default refresh across
+   concurrent sessions caused the overnight gh flood (704 refs 08-29 + 126 on
+   08-30, ≥7 sessions). Lane waits go through `oc-prchecks` (15s poll,
+   single-flight dispatch lock + headSha adoption); carrier waits through
+   `oc-deploy watch` or a DETACHED ≥60s poller (proven `/tmp/swap-*.sh`
+   pattern) — carrier waits are SUPERVISOR-owned; an editor never watches a
+   build. Never hand-roll a short-interval `gh run watch` loop.
+2. **`OC_ACTOR=<session-uuid>` MUST be exported on every `oc-*` tool
+   invocation** — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
+   making floods and behavior attributable after the fact and feeding the
+   ledger-beats-memory guard (the CONSENT REGISTER live-record rule: ledger
+   beats memory when they disagree). This session's uuid comes from the runtime
+   prompt/session context; a
+   lane that cannot recall its own uuid reads it from its Session-Id trailer /
+   the supervisor roster before running any tool.
+3. Re-running the same CI because the head moved is inherent to a fix loop, but
+   only via oc-prchecks re-dispatch (never a second raw watcher) — pr-checks.yml
+   now carries a concurrency group (`cancel-in-progress: true`, owner fix) so
+   the superseded run is auto-cancelled and minutes stop burning.
 ## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52, owner Go 2026-08-30)
 
 Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep
@@ -135,60 +119,49 @@ pull-check is YOUR duty; supervisor notifies stay targeted per Duty 3.
 investigation — stale rituals are suspected to survive in sessions that never
 re-check, not on disk.)*
 
-## CI-wait discipline & actor attribution (owner 2026-08-30 — fix batch)
+## Tool reference — editor's quick table (owner 2026-08-31)
 
-1. **Raw `gh run watch` / `gh watch` are BANNED.** The 3s default refresh across
-   concurrent sessions caused the overnight gh flood (704 refs 08-29 + 126 on
-   08-30, ≥7 sessions). Lane waits go through `oc-prchecks` (15s poll,
-   single-flight dispatch lock + headSha adoption); carrier waits through
-   `oc-deploy watch` or a DETACHED ≥60s poller (proven `/tmp/swap-*.sh`
-   pattern) — carrier waits are SUPERVISOR-owned; an editor never watches a
-   build. Never hand-roll a short-interval `gh run watch` loop.
-2. **`OC_ACTOR=<session-uuid>` MUST be exported on every `oc-*` tool
-   invocation** — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
-   making floods and behavior attributable after the fact and feeding the
-   ledger-beats-memory guard (the CONSENT REGISTER live-record rule: ledger
-   beats memory when they disagree). This session's uuid comes from the runtime
-   prompt/session context; a
-   lane that cannot recall its own uuid reads it from its Session-Id trailer /
-   the supervisor roster before running any tool.
-3. Re-running the same CI because the head moved is inherent to a fix loop, but
-   only via oc-prchecks re-dispatch (never a second raw watcher) — pr-checks.yml
-   now carries a concurrency group (`cancel-in-progress: true`, owner fix) so
-   the superseded run is auto-cancelled and minutes stop burning.
-4. **Poll floor — EVERY detached gh poller ≥60s.** Waiter, watchdog, courtesy
-   loop: no exceptions by mechanism (Duty-4 2026-08-31, lane 2fbfb2f8: a 30s
-   swap-chain waiter was the same flood class the ≥60s rule was written for).
-5. **`--wait` must fit the ~120s tool-runner ceiling (≤90s).** Longer waits =
-   exit 5 + resume-by-run-id or a detached poller (61161247: `--wait 580` can
-   never fit). The FIRST dispatch call carries an explicit ≥600s tool timeout;
-   a mid-flight dead invocation (no exit code, no run URL) is recovered by API
-   run-search (`gh run list --json`, job name embeds head sha) and ADOPTED —
-   never a blind re-dispatch (7e1ebbb6: the retry double-dispatched and the run
-   was cancelled as its own same-ref supersession).
-6. **Waiter legs verify invocations before launch.** Each leg of a detached
-   chain checks its exact tool invocation against `--help`/tools.log BEFORE the
-   chain launches (same trust level as the journal-start-line read-back), and a
-   mid-chain rc≠0 session-notifies the owning session IMMEDIATELY, not only at
-   chain end (2fbfb2f8: an invented `--run-id` flag made the poll leg rc=1, the
-   swap was skipped, and a GREEN build sat unswapped with no alarm). Operational
-   wakes carry `interrupt=true` (deferred delivery — queues at the target's
-   turn boundary; a default send REFUSES mid-turn and the alarm is lost,
-   SKILL.md §session_notify mechanics DELIVERY MODES).
-7. **Notify wiring lives in the wrapper script, NEVER as oc-prchecks flags** —
-   the tool has no notify options (212b3c83: v7 glued nonexistent
-   `--notify-session/--notify-text` → usage rc=2 in 0.0s, gate dark ~45min).
-   A detached waiter with NO notify path gets a one-shot cron courier armed
-   before end of turn (c6b1a539: quiet-window re-dispatcher completed its work,
-   lane sat dark until the owner roll call).
-8. **Log-window verification uses line-number cutoffs or full timestamps** —
-   `grep -n marker` → `tail -n +N`, or full-timestamp compare; never prefix/
-   field heuristics (log continuation lines carry no leading timestamp and leak
-   debris into the window — 2fbfb2f8 orphan false-regression).
-9. **`gh api` REST v3 keys are snake_case.** In `--jq` filters
-   `run_started_at`/`updated_at` work; camelCase (`runStartedAt`) silently
-   evaluates to null (d18ce16a: terminal conclusion + null timestamps read as a
-   data anomaly — a near-miss of a false verdict).
+Canonical descriptions + selftest contracts: SKILL.md tool table. The
+editor-relevant subset, invocation forms only (all paths relative to the skill
+dir; `OC_ACTOR=<your full uuid>` on every call):
+
+| Tool | Invocation | For | rc |
+|------|-----------|-----|-----|
+| `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add→oc-index-worktree | 0 ok / dirty-tree gate on remove |
+| `oc-index-worktree` | `tools/oc-index-worktree` (inside worktree) | codegraph index — un-skippable Phase 2 final leg (oc-wt chain) | 0 ok |
+| `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume | 0 GREEN / 2 usage / 3 RED / 5 resume |
+| `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) | 0 no-candidates / 1 candidates / 2 usage / 3 api |
+| `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | Phase 6 per-commit implementation comment (body-file discipline inside) | 0 posted / 2 usage / 3 gh |
+| `oc-ledger` | `stamp claim --what "…"` (canonical: `--what`; bare positional also accepted) · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack | 0 ok / 2 usage |
+| `oc-drift-check` | `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` | §Mid-cycle skill drift step 1–2 | 0 no-drift / 1 DRIFT |
+| `oc-deploy` | `ship --execute` · `poll` · `watch` · `fanout` | ship chain (dispatch → watch → swap); ship dispatch is leg 1 ONLY — watch+swap REQUIRED | see SKILL.md |
+| `oc-upstream-delta` | `tools/oc-upstream-delta` | fork vs upstream divergence read | 0 ok |
+| `oc-attrib` | `tools/oc-attrib --deployed` | who owns the deployed range (fanout targeting) | 0 ok |
+| `oc-branch-sweep` | `tools/oc-branch-sweep --repo <path>` | merged/stale branch proof; deletes MERGED only | 0 nothing-deleted / 1 deletions / 2 usage / 3 git |
+| `oc-pr-fault-scope` | `tools/oc-pr-fault-scope <pr> --run <id>` | failing-files ∩ PR-files (blame hygiene) | 0 in-scope / base-fault |
+
+Rules that outlive any table: journal read-back after every `oc-ledger`
+claim/stamp (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
+a tool's exit code alone; the ≥60s detached-poll floor (§CI-wait discipline).
+
+## Phase 0 — Fresh base
+
+```bash
+git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
+```
+
+- Branch off fresh `origin/main`; merge-sync RETIRED (2026-08-26, REBASE-PORT —
+  SKILL.md §Upstream relations): NEVER `merge --ff-only adolfousier/main` into
+  the shared checkout.
+- **The shared `~/opencrabs` checkout is NEVER evidence** (v0.4.5): it may sit on any
+  session's leftover branch. Verify shipped behavior against `origin/main`
+  explicitly (`git fetch origin && git show origin/main:<path>`) or in a fresh
+  worktree — never by grepping the shared tree. *(learned 2026-08-26: a grep into the
+  shared checkout surfaced OUR dropped fix and nearly concluded the maintainer's build
+  still carried it — the regression was live on main)*
+- Before building on an existing branch: diff it against its merge-base to confirm no
+  foreign WIP rode along from parallel agents. Take a backup branch ref before any
+  `rebase --onto`. *(SKILL.md war story: foreign-WIP diff vs merge-base, 2026-08-25)*
 
 ## Phase 1 — Claim on the fork BEFORE editing
 
@@ -267,6 +240,43 @@ switched under you mid-task at any moment.
 `git -C ~/opencrabs worktree list` only to view live trees, never as a
 pre-check; never reuse another live task's path.
 
+**Worktree lifecycle — delete early, recreate on demand**
+
+The worktree's job ends the moment your code is committed AND pushed — CI
+compiles on GitHub, not here. Proven fixes fast-forward into fork `main`
+(Phase 6), so fork main accumulates everything we ship; upstream receives
+finished features only via the completion-time PR (Phase 7).
+
+DELETE immediately after a verified clean push:
+
+```bash
+git -C ~/oc-wt-<task> status --porcelain   # must be empty — all committed & pushed
+tools/oc-wt remove <task>                  # dirty-tree gate + journals the destroyed listing
+```
+
+RECREATE whenever a fix round begins (red run handed back, smoke-test fix
+request): ALWAYS a NEW tree — same branch, same creation steps as the first
+time (`tools/oc-wt add <task> <branch>` — prune/fetch/validate/behind-base
+gates chained; continue Phase 3/5):
+
+```bash
+tools/oc-wt add <task> <branch>
+```
+
+`oc-wt` prunes stale entries on every add — never run bare
+`git worktree prune` as a ritual step; `git worktree list` only to view.
+
+**Worktree-writer exclusivity (P6 v0.4.14 + P9 v0.4.17): while holding an
+active worktree ALL delegated execution runs INLINE in the owning session —
+plan-driven tasks included (isolated=false), never auto-spawned isolated
+sub-agents of ANY scope**: auto-spawned isolated workers
+report "done" while the diff is still empty, then their edits surface LATE and
+UNCOMMITTED in your tree, racing the parent's verification reads. Deliverable
+ops (surgical fixes, merge landings) are editor-own. *(2026-08-26, TWO editors
+independently: plan-task subagents reported complete with empty diffs / stale
+origin/main / orphaned worktrees — each cost several diagnostic turns before
+inline takeover)*
+
 ## Phase 3 — Explore before writing
 
 - **Structure, callers, impact chains:** `grep_code` (codegraph) — who calls this,
@@ -290,6 +300,23 @@ pre-check; never reuse another live task's path.
   fn-signature tail — only direct re-reads caught both; the gate would have
   waved the signature-eaten file through to red CI)*
 
+
+**Branch-attached HEAD before signing (v0.4.14, proposal P5)**: confirm
+`git symbolic-ref -q HEAD` resolves (non-empty) BEFORE committing + signing — a
+detached HEAD commits silently to a nameless sha, invisible to branch pushes and
+unreachable by remote-tracking name. If detached: land the sha to an explicit
+ref immediately. *(2026-08-26: a resolution committed on detached HEAD in a PR
+worktree — only an explicit-sha push recovered it)*
+
+Signing is not optional: an unsigned commit makes you invisible to the
+notification loop — your feature ships untested and your failures go
+unattributed. Your full session UUID is IN YOUR PROMPT (session/runtime
+context) — read it from there when composing the trailer.
+
+**Test placement (CONTRIBUTING.md policy — lens G regroup v0.4.70, from
+Phase 7 step 2c):** tests live under `src/tests/*_test.rs` registered in
+`mod.rs`, never inline `#[cfg(test)]` blocks — upstream CI enforces both.
+
 ## Phase 5 — CI gate before every commit (CI-only since v0.4.34)
 
 No local lint tooling on this box. The lint/static-analysis
@@ -307,8 +334,8 @@ re-dispatch pr-checks, read the run log — that loop replaces every local lint 
   carrier ref, not the `-f ref` input), watch, per-step report with the fmt
   soft-fail EXPOSED. `--repo` accepts the slug OR a repo/worktree path
   (resolved via its origin remote — no more slug/path confusion). Exit 0 GREEN /
-  3 RED / 5 still-in-flight (prints the run URL for resume). The manual 4-step
-  form stays in SKILL.md's tool table as fallback.
+  3 RED / 5 still-in-flight (prints the run URL for resume). The manual form
+  survives as the SKILL.md tool-table fallback row.
 - Gate your BRANCH state, not the shared checkout: the run proves what CI saw on
   your branch (your commits on top of the branch base).
 - Push after every fix-round; the NEWEST green run URL is the evidence
@@ -345,11 +372,9 @@ fork `main` — ALL editors' changes together
 never ships. **Implementation comment per commit (owner 2026-08-28 22:54Z):**
 after EACH editor commit, post a short summary + commit sha + verification
 state (tests/lint) as a gh comment on the tracked issue — one comment per
-commit, immediately, no batching. Mechanics (Duty-4 2026-08-31, lane
-212b3c83): `--body-file` with a single-quoted heredoc ONLY — inline
-double-quoted bodies run shell command substitution on backticks (gh
-"received 2 arguments", mangled post), and `--edit-last` across commits
-overwrites the PREVIOUS commit's comment (one-comment-per-commit violation).
+commit, immediately, no batching. Mechanics: `tools/oc-issue-log <issue-n> <sha>`
+posts it (gh `--body-file` discipline + `--edit-last` pitfalls handled inside;
+SKILL.md tool table — Duty-4 2026-08-31, lane 212b3c83).
 
 Non-ff rejection = another editor landed first; integrate and retry:
 
@@ -393,6 +418,8 @@ returns GREEN/RED; the old failure mode was a silently dropped ORDER hand-off
 (04f64d8a never reached the compiler while the issue read "awaiting
 Compiler").)*
 
+## Ship — oc-deploy (S3 path)
+
 **S3 SHIP PATH — oc-deploy IS the ship path (S3 cutover, live 2026-08-28; compiler retired).**
 The lane runs its own ship as an agent-launched BACKGROUND task (timer retired
 per owner 19:21Z):
@@ -426,32 +453,6 @@ gates now run inside `oc-deploy ship` itself (tools/archive/compiler.md archived
 - Once the new run is green, post the fix evidence to the upstream
   issue (the Editor owns the issue thread end to end).
 
-## Worktree lifecycle — delete early, recreate on demand
-
-The worktree's job ends the moment your code is committed AND pushed — CI
-compiles on GitHub, not here. Proven fixes fast-forward into fork `main`
-(Phase 6), so fork main accumulates everything we ship; upstream receives
-finished features only via the completion-time PR (Phase 7).
-
-DELETE immediately after a verified clean push:
-
-```bash
-git -C ~/oc-wt-<task> status --porcelain   # must be empty — all committed & pushed
-tools/oc-wt remove <task>                  # dirty-tree gate + journals the destroyed listing
-```
-
-RECREATE whenever a fix round begins (red run handed back, smoke-test fix
-request): ALWAYS a NEW tree — same branch, same creation steps as the first
-time (`tools/oc-wt add <task> <branch>` — prune/fetch/validate/behind-base
-gates chained; continue Phase 3/5):
-
-```bash
-tools/oc-wt add <task> <branch>
-```
-
-`oc-wt` prunes stale entries on every add — never run bare
-`git worktree prune` as a ritual step; `git worktree list` only to view.
-
 ## Phase 6b — Smoke-test-on-notify (your features, after any swap)
 
 A post-swap notify announcing a new binary (mechanical fan-out — `oc-deploy
@@ -460,7 +461,7 @@ since v0.4.37; `[session-notify from=<uuid>]` header) means your
 commits are in it — prove the FEATURE works. This phase produces SMOKE TEST
 evidence (SKILL.md Test ontology): behavioral, against the RUNNING binary,
 zero cargo. CODE TESTS (fmt/clippy/cargo test) are a different kind, CI-only —
-Phase 7 step 2c. The binary is live right here (`opencrabs-ops` user unit) —
+Phase 5 (Phase 7 step 2c reuses it on upstream PR heads). The binary is live right here (`opencrabs-ops` user unit) —
 no cargo needed.
 
 1. Read run id + built sha from the notification body. **If the daemon bounced**
@@ -505,7 +506,7 @@ Your answer is always the SAME sequence (decision 2026-08-25):
    violates the issue-first hard rule (SKILL.md).
 
 ```bash
-# 1. fresh worktree at the relevant sha (lifecycle rules below)
+# 1. fresh worktree at the relevant sha (worktree lifecycle, Phase 2)
 tools/oc-wt add <task> <branch>
 # 2. reproduce → fix → Phase 5 CI gate → SIGNED commit
 git -C ~/oc-wt-<task> commit --trailer "Session-Id: <full session uuid>" --trailer "Issue-Ref: #<issue-n>"
@@ -518,30 +519,9 @@ git -C ~/oc-wt-<task> push origin <branch>:main
 tools/oc-wt remove <task>
 ```
 
+**Per-commit laws live in their phases (lens G regroup v0.4.70):** branch-attached HEAD + signing → §Phase 4; worktree-writer exclusivity → §Phase 2. They bind EVERY commit in ANY phase — read them there.
+
 5. Re-ship fork `main` via oc-deploy: `oc-deploy ship --sha <NEW-head-sha> --features <comma-set> --execute` (S3 2026-08-28 — the compiler role is retired; shipping is the editor's own background task, it dispatches fork `main`, which now carries your fix alongside every other editor's merged work).
-
-**Branch-attached HEAD before signing (v0.4.14, proposal P5)**: confirm
-`git symbolic-ref -q HEAD` resolves (non-empty) BEFORE committing + signing — a
-detached HEAD commits silently to a nameless sha, invisible to branch pushes and
-unreachable by remote-tracking name. If detached: land the sha to an explicit
-ref immediately. *(2026-08-26: a resolution committed on detached HEAD in a PR
-worktree — only an explicit-sha push recovered it)*
-
-**Worktree-writer exclusivity (P6 v0.4.14 + P9 v0.4.17): while holding an
-active worktree ALL delegated execution runs INLINE in the owning session —
-plan-driven tasks included (isolated=false), never auto-spawned isolated
-sub-agents of ANY scope**: auto-spawned isolated workers
-report "done" while the diff is still empty, then their edits surface LATE and
-UNCOMMITTED in your tree, racing the parent's verification reads. Deliverable
-ops (surgical fixes, merge landings) are editor-own. *(2026-08-26, TWO editors
-independently: plan-task subagents reported complete with empty diffs / stale
-origin/main / orphaned worktrees — each cost several diagnostic turns before
-inline takeover)*
-
-Signing is not optional: an unsigned commit makes you invisible to the
-notification loop — your feature ships untested and your failures go
-unattributed. Your full session UUID is IN YOUR PROMPT (session/runtime
-context) — read it from there when composing the trailer.
 
 ## Phase 7 — Feature complete → upstream PR (owner directive 2026-08-25)
 
@@ -599,9 +579,8 @@ gh workflow run pr-checks.yml --repo leshchenko1979/opencrabs \
 #   never a filed PR. Cite the green run URL in the PR body prep next to the
 #   smoke/run evidence. Iterate clippy fixes by EDITING CODE and re-dispatching
 #   pr-checks — NEVER run cargo locally (box law, top of this file: binaries
-#   disabled 2026-08-28); tests live under src/tests/*_test.rs registered in
-#   mod.rs, never inline #[cfg(test)] blocks — both per CONTRIBUTING.md
-#   policy. (The yml lives ONLY on the carrier branch — never fork main,
+#   disabled 2026-08-28); test-placement policy → §Phase 4. (The yml lives
+#   ONLY on the carrier branch — never fork main,
 #   never the PR-head branch: zero infra commits in Adolfo's diff.)
 
 # 3. push the head branch to the FORK (PR heads live there)

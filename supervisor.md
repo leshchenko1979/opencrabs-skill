@@ -107,7 +107,7 @@ process 2026-08-28.) Everything else waits for each lane's next boundary.
 > QUEUE ACCEPTANCE canonical there): live roster check SAME turn; silent
 > target → one retry → ledger event note; `target_session` = FULL UUID only.
 > Roster/cadence wake pings and any operational directive to a MID-TURN lane
-> carry `interrupt=true` (deferred delivery) — default sends refuse and the
+> carry `interrupt=true` (mid-turn failsafe, NOT deferred mode) — default sends refuse and the
 > ping is lost (24 refusals 2026-08-31, the comatose-lanes incident).
 
 Inbox discipline for any (re-enabled) build lane: ORDERs / red-run handoffs /
@@ -316,3 +316,41 @@ tg_edit_message / telegram_edit). A matching row → notify the rule (SKILL.md
 fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
 canonical text stays in SKILL.md §Upstream relations; this line is the
 supervisor-side ownership pointer.
+
+## CI-wait & waiter discipline (supervisor-scoped items; lens G regroup v0.4.70)
+
+Moved from editor.md §CI-wait (owner fix batch 2026-08-30) — these bind SUPERVISOR waiters and any detached lane polling; the editor keeps items 1–3 (gh-watch ban, OC_ACTOR stamping, oc-prchecks re-dispatch). Numbering here is local:
+
+1. **Poll floor — EVERY detached gh poller ≥60s.** Waiter, watchdog, courtesy
+   loop: no exceptions by mechanism (Duty-4 2026-08-31, lane 2fbfb2f8: a 30s
+   swap-chain waiter was the same flood class the ≥60s rule was written for).
+2. **`--wait` must fit the ~120s tool-runner ceiling (≤90s).** Longer waits =
+   exit 5 + resume-by-run-id or a detached poller (61161247: `--wait 580` can
+   never fit). The FIRST dispatch call carries an explicit ≥600s tool timeout;
+   a mid-flight dead invocation (no exit code, no run URL) is recovered by API
+   run-search (`gh run list --json`, job name embeds head sha) and ADOPTED —
+   never a blind re-dispatch (7e1ebbb6: the retry double-dispatched and the run
+   was cancelled as its own same-ref supersession).
+3. **Waiter legs verify invocations before launch.** Each leg of a detached
+   chain checks its exact tool invocation against `--help`/tools.log BEFORE the
+   chain launches (same trust level as the claim read-back, editor.md Phase 1 step 4), and a
+   mid-chain rc≠0 session-notifies the owning session IMMEDIATELY, not only at
+   chain end (2fbfb2f8: an invented `--run-id` flag made the poll leg rc=1, the
+   swap was skipped, and a GREEN build sat unswapped with no alarm). Operational
+   wakes carry `interrupt=true` (mid-turn failsafe delivery — queues at the target's
+   turn boundary; a default send REFUSES mid-turn and the alarm is lost,
+   SKILL.md §session_notify mechanics DELIVERY MODES).
+4. **Notify wiring lives in the wrapper script, NEVER as oc-prchecks flags** —
+   the tool has no notify options (212b3c83: v7 glued nonexistent
+   `--notify-session/--notify-text` → usage rc=2 in 0.0s, gate dark ~45min).
+   A detached waiter with NO notify path gets a one-shot cron courier armed
+   before end of turn (c6b1a539: quiet-window re-dispatcher completed its work,
+   lane sat dark until the owner roll call).
+5. **Log-window verification uses line-number cutoffs or full timestamps** —
+   `grep -n marker` → `tail -n +N`, or full-timestamp compare; never prefix/
+   field heuristics (log continuation lines carry no leading timestamp and leak
+   debris into the window — 2fbfb2f8 orphan false-regression).
+6. **`gh api` REST v3 keys are snake_case.** In `--jq` filters
+   `run_started_at`/`updated_at` work; camelCase (`runStartedAt`) silently
+   evaluates to null (d18ce16a: terminal conclusion + null timestamps read as a
+   data anomaly — a near-miss of a false verdict).

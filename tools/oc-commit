@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # oc-commit — C5 (lens C, Duty-6 2026-08-31): gated commit wrapper enforcing
-# the three per-commit rituals of editor.md §Phase 6c in one place:
+# the three per-commit laws of editor.md in one place (lens G regroup v0.4.70: detached-HEAD + signing → §Phase 4, writer-exclusivity → §Phase 2):
 #   1. HEAD-attached check (refuses detached HEAD — incident class)
 #   2. Session-Id trailer from OC_ACTOR (refuses unset actor)
 #   3. Issue-Ref trailer derived from the actor's latest ledger claim event
