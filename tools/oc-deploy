@@ -365,6 +365,20 @@ Issue-Ref: #99"
   OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_TARGET="$T/bin/oc-fake" \
     "$SELF_BIN" swap-execute --sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
     --run 111 --drill >/dev/null 2>&1; check_rc "swap-stage-gate" $? 4
+  # 13b. double-execution guard: deployed.sha == --sha -> exit 2, no install
+  printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD/workers-ledger.json"
+  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$SD/deployed.sha"
+  printf 'v1-fake-binary' > "$T/bin/oc-fake"
+  OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_TARGET="$T/bin/oc-fake" \
+    OC_SWAP_BACKUP_DIR="$SD/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_A2A_URL="" \
+    "$SELF_BIN" swap-execute --sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    --run 112 --features telegram --drill >/dev/null 2>&1
+  check_rc "swap-double-guard" $? 2
+  [ "$(cat "$SD/deployed.sha")" = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: guard ran past marker read"; }
+  [ "$(cat "$T/bin/oc-fake")" = "v1-fake-binary" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: guard did not prevent install"; }
   # 14. watchdog: CLEAN when fork main tip == deployed.sha
   local WTIP; WTIP="$(git -C "$T/remote.git" rev-parse main)"
   printf '%s\n' "$WTIP" > "$SD/deployed.sha"
@@ -666,6 +680,7 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: sidecar-sync journal line missing"; }
   # 17o. sidecar guard: sandbox default (SIDECARS unset) => sidecars SKIPPED,
   #      zero restarts even though units would look stale.
+  printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' > "$SD4/deployed.sha"  # reset: guard (13b) rejects same-sha re-swap
   out="$(OC_DEPLOY_STATE_DIR="$SD4" OC_SWAP_TARGET="$T/bin/oc-fake2" \
     OC_SWAP_BACKUP_DIR="$SD4/backups" OC_SWAP_RESTART_CMD=true \
     OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
@@ -1086,6 +1101,13 @@ swap_execute() {
   [ -f "$BASELINE" ] && cp -p "$BASELINE" "$WORKDIR/state-backup/baseline.json"
   [ -f "$ORDERS" ] && cp -p "$ORDERS" "$WORKDIR/state-backup/orders.json"
   local PREV_SHA; PREV_SHA="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
+  # double-execution guard (found live 2026-08-31: run 33388930453 executed twice —
+  # stall-hit session relaunched the leg after run 1 had already written markers;
+  # run 2 then recorded prev_sha == deployed sha, corrupting attribution range).
+  if [ "$PREV_SHA" = "$SHA" ]; then
+    jline guard 2 "$(jq -cn --arg s "$SHA" '{reason:"already-deployed", deployed_sha:$s}')"
+    die 2 "swap-execute: $SHA is ALREADY the deployed sha — refusing double execution (if intentional, correct markers manually)"
+  fi
 
   # --- 5. install (cp to .new, then atomic rename over target) ---
   local OLD_SHA NEW_SHA
