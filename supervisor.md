@@ -106,6 +106,9 @@ process 2026-08-28.) Everything else waits for each lane's next boundary.
 > Delivery discipline per SKILL.md §session_notify mechanics (DELIVERY ≠
 > QUEUE ACCEPTANCE canonical there): live roster check SAME turn; silent
 > target → one retry → ledger event note; `target_session` = FULL UUID only.
+> Roster/cadence wake pings and any operational directive to a MID-TURN lane
+> carry `interrupt=true` (deferred delivery) — default sends refuse and the
+> ping is lost (24 refusals 2026-08-31, the comatose-lanes incident).
 
 Inbox discipline for any (re-enabled) build lane: ORDERs / red-run handoffs /
 owner directives only; ACK bookkeeping stays ledger-internal (moved from

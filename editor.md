@@ -171,7 +171,10 @@ re-check, not on disk.)*
    chain launches (same trust level as the journal-start-line read-back), and a
    mid-chain rc≠0 session-notifies the owning session IMMEDIATELY, not only at
    chain end (2fbfb2f8: an invented `--run-id` flag made the poll leg rc=1, the
-   swap was skipped, and a GREEN build sat unswapped with no alarm).
+   swap was skipped, and a GREEN build sat unswapped with no alarm). Operational
+   wakes carry `interrupt=true` (deferred delivery — queues at the target's
+   turn boundary; a default send REFUSES mid-turn and the alarm is lost,
+   SKILL.md §session_notify mechanics DELIVERY MODES).
 7. **Notify wiring lives in the wrapper script, NEVER as oc-prchecks flags** —
    the tool has no notify options (212b3c83: v7 glued nonexistent
    `--notify-session/--notify-text` → usage rc=2 in 0.0s, gate dark ~45min).

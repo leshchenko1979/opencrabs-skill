@@ -188,6 +188,28 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   Neither role can forge or strip identity.
 - Delivery drains at the target's next tool-loop boundary and wakes idle
   sessions — no polling anywhere.
+- DELIVERY MODES (v0.4.69, binary behavior review 2026-08-31 — owner order):
+  - **immediate** — target idle: a plain send wakes it now. Default for FYI / courtesy.
+  - **deferred** — `interrupt: true` (CLI `--interrupt`) on a mid-turn target: the
+    message QUEUES and drains at that turn's next tool-loop boundary
+    ("arrived-during-work"). The ONLY reliable operational wake (gate GREEN,
+    build done, action needed) to a working lane: a default send REFUSES
+    mid-turn and the wake is LOST unless retried (2026-08-31 evidence: 24
+    refusals in one day, 19 bounced off a single HQ mid-turn stretch — lanes
+    went comatose). Never interrupt=true for courtesy pings — that is the
+    derail the gate exists to prevent.
+  - **redirect** — target no longer owns its channel: delivery is steered
+    AUTOMATICALLY to the occupying session with provenance framing (fork #19);
+    the reply names where it went. Follow the redirect — continue with the
+    occupier, never re-send to the dead uuid.
+  - **no-route** — dead/cross-instance target: error → `a2a_send` fallback,
+    else UNREACHABLE in the report.
+- Refusal handling: a mid-turn refusal is NOT delivery. Operational content →
+  resend with `interrupt: true` in the same turn; deferrable content → ledger
+  skip note + retry at your next boundary.
+- CLI form carries `--sender "<lane label>" --title "<topic>"` where supported
+  (oc-deploy fanout precedent) — the mechanical `from=<uuid>` header is added
+  on top and cannot be forged or stripped.
 
 ### Telegram surface law (v0.4.31, owner directive 2026-08-28)
 
