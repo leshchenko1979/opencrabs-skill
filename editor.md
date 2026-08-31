@@ -40,6 +40,29 @@ Phase 7 step 2c) or quick-build-linux dispatched via `oc-deploy ship`. Need
 Iterating clippy fixes? Edit code, re-dispatch pr-checks, read the run log.
 Never compile locally.
 
+## Tool reference — editor's quick table (owner 2026-08-31)
+
+Canonical descriptions + selftest contracts: SKILL.md tool table. The
+editor-relevant subset, invocation forms only (all paths relative to the skill
+dir; `OC_ACTOR=<your full uuid>` on every call):
+
+| Tool | Invocation | For | rc |
+|------|-----------|-----|-----|
+| `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add→oc-index-worktree | 0 ok / dirty-tree gate on remove |
+| `oc-index-worktree` | `tools/oc-index-worktree` (inside worktree) | codegraph index — un-skippable step 2 | 0 ok |
+| `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume | 0 GREEN / 2 usage / 3 RED / 5 resume |
+| `oc-ledger` | `stamp claim --what "…"` (FULL flags, no bare positionals) · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack | 0 ok / 2 usage |
+| `oc-drift-check` | `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` | §Mid-cycle skill drift step 1–2 | 0 no-drift / 1 DRIFT |
+| `oc-deploy` | `ship --execute` · `poll` · `watch` · `fanout` | ship chain (dispatch → watch → swap); ship dispatch is leg 1 ONLY — watch+swap REQUIRED | see SKILL.md |
+| `oc-upstream-delta` | `tools/oc-upstream-delta` | fork vs upstream divergence read | 0 ok |
+| `oc-attrib` | `tools/oc-attrib --deployed` | who owns the deployed range (fanout targeting) | 0 ok |
+| `oc-branch-sweep` | `tools/oc-branch-sweep --repo <path>` | merged/stale branch proof; deletes MERGED only | 0 ok |
+| `oc-pr-fault-scope` | `tools/oc-pr-fault-scope <pr> --run <id>` | failing-files ∩ PR-files (blame hygiene) | 0 in-scope / base-fault |
+
+Rules that outlive any table: journal read-back after every state-changing
+call (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
+a tool's exit code alone; the ≥60s detached-poll floor (§CI-wait discipline).
+
 ## Phase 0 — Fresh base
 
 ```bash
