@@ -650,6 +650,15 @@ Rules:
   it resolves against adolfousier's issue space, not ours (owner directive
   2026-08-27 — issues live on the fork). WE close the fork issue (step 5) right
   after the PR is up — do not wait for the maintainer merge.
+- **QUALIFIED FORK REFS on upstream surfaces (owner directive 2026-08-31, fork #54):**
+  a bare `#N` where N is a FORK issue number must never appear on an upstream
+  surface (PR body, PR title, issue body, comment) OUTSIDE a code span — GitHub
+  autolinks it against adolfousier's issue space and the tooltip points at an
+  unrelated upstream issue (upstream #29 = memory-process question vs fork #29 =
+  compaction signal). Write `leshchenko1979/opencrabs#N` or the full URL. Bare
+  `#N` stays reserved for UPSTREAM-local references. Code spans are exempt
+  (GitHub does not autolink inside backticks) — literal log-line quotes stay
+  verbatim. Fork-side surfaces are unaffected (bare #N resolves correctly there).
 - One feature = one PR; never bundle two features to save a PR.
 - **ATOMICITY (owner directive 2026-08-26):** issues, PRs and commits are atomic —
   one problem per issue, one logical change per commit, one issue per PR. Every
