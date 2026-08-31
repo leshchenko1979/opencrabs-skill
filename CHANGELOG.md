@@ -5,6 +5,10 @@ Moved out of SKILL.md frontmatter at v0.4.43 (Duty-6 run-2 finding B6 —
 material, not procedure). Git-tracked in the skill repo; append one entry per
 bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 
+## v0.4.67 (2026-08-31) - qualified fork refs on upstream surfaces
+
+- editor.md Phase 7: bare `#N` (fork issue numbers) FORBIDDEN on upstream surfaces outside code spans - GitHub autolinks to adolfo's unrelated issue #N. Qualified `leshchenko1979/opencrabs#N` or full URL required. Origin: owner directive 2026-08-31 (fork #54); live offenders found on PR titles 1273/1268/1266 + issue bodies 1255/1257, patched same day.
+
 ## Entries
 
 ## v0.4.66 (2026-08-31) — editor requirement-intake rule (owner 2026-08-31 14:51Z)
