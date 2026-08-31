@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-ship-audit — C6 (lens C, Duty-6 2026-08-31): dispatch-WITHOUT-swap alarm.
+# Scans the unified tools.log for SUCCESSFUL ship dispatches (oc-deploy
+# "ship --sha <sha> ... --execute", exit 0) and pairs each against swap
+# evidence: a swap journal (swap-<sha>*.jsonl with a step:"auto-swap" line)
+# in the oc-deploy journal dir, or the deployed.sha marker matching the sha.
+# Closes the orphaned-GREEN-ship class (3 live instances 2026-08-31): a
+# dispatch-only rc=0 exit can never again read as a shipped build — absence
+# of a swap row for the sha is alarmable from the log alone.
+# Dispatches younger than --grace minutes (default 120) read IN-FLIGHT, not
+# ORPHANED (no false alarm on a chain still executing).
+#
+# Usage:
+#   oc-ship-audit [--hours N] [--log <tools.log>] [--journal-dir <dir>]
+#                 [--grace <min>] | --selftest
+#
+# Output: TSV: VERDICT <tab> sha7 <tab> ts <tab> lag_h <tab> swapped-evidence
+# Exit codes: 0 all-SWAPPED (or no dispatches) · 1 ORPHANED found ·
+#             2 usage · 3 log/dir missing
+# Env: OC_TOOLS_LOG
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-ship-audit" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() { echo "usage: $0 [--hours N] [--log <tools.log>] [--journal-dir <dir>] [--grace <min>] | --selftest" >&2; exit 2; }
+
+if [ "${1:-}" = "--selftest" ]; then
+  d="$(mktemp -d)" || exit 3
+  trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  mkdir -p "$d/journal"
+  OLD="$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+  NEW="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+  # paired dispatch (has swap journal) + orphaned old dispatch + in-flight new dispatch + failed attempt
+  cat > "$d/tools.log" <<EOF
+{"ts":"$OLD","tool":"oc-deploy","actor":"a1","args":"ship --sha aaaaaaa111111111111111111111111111111111 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}
+{"ts":"$OLD","tool":"oc-deploy","actor":"a1","args":"ship --sha bbbbbbb222222222222222222222222222222222 --features telegram --execute","exit":2,"secs":5.0,"extra":{}}
+{"ts":"$OLD","tool":"oc-deploy","actor":"a2","args":"ship --sha ccccccc333333333333333333333333333333333 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}
+{"ts":"$NEW","tool":"oc-deploy","actor":"a3","args":"ship --sha ddddddd444444444444444444444444444444444 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}
+EOF
+  printf '{"ts":"%s","seq":1,"step":"auto-swap","exit":0,"sha":"aaaaaaa111111111111111111111111111111111","run_id":"123"}\n' "$OLD" > "$d/journal/swap-aaaaaaa-1788000000.jsonl"
+  OUT="$("$0" --log "$d/tools.log" --journal-dir "$d/journal")"; RC=$?
+  [ $RC -eq 1 ] || { echo "selftest: orphan present but rc=$RC" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q $'^ORPHANED\tccccccc' || { echo "selftest: ccccccc not ORPHANED" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q $'^SWAPPED\taaaaaaa' || { echo "selftest: aaaaaaa not SWAPPED" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q $'^IN-FLIGHT\tddddddd' || { echo "selftest: ddddddd not IN-FLIGHT" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q 'bbbbbbb' && { echo "selftest: failed dispatch bbbbbbb must be skipped" >&2; exit 1; }
+  # all swapped -> 0
+  printf '{"ts":"%s","seq":1,"step":"auto-swap","exit":0,"sha":"ccccccc333333333333333333333333333333333"}\n' "$OLD" > "$d/journal/swap-ccccccc-1788000100.jsonl"
+  "$0" --log "$d/tools.log" --journal-dir "$d/journal" >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: audit not clean after ccccccc swap journal (IN-FLIGHT ddddddd must not alarm)" >&2; exit 1; }
+  # usage
+  "$0" --nonsense >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: bad flag != 2" >&2; exit 1; }
+  # missing log -> 3
+  "$0" --log "$d/nope.log" >/dev/null 2>&1; [ $? -eq 3 ] || { echo "selftest: missing log != 3" >&2; exit 1; }
+  # rogue non-JSON lines must NOT truncate the scan into a false clean:
+  # append a fresh orphan dispatch + insert garbage BEFORE it; orphan must still be found (rc 1)
+  OLD2="$(date -u -d '5 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"ts":"%s","tool":"oc-deploy","actor":"a9","args":"ship --sha eeeee55555555555555555555555555555555555 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}\n' "$OLD2" >> "$d/tools.log"
+  sed -i "1i 2026-08-29T16:44:18Z stamp rogue-writer action=ledger-append outcome=ok n=1325" "$d/tools.log"
+  "$0" --log "$d/tools.log" --journal-dir "$d/journal" >/dev/null 2>/dev/null
+  [ $? -eq 1 ] || { echo "selftest: rogue line truncated scan into false clean" >&2; exit 1; }
+  echo "selftest OK"; exit 0
+fi
+
+HOURS=24; GRACE=120
+LOG="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
+JDIR="/root/.opencrabs/profiles/ops/opencrabs-dev/oc-deploy/journal"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --hours) HOURS="${2:-}"; shift 2 ;;
+    --log) LOG="${2:-}"; shift 2 ;;
+    --journal-dir) JDIR="${2:-}"; shift 2 ;;
+    --grace) GRACE="${2:-}"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+[ -f "$LOG" ] || { echo "log missing: $LOG" >&2; exit 3; }
+[ -d "$JDIR" ] || { echo "journal dir missing: $JDIR" >&2; exit 3; }
+
+# Robustness (2026-08-31 live incident): the canonical log carries rogue
+# non-JSON TSV lines (a stamp script wrote raw text on 08-29, lines 112-113).
+# jq ABORTS at the first bad line — a naive consumer scans only the head and
+# can emit a false CLEAN. Pre-pass: isolate JSON lines, count and NAME the
+# skipped ones loudly.
+JSON_LOG="$(mktemp)" || exit 3
+trap '_rc=$?; rm -f "$JSON_LOG" /tmp/.oc-ship-audit.$$; oc_log_finish "$_rc"' EXIT
+BAD=0
+while IFS= read -r line; do
+  case "$line" in
+    "{"*) printf '%s\n' "$line" >> "$JSON_LOG" ;;
+    *) [ -n "$line" ] && { BAD=$((BAD + 1)); echo "audit: SKIPPED non-JSON line: ${line:0:80}" >&2; } ;;
+  esac
+done < "$LOG"
+[ "$BAD" -gt 0 ] && echo "audit: $BAD non-JSON legacy lines skipped — log format contract violated, scan covers JSON rows only" >&2
+
+SINCE="$(date -u -d "-$HOURS hours" +%s)"
+NOW="$(date -u +%s)"
+ORPHANS=0
+
+# successful dispatch rows within the window
+jq -r --argjson since "$SINCE" 'select(.tool=="oc-deploy" and .exit==0)
+  | .args | select(startswith("ship --sha ")) | select(contains("--execute")) | capture("^ship --sha (?<sha>[0-9a-f]{7,40})").sha' \
+  "$JSON_LOG" 2>/dev/null | while read -r sha; do
+  ts="$(jq -r --arg sha "$sha" 'select(.tool=="oc-deploy" and .exit==0 and (.args|contains($sha))) | .ts' "$JSON_LOG" | tail -1)"
+  short="${sha:0:7}"
+  TE="$(date -u -d "$ts" +%s 2>/dev/null)" || continue
+  [ "$TE" -ge "$SINCE" ] || continue
+  ANY=1
+  LAG="$(( (NOW - TE) / 3600 )).$(( ((NOW - TE) % 3600) * 10 / 3600 ))"
+  EV=""
+  # evidence 1: swap journal for this sha (file name or auto-swap line)
+  if ls "$JDIR"/swap-"$short"-*.jsonl >/dev/null 2>&1 \
+     && grep -l '"step":"auto-swap"' "$JDIR"/swap-"$short"-*.jsonl >/dev/null 2>&1; then
+    EV="swap-journal swap-$short*"
+  fi
+  # evidence 2: journal content match (full sha inside any swap journal)
+  if [ -z "$EV" ] && grep -l "\"sha\":\"$sha\"" "$JDIR"/swap-*.jsonl >/dev/null 2>&1; then
+    EV="swap-journal content"
+  fi
+  if [ -z "$EV" ]; then
+    if [ $((NOW - TE)) -lt $((GRACE * 60)) ]; then
+      printf 'IN-FLIGHT\t%s\t%s\t%s\t-\n' "$short" "$ts" "$LAG"
+    else
+      printf 'ORPHANED\t%s\t%s\t%s\tno swap journal for sha\n' "$short" "$ts" "$LAG"
+    fi
+  else
+    printf 'SWAPPED\t%s\t%s\t%s\t%s\n' "$short" "$ts" "$LAG" "$EV"
+  fi
+done > /tmp/.oc-ship-audit.$$ 2>/dev/null
+
+if [ -s /tmp/.oc-ship-audit.$$ ]; then
+  cat /tmp/.oc-ship-audit.$$
+  grep -q '^ORPHANED' /tmp/.oc-ship-audit.$$ && ORPHANS=1
+fi
+rm -f /tmp/.oc-ship-audit.$$
+if [ "$ORPHANS" -eq 1 ]; then
+  echo "audit: ORPHANED dispatch found — dispatch-only rc=0 is NOT a shipped build" >&2
+  exit 1
+fi
+echo "audit: clean (no orphaned dispatches in the last ${HOURS}h)" >&2
+exit 0
