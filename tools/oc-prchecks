@@ -29,9 +29,15 @@
 # OC_PRCHECKS_RESOLVE_WAIT, OC_PRCHECKS_RESOLVE_POLL,
 # OC_DEPLOY_STATE_DIR (lock home), OC_PRCHECKS_LOCK_WAIT (tests/ops).
 #
-# Exit: 0 GREEN (terminal, all jobs+steps ok, fmt explicit)
+# Exit: 0 GREEN (terminal, run conclusion success, zero FAILED steps/jobs)
 #       2 usage / sha-shape / unknown ref / repo-path-no-origin
-#       3 RED (terminal with a failure, or fmt step missing/skipped/failed)
+#       3 RED (run conclusion cancelled/failure/timed_out/startup_failure,
+#         or a FAILED step — soft-fail exposed; skipped/neutral steps pass)
+#       5 non-terminal at verdict time (resume: gh run view <id>)
+# Verdict rule (v0.4.56, owner Go 08-31 03:05Z): the RUN conclusion is the
+# verdict; per-step detail is a tiebreak ONLY for conclusion=failure steps
+# (kills false GREEN on cancelled and false RED on skipped fmt — issue-lane
+# findings 2026-08-30, runs 33316539757/33341579381 et al).
 #       4 dispatch-or-api-or-lock failure (incl. yml-missing-on-carrier,
 #         adoption timeout, dispatch lock busy)
 #       5 still in flight after --wait (run id + URL on stdout for resume)
@@ -106,8 +112,13 @@ case "\$*" in
       *)           printf '{"jobs":[{"name":"lint","conclusion":"success","steps":[{"name":"cargo fmt","conclusion":"success"}]},{"name":"test","conclusion":"success","steps":[]}]}\n' ;;
     esac ;;
   *"run view"*)
-    [ "\$S" = "inflight" ] && printf '{"status":"in_progress","conclusion":null}\n' && exit 0
-    printf '{"status":"completed","conclusion":"success"}\n' ;;
+    case "\$S" in
+      inflight)       printf '{"status":"in_progress","conclusion":null}\n' && exit 0 ;;
+      cancelled)      printf '{"status":"completed","conclusion":"cancelled"}\n' ;;
+      run_failed)     printf '{"status":"completed","conclusion":"failure"}\n' ;;
+      nullconclusion) printf '{"status":"completed","conclusion":null}\n' ;;
+      *)              printf '{"status":"completed","conclusion":"success"}\n' ;;
+    esac ;;
   *) printf '{}\n' ;;
 esac
 EOS
@@ -141,8 +152,23 @@ do_selftest() {
   if [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"cargo fmt"*) true ;; *) false ;; esac; then
     t_ok "fmt soft-fail EXPOSED: job success + fmt failure -> 3 RED"
   else t_bad "fmt soft-fail (rc=$T_RC out=$T_OUT)"; fi
-  run_t fmt_skipped "$SHA";          [ "$T_RC" -eq 3 ] && t_ok "fmt skipped -> 3 RED" || t_bad "fmt skipped (rc=$T_RC)"
+  run_t fmt_skipped "$SHA"
+  if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"fmt-skipped-pass"*) true ;; *) false ;; esac; then
+    t_ok "fmt skipped + run success -> GREEN exit 0 reason fmt-skipped-pass (IDEA B killed)"
+  else t_bad "fmt skipped pass (rc=$T_RC out=$T_OUT)"; fi
   run_t job_failed "$SHA";           [ "$T_RC" -eq 3 ] && t_ok "job failed -> 3 RED" || t_bad "job failed (rc=$T_RC)"
+  run_t cancelled "$SHA"
+  if [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"run-cancelled"*) true ;; *) false ;; esac; then
+    t_ok "run conclusion cancelled -> 3 RED reason run-cancelled (false GREEN killed)"
+  else t_bad "cancelled (rc=$T_RC out=$T_OUT)"; fi
+  run_t run_failed "$SHA"
+  if [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"run-failure"*) true ;; *) false ;; esac; then
+    t_ok "run conclusion failure -> 3 RED reason run-failure"
+  else t_bad "run_failed (rc=$T_RC out=$T_OUT)"; fi
+  run_t nullconclusion "$SHA"
+  if [ "$T_RC" -eq 5 ] && case "$T_OUT" in *"non-terminal at verdict time"*) true ;; *) false ;; esac; then
+    t_ok "non-terminal at verdict time -> 5, no verdict emitted (stale-read guard)"
+  else t_bad "nullconclusion (rc=$T_RC out=$T_OUT)"; fi
   run_t inflight "$SHA" --wait 1
   if [ "$T_RC" -eq 5 ] && case "$T_OUT" in *"runs/222"*) true ;; *) false ;; esac; then
     t_ok "in-flight timeout -> 5 with run URL for resume"
@@ -314,7 +340,14 @@ done
 CONCLUSION="$(printf '%s' "$ST" | jq -r '.conclusion')"
 oc_log_extra "conclusion" "$CONCLUSION"
 
-# ---------- step 5: per-step report, fmt soft-fail EXPOSED ---------------------
+# ---------- step 5: verdict — RUN conclusion authoritative (v0.4.56) ----------
+# Verdicts fire ONLY on a terminal run conclusion (the 23:45:07Z RED fired 7s
+# BEFORE conclusion=success — stale reads must never verdict).
+if [ -z "$CONCLUSION" ] || [ "$CONCLUSION" = "null" ]; then
+  echo "IN-FLIGHT run=$RUN_ID $RUN_URL (non-terminal at verdict time — resume: gh run view $RUN_ID)" >&2
+  oc_log_extra "verdict_reason" "non-terminal"
+  exit 5
+fi
 JOBS="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json jobs 2>/dev/null)" || {
   echo "$PROG: jobs fetch failed for run $RUN_ID" >&2; exit 4; }
 printf '%s' "$JOBS" | jq -r '.jobs[] | "JOB\t\(.name)\t\(.conclusion)"'
@@ -322,21 +355,31 @@ FMT_LINES="$(printf '%s' "$JOBS" | jq -r '.jobs[].steps[]? | select(.name | test
 [ -n "$FMT_LINES" ] && printf '%s\n' "$FMT_LINES"
 
 VERDICT="GREEN"
-REASONS=""
-# every job must be success
-BAD_JOBS="$(printf '%s' "$JOBS" | jq -r '[.jobs[] | select(.conclusion != "success") | .name] | join(",")')"
-if [ -n "$BAD_JOBS" ]; then VERDICT="RED"; REASONS="jobs failed: $BAD_JOBS"; fi
-# fmt step must exist and be success (the soft-fail the job conclusion hides)
-if [ -z "$FMT_LINES" ]; then
-  VERDICT="RED"; REASONS="${REASONS:+$REASONS; }fmt step MISSING"
-elif printf '%s\n' "$FMT_LINES" | awk -F'\t' '$3 != "success" { found=1 } END { exit !found }'; then
-  VERDICT="RED"; REASONS="${REASONS:+$REASONS; }fmt step not success (soft-fail exposed)"
-fi
+REASON=""
+case "$CONCLUSION" in
+  success)
+    # tiebreak ONLY: steps/jobs with conclusion=failure fail; skipped/neutral pass
+    BAD_JOBS="$(printf '%s' "$JOBS" | jq -r '[.jobs[] | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out" or .conclusion=="startup_failure") | .name] | join(",")')"
+    if [ -n "$BAD_JOBS" ]; then VERDICT="RED"; REASON="jobs-failed: $BAD_JOBS"; fi
+    if printf '%s\n' "$FMT_LINES" | awk -F'\t' '$3 == "failure" { found=1 } END { exit !found }'; then
+      VERDICT="RED"; REASON="${REASON:+$REASON; }fmt step FAILED (soft-fail exposed)"
+    elif [ "$VERDICT" = "GREEN" ] && printf '%s\n' "$FMT_LINES" | awk -F'\t' '$3 == "skipped" { found=1 } END { exit !found }'; then
+      REASON="fmt-skipped-pass"
+    fi
+    ;;
+  cancelled|failure|timed_out|startup_failure)
+    VERDICT="RED"; REASON="run-$CONCLUSION"
+    ;;
+  *)
+    VERDICT="RED"; REASON="run-conclusion-$CONCLUSION"
+    ;;
+esac
 oc_log_extra "fmt" "$(printf '%s' "$FMT_LINES" | awk -F'\t' '{print $3}' | sort -u | tr '\n' ',' | sed 's/,$//')"
 oc_log_extra "verdict" "$VERDICT"
+oc_log_extra "verdict_reason" "$REASON"
 
-echo "VERDICT $VERDICT"
+echo "VERDICT $VERDICT${REASON:+ (reason: $REASON)}"
 echo "RUN $RUN_URL"
 if [ "$VERDICT" = "GREEN" ]; then exit 0; fi
-echo "$PROG: RED — ${REASONS:-run conclusion $CONCLUSION}" >&2
+echo "$PROG: RED — $REASON" >&2
 exit 3

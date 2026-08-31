@@ -8,7 +8,7 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.55
+version: 0.4.56
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
