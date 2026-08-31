@@ -15,6 +15,7 @@
 # Usage:
 #   oc-wt add <task> <branch> [--base origin/main] [--force] [--repo P] [--no-log]
 #   oc-wt remove <task> [--force] [--repo P] [--no-log]
+#   oc-wt list [--repo P] [--no-log]     (lens C10, v0.4.65: task/branch/dirty TSV)
 #   oc-wt --selftest          offline fixture repo (no network)
 #
 # Exit: 0 ok / 2 usage (slug, verb, args) / 3 add:path-exists · remove:dirty
@@ -37,6 +38,7 @@ usage() {
   cat >&2 <<EOS
 Usage: $PROG add <task> <branch> [--base origin/main] [--force] [--repo P] [--no-log]
        $PROG remove <task> [--force] [--repo P] [--no-log]
+       $PROG list [--repo P] [--no-log]   # TSV: task path branch dirty-n
 Exit: 0 ok / 2 usage / 3 path-exists-or-dirty / 4 index-failed / 5 repo-or-branch-missing / 6 behind-base
 EOS
   exit 2
@@ -100,6 +102,12 @@ do_selftest() {
   if [ "$RC" -eq 4 ] && [ -d "$HOME/oc-wt-t4" ] && case "$OUT" in *"codegraph index exploded"*) true ;; *) false ;; esac; then
     t_ok "index fail -> 4, tree kept, warning verbatim"
   else t_bad "index fail (rc=$RC dir=$([ -d "$HOME/oc-wt-t4" ] && echo yes || echo no))"; fi
+  # 7b. list (C10) -> 3 rows: task/path/branch/dirty, t1 clean
+  LIST_OUT="$(env OC_TOOLS_NOLOG=1 "$SELF" list --repo "$D/repo" 2>&1)"; RC=$?
+  if [ "$RC" -eq 0 ] && [ "$(printf '%s\n' "$LIST_OUT" | grep -c .)" -eq 3 ] \
+     && [ "$(printf '%s\n' "$LIST_OUT" | awk -F'\t' '$1=="t1" && $3=="feat-x" && $4==0' | wc -l)" -eq 1 ]; then
+    t_ok "list -> 3 rows with task/path/branch/dirty"
+  else t_bad "list (rc=$RC rows=$(printf '%s\n' "$LIST_OUT" | grep -c .))"; fi
   # 8. remove clean -> 0 + gone
   env OC_TOOLS_NOLOG=1 "$SELF" remove t3 --repo "$D/repo" >/dev/null 2>&1; RC=$?
   [ "$RC" -eq 0 ] && [ ! -d "$HOME/oc-wt-t3" ] && t_ok "remove clean -> 0, dir gone" || t_bad "remove clean (rc=$RC)"
@@ -109,6 +117,10 @@ do_selftest() {
   if [ "$RC" -eq 3 ] && case "$OUT" in *"untracked.txt"*) true ;; *) false ;; esac; then
     t_ok "remove dirty -> 3 with porcelain listing"
   else t_bad "remove dirty (rc=$RC out=$OUT)"; fi
+  # 9b. list dirty bit (C10): t1 now shows 1 dirty entry
+  LIST_OUT="$(env OC_TOOLS_NOLOG=1 "$SELF" list --repo "$D/repo" 2>&1)"; RC=$?
+  [ "$RC" -eq 0 ] && [ "$(printf '%s\n' "$LIST_OUT" | awk -F'\t' '$1=="t1" && $4==1' | wc -l)" -eq 1 ] \
+    && t_ok "list dirty bit (t1 -> 1)" || t_bad "list dirty (rc=$RC)"
   # 10. remove dirty --force -> 0 + journal carries the destroyed listing
   env OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" remove t1 --force --repo "$D/repo" >/dev/null 2>&1; RC=$?
   if [ "$RC" -eq 0 ] && [ -f "$D/tools.log" ] && grep -q "untracked.txt" "$D/tools.log"; then
@@ -129,10 +141,13 @@ do_selftest() {
 
 # ---------- arg parse ----------------------------------------------------------
 VERB="${1:-}"; shift 2>/dev/null || true
-case "$VERB" in add|remove) : ;; *) usage ;; esac
-TASK="${1:-}"; shift 2>/dev/null || true
-[ -n "$TASK" ] || usage
-slug_ok "$TASK" || { echo "$PROG: bad task slug '$TASK' (^[a-z0-9][a-z0-9-]{0,40}$)" >&2; exit 2; }
+case "$VERB" in add|remove|list) : ;; *) usage ;; esac
+TASK=""
+if [ "$VERB" != "list" ]; then
+  TASK="${1:-}"; shift 2>/dev/null || true
+  [ -n "$TASK" ] || usage
+  slug_ok "$TASK" || { echo "$PROG: bad task slug '$TASK' (^[a-z0-9][a-z0-9-]{0,40}$)" >&2; exit 2; }
+fi
 BRANCH=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -147,9 +162,22 @@ while [ $# -gt 0 ]; do
 done
 case "$REPO" in "~"|"~/"*) REPO="${HOME}${REPO#\~}" ;; esac
 WT="$HOME/oc-wt-$TASK"
-oc_log_extra "verb" "$VERB"; oc_log_extra "task" "$TASK"
+oc_log_extra "verb" "$VERB"; [ -n "$TASK" ] && oc_log_extra "task" "$TASK"
 [ -d "$REPO" ] && "$GIT_BIN" -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || {
   echo "$PROG: repo not found: $REPO" >&2; exit 5; }
+
+if [ "$VERB" = "list" ]; then
+  # lens C10 (v0.4.65): TSV of this repo's oc-wt worktrees — task, path, branch, dirty-n
+  "$GIT_BIN" -C "$REPO" worktree list --porcelain | awk '
+    /^worktree /  { wt=substr($0,10) }
+    /^branch /    { br=substr($0,8)
+                    if (wt ~ /\/oc-wt-/) { print wt "\t" br; wt=""; br="" } }' | while IFS="$(printf '\t')" read -r wpath wbranch; do
+    task="$(basename "$wpath")"; task="${task#oc-wt-}"
+    dirty="$("$GIT_BIN" -C "$wpath" status --porcelain 2>/dev/null | wc -l)"
+    printf '%s\t%s\t%s\t%s\n' "$task" "$wpath" "${wbranch#refs/heads/}" "$dirty"
+  done
+  exit 0
+fi
 
 if [ "$VERB" = "add" ]; then
   [ -n "$BRANCH" ] || usage
