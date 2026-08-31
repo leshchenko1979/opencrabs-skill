@@ -16,7 +16,10 @@
 #                                          mirror push to origin (v0.4.50)
 #   check-version                          SKILL.md vs 3 ledger fields (RO)
 #   cadence                                skill-bumps since last review (RO)
-#   ack <uuid> <version> [--at <ts>]       worker last_acked + ack event
+#   ack <uuid> <0.N.N version> [--at <ts>]  worker last_acked + ack event
+#                                          (v0.4.55: full skill version shape —
+#                                          the old N.N regex could never record
+#                                          a real version; folds IDEA A core)
 #   enroll <uuid> <role> [--topic N] [--feature X]   roster row creation
 #   commit-pending [--bundle]              sweep: commit uncommitted stamps /
 #                                          runtime artifacts (B1–B4 option b);
@@ -28,7 +31,7 @@
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
-#   --selftest                             fixture suite (48 cases)
+#   --selftest                             fixture suite (51 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -267,10 +270,11 @@ cmd_cadence() {
 cmd_ack() {
   local uuid="${1:-}" version="${2:-}" at=""; shift 2 2>/dev/null || true
   while [ $# -gt 0 ]; do case "$1" in --at) at="${2:-}"; shift 2 ;; *) shift ;; esac; done
-  [ -n "$uuid" ] && [ -n "$version" ] || die 2 "usage: oc-ledger ack <uuid> <N.N version> [--at <ts>]"
+  [ -n "$uuid" ] && [ -n "$version" ] || die 2 "usage: oc-ledger ack <uuid> <0.N.N version> [--at <ts>]"
   echo "$uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
     || die 2 "ack: uuid shape invalid (want 8-4-4-4-12 hex): '$uuid'"
-  echo "$version" | grep -Eq '^[0-9]+\.[0-9]+$' || die 2 "ack: version shape invalid (want N.N): '$version'"
+  version="${version#v}"  # tolerate display spelling v0.N.N; store bare, matching sync
+  echo "$version" | grep -Eq '^0\.[0-9]+\.[0-9]+$' || die 2 "ack: version shape invalid (want 0.N.N, v prefix tolerated): '$version'"
   [ -n "$at" ] || at="$(now_iso)"
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   jq -e --arg u "$uuid" '.workers[]? | select(.uuid == $u)' "$LEDGER" >/dev/null 2>&1 \
@@ -437,12 +441,16 @@ EOF
   bash "$ME" cadence >/dev/null 2>&1; chk "cadence-fire-rc" 1 $?
   bash "$ME" stamp review-battery "boundary" >/dev/null 2>&1
   bash "$ME" cadence | grep -q "0/5 WAIT" && ok || bad "cadence-reset-on-review"
-  # 23-26: ack
-  bash "$ME" ack short-uuid 0.4 >/dev/null 2>&1; chk "ack-bad-uuid" 2 $?
-  bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.2 >/dev/null 2>&1; chk "ack-bad-version" 2 $?
-  bash "$ME" ack 11111111-1111-1111-1111-111111111111 0.4 >/dev/null 2>&1; chk "ack-unknown-uuid" 3 $?
-  bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4 >/dev/null 2>&1; chk "ack-happy" 0 $?
-  chk "ack-written" "0.4" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
+  # 23-26: ack (v0.4.55: full 0.N.N shape — the old N.N regex could never
+  # record a real skill version, which broke the reload convention's ack step)
+  bash "$ME" ack short-uuid 0.4.2 >/dev/null 2>&1; chk "ack-bad-uuid" 2 $?
+  bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4 >/dev/null 2>&1; chk "ack-bad-version" 2 $?
+  bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 1.2.3 >/dev/null 2>&1; chk "ack-bad-major" 2 $?
+  bash "$ME" ack 11111111-1111-1111-1111-111111111111 0.4.2 >/dev/null 2>&1; chk "ack-unknown-uuid" 3 $?
+  bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.2 >/dev/null 2>&1; chk "ack-happy" 0 $?
+  chk "ack-written" "0.4.2" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
+  bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee v0.4.3 >/dev/null 2>&1; chk "ack-vprefix" 0 $?
+  chk "ack-vprefix-normalized" "0.4.3" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
   # 27-29: enroll
   bash "$ME" enroll nope editor >/dev/null 2>&1; chk "enroll-bad-uuid" 2 $?
   bash "$ME" enroll 22222222-2222-2222-2222-222222222222 editor --topic 42 >/dev/null 2>&1; chk "enroll-happy" 0 $?

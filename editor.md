@@ -93,7 +93,9 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
    or wakes to a `session_notify`, FIRST compare
    `grep -m1 '^version:' SKILL.md` against the version recorded at your claim.
 2. Drift → re-read SKILL.md + editor.md in full from disk, then stamp
-   `oc-ledger ack <your-roster-uuid> <new-version>` — the ack row is the
+   `oc-ledger ack <your-roster-uuid> <new-version>` (shape `0.N.N`, `v`
+   prefix tolerated — v0.4.55 fixed the N.N-only regex that made every real
+   version un-ackable) — the ack row is the
    mechanical adoption record (supervisor Duty 3 reads it for skew-chase).
 3. Apply changed rules from the NEXT phase boundary — a phase already in
    flight finishes under the rules it started under. Doc-only drift adopts
