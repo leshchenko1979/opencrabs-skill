@@ -51,6 +51,7 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 | `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add→oc-index-worktree | 0 ok / dirty-tree gate on remove |
 | `oc-index-worktree` | `tools/oc-index-worktree` (inside worktree) | codegraph index — un-skippable step 2 | 0 ok |
 | `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume | 0 GREEN / 2 usage / 3 RED / 5 resume |
+| `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) | 0 no-candidates / 1 candidates / 2 usage / 3 api |
 | `oc-ledger` | `stamp claim --what "…"` (canonical: `--what`; bare positional also accepted) · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack | 0 ok / 2 usage |
 | `oc-drift-check` | `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` | §Mid-cycle skill drift step 1–2 | 0 no-drift / 1 DRIFT |
 | `oc-deploy` | `ship --execute` · `poll` · `watch` · `fanout` | ship chain (dispatch → watch → swap); ship dispatch is leg 1 ONLY — watch+swap REQUIRED | see SKILL.md |
@@ -195,7 +196,10 @@ re-check, not on disk.)*
    pre-read understanding, mis-stating mechanics until a reload mandate
    restored fidelity)*
 
-1. Search existing issues first: `gh search issues ... -R leshchenko1979/opencrabs`
+1. Search existing issues first — MECHANIZED: `tools/oc-issue-sweep '<query>'`
+   (closed-issue hygiene sweep: fork open + fork closed + upstream closed,
+   harvests `close-reason:` lines from comments, TSV; the raw form is
+   `gh search issues ... -R leshchenko1979/opencrabs`
    (the issues home, owner directive 2026-08-27). UNIQUENESS GATE (v0.4.17):
    "no issue covers this" may be asserted only after a CLOSED-state sweep AND
    paginated comments (--paginate) — an open-only page-one check missed the
@@ -541,6 +545,9 @@ rule for completed features) — but it fires ONLY on owner approval.
 #    ROUTING (reply or positive reaction counts; silence does NOT).
 
 # 1. list fork-only commits, pick THIS feature's (trailers + touched files)
+#    — mechanized: `tools/oc-deploy contributors <old>..<new>` (3-col TSV:
+#    session-uuid / issue_refs / sha7s) or `tools/oc-attrib --range` for
+#    roster-resolved roles; the raw form:
 git -C ~/opencrabs fetch adolfousier
 git -C ~/opencrabs log --format='%H%x09%s%x09%(trailers:key=Session-Id,valueonly)' \
   adolfousier/main..origin/main

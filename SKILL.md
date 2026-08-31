@@ -319,8 +319,10 @@ codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing 
 - The feature set is PARAMETRIZED (`ebf44f69`, 2026-08-25): a workflow_dispatch
   input `features` (comma-separated). Its **`default:` in the workflow yml on the
   CARRIER branch `ci/quick-build-linux` is the SINGLE SOURCE OF TRUTH** for what we
-  ship — these skill files NEVER copy the set (drift killed 2026-08-25). Read it live:
-  `git -C ~/opencrabs show origin/ci/quick-build-linux:.github/workflows/quick-build-linux.yml | grep -A2 'features:'`
+  ship — these skill files NEVER copy the set (drift killed 2026-08-25). Read it
+  live with `tools/oc-carrier-features` (the reader oc-deploy itself resolves
+  through; raw form:
+  `git -C ~/opencrabs show origin/ci/quick-build-linux:.github/workflows/quick-build-linux.yml | grep -A2 'features:'`)
   Changing the pick later = one-line Editor commit to that yml's `default:` —
   skills untouched.
 - Dispatch ALWAYS passes the set explicitly: `-f features=<set>` (decision
