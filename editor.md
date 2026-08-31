@@ -223,6 +223,16 @@ re-check, not on disk.)*
    passed — a glitched argv (event n=1361 stored `what:"--what"`) silently
    produced an empty claim the lane cited as proof for ~11h. A read-back mismatch
    = re-stamp + `tools.log` check before anything cites the event number.
+5. **Requirement intake — persist processed, not verbatim (owner 2026-08-31
+   14:51Z):** when the editor receives a NEW or MATERIALLY UPDATED requirement
+   (owner word, or a clarification that changes scope/shape mid-task), persist
+   it in a fork issue BEFORE executing: update the issue already being worked
+   when the requirement extends it; open a new one when it is a distinct
+   concern. The persisted form is the PROCESSED requirement — normalized into
+   the actionable statement (what changes, acceptance, out-of-scope) — never a
+   raw chat quote. Subsequent commits/claims carry `Issue-Ref: #N` like any
+   other work. Why: a session that dies mid-task must leave the requirement
+   recoverable from durable state, not chat memory (2026-08-31 stall class).
 
 ## Phase 2 — Worktree per task, before any edits
 
