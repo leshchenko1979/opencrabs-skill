@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-issue-log — per-commit implementation comment on the tracked fork issue
+# =============================================================================
+# Duty-6 lens C3 (2026-08-31, incident-backed: mangled hand-posts, lane
+# 212b3c83 burn). Composes the mandatory one-comment-per-commit
+# implementation note (owner 2026-08-28 22:54Z) from git metadata and posts
+# it via gh --body-file ONLY — the inline-heredoc shell-substitution class
+# can never happen through this tool.
+#
+# Usage: oc-issue-log <issue-n> <sha> [--state <verification text>] [--repo <slug>] [--dry-run] | --selftest
+# Exit:  0 posted / 2 usage / 3 gh-fail
+# Body composition: git log -1 subject + trailers (Session-Id, Issue-Ref) +
+# --state text; written to a mktemp body file; no backticks, no substitutions.
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-issue-log" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() { echo "usage: $0 <issue-n> <sha> [--state <text>] [--repo <slug>] [--dry-run] | --selftest" >&2; exit 2; }
+die() { echo "oc-issue-log: $2" >&2; exit "$1"; }
+
+FORK="${OC_ISSUE_LOG_REPO:-leshchenko1979/opencrabs}"
+ISSUE=""; SHA=""; STATE=""; DRY=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --state) STATE="${2:-}"; shift 2 ;;
+    --repo) FORK="${2:-}"; shift 2 ;;
+    --dry-run) DRY=1; shift ;;
+    --selftest)
+      d="$(mktemp -d)"
+      git -C "$d" init -q 2>/dev/null; git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "test subject" 2>/dev/null
+      s="$(git -C "$d" rev-parse HEAD)"
+      subj="$(git -C "$d" log -1 --format=%s "$s")"
+      [ "$subj" = "test subject" ] || { echo "selftest: subject extraction broken" >&2; exit 1; }
+      echo "selftest OK"; exit 0 ;;
+    -h|--help) usage ;;
+    *) if [ -z "$ISSUE" ]; then ISSUE="$1"; elif [ -z "$SHA" ]; then SHA="$1"; else usage; fi; shift ;;
+  esac
+done
+[ -n "$ISSUE" ] && [ -n "$SHA" ] || usage
+case "$ISSUE" in ''|*[!0-9]*) die 2 "issue-n must be numeric" ;; esac
+FULL_SHA="$(git log --format=%H -1 "$SHA" 2>/dev/null)" || die 3 "sha not found in repo: $SHA"
+[ -n "$FULL_SHA" ] || die 3 "sha not found in repo: $SHA"
+
+SUBJECT="$(git log -1 --format=%s "$FULL_SHA")"
+TRAILERS="$(git log -1 --format='%(trailers:key=Session-Id,valueonly)%(trailers:key=Issue-Ref,valueonly)' "$FULL_SHA" | sed '/^$/d')"
+BODY="$(mktemp /tmp/oc-issue-log-body.XXXXXX.md)"
+{
+  echo "Implementation commit: \`$FULL_SHA\`"
+  echo
+  echo "- **Subject:** $SUBJECT"
+  [ -n "$TRAILERS" ] && echo "- **Trailers:** $TRAILERS"
+  [ -n "$STATE" ] && echo "- **Verification state:** $STATE"
+  echo
+  echo "<!-- posted by oc-issue-log (one comment per commit, owner 2026-08-28 22:54Z) -->"
+} > "$BODY"
+
+if [ "$DRY" = "1" ]; then cat "$BODY"; rm -f "$BODY"; echo "dry-run: body composed, nothing posted"; exit 0; fi
+if gh issue comment "$ISSUE" --repo "$FORK" --body-file "$BODY"; then
+  rm -f "$BODY"; echo "posted implementation comment on $FORK#$ISSUE for $FULL_SHA"; exit 0
+else
+  rc=$?; rm -f "$BODY"; die 3 "gh issue comment failed (rc=$rc) — body preserved at $BODY (set OC_ISSUE_LOG_REPO if the slug is wrong)"
+fi

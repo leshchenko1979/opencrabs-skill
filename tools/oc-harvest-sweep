@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-harvest-sweep — pre-gate harvest verification (mechanical legs)
+# =============================================================================
+# Duty-6 lens C4 (2026-08-31, incident-backed: 4 lanes converged, 3 gate
+# rounds burned overnight proving the gap). Runs the DETERMINISTIC legs of
+# the editor.md §Phase 7 HARVEST VERIFICATION SWEEP on a harvested PR
+# branch BEFORE the first gate dispatch. Leg (c) (behavioral judgment)
+# stays human.
+#
+# Usage: oc-harvest-sweep <pr-branch> [--base <upstream-ref>] [--repo <path>] [--port-of sha1,sha2] | --selftest
+# Exit:  0 clean / 1 findings / 2 usage / 3 git-fail
+# Legs:  (T) trailer sweep — every commit in base..branch carries Session-Id
+#        (P) patch-id — each --port-of sha has a patch-id match on the branch
+#        (E) empty-diff — branch vs base diff must be non-empty
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-harvest-sweep" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() { echo "usage: $0 <pr-branch> [--base adolfousier/main] [--repo <path>] [--port-of sha1,sha2] | --selftest" >&2; exit 2; }
+die() { echo "oc-harvest-sweep: $2" >&2; exit "$1"; }
+
+BASE="adolfousier/main"; REPO="$HOME/opencrabs"; PORT=""; BRANCH=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base) BASE="${2:-}"; shift 2 ;;
+    --repo) REPO="${2:-}"; shift 2 ;;
+    --port-of) PORT="${2:-}"; shift 2 ;;
+    --selftest)
+      d="$(mktemp -d)"
+      git -C "$d" init -q && git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+      b="$(git -C "$d" rev-parse HEAD)"
+      git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "x" --trailer "Session-Id: u1"
+      h="$(git -C "$d" rev-parse HEAD)"
+      git -C "$d" checkout -q -b pr "$b" 2>/dev/null
+      p="$(git -C "$d" log -1 --format='%H%x09%(trailers:key=Session-Id,valueonly)' pr | cut -f2)"
+      [ -z "$p" ] || { echo "selftest: empty-trailer probe broken" >&2; exit 1; }
+      echo "selftest OK"; exit 0 ;;
+    -h|--help) usage ;;
+    *) if [ -z "$BRANCH" ]; then BRANCH="$1"; else usage; fi; shift ;;
+  esac
+done
+[ -n "$BRANCH" ] || usage
+git -C "$REPO" rev-parse --verify -q "$BRANCH" >/dev/null || die 3 "branch not found in $REPO: $BRANCH"
+git -C "$REPO" rev-parse --verify -q "$BASE"   >/dev/null || die 3 "base ref not found in $REPO: $BASE (fetch first)"
+
+rc=0
+# Leg T — trailer sweep
+MISSING=0
+while IFS=$'\t' read -r c s; do
+  if [ -z "$s" ]; then echo -e "trailer-missing\t$c\t$(git -C "$REPO" log -1 --format=%s "$c")"; MISSING=$((MISSING+1)); fi
+done < <(git -C "$REPO" log --format='%H%x09%(trailers:key=Session-Id,valueonly)' "$BASE..$BRANCH")
+[ "$MISSING" -eq 0 ] && echo -e "trailers\tOK (all $BRANCH commits carry Session-Id)" || { echo -e "trailers\t$MISSING commit(s) MISSING Session-Id"; rc=1; }
+
+# Leg E — empty diff
+if [ -z "$(git -C "$REPO" diff "$BASE..$BRANCH")" ]; then
+  echo -e "empty-diff\tFINDING: branch has no diff vs $BASE — nothing ported"; rc=1
+else
+  echo -e "empty-diff\tOK (branch carries a diff vs $BASE)"
+fi
+
+# Leg P — patch-id verification of ported shas
+if [ -n "$PORT" ]; then
+  BRANCH_PIDS="$(git -C "$REPO" log "$BASE..$BRANCH" -p --format= | git patch-id --stable | cut -d' ' -f1)"
+  IFS=',' read -ra PCS <<< "$PORT"
+  for psha in "${PCS[@]}"; do
+    pid="$(git -C "$REPO" show "$psha" --format= -p 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
+    if [ -z "$pid" ]; then echo -e "patch-id:$psha\tERROR: cannot compute patch-id (bad sha?)"; rc=1
+    elif echo "$BRANCH_PIDS" | grep -qF "$pid"; then echo -e "patch-id:$psha\tMATCH on $BRANCH"
+    else echo -e "patch-id:$psha\tNO-MATCH on $BRANCH (not ported yet, or content drifted)"; rc=1; fi
+  done
+fi
+
+if [ "$rc" -eq 0 ]; then echo "SWEEP: CLEAN — mechanical legs pass, gate dispatch may proceed"; else echo "SWEEP: FINDINGS — resolve rows above BEFORE the first gate dispatch"; fi
+exit "$rc"

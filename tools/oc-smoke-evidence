@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-smoke-evidence — mechanical identity + presence evidence for a smoke verdict
+# =============================================================================
+# Duty-6 lens C1 (2026-08-31, incident-backed: 15+ hand-assembled evidence
+# lines in state smoke-verdicts.log). Prints the boilerplate every Phase 6b
+# smoke verdict needs: running daemon identity (MainPID, exe path, sha256)
+# compared against the deployed markers (deployed.sha + deployed.meta.json
+# artifact sha), optional strings markers, optional negative control.
+#
+# BEHAVIORAL JUDGMENT STAYS HUMAN — this tool produces IDENTITY evidence only.
+#
+# Usage: oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2]
+#                          [--negative-control <backup-binary>] [--selftest]
+# Exit:  0 IDENTITY-MATCH / 1 MISMATCH / 2 usage / 3 unit-or-proc-fail
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-smoke-evidence" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() { echo "usage: $0 [--unit <systemd-user-unit>] [--strings m1,m2] [--negative-control <binary>] | --selftest" >&2; exit 2; }
+die() { echo "oc-smoke-evidence: $2" >&2; exit "$1"; }
+
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
+UNIT="opencrabs-ops"; MARKERS=""; NEGCTRL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --unit) UNIT="${2:-}"; shift 2 ;;
+    --strings) MARKERS="${2:-}"; shift 2 ;;
+    --negative-control) NEGCTRL="${2:-}"; shift 2 ;;
+    --selftest)
+      d="$(mktemp -d)"
+      printf 'x%.0s' {1..100} > "$d/a"; cp "$d/a" "$d/b"; printf 'x%.0s' {1..100} > "$d/c"; printf 'y' >> "$d/c"
+      h1="$(sha256sum "$d/a" | cut -d' ' -f1)"; h2="$(sha256sum "$d/b" | cut -d' ' -f1)"; h3="$(sha256sum "$d/c" | cut -d' ' -f1)"
+      [ "$h1" = "$h2" ] && [ "$h1" != "$h3" ] || { echo "selftest: hash discrimination broken" >&2; exit 1; }
+      echo "selftest OK"; exit 0 ;;
+    -h|--help) usage ;;
+    *) usage ;;
+  esac
+  shift
+done
+
+[ -f "$STATE_DIR/deployed.meta.json" ] || die 3 "deployed.meta.json missing in $STATE_DIR"
+PID="$(systemctl --user show "$UNIT" -p MainPID --value 2>/dev/null)" || die 3 "systemctl --user show $UNIT failed"
+case "$PID" in ''|0) die 3 "unit $UNIT not running (MainPID=$PID)" ;; esac
+EXE="$(readlink -f "/proc/$PID/exe" 2>/dev/null)" || die 3 "cannot resolve /proc/$PID/exe"
+[ -x "$EXE" ] || die 3 "exe not accessible: $EXE"
+
+EXE_SHA="$(sha256sum "$EXE" | cut -d' ' -f1)"
+SRC_SHA="$(jq -r '.sha // ""' "$STATE_DIR/deployed.meta.json")"
+ART_SHA="$(jq -r '.artifact_sha256 // ""' "$STATE_DIR/deployed.meta.json")"
+RUN_ID="$(jq -r '.run_id // ""' "$STATE_DIR/deployed.meta.json")"
+SWAP_AT="$(jq -r '.swapped_at // ""' "$STATE_DIR/deployed.meta.json")"
+DEPLOYED_SHA="$(head -1 "$STATE_DIR/deployed.sha" 2>/dev/null || echo '')"
+
+# TSV evidence block
+echo -e "pid\t$PID"
+echo -e "exe_path\t$EXE"
+echo -e "exe_sha256\t$EXE_SHA"
+echo -e "artifact_sha256\t$ART_SHA"
+echo -e "source_sha\t$SRC_SHA"
+echo -e "deployed.sha\t$DEPLOYED_SHA"
+echo -e "run_id\t$RUN_ID"
+echo -e "swapped_at\t$SWAP_AT"
+
+rc=0
+if [ -n "$ART_SHA" ]; then
+  if [ "$EXE_SHA" = "$ART_SHA" ]; then
+    echo -e "identity\tMATCH (running exe == run $RUN_ID artifact)"
+  else
+    echo -e "identity\tMISMATCH (running exe != deployed artifact sha)"; rc=1
+  fi
+else
+  echo -e "identity\tNO-ARTIFACT-SHA (deployed.meta.json lacks artifact_sha256)"; rc=1
+fi
+[ "$SRC_SHA" = "$DEPLOYED_SHA" ] || { echo -e "deployed.sha\tMISMATCH (meta vs marker)"; rc=1; }
+
+# feature-presence markers (strings on the live binary)
+if [ -n "$MARKERS" ]; then
+  IFS=',' read -ra MS <<< "$MARKERS"
+  for m in "${MS[@]}"; do
+    if strings "$EXE" 2>/dev/null | grep -qF -- "$m"; then
+      echo -e "marker:$m\tFOUND"
+    else
+      echo -e "marker:$m\tMISSING"; rc=1
+    fi
+  done
+fi
+
+# negative control: a DIFFERENT binary must hash different — proves the hash discriminates
+if [ -n "$NEGCTRL" ]; then
+  [ -f "$NEGCTRL" ] || die 3 "negative-control file missing: $NEGCTRL"
+  NC_SHA="$(sha256sum "$NEGCTRL" | cut -d' ' -f1)"
+  if [ "$NC_SHA" != "$EXE_SHA" ]; then
+    echo -e "negative-control\tOK (differs from live exe)"
+  else
+    echo -e "negative-control\tSUSPECT (identical to live exe — control is not a control)"; rc=1
+  fi
+fi
+
+if [ "$rc" -eq 0 ]; then echo "VERDICT: IDENTITY-MATCH — binary identity + feature presence on live $UNIT"; else echo "VERDICT: MISMATCH — see rows above"; fi
+exit "$rc"
