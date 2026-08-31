@@ -203,6 +203,15 @@ Method:
      proposed tool + its single-command interface. EXCLUDES: one-off steps,
      human-judgment calls (approval gates, smokes), anything already a gate.
      Candidates feed the Supervisor's process-tool ownership (scope above).
+     PLUS USAGE-LOG ANALYSIS (owner directive 2026-08-31 "see tool logs and
+     analyse usage"): every C pass reads the actual tool records — state-dir
+     `tools.log`, `oc-deploy/journal/*.jsonl`, `workers-ledger.json` events,
+     smoke-verdicts — and derives ground truth no prose review can: which
+     verbs/flags are really invoked and how often, rc distributions (a tool
+     whose calls cluster on rc 2 is a broken interface), documented tools
+     never invoked in the window (YAGNI/deletion evidence for Reviewer D),
+     hand-built ritual artifacts that a proposal should replace. Findings
+     cite the log rows they rest on.
    - Reviewer D — DELETION SAFETY (owner directive 2026-08-29): enumerate
      retired / stale / duplicate-looking artifacts in the skill scope (files,
      state files, ledgers, markers, tool flags) and for EACH list what reads
