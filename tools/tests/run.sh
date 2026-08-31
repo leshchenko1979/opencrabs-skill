@@ -278,12 +278,7 @@ if tool oc-ping-proof; then
   "$TOOLS_DIR/oc-ping-proof" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
 fi
 
-# ---- 9i. oc-watchdog-check (B26, thin alias) --------------------------------
-section "oc-watchdog-check"
-run_selftest oc-watchdog-check
-if tool oc-watchdog-check; then
-  "$TOOLS_DIR/oc-watchdog-check" -h >/dev/null 2>&1; [ $? -eq 1 ] && ok "-h -> 1 (help)" || bad "-h -> expected 1"
-fi
+# ---- 9i. oc-watchdog-check — RETIRED v0.4.65 (lens E A1: pure passthrough to oc-deploy watch) ----
 
 # ---- 9k. oc-deploy contributors + fanout (issue #24) -------------------------
 # Black-box battery checks for the #24 mechanical notify fan-out, invoking the
