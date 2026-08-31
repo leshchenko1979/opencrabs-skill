@@ -69,7 +69,7 @@ JSON
   echo "selftest OK"; exit 0
 fi
 
-: "${LEDGER:=/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
+: "${LEDGER:=${OC_LEDGER:-/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}}"
 if [ -z "$CURRENT" ]; then
   SKILL="/root/.opencrabs/profiles/ops/skills/opencrabs-dev/SKILL.md"
   CURRENT="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL" 2>/dev/null | head -1)"

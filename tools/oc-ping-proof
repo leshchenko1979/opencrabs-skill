@@ -67,7 +67,7 @@ while [ $# -gt 0 ]; do
 done
 echo "$UUID" | grep -Eq '^[^[:space:]]+$' || usage
 PING="$(to_epoch "$TS")" || { echo "unparseable ping-ts: $TS" >&2; exit 4; }
-: "${LEDGER:=/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
+: "${LEDGER:=${OC_LEDGER:-/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}}"
 jq -e --arg u "$UUID" '.workers[] | select(.uuid==$u)' "$LEDGER" >/dev/null 2>&1 \
   || { echo "UNREACHABLE $UUID"; exit 3; }
 

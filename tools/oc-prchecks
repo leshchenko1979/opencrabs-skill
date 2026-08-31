@@ -43,8 +43,6 @@
 #       5 still in flight after --wait (run id + URL on stdout for resume)
 # =============================================================================
 set -u
-# --no-log must win before the lib sees argv
-for _a in "$@"; do [ "$_a" = "--no-log" ] && export OC_TOOLS_NOLOG=1; done
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-prchecks" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT

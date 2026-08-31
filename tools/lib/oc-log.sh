@@ -38,6 +38,7 @@ oc_log_init() {
   OC_LOG_ARGS="$*"
   case " $OC_LOG_ARGS " in
     *" --selftest "*) export OC_TOOLS_NOLOG=1 ;;  # recursive selftest children stay silent too
+    *" --no-log "*)   export OC_TOOLS_NOLOG=1 ;;  # lib-level suppression (E-B1, 2026-08-31): tools no longer pre-scan argv
   esac
   if [ "${OC_TOOLS_NOLOG:-0}" = "1" ]; then
     OC_LOG_ENABLED=0

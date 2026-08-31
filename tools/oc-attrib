@@ -13,7 +13,7 @@
 #   ./tools/oc-attrib --repo <path> --range <A..B> [--ledger workers-ledger.json] [--json]
 #   ./tools/oc-attrib --repo <path> --deployed [--ledger workers-ledger.json] [--json]
 #       --deployed composes <prev_sha>..<deployed_sha> from deployed markers
-#       (deployed.sha + deployed.meta.json) in $OC_DEPLOY_STATE_DIR (default skills/opencrabs-dev)
+#       (deployed.sha + deployed.meta.json) in $OC_DEPLOY_STATE_DIR (default /root/.opencrabs/profiles/ops/opencrabs-dev — post-v0.4.60 state split)
 #   ./tools/oc-attrib --selftest
 #
 # Exit codes: 0 ok · 2 usage / bad range syntax · 3 git failure · 4 empty range

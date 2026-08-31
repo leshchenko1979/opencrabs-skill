@@ -156,12 +156,21 @@ cmd_stamp() {
   [ -n "$by" ] || by="$(derive_by)"
   [ "$kind" = "skill-bump" ] && die 2 "stamp: kind skill-bump is sync-only — use: oc-ledger sync --version <v>"
   case "$KINDS" in *" $kind "*) ;; *) die 2 "stamp: unknown kind '$kind' (v1.1 vocabulary — see header)" ;; esac
+  case "$what" in --*) die 2 "stamp: what looks like a lost flag (\"$what\") — pass text with --what explicitly (glitched-argv class, ledger n=1361/n=1372)" ;; esac
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   _stamp_locked() {
     local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
     atomic_jq --arg n "$n" --arg t "$t" --arg by "$by" --arg kind "$kind" --arg what "$what" \
       '.events += [{n: ($n|tonumber), t: $t, by: $by, kind: $kind, what: $what}] | .updated_at = $t' || return $?
-    echo "stamped n=$n kind=$kind"
+    # read-back self-verify (Duty-6 lens C2, 2026-08-31): never trust the write —
+    # the n=1361/1372 glitched-argv stamps landed with what:"--what" and no check spoke
+    local r_kind r_what
+    r_kind="$(jq -r --argjson n "$n" '[.events[] | select(.n == $n)][0].kind // ""' "$LEDGER" 2>/dev/null)"
+    r_what="$(jq -r --argjson n "$n" '[.events[] | select(.n == $n)][0].what // ""' "$LEDGER" 2>/dev/null)"
+    if [ "$r_kind" != "$kind" ] || [ "$r_what" != "$what" ]; then
+      die 4 "stamp READ-BACK MISMATCH: sent kind=$kind what=$what, disk has kind=$r_kind what=$r_what — ledger corruption; investigate before further stamps"
+    fi
+    echo "stamped n=$n kind=$kind (read-back ok)"
     git_state_commit "ledger n=$n: $kind (oc-ledger stamp)"
   }
   with_lock _stamp_locked
