@@ -19,10 +19,10 @@ the tool is NOT DONE. Chat-scroll archaeology is failure.
 
 ## Journal location
 
-`STATE_DIR/oc-deploy/journal/swap-<sha>-<epoch>.jsonl` — one file per swap attempt,
+`STATE_DIR/oc-deploy/journal/swap-<short-sha>-<epoch>.jsonl` — one file per swap attempt,
 append-only, every line fsync'd before the next step starts. (Live oc-deploy
-writes the FULL 40-char sha + an epoch suffix — never a short sha: two swaps of
-the same sha would collide on a short form.) STATE_DIR = the state
+writes the 8-char short sha + an epoch suffix — the epoch disambiguates repeat
+swaps of the same sha.) STATE_DIR = the state
 dir oc-deploy already owns for `deployed.sha`.
 
 ## Line shape (one JSON object per line)

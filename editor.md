@@ -51,12 +51,12 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 | `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add→oc-index-worktree | 0 ok / dirty-tree gate on remove |
 | `oc-index-worktree` | `tools/oc-index-worktree` (inside worktree) | codegraph index — un-skippable step 2 | 0 ok |
 | `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume | 0 GREEN / 2 usage / 3 RED / 5 resume |
-| `oc-ledger` | `stamp claim --what "…"` (FULL flags, no bare positionals) · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack | 0 ok / 2 usage |
+| `oc-ledger` | `stamp claim --what "…"` (canonical: `--what`; bare positional also accepted) · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack | 0 ok / 2 usage |
 | `oc-drift-check` | `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` | §Mid-cycle skill drift step 1–2 | 0 no-drift / 1 DRIFT |
 | `oc-deploy` | `ship --execute` · `poll` · `watch` · `fanout` | ship chain (dispatch → watch → swap); ship dispatch is leg 1 ONLY — watch+swap REQUIRED | see SKILL.md |
 | `oc-upstream-delta` | `tools/oc-upstream-delta` | fork vs upstream divergence read | 0 ok |
 | `oc-attrib` | `tools/oc-attrib --deployed` | who owns the deployed range (fanout targeting) | 0 ok |
-| `oc-branch-sweep` | `tools/oc-branch-sweep --repo <path>` | merged/stale branch proof; deletes MERGED only | 0 ok |
+| `oc-branch-sweep` | `tools/oc-branch-sweep --repo <path>` | merged/stale branch proof; deletes MERGED only | 0 nothing-deleted / 1 deletions / 2 usage / 3 git |
 | `oc-pr-fault-scope` | `tools/oc-pr-fault-scope <pr> --run <id>` | failing-files ∩ PR-files (blame hygiene) | 0 in-scope / base-fault |
 
 Rules that outlive any table: journal read-back after every state-changing
@@ -113,8 +113,9 @@ shipping mid-flight (cadence is FIRE territory). Skill files are plain disk
 files read on demand — nothing is cached in-session — so "reload" = re-read:
 
 1. On every turn that resumes from a detached long command (result injection)
-   or wakes to a `session_notify`, FIRST compare
-   `grep -m1 '^version:' SKILL.md` against the version recorded at your claim.
+   or wakes to a `session_notify`, FIRST run
+   `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` (mechanical:
+   version-shape validated; `--ack` stamps the adoption record directly).
 2. Drift → re-read SKILL.md + editor.md in full from disk, then stamp
    `oc-ledger ack <your-roster-uuid> <new-version>` (shape `0.N.N`, `v`
    prefix tolerated — v0.4.55 fixed the N.N-only regex that made every real
@@ -245,8 +246,9 @@ ALL edits happen in the worktree, never in the shared checkout. One task = one
 worktree = one branch. Parallel agents share the repo; the shared checkout can be
 switched under you mid-task at any moment.
 
-Before adding: `git -C ~/opencrabs worktree list` — prune stale entries first
-(`git worktree prune`); never reuse another live task's path.
+`oc-wt add` prunes stale worktree entries on every invocation — run
+`git -C ~/opencrabs worktree list` only to view live trees, never as a
+pre-check; never reuse another live task's path.
 
 ## Phase 3 — Explore before writing
 
@@ -386,8 +388,9 @@ per owner 19:21Z):
 The script performs the chain Phase 6 does by hand — fork-main fetch +
 fast-forward check → push → 4 ORDER gates (oc-order-validate) → carrier
 dispatch on `ci/quick-build-linux` — appends every verdict to the shadow
-journal (`oc-deploy-shadow.log` in the state dir), and returns RED + failing
-gate or GREEN + run id to the invoking session. **Ship semantics: dispatch
+journal (`oc-deploy-shadow.log` in the state dir), and exits 0 with the
+dispatch confirmation (poll discovers the run id) or exit 2 + failing
+gate to the invoking session. **Ship semantics: dispatch
 is real always; deploys are real from S2 (poll mode, sha-bound, auto-swap on
 GREEN — consent eliminated owner 2026-08-28 18:50Z; journaled, auto-rollback on
 post-bounce verify fail stays, smoke-FAIL rollback = owner call; ledger `meta.oc_deploy_stage` gates it, exit 4 below
@@ -417,19 +420,20 @@ DELETE immediately after a verified clean push:
 
 ```bash
 git -C ~/oc-wt-<task> status --porcelain   # must be empty — all committed & pushed
-git -C ~/opencrabs worktree remove ~/oc-wt-<task>
+tools/oc-wt remove <task>                  # dirty-tree gate + journals the destroyed listing
 ```
 
 RECREATE whenever a fix round begins (red run handed back, smoke-test fix
 request): ALWAYS a NEW tree — same branch, same creation steps as the first
-time (Phase 0 → `git worktree prune` → Phase 2; continue Phase 3/5):
+time (`tools/oc-wt add <task> <branch>` — prune/fetch/validate/behind-base
+gates chained; continue Phase 3/5):
 
 ```bash
-git -C ~/opencrabs worktree add ~/oc-wt-<task> <branch>
+tools/oc-wt add <task> <branch>
 ```
 
-Never leave orphaned trees behind: `git worktree list` before starting any new
-task; `git worktree prune` cleans stale entries.
+`oc-wt` prunes stale entries on every add — never run bare
+`git worktree prune` as a ritual step; `git worktree list` only to view.
 
 ## Phase 6b — Smoke-test-on-notify (your features, after any swap)
 
@@ -485,7 +489,7 @@ Your answer is always the SAME sequence (decision 2026-08-25):
 
 ```bash
 # 1. fresh worktree at the relevant sha (lifecycle rules below)
-git -C ~/opencrabs worktree add ~/oc-wt-<task> <branch>
+tools/oc-wt add <task> <branch>
 # 2. reproduce → fix → Phase 5 CI gate → SIGNED commit
 git -C ~/oc-wt-<task> commit --trailer "Session-Id: <full session uuid>" --trailer "Issue-Ref: #<issue-n>"
 #    (Session-Id = you; Issue-Ref = the ONE issue this change fixes — atomicity,
@@ -494,7 +498,7 @@ git -C ~/oc-wt-<task> commit --trailer "Session-Id: <full session uuid>" --trail
 git -C ~/oc-wt-<task> push origin <branch>
 git -C ~/oc-wt-<task> push origin <branch>:main
 # 4. remove the worktree — job done
-git -C ~/opencrabs worktree remove ~/oc-wt-<task>
+tools/oc-wt remove <task>
 ```
 
 5. Re-ship fork `main` via oc-deploy: `oc-deploy ship --sha <NEW-head-sha> --features <comma-set> --execute` (S3 2026-08-28 — the compiler role is retired; shipping is the editor's own background task, it dispatches fork `main`, which now carries your fix alongside every other editor's merged work).
@@ -542,7 +546,10 @@ git -C ~/opencrabs log --format='%H%x09%s%x09%(trailers:key=Session-Id,valueonly
   adolfousier/main..origin/main
 
 # 2. harvest onto a branch off UPSTREAM main — NEW worktree, usual hygiene
+#    (-b creation is beyond oc-wt: it validates branches, never creates them —
+#     so raw add here, then the UN-SKIPPABLE index chain immediately after)
 git -C ~/opencrabs worktree add ~/oc-wt-up-<feature> -b leshchenko1979/<feature> adolfousier/main
+tools/oc-index-worktree ~/oc-wt-up-<feature>
 git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
 # Phase 5 gate: pr-checks GREEN on the PR branch — zero errors in ported lines
 
@@ -566,8 +573,9 @@ gh workflow run pr-checks.yml --repo leshchenko1979/opencrabs \
 #    prints the GREEN/RED verdict + run URL for the PR-body citation below)
 #   fmt (soft-fail, mirrors upstream) + clippy --locked --lib --bins --tests
 #   --all-features -D warnings + cargo test --locked --profile ci
-#   --all-features — flags VERBATIM from adolfousier's ci.yml, so green here
-#   predicts green on his full gate. ANY red = fix cycle + re-dispatch,
+#   --all-features — flags VERBATIM from pr-checks.yml (the triad mirrors
+#   adolfousier's CI), so green here predicts green on his full gate.
+#   ANY red = fix cycle + re-dispatch,
 #   never a filed PR. Cite the green run URL in the PR body prep next to the
 #   smoke/run evidence. Iterate clippy fixes by EDITING CODE and re-dispatching
 #   pr-checks — NEVER run cargo locally (box law, top of this file: binaries
@@ -594,8 +602,8 @@ gh pr create -R adolfousier/opencrabs --base main --head leshchenko1979:leshchen
 # 5. close the tracked FORK issue with a pointer comment
 gh issue close <issue-n> -R leshchenko1979/opencrabs -c "Implemented in upstream PR adolfousier/opencrabs#<pr-number>"
 
-# 6. remove the worktree — done
-git -C ~/opencrabs worktree remove ~/oc-wt-up-<feature>
+# 6. remove the worktree — done (dirty-tree gate + journal via oc-wt)
+tools/oc-wt remove up-<feature>
 ```
 
 Rules:
