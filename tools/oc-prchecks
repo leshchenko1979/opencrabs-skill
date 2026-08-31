@@ -41,6 +41,8 @@
 #       4 dispatch-or-api-or-lock failure (incl. yml-missing-on-carrier,
 #         adoption timeout, dispatch lock busy)
 #       5 still in flight after --wait (run id + URL on stdout for resume)
+#       7 carrier head unresolvable via branches API (fork-lane gate / missing carrier ref)
+#         — NEVER adopt a run on a blind window (false-GREEN finding 2026-08-31)
 # =============================================================================
 set -u
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
@@ -62,7 +64,7 @@ LOCK_WAIT="${OC_PRCHECKS_LOCK_WAIT:-90}"
 usage() {
   cat >&2 <<EOS
 Usage: $PROG <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
-Exit: 0 GREEN / 2 usage-or-shape / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout
+Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 7 carrier-head-unresolvable
 EOS
   exit 2
 }
@@ -233,6 +235,13 @@ if REPO_TOP="$(git -C "$REPO_INPUT" rev-parse --show-toplevel 2>/dev/null)"; the
 fi
 oc_log_extra "repo" "$REPO"
 
+# ---------- step 0: FORK-LANE gate (finding 2026-08-31, suggest-options lane)
+case "$REPO" in
+  leshchenko1979/opencrabs) : ;;
+  *) echo "$PROG: $REPO not supported — oc-prchecks is fork-lane only (carrier workflow lives on the fork; upstream PR waits use detached gh run list pollers)" >&2
+     oc_log_extra "fork_lane_gate" "refused:$REPO"
+     exit 2 ;;
+esac
 # ---------- step 1: SHAPE gate (carrier inputs are sha-bound, Gate 1 3349cf7e)
 case "$REF" in
   *[!0-9a-fA-F]*) : ;;  # not pure hex -> branch name, resolve below
@@ -300,6 +309,11 @@ RUN_ID=""
 # earliest — under the lock the newest carrier dispatch IS this lane's own run,
 # so a stale older lane's run is never adopted.
 CARRIER_HEAD="$("$GH_BIN" api "repos/$REPO/git/ref/heads/$CARRIER" --jq '.object.sha' 2>/dev/null || true)"
+[ -n "$CARRIER_HEAD" ] || {
+  echo "$PROG: carrier head unresolvable via branches API (ref $CARRIER on $REPO) — refusing time-window adoption (would match ANY run); use a detached gh run list poller" >&2
+  oc_log_extra "carrier_head" "unresolvable"
+  exit 7
+}
 TS_FLOOR="$(date -u -d "$DISPATCH_TS -5 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$DISPATCH_TS")"
 deadline=$(( $(date +%s) + RESOLVE_WAIT ))
 while [ -z "$RUN_ID" ]; do
