@@ -167,7 +167,7 @@ incident suggests drift. FIRST RUN fired on adoption (2026-08-26).
 
 Method:
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
-   one per lens (A/B/C/D/E); they NEVER edit skill files. Owner directive
+   one per lens (A/B/C/D/E/F/G); they NEVER edit skill files. Owner directive
    2026-08-26: Duty-6 reviews are ALWAYS sub-agent work, never Supervisor-only
    inline reading. Findings must carry verbatim quotes; Supervisor verifies
    every accepted quote against disk before acting. Hollow report -> ONE retry
@@ -231,6 +231,24 @@ Method:
      INTERFACES. Each finding names the merge/verb-move + its single-command
      shape. EXCLUDES: one-off chains, anything with an approval gate between
      the steps (a gate is human judgment — never merged away).
+   - Reviewer F — TOOL CODE REVIEW (owner directive 2026-08-31 "make a review
+     of our skill tools code"): the tools/ implementations themselves — shell
+     correctness (quoting, set -e gaps, rc collisions with the documented rc
+     register), journaling completeness (every state-changing step writes its
+     log line BEFORE the next step — owner tool-logging rule), selftest
+     coverage vs the documented interface, dead flags/verbs, divergence
+     between SKILL.md tool-table rows and actual behavior (flags, rc, paths).
+     Findings cite file:line. First full F pass shipped 2026-08-31 (standing
+     lens from v0.4.67).
+   - Reviewer G — EDITOR.MD STRUCTURE (owner directive 2026-08-31 "review if
+     editor.md is well structured or needs to be regrouped or split"): the
+     file's organization — phase ordering vs actual work sequence, sections
+     grown past cohesion (one section = one concern), rules living in the
+     wrong phase, cross-reference integrity after edits, whether the file
+     should split (e.g. per-phase reference pages) or regroup. Findings must
+     weigh the cost of a split (cross-refs, worker reading load) against the
+     cost of growth. First full G pass shipped 2026-08-31 (standing lens from
+     v0.4.67).
 2. Brief: five file paths, role map, ontology terms, ref names, strict output
    contract — numbered findings `file §section · verbatim quote · dimension ·
    problem · concrete fix · severity`. No pleasantries.
