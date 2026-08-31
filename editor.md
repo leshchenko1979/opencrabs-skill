@@ -282,7 +282,8 @@ re-dispatch pr-checks, read the run log — that loop replaces every local lint 
 - **One command (v0.4.46; adoption fixed v0.4.48):** `tools/oc-prchecks <branch> [--repo SLUG-or-PATH]`
   runs the whole ritual — FULL-sha shape gate, LOUD yml-on-carrier check,
   dispatch under a state-dir lock, time-window run adoption
-  (`workflow_dispatch` + carrier branch + created-after-dispatch, earliest-wins —
+  (`headSha==carrier head + createdAt>=dispatch_ts−5s`, LATEST-wins since
+  v0.4.53 — under the lock the newest carrier dispatch IS this lane's own run;
   the old sha-bound filter could never match: workflow_dispatch headSha is the
   carrier ref, not the `-f ref` input), watch, per-step report with the fmt
   soft-fail EXPOSED. `--repo` accepts the slug OR a repo/worktree path

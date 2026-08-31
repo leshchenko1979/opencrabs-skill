@@ -1097,7 +1097,7 @@ swap_execute() {
   else
     local CYC SEAL_RC
     CYC="$(jq -r '.cycle // 0' "$BASELINE" 2>/dev/null || echo 0)"
-    "$SEAL" --sha "$SHA" --run-id "$RUN_ID" --binary-sha "$EXPECTED" --features "$FEATURES" --cycle "$((CYC+1))" --set-note "oc-deploy S2 swap" >/dev/null 2>&1; SEAL_RC=$?
+    "$SEAL" --baseline "$BASELINE" --orders "$ORDERS" --sha "$SHA" --run-id "$RUN_ID" --binary-sha "$EXPECTED" --features "$FEATURES" --cycle "$((CYC+1))" --set-note "oc-deploy S2 swap" >/dev/null 2>&1; SEAL_RC=$?
     jline seal "$SEAL_RC" "$(jq -cn --arg b "$BASELINE" --argjson c "$((CYC+1))" --argjson e "$SEAL_RC" '{baseline_path:$b, cycle:$c, seal_exit:$e}')"
     [ "$SEAL_RC" -eq 0 ] || die 2 "seal FAILED — new binary on disk, NOT restarted; markers NOT written; manual attention (rollback source: $BAK)"
   fi
