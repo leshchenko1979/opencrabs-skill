@@ -201,6 +201,10 @@ cmd_sync() {
   # SKILL.md must already carry the version (tool never writes it first)
   grep -Eq "^version: $v\$" "$SKILL_DIR/SKILL.md" \
     || die 6 "sync: SKILL.md frontmatter does not say version: $v — bump the doc first"
+  # CHANGELOG gate (lens C8, v0.4.65): a bump ships only with its receipt —
+  # the v0.4.54 backfill incident (bump shipped with no CHANGELOG entry) is dead
+  grep -q "^## v$v\$" "$SKILL_DIR/CHANGELOG.md" \
+    || die 6 "sync: CHANGELOG.md has no '## v$v' entry — write the receipt first"
   # step check: equal (re-sync) or third-component +1 only
   local cur; cur="$(jq -r '.meta.skill_version // ""' "$LEDGER")"
   if [ "$cur" != "$v" ]; then
@@ -459,6 +463,9 @@ EOF
   bash "$ME" sync --version 0.4.2 >/dev/null 2>&1; chk "sync-skillmd-mismatch" 6 $?
   sed -i 's/version: 0.4.9/version: 0.4.2/' "$T/skill/SKILL.md"
   bash "$ME" sync --version 0.4.9 >/dev/null 2>&1; chk "sync-step-gap" 6 $?
+  # C8 (v0.4.65): sync refuses a bump whose CHANGELOG entry is missing
+  bash "$ME" sync --version 0.4.2 >/dev/null 2>&1; chk "sync-changelog-missing" 6 $?
+  printf '\n## v0.4.2\nfixture receipt\n' >> "$T/skill/CHANGELOG.md"
   # 14-17: sync happy + git legs + re-sync
   SYNC_OUT="$(bash "$ME" sync --version 0.4.2 --why selftest 2>&1)"; chk "sync-happy" 0 $?
   case "$SYNC_OUT" in *"shadow-rotate:"*) ok ;; *) bad "sync-tail-rotate-line" ;; esac
@@ -470,6 +477,7 @@ EOF
   # 17b: payload-sweep root-fix (n=1405: v0.4.58/61/62 strayed payload via hardcoded add list)
   echo "payload-leg" > "$T/skill/tools/payload-probe.sh"
   sed -i 's/version: 0.4.2/version: 0.4.3/' "$T/skill/SKILL.md"
+  printf '\n## v0.4.3\npayload receipt\n' >> "$T/skill/CHANGELOG.md"
   PSWEEP_OUT="$(bash "$ME" sync --version 0.4.3 --why payload-sweep 2>&1)"; chk "sync-payload-sweep" 0 $?
   case "$PSWEEP_OUT" in *"PAYLOAD SWEPT"*) ok ;; *) bad "sync-payload-warning" ;; esac
   git -C "$T/skill" show v0.4.3 --name-only | grep -q "payload-probe.sh" && ok || bad "sync-sweeps-payload"
@@ -483,6 +491,7 @@ EOF
   bash "$ME" cadence | grep -q "2/5 WAIT" && ok || bad "cadence-count"   # two skill-bumps (happy + payload-sweep; re-syncs were idempotent)
   for i in 3 4 5 6; do
     sed -i "s/^version: .*/version: 0.4.$i/" "$T/skill/SKILL.md"
+    printf '\n## v0.4.%s\npad receipt\n' "$i" >> "$T/skill/CHANGELOG.md"
     bash "$ME" sync --version "0.4.$i" --why pad >/dev/null 2>&1
   done
   bash "$ME" cadence >/dev/null 2>&1; chk "cadence-fire-rc" 1 $?
