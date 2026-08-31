@@ -202,8 +202,10 @@ cmd_sync() {
   grep -Eq "^version: $v\$" "$SKILL_DIR/SKILL.md" \
     || die 6 "sync: SKILL.md frontmatter does not say version: $v — bump the doc first"
   # CHANGELOG gate (lens C8, v0.4.65): a bump ships only with its receipt —
-  # the v0.4.54 backfill incident (bump shipped with no CHANGELOG entry) is dead
-  grep -q "^## v$v\$" "$SKILL_DIR/CHANGELOG.md" \
+  # the v0.4.54 backfill incident (bump shipped with no CHANGELOG entry) is dead.
+  # Header convention is "## v<ver> (date) — title", so match the version token
+  # at line start followed by space/paren/dash/end — not a bare-line equality.
+  grep -Eq "^## v$v([ —(:]|$)" "$SKILL_DIR/CHANGELOG.md" \
     || die 6 "sync: CHANGELOG.md has no '## v$v' entry — write the receipt first"
   # step check: equal (re-sync) or third-component +1 only
   local cur; cur="$(jq -r '.meta.skill_version // ""' "$LEDGER")"
