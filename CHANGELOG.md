@@ -59,3 +59,8 @@ Docs-only; battery 97/0; sync+tag v0.4.62; mirrors at parity.
 - SKILL.md Hard rules: worker-naming rule SHARPENED — topic/chat name only on EVERY surface (was: owner reports only; tonight's uuid-laden fleet board was the live violation). Uuids = routing fields only.
 - SKILL.md Hard rules: NEW official-ontology rule — SKILL-defined vocabulary only; new concepts named via poll on owner word; Reviewer A enforces.
 - editor.md: NEW "Tool reference — editor's quick table" (invocation forms + rc contracts + the three rules that outlive any table). Doc-only bump; no tool code touched.
+
+## v0.4.63 (2026-08-31) — sync payload root-fix (incident n=1405)
+- oc-ledger sync: stage the FULL skill working tree (tracked+untracked) instead of the hardcoded SKILL.md+CHANGELOG.md list — a bump tag can no longer point at a tree missing its payload (three-strike class: v0.4.58/61/62 strayed files). Swept non-doc payload named loudly on stderr ("PAYLOAD SWEPT").
+- Selftest +3 (69/0): payload probe swept into bump commit + warning present + committed tree verified; bundle fixture de-coupled from leaked untracked dirt; cadence-count fixture updated for the extra bump event.
+- Owner "Go" 2026-08-31 (sync-fix proposal after n=1405 stamp).

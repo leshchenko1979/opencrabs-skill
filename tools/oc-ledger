@@ -226,9 +226,16 @@ cmd_sync() {
     return 0
   }
   with_lock _sync_locked || exit $?
-  # skill-repo git leg: commit the version docs + tag
+  # skill-repo git leg: commit the version docs + tag.
+  # v0.4.63 root-fix (incident n=1405, three strikes v0.4.58/61/62): stage the
+  # FULL working tree, never a hardcoded doc list — a bump tag must never
+  # point at a tree missing its payload files. Swept non-doc payload is named
+  # LOUDLY on stderr so the sweep is visible in tools.log, never silent.
   if [ -d "$SKILL_DIR/.git" ]; then
-    ( cd "$SKILL_DIR" && git add SKILL.md CHANGELOG.md 2>/dev/null
+    ( cd "$SKILL_DIR" || exit 1
+      swept="$(git status --porcelain | awk 'NF{p=$1; $1=""; sub(/^ +/,""); print p" "$0}' | grep -vE '^(.. )?(SKILL\.md|CHANGELOG\.md)$' || true)"
+      git add -A
+      [ -n "$swept" ] && echo "PAYLOAD SWEPT into bump commit (silent-stray class, pre-v0.4.63): $(printf '%s' "$swept" | tr '\n' '; ')" >&2
       git commit -q -m "skill v$v: oc-ledger sync — ${why:-version sync}" 2>/dev/null \
         || echo "commit-lag: skill commit deferred" >&2
       git tag "v$v" 2>/dev/null || echo "tag v$v exists or failed" >&2 )
@@ -451,6 +458,12 @@ EOF
   git -C "$T/state" log --oneline | grep -q "skill-bump v0.4.2" && ok || bad "sync-state-commit"
   git -C "$T/skill" tag | grep -q '^v0\.4\.2$' && ok || bad "sync-skill-tag"
   bash "$ME" sync --version 0.4.2 --why resync >/dev/null 2>&1; chk "sync-resync-equal" 0 $?
+  # 17b: payload-sweep root-fix (n=1405: v0.4.58/61/62 strayed payload via hardcoded add list)
+  echo "payload-leg" > "$T/skill/tools/payload-probe.sh"
+  sed -i 's/version: 0.4.2/version: 0.4.3/' "$T/skill/SKILL.md"
+  PSWEEP_OUT="$(bash "$ME" sync --version 0.4.3 --why payload-sweep 2>&1)"; chk "sync-payload-sweep" 0 $?
+  case "$PSWEEP_OUT" in *"PAYLOAD SWEPT"*) ok ;; *) bad "sync-payload-warning" ;; esac
+  git -C "$T/skill" show v0.4.3 --name-only | grep -q "payload-probe.sh" && ok || bad "sync-sweeps-payload"
   # 18-19: check-version
   bash "$ME" check-version >/dev/null 2>&1; chk "check-version-ok" 0 $?
   jq '.meta.skill_version = "0.4.1"' "$OC_LEDGER" > "$T/d.json" && mv "$T/d.json" "$OC_LEDGER"
@@ -458,7 +471,7 @@ EOF
   bash "$ME" check-version >/dev/null 2>&1; chk "check-version-drift-rc" 1 $?
   jq '.meta.skill_version = "0.4.2"' "$OC_LEDGER" > "$T/d.json" && mv "$T/d.json" "$OC_LEDGER"
   # 20-22: cadence
-  bash "$ME" cadence | grep -q "1/5 WAIT" && ok || bad "cadence-count"   # one skill-bump (re-sync above was idempotent — no dup event)
+  bash "$ME" cadence | grep -q "2/5 WAIT" && ok || bad "cadence-count"   # two skill-bumps (happy + payload-sweep; re-syncs were idempotent)
   for i in 3 4 5 6; do
     sed -i "s/^version: .*/version: 0.4.$i/" "$T/skill/SKILL.md"
     bash "$ME" sync --version "0.4.$i" --why pad >/dev/null 2>&1
@@ -487,6 +500,10 @@ EOF
   bash "$ME" commit-pending | grep -q "state ledger committed" && ok || bad "commit-pending-sweep"
   git -C "$T/state" status --porcelain workers-ledger.json | grep -q . && bad "commit-pending-left-dirty" || ok
   echo artifact > "$T/skill/deployed.sha"
+  # v0.4.63: sync now sweeps untracked files (payload root-fix), so the bundle
+  # needs a freshly dirty runtime artifact — pre-root-fix the test leaked the
+  # battery receipt's untracked dirt from the sync-gate block above
+  echo '{"verdict":"PASS","fail":0,"ts":"'"$(now_iso)"'","probe":"bundle"}' > "$T/skill/tools/tests/battery-last.json"
   bash "$ME" commit-pending --bundle | grep -q "runtime artifacts" && ok || bad "commit-pending-bundle"
   echo '{"sha":"fixture"}' > "$T/state/baseline.json"
   bash "$ME" commit-pending --bundle | grep -q "baseline.json" && ok || bad "commit-pending-baseline-sweep"
