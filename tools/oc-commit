@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-commit — C5 (lens C, Duty-6 2026-08-31): gated commit wrapper enforcing
+# the three per-commit rituals of editor.md §Phase 6c in one place:
+#   1. HEAD-attached check (refuses detached HEAD — incident class)
+#   2. Session-Id trailer from OC_ACTOR (refuses unset actor)
+#   3. Issue-Ref trailer derived from the actor's latest ledger claim event
+#      (same derivation as `oc-ledger confirm`; override with --issue N)
+# NEVER stages anything — the stage-only-your-paths rule is untouched; it
+# refuses when the index is empty instead of improvising a stage.
+#
+# Usage:
+#   oc-commit -m <msg> [-m <msg>...] [--issue N] [--repo <path>] | --selftest
+#
+# Exit codes: 0 committed · 2 usage · 3 gate-fail (detached HEAD / no actor /
+#             nothing staged / no issue derivable) · 4 git-commit failure
+# Env: OC_ACTOR (required) · OC_LEDGER (ledger override) · OC_TOOLS_LOG
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-commit" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() { echo "usage: $0 -m <msg> [-m <msg>...] [--issue N] [--repo <path>] | --selftest" >&2; exit 2; }
+
+if [ "${1:-}" = "--selftest" ]; then
+  d="$(mktemp -d)" || exit 3
+  trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  # ledger fixture: worker u-fix has a claim mentioning #149
+  cat > "$d/wl.json" <<'JSON'
+{"workers":[{"uuid":"u-fix","role":"editor"}],"events":[
+ {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor u-fix (topic 29947)","what":"claimed Duty-6 fix for #149 trailer test"},
+ {"t":"2026-08-31T10:01:00Z","kind":"claim","by":"other worker","what":"unrelated"}]}
+JSON
+  R="$d/repo"; git init -q -b main "$R"
+  git -C "$R" -c user.email=t@t -c user.name=T commit -q --allow-empty -m seed
+  OC="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"; export OC_LEDGER="$d/wl.json"
+  GITOK="git -C $R -c user.email=t@t -c user.name=T"
+  # 1. unset OC_ACTOR -> 3
+  ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: unset OC_ACTOR != 3" >&2; exit 1; }
+  # 2. detached HEAD -> 3
+  ( cd "$R" && git checkout -q --detach && echo y > g && git add g \
+      && OC_ACTOR=u-fix "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: detached HEAD != 3" >&2; exit 1; }
+  ( cd "$R" && git checkout -q main && git reset -q )
+  # 3. nothing staged -> 3
+  OC_ACTOR=u-fix "$OC" -m test --repo "$R" >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: nothing-staged != 3" >&2; exit 1; }
+  # 4. success: trailers derived (Session-Id + Issue-Ref #149 from claim)
+  ( cd "$R" && echo z > h && git add h && OC_ACTOR=u-fix "$OC" -m "fix: trailers" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: gated commit failed" >&2; exit 1; }
+  LOG="$(git -C "$R" log -1 --format=%B)"
+  printf '%s' "$LOG" | grep -q "Session-Id: u-fix" || { echo "selftest: Session-Id trailer missing" >&2; exit 1; }
+  printf '%s' "$LOG" | grep -q "Issue-Ref: #149" || { echo "selftest: Issue-Ref #149 missing" >&2; exit 1; }
+  # 5. explicit --issue overrides derivation
+  ( cd "$R" && echo w > i && git add i && OC_ACTOR=u-fix "$OC" -m "chore: override" --issue 42 --repo "$R" ) >/dev/null 2>&1
+  git -C "$R" log -1 --format=%B | grep -q "Issue-Ref: #42" || { echo "selftest: --issue override missing" >&2; exit 1; }
+  # 6. claim without #N and no --issue -> 3
+  cat > "$d/wl2.json" <<'JSON'
+{"workers":[{"uuid":"u-fix","role":"editor"}],"events":[
+ {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor u-fix","what":"claim with no issue ref"}]}
+JSON
+  ( cd "$R" && echo v > j && git add j && OC_LEDGER="$d/wl2.json" OC_ACTOR=u-fix "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: no-issue-derivable != 3" >&2; exit 1; }
+  # 7. usage
+  OC_ACTOR=u-fix "$OC" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: no args != 2" >&2; exit 1; }
+  echo "selftest OK"; exit 0
+fi
+
+REPO="$(pwd)"; MSGS=(); ISSUE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m) [ -n "${2:-}" ] || usage; MSGS+=("$1" "$2"); shift 2 ;;
+    --issue) ISSUE="${2:-}"; [ -n "$ISSUE" ] || usage; shift 2 ;;
+    --repo) REPO="${2:-}"; [ -n "$REPO" ] || usage; shift 2 ;;
+    *) usage ;;
+  esac
+done
+[ ${#MSGS[@]} -ge 2 ] || usage
+[ -d "$REPO/.git" ] || { echo "gate-fail: not a git repo: $REPO" >&2; exit 3; }
+G="git -C $REPO"
+
+# gate 1: HEAD attached (incident class: commits landing nowhere)
+$G symbolic-ref -q HEAD >/dev/null 2>&1 \
+  || { echo "gate-fail: DETACHED HEAD in $REPO — attach a branch first" >&2; exit 3; }
+# gate 2: actor present
+[ -n "${OC_ACTOR:-}" ] || { echo "gate-fail: OC_ACTOR unset — Session-Id trailer cannot be derived" >&2; exit 3; }
+# gate 3: something staged (never stages anything itself)
+$G diff --cached --quiet 2>/dev/null \
+  && { echo "gate-fail: nothing staged — stage your paths first (stage-only-your-paths rule)" >&2; exit 3; }
+
+# derive Issue-Ref from the actor's latest claim (mirrors oc-ledger cmd_confirm)
+LEDGER="${OC_LEDGER:-/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
+if [ -z "$ISSUE" ] && [ -f "$LEDGER" ]; then
+  claim="$(jq -r --arg u "$OC_ACTOR" '[.events[] | select(.kind=="claim" and ((.by // "") | contains($u)))][-1].what // ""' "$LEDGER" 2>/dev/null)"
+  ISSUE="$(printf '%s' "$claim" | grep -oE '#[0-9]+' | head -1 | tr -d '#')"
+fi
+if [ -n "$ISSUE" ]; then
+  printf '%s' "$ISSUE" | grep -Eq '^[0-9]+$' || { echo "gate-fail: bad --issue '$ISSUE'" >&2; exit 3; }
+  echo "issue-ref: #$ISSUE (from ${OC_LEDGER:+override ledger}${OC_LEDGER:-canonical ledger})" >&2
+else
+  echo "gate-fail: no Issue-Ref derivable — no claim with #N by $OC_ACTOR and no --issue passed" >&2
+  exit 3
+fi
+
+# gated commit
+if $G commit --trailer "Session-Id: $OC_ACTOR" --trailer "Issue-Ref: #$ISSUE" "${MSGS[@]}"; then
+  echo "committed on $($G rev-parse --abbrev-ref HEAD): $($G rev-parse --short HEAD) (actor $OC_ACTOR, issue #$ISSUE)"
+  exit 0
+fi
+echo "git commit failed (see git output above)" >&2
+exit 4
