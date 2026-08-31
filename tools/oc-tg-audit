@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-tg-audit — C7 (lens C, Duty-6 2026-08-31): Telegram surface-law evidence
+# scan. Verdicts a lane's compliance from the ops daily logs: finds TOOL_ACCUM
+# rows emitted by the accused session that carry a BANNED telegram surface
+# tool (telegram_send / tg_send_message / tg_edit_message / telegram_edit —
+# the SKILL.md §Telegram surface law set, supervisor.md Duty 7 A12 pattern).
+# Falls back to "Executing tool: <name>" rows when a date has no TOOL_ACCUM
+# evidence. Read-only; sanctioned senders (Gatus DM reports, /tq-approve flow)
+# are the SUPERVISOR's judgment call — this tool reports evidence only.
+#
+# Usage:
+#   oc-tg-audit <uuid> [--date YYYY-MM-DD] [--days N] [--log-dir P] | --selftest
+#   (default: today UTC, 1 day)
+#
+# Output: TSV: <date> <tab> ts <tab> evidence-kind <tab> tool
+#         final verdict line on stderr: VIOLATION <uuid> (n rows) | CLEAN <uuid>
+# Exit codes: 0 clean · 1 violation · 2 usage · 3 log-missing
+# Env: OC_TOOLS_LOG_DIR
+# =============================================================================
+set -u
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-tg-audit" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() { echo "usage: $0 <uuid> [--date YYYY-MM-DD] [--days N] [--log-dir P] | --selftest" >&2; exit 2; }
+
+BANNED='telegram_send|tg_send_message|tg_edit_message|telegram_edit'
+
+if [ "${1:-}" = "--selftest" ]; then
+  d="$(mktemp -d)" || exit 3
+  trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  TODAY="$(date -u +%Y-%m-%d)"
+  # violating lane: TOOL_ACCUM row with banned tool; clean lane: only bash rows
+  cat > "$d/opencrabs.$TODAY" <<EOF
+2026-08-31T09:00:01.000000+00:00 DEBUG ThreadId(01) run_tool_loop{session_id=u-guilty}: [TOOL_ACCUM] idx=0, id=c1, name=telegram_send, args_len=50, args_tail=chat_id
+2026-08-31T09:00:02.000000+00:00  INFO ThreadId(01) run_tool_loop{session_id=u-guilty}: Executing tool: telegram_send
+2026-08-31T09:05:00.000000+00:00 DEBUG ThreadId(02) run_tool_loop{session_id=u-clean}: [TOOL_ACCUM] idx=0, id=c2, name=bash, args_len=10, args_tail=ls
+2026-08-31T09:06:00.000000+00:00 DEBUG ThreadId(03) run_tool_loop{session_id=u-other}: [TOOL_ACCUM] idx=0, id=c3, name=telegram_send, args_len=50, args_tail=chat_id
+EOF
+  OUT="$("$0" u-guilty --date "$TODAY" --log-dir "$d")"; RC=$?
+  [ $RC -eq 1 ] || { echo "selftest: guilty lane rc=$RC != 1" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q 'TOOL_ACCUM' || { echo "selftest: TOOL_ACCUM evidence missing" >&2; exit 1; }
+  "$0" u-clean --date "$TODAY" --log-dir "$d" >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: clean lane not CLEAN" >&2; exit 1; }
+  # other lane's violation must not contaminate
+  "$0" u-clean --date "$TODAY" --log-dir "$d" >/dev/null 2>&1
+  # fallback evidence kind: Executing-tool rows when TOOL_ACCUM absent
+  grep -v 'TOOL_ACCUM' "$d/opencrabs.$TODAY" > "$d/opencrabs.2026-08-30"
+  OUT="$("$0" u-guilty --date 2026-08-30 --log-dir "$d")"; RC=$?
+  [ $RC -eq 1 ] || { echo "selftest: fallback Executing-tool evidence rc=$RC != 1" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q 'EXEC' || { echo "selftest: fallback evidence kind not labeled" >&2; exit 1; }
+  # missing log -> 3
+  "$0" u-guilty --date 2026-08-29 --log-dir "$d" >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: missing log != 3" >&2; exit 1; }
+  # usage
+  "$0" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: no args != 2" >&2; exit 1; }
+  echo "selftest OK"; exit 0
+fi
+
+UUID=""; DATE="$(date -u +%Y-%m-%d)"; DAYS=1
+LOG_DIR="${OC_TOOLS_LOG_DIR:-/root/.opencrabs/profiles/ops/logs}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --date) DATE="${2:-}"; shift 2 ;;
+    --days) DAYS="${2:-}"; shift 2 ;;
+    --log-dir) LOG_DIR="${2:-}"; shift 2 ;;
+    -*) usage ;;
+    *) if [ -z "$UUID" ]; then UUID="$1"; shift; else usage; fi ;;
+  esac
+done
+[ -n "$UUID" ] || usage
+echo "$UUID" | grep -Eq '^[^[:space:]]+$' || usage
+[ -d "$LOG_DIR" ] || { echo "log dir missing: $LOG_DIR" >&2; exit 3; }
+
+# expand the date window (date list, oldest first)
+DATES=()
+i=$((DAYS - 1))
+while [ "$i" -ge 0 ]; do
+  DATES+=("$(date -u -d "$DATE -$i days" +%Y-%m-%d)")
+  i=$((i - 1))
+done
+
+HITS=0; SEEN_LOG=0
+for day in "${DATES[@]}"; do
+  f="$LOG_DIR/opencrabs.$day"
+  [ -f "$f" ] || continue
+  SEEN_LOG=1
+  # primary evidence: TOOL_ACCUM emissions by the accused session
+  if grep -a 'TOOL_ACCUM' "$f" | grep -a "session_id=$UUID" | grep -aE "name=($BANNED)," | head -50 | while IFS= read -r row; do
+      ts="$(printf '%s' "$row" | cut -c1-26)"
+      tool="$(printf '%s' "$row" | grep -oE "name=($BANNED)," | head -1 | cut -d= -f2 | tr -d ,)"
+      printf '%s\t%s\tTOOL_ACCUM\t%s\n' "$day" "$ts" "$tool"
+    done; then
+    :
+  fi
+  n="$(grep -a 'TOOL_ACCUM' "$f" | grep -ac "session_id=$UUID" | head -1)"
+  nb="$(grep -a 'TOOL_ACCUM' "$f" | grep -a "session_id=$UUID" | grep -acE "name=($BANNED),")"
+  if [ "$nb" -gt 0 ]; then HITS=$((HITS + nb)); continue; fi
+  # fallback evidence: actual executions (dates whose emitter rows rotated away)
+  ne="$(grep -a "session_id=$UUID" "$f" | grep -acE "Executing tool: ($BANNED)( |$)")"
+  if [ "$ne" -gt 0 ]; then
+    grep -a "session_id=$UUID" "$f" | grep -aE "Executing tool: ($BANNED)( |$)" | head -50 | while IFS= read -r row; do
+      ts="$(printf '%s' "$row" | cut -c1-26)"
+      tool="$(printf '%s' "$row" | grep -oE "Executing tool: ($BANNED)" | head -1 | sed 's/Executing tool: //')"
+      printf '%s\t%s\tEXEC\t%s\n' "$day" "$ts" "$tool"
+    done
+    HITS=$((HITS + ne))
+  fi
+done
+
+if [ "$SEEN_LOG" -eq 0 ]; then
+  echo "log missing: no opencrabs.<date> files in $LOG_DIR for the requested window" >&2
+  exit 3
+fi
+
+if [ "$HITS" -gt 0 ]; then
+  echo "VIOLATION $UUID ($HITS banned-surface rows)" >&2
+  exit 1
+fi
+echo "CLEAN $UUID (window ${DATES[0]}..${DATES[-1]}, no banned telegram-surface rows)" >&2
+exit 0
