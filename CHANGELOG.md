@@ -6,6 +6,11 @@ material, not procedure). Git-tracked in the skill repo; append one entry per
 bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 
 ## Entries
+
+## v0.4.66 (2026-08-31) — editor requirement-intake rule (owner 2026-08-31 14:51Z)
+
+- editor.md Phase 1 step 5: NEW/updated requirements persist in a fork issue BEFORE execution — processed actionable form, never verbatim; extends the in-flight issue or opens a new one; Issue-Ref discipline applies. Origin: owner correction of the supervisor-scoped draft; live issue leshchenko1979/opencrabs#51.
+
 ## v0.4.65 (2026-08-31) — "Do 1+2" batch: deletion ritual, watchdog retirement, lens C MED/LOW tools, ship-chain hardening
 
 Owner "Do 1+2 then explain 3" (afternoon, post-v0.4.64):
