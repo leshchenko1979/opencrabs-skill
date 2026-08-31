@@ -417,6 +417,7 @@ cmd_commit_pending() {
 
 # ---- selftest (48 cases) ------------------------------------------------------
 cmd_selftest() {
+  export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
   local T P=0 F=0
   T="$(mktemp -d)"; mkdir -p "$T/state" "$T/skill/tools/tests"
@@ -611,8 +612,26 @@ cmd_confirm() { # oc-ledger confirm <uuid> [--gh <cmd>] — verify the worker's
   with_lock _confirm_locked
 }
 
+# ---- ship-audit tail-chain (C-F4, v0.4.71) ------------------------------------
+# Tail-chains the deploy-journal orphan audit onto the Duty-3/4 sweep cadence:
+# rc1 = findings (orphaned/failed legs) -> loud stderr pointer; the audit's own
+# invocation is journaled by lib/oc-log.sh. rc2/other = fixture/env, ignored.
+# OC_SHIP_AUDIT_CHAIN=0 disables (selftest/battery fixtures).
+oc_ship_audit_chain() {
+  [ "${OC_SHIP_AUDIT_CHAIN:-1}" = "1" ] || return 0
+  local AUDIT RC=0
+  AUDIT="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/oc-ship-audit"
+  [ -x "$AUDIT" ] || return 0
+  "$AUDIT" --grace 120 >/dev/null 2>&1 || RC=$?
+  if [ "$RC" -eq 1 ]; then
+    echo "oc-ledger: SHIP-AUDIT rc=1 - ORPHANED/failed deploy legs detected; run: tools/oc-ship-audit --grace 120" >&2
+  fi
+  return 0
+}
+
 # ---- dispatch -----------------------------------------------------------------
 parse_global "$@"
+case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm> | --selftest"; exit 0 ;; esac
 if [ "$SELFTEST" -eq 1 ]; then cmd_selftest; exit $?; fi
 sub="${ARGS[0]:-}"; rest=("${ARGS[@]:1}")
 case "$sub" in
@@ -622,7 +641,8 @@ case "$sub" in
   cadence) cmd_cadence ;;
   ack) cmd_ack "${rest[@]+"${rest[@]}"}" ;;
   enroll) cmd_enroll "${rest[@]+"${rest[@]}"}" ;;
-  commit-pending) cmd_commit_pending "${rest[@]+"${rest[@]}"}" ;;
+  commit-pending) cmd_commit_pending "${rest[@]+"${rest[@]}"}"; oc_ship_audit_chain ;;
   confirm) cmd_confirm "${rest[@]+"${rest[@]}"}" ;;
+  selftest) cmd_selftest; exit $? ;;
   *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm> | --selftest" ;;
 esac

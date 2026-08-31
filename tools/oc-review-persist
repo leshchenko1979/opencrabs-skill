@@ -39,6 +39,9 @@ if [ "${1:-}" = "--selftest" ]; then
   okf "[ -f '$T/skill-review-A-$day.md' ]" "file-exists"
   okf "grep -q '|A|$T/skill-review-A-$day.md|' '$T/skill-review-index.log'" "index-line"
   bash "$ME" bogus "x" --dir "$T" >/dev/null 2>&1; chk "bad-lens" 2 $?
+  bash "$ME" G2 "multi-pass" --dir "$T" >/dev/null 2>&1; chk "lens-multipass" 0 $?
+  okf "grep -q '|G2|$T/skill-review-G2-$day.md|' '$T/skill-review-index.log'" "multipass-index"
+  bash "$ME" Z9 "x" --dir "$T" >/dev/null 2>&1; chk "bad-lens-out-of-range" 2 $?
   bash "$ME" A "" --dir "$T" >/dev/null 2>&1; chk "empty-input" 2 $?
   echo "from file" > "$T/in.md"
   bash "$ME" B "@$T/in.md" --dir "$T" >/dev/null 2>&1; chk "at-file" 0 $?
@@ -55,7 +58,10 @@ lens="${1:-}"; src="${2:-}"; DIR="${OC_REVIEW_DIR:-/tmp}"; shift 2 2>/dev/null |
 while [ $# -gt 0 ]; do case "$1" in --dir) DIR="${2:-}"; shift 2 ;; *) shift ;; esac; done
 
 [ -n "$lens" ] || die 2 "usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]"
-case "$LENSES" in *" $lens "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES)" ;; esac
+case "$lens" in
+  [A-G]|[A-G][0-9]) ;;  # multi-pass lens names (C-F7, v0.4.71)
+  *) case "$LENSES" in *" $lens "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES or A-G / A1-G9)" ;; esac ;;
+esac
 [ -n "$src" ] || die 2 "report input is empty (pass text, @file, or -)"
 
 case "$src" in

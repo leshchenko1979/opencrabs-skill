@@ -5,48 +5,34 @@ Moved out of SKILL.md frontmatter at v0.4.43 (Duty-6 run-2 finding B6 —
 material, not procedure). Git-tracked in the skill repo; append one entry per
 bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 
-## v0.4.67 (2026-08-31) - qualified fork refs on upstream surfaces
+## v0.4.60 — deploy accounting migration + ship leg-plan journaling (owner 06:03Z "fix the gaps" + 06:10 "Go")
 
-- editor.md Phase 7: bare `#N` (fork issue numbers) FORBIDDEN on upstream surfaces outside code spans - GitHub autolinks to adolfo's unrelated issue #N. Qualified `leshchenko1979/opencrabs#N` or full URL required. Origin: owner directive 2026-08-31 (fork #54); live offenders found on PR titles 1273/1268/1266 + issue bodies 1255/1257, patched same day.
+- **Migration:** deploy artifacts out of the skill dir (owner order "move all accounting files and markers"): `deployed.sha`, `deployed.meta.json`, `fanout.state`, `oc-deploy/journal/`, shadow archive + stale fanout locks moved to the state dir (`opencrabs-dev/`), byte-verified copies before removal. `oc-deploy:66` STATE_DIR default flipped; `oc-attrib:83` + `oc-shadow-rotate:23` defaults flipped too — **the battery wire test caught oc-attrib rc=5** on the migrated marker (hardcoded default my path-grep missed; lesson: grep the ROOT literal, not the artifact path).
+- **Gap fix (two orphaned GREEN ships 2026-08-31):** `ship --execute` dispatch leg now journals `leg=dispatch, next="watch+swap REQUIRED", shipped=NO` via tools.log extra — a dispatch-only rc=0 exit can never again read as a shipped build; absence of a swap row for the sha is alarmable from the journal alone.
+- **Sweep lists:** oc-ledger skill RUNTIME_ARTIFACTS shrinks to the battery receipt; moved set joined the state sweep (git-tracked in the state repo).
+- **Live-verified post-migration:** `poll` reads deployed=d730e9ca from the new path; `fanout --run 33359092769` → skip reason=done (idempotency preserved). oc-deploy selftest 145/0, oc-ledger 66/0, battery **97/0**. Skill `1469b1bc`+`471ca33b`; rc=2-first-attempt pattern (2 ships) noted as dispatch-lock suspect — rc vocabulary documented, no code change.
 
-## v0.4.68 (2026-08-31) — oc-prchecks upstream guard
+## v0.4.61 — naming + ontology hard rules; editor tool reference (owner 2026-08-31)
+- SKILL.md Hard rules: worker-naming rule SHARPENED — topic/chat name only on EVERY surface (was: owner reports only; tonight's uuid-laden fleet board was the live violation). Uuids = routing fields only.
+- SKILL.md Hard rules: NEW official-ontology rule — SKILL-defined vocabulary only; new concepts named via poll on owner word; Reviewer A enforces.
+- editor.md: NEW "Tool reference — editor's quick table" (invocation forms + rc contracts + the three rules that outlive any table). Doc-only bump; no tool code touched.
 
-- oc-prchecks: `--pr` against upstream now exits 2 (fork-lane-only CI verdicts; use gh run list pollers for upstream), unresolvable head exits 7 — false-GREEN shape exit killed (finding: suggest-options lane, owner "harden").
-- selftest 16/16.
+## v0.4.62 (2026-08-31) — stale-refs/ontology batch + Reviewer A strengthened (owner "Go" 09:17Z)
 
-## v0.4.68 (2026-08-31) — oc-prchecks upstream guard
+Duty-6-style read-only review (subagent, lens: stale references + unclear terms) found 22 defects in v0.4.61 text; all fixed, quotes disk-verified:
 
-- oc-prchecks: fork-lane gate (rc 2, upstream repo refused pre-API) + carrier-head guard (rc 7, refuses time-window adoption when branches API cannot resolve the carrier head — previously matched ANY run: false GREEN). Finding: suggest-options lane; live-verified both guards; fork lane untouched; selftest 16/16.
+- 1b dead paths (5): fanout journal path + editor brake path + shadow-log location repointed to the state dir (v0.4.60 migration residue — the brake doc armed NOTHING at the old path); 2 false "archived at tools/archive/oc-consent-check" claims corrected (archive holds only compiler.md; blob in git history).
+- 1d dead test-leg prose (4): test-ontology CODE TESTS cells repointed to pr-checks.yml as the ONLY test locus (carrier leg removed e71dba58); cargo flags made verbatim (`--locked --profile ci --all-features`) at SKILL.md UPSTREAM CI GATE + editor Phase 5 + Phase 6 comment.
+- 1a unmarked retired concepts (2): "CI is the compiler" present-tense -> CI-is-the-only-executor with Compiler RETIRED 2026-08-28 marker (x2).
+- class-2 unclear terms: NEW SKILL.md section "Glossary — official terms" (CI gate incl. legacy synonyms, ORDER gates, S2/S3, lane, roster, lens, selftest vs battery, GREEN/RED terminal truth); "4-lens" -> "5-lens (A–E)"; ontology-rule parenthetical now cites the real ontology terms; lint-gate name variants normalized.
+- supervisor.md: Reviewer A lens STRENGTHENED (owner word same turn) with the churn-drift checklist: one-concept-one-name, glossary conformance, post-migration ROOT-literal path sweep, enumeration consistency, retired-concepts-marked.
 
-## v0.4.69 (2026-08-31) — notification instructions: deferred delivery modes
+Docs-only; battery 97/0; sync+tag v0.4.62; mirrors at parity.
 
-- SKILL.md §session_notify mechanics: DELIVERY MODES (immediate / deferred via interrupt=true / automatic redirect on channel rebind fork #19 / no-route), refusal-handling rule, CLI --sender/--title form (owner order; evidence: 24 mid-turn refusals = lost wakes, comatose-lanes incident).
-- editor.md §CI-wait item 6 + supervisor.md delivery discipline: operational wakes to mid-turn lanes carry interrupt=true.
-- AGENTS.md waiter form updated (--sender/--title/--interrupt).
-
-Issue-Ref: #56
-
-## Entries
-## v0.4.70 (2026-08-31) — lens G regroup + notify delivery-mode terminology
-
-- Owner corrections: interrupt=true is the #13 FAILSAFE (mid-turn operational wake), NOT deferred mode; deferred/queued delivery = acks + low-urgency (SKILL.md DELIVERY MODES, editor.md, supervisor.md, AGENTS.md).
-- Lens G regroup (fork #57, owner "Lens G go"): HIGH 13 per-commit laws → detached-HEAD+signing Phase 4, writer-exclusivity Phase 2 (6c pointers); standing-laws band reordered (Box→Telegram→CI-wait→drift); Ship — oc-deploy (S3 path) promoted out of Phase 6; CI-wait items 4-9 → supervisor.md §CI-wait & waiter discipline; worktree lifecycle → Phase 2; test placement → Phase 4; oc-issue-log row; SKILL.md gh-run-watch fallback row aligned with the ban; 8 LOW/MED pointer fixes. Verdict: REGROUP, no split.
-## v0.4.66 (2026-08-31) — editor requirement-intake rule (owner 2026-08-31 14:51Z)
-
-- editor.md Phase 1 step 5: NEW/updated requirements persist in a fork issue BEFORE execution — processed actionable form, never verbatim; extends the in-flight issue or opens a new one; Issue-Ref discipline applies. Origin: owner correction of the supervisor-scoped draft; live issue leshchenko1979/opencrabs#51.
-
-## v0.4.65 (2026-08-31) — "Do 1+2" batch: deletion ritual, watchdog retirement, lens C MED/LOW tools, ship-chain hardening
-
-Owner "Do 1+2 then explain 3" (afternoon, post-v0.4.64):
-
-- **Deletion batch (ritual-verified):** coma-audit trio (3 DELETE-SAFE files), bare `workers-ledger.lock` (0 bytes), empty skill-dir `oc-deploy-shadow.log` (0 lines, gitignored); CHANGELOG lock-ID correction.
-- **Watchdog wrapper retired:** `oc-watchdog-check` deleted — one invocation on record (08-28), superseded by per-session gate watchdogs + `oc-deploy watch`.
-- **New tools:** `oc-commit` (repo-guarded commit: dirty-tree/branch/protected-path gates + journal), `oc-ship-audit` (tools.log orphan/terminal-missing dispatch scan, rogue-line hardened — live-run surfaced the 08-31 orphaned-GREEN class where the unhardened jq said CLEAN), `oc-tg-audit` (banned telegram-surface row scan from ops daily logs — first live run caught 92 banned rows from an off-roster session), `oc-wt list` verb (TSV: task path branch dirty-n). All selftested + registered in SKILL.md.
-- **C8 sync changelog gate:** `oc-ledger sync` refuses when CHANGELOG lacks the version being shipped.
-- **Duty 7 extended (owner directive):** QUIRK/FAIL prefixes — workers report tool quirks and failures to the supervisor; supervisor triages into ledger + review lens.
-- **YAGNI rejections documented** (C9 oc-waiter, C11 oc-logstats): `tmp/duty6-review-20260831/DECISIONS-lens-C-YAGNI.md`, with revisit triggers.
-- **Ship-chain hardening (found live via battery):** run 33388930453 (#49) executed swap-execute TWICE (stall-hit session relaunch); run 2 corrupted deployed.meta.json prev_sha. Fixes: double-execution guard in swap-execute (dies 2 on same-sha re-swap, selftest 13b, 17o fixture reset, c8f6b77d); battery oc-attrib wire test hardened for degenerate marker state (84af91de); live meta repaired to true prev d730e9ca (ledger n=1410). Residual gap flagged: neither journal captured a restart line despite the daemon bounce.
-
+## v0.4.63 (2026-08-31) — sync payload root-fix (incident n=1405)
+- oc-ledger sync: stage the FULL skill working tree (tracked+untracked) instead of the hardcoded SKILL.md+CHANGELOG.md list — a bump tag can no longer point at a tree missing its payload (three-strike class: v0.4.58/61/62 strayed files). Swept non-doc payload named loudly on stderr ("PAYLOAD SWEPT").
+- Selftest +3 (69/0): payload probe swept into bump commit + warning present + committed tree verified; bundle fixture de-coupled from leaked untracked dirt; cadence-count fixture updated for the extra bump event.
+- Owner "Go" 2026-08-31 (sync-fix proposal after n=1405 stamp).
 ## v0.4.64 (2026-08-31) — Duty-6 five-lens fix batch, P0–P3 + K-wiring (owner "Go all" 10:39Z)
 
 Five read-only lenses (A ontology / B efficiency / C CLI-automation / D deletion / E topology) reviewed the v0.4.63 tree; all incident-backed HIGHs disk-verified by the supervisor, then fixed on the owner's "Go all":
@@ -92,31 +78,51 @@ oc-deploy selftest 145/0; battery 97/0.
 - "v0.4.57 (2026-08-31 ~04:1xZ owner 'include, then go with the suggestions above' — Duties 4+6 13/5 FIRE incorporation batch): DUTY 4 (8 lanes, 17 proposals -> 12 accept-mechanical + 4->1 merged): editor.md §CI-wait discipline items 4-9 (>=60s floor for EVERY detached gh poller; --wait <=90s vs the 120s tool-runner ceiling + >=600s first-dispatch timeout + API run-search recovery; per-leg invocation verify + mid-chain rc!=0 immediate notify; notify wiring in the wrapper never as oc-prchecks flags + cron courier for notify-less waiters; log-window line-number cutoffs; gh api REST v3 snake_case); Phase 1 claim read-back (n=1361 class); Phase 6 --body-file-only implementation-comment mechanics; Phase 7 HARVEST VERIFICATION SWEEP (4-lane convergence: fork-side symbol sweep, attribute porting, foreign-hunk drop, patch-id verify); SKILL.md Box law rustfmt-wrapper-newer-than-CI rule. DUTY 6 (44 findings): HIGH x3 fixed — SKILL.md Tackling-comment residue retired (upstream ban), UPSTREAM CI GATE text repointed to CI-gate evidence (local-cargo triad reading killed), ops AGENTS.md staleness (compiler present-tense, tackling procedure, v0.4.29 pin) surgically corrected; oc-review-persist adopted as the Duty-6 persistence verb (SKILL.md row path fixed to $OC_REVIEW_DIR default /tmp); Reviewer E (INTERFACE/TOPOLOGY — tool-merge review) added to the lens set per owner question 03:54Z (verified: NO lens covered tool merges before); ROSETTE/HQ-roster coinages replaced with real sources; CONSENT REGISTER dup -> pointer; roster-enroll kind added to the register row; orphan (c) marker dropped. TOOL BUG: oc-ledger cmd_stamp had no --what flag and ate it as positional text while dropping the real value (n=1361 AND n=1372 both stored what=--what) — now accepts --what, rejects unknown flags rc=2; selftest +4 cases 55/55; corrective incident stamped n=1383. TOOLS.md gains the write_opencrabs_file profile-relative path rule (KERNEL placement, owner go). Battery 88/0 pre-bump."
 - "v0.4.58 (2026-08-31 04:20Z owner Go — lens-C tool builds + D-lens deletion sweep + by-attribution fix): LENS C (5 builds): oc-drift-check (claimed vs live version, --ack delegates oc-ledger ack), oc-toolaccum (tools.log per-actor per-tool failure arithmetic, threshold 3 = repeat-offense), oc-branch-sweep (MERGED/ABSORBED/STALE/ACTIVE classification, deletes MERGED only, protected base/HEAD/--keep, archive tip sha in TSV), oc-pr-fault-scope (failing-files intersect PR-files = IN-SCOPE/BASE-FAULT, the 08-26 clippy-wall lesson mechanical), oc-ledger confirm verb (verifies latest claim #N on the live fork via injectable gh, THEN flips workers[].confirmed — until today NO verb flipped it). DUTY-4 IDEA (lane 7e1ebbb6, n=1386 trap): stamp by-default no longer lies — derive_by() maps OC_ACTOR via the roster, unrostered says so, no actor = LOUD '(unattributed — pass --by)'; the silent 'supervisor (topic 30220)' default retired. D-LENS SWEEP (owner Go): 10 conditional DELETE-SAFE items deleted AFTER per-file tracked+clean+blob verification (21:56Z condition): 8 tools/archive/*.bak + oc-consent-check (skill 6a12cd28, blobs 2e70dc02/47da2f36/1ed75411/95121286x3/b50c58dd/a2e1f203/a77f9119) + pending-health-check.json (state aafc248, blob 27041bbf — v0.4.47 claim 'already gone from disk' was FALSE, file lived untouched; corrected in ledger n=1391); watchdog-13e4e1da.log archived to journal/ (dead since 23:40Z); workers-ledger.lock writer IDENTIFIED = oc-ledger with_lock() exec 9> — KEEP, live control [CORRECTED v0.4.65, lens D #13: that identification was STALE — the real oc-ledger lock is workers-ledger.json.lock (with_lock does exec 9>"$LEDGER.lock" with LEDGER=workers-ledger.json); the bare workers-ledger.lock was an orphaned 0-byte untracked leftover with ZERO refs in tools/, deleted on owner word 2026-08-31 11:45Z]; pre-merge ledger anchors confirmed tracked, KEEP as provenance. Selftests: oc-ledger 55->66, oc-drift-check 6, oc-toolaccum 7, oc-branch-sweep 9, oc-pr-fault-scope 4; battery 88 -> 97 PASS / 0 FAIL. Tool table +5 rows."
 - "v0.4.59: oc-deploy sidecar sync (#47, owner 'Go' 2026-08-31 04:45Z) — GREEN-path sidecar_sync(): after ops post-verify match, every active opencrabs-*.service user unit (primary excluded) whose MainPID exe sha != deployed sha is restarted + re-verified (found live 2026-08-31: default+family daemons 2 days/3 swaps behind, leaked rich-only tags through pre-fix card code); NON-FATAL by design (sidecar-unit exit=1 journaled, swap never fails on a stuck sidecar); gates DRILL=off / sandbox-off unless OC_SWAP_SIDECARS=2 / 0=always-off; selftest shims OC_SWAP_SIDECAR_LISTER/SHOW/ACTIVE/RESTART + OC_SWAP_PROC_PREFIX + OC_SWAP_PRIMARY_UNIT; selftest cases 17n (stale restarted, in-sync untouched) + 17o (sandbox guard skips, zero restarts); battery 145 PASS / 0 FAIL"
-## v0.4.60 — deploy accounting migration + ship leg-plan journaling (owner 06:03Z "fix the gaps" + 06:10 "Go")
+## v0.4.65 (2026-08-31) — "Do 1+2" batch: deletion ritual, watchdog retirement, lens C MED/LOW tools, ship-chain hardening
 
-- **Migration:** deploy artifacts out of the skill dir (owner order "move all accounting files and markers"): `deployed.sha`, `deployed.meta.json`, `fanout.state`, `oc-deploy/journal/`, shadow archive + stale fanout locks moved to the state dir (`opencrabs-dev/`), byte-verified copies before removal. `oc-deploy:66` STATE_DIR default flipped; `oc-attrib:83` + `oc-shadow-rotate:23` defaults flipped too — **the battery wire test caught oc-attrib rc=5** on the migrated marker (hardcoded default my path-grep missed; lesson: grep the ROOT literal, not the artifact path).
-- **Gap fix (two orphaned GREEN ships 2026-08-31):** `ship --execute` dispatch leg now journals `leg=dispatch, next="watch+swap REQUIRED", shipped=NO` via tools.log extra — a dispatch-only rc=0 exit can never again read as a shipped build; absence of a swap row for the sha is alarmable from the journal alone.
-- **Sweep lists:** oc-ledger skill RUNTIME_ARTIFACTS shrinks to the battery receipt; moved set joined the state sweep (git-tracked in the state repo).
-- **Live-verified post-migration:** `poll` reads deployed=d730e9ca from the new path; `fanout --run 33359092769` → skip reason=done (idempotency preserved). oc-deploy selftest 145/0, oc-ledger 66/0, battery **97/0**. Skill `1469b1bc`+`471ca33b`; rc=2-first-attempt pattern (2 ships) noted as dispatch-lock suspect — rc vocabulary documented, no code change.
+Owner "Do 1+2 then explain 3" (afternoon, post-v0.4.64):
 
-## v0.4.61 — naming + ontology hard rules; editor tool reference (owner 2026-08-31)
-- SKILL.md Hard rules: worker-naming rule SHARPENED — topic/chat name only on EVERY surface (was: owner reports only; tonight's uuid-laden fleet board was the live violation). Uuids = routing fields only.
-- SKILL.md Hard rules: NEW official-ontology rule — SKILL-defined vocabulary only; new concepts named via poll on owner word; Reviewer A enforces.
-- editor.md: NEW "Tool reference — editor's quick table" (invocation forms + rc contracts + the three rules that outlive any table). Doc-only bump; no tool code touched.
+- **Deletion batch (ritual-verified):** coma-audit trio (3 DELETE-SAFE files), bare `workers-ledger.lock` (0 bytes), empty skill-dir `oc-deploy-shadow.log` (0 lines, gitignored); CHANGELOG lock-ID correction.
+- **Watchdog wrapper retired:** `oc-watchdog-check` deleted — one invocation on record (08-28), superseded by per-session gate watchdogs + `oc-deploy watch`.
+- **New tools:** `oc-commit` (repo-guarded commit: dirty-tree/branch/protected-path gates + journal), `oc-ship-audit` (tools.log orphan/terminal-missing dispatch scan, rogue-line hardened — live-run surfaced the 08-31 orphaned-GREEN class where the unhardened jq said CLEAN), `oc-tg-audit` (banned telegram-surface row scan from ops daily logs — first live run caught 92 banned rows from an off-roster session), `oc-wt list` verb (TSV: task path branch dirty-n). All selftested + registered in SKILL.md.
+- **C8 sync changelog gate:** `oc-ledger sync` refuses when CHANGELOG lacks the version being shipped.
+- **Duty 7 extended (owner directive):** QUIRK/FAIL prefixes — workers report tool quirks and failures to the supervisor; supervisor triages into ledger + review lens.
+- **YAGNI rejections documented** (C9 oc-waiter, C11 oc-logstats): `tmp/duty6-review-20260831/DECISIONS-lens-C-YAGNI.md`, with revisit triggers.
+- **Ship-chain hardening (found live via battery):** run 33388930453 (#49) executed swap-execute TWICE (stall-hit session relaunch); run 2 corrupted deployed.meta.json prev_sha. Fixes: double-execution guard in swap-execute (dies 2 on same-sha re-swap, selftest 13b, 17o fixture reset, c8f6b77d); battery oc-attrib wire test hardened for degenerate marker state (84af91de); live meta repaired to true prev d730e9ca (ledger n=1410). Residual gap flagged: neither journal captured a restart line despite the daemon bounce.
 
-## v0.4.62 (2026-08-31) — stale-refs/ontology batch + Reviewer A strengthened (owner "Go" 09:17Z)
+## v0.4.66 (2026-08-31) — editor requirement-intake rule (owner 2026-08-31 14:51Z)
 
-Duty-6-style read-only review (subagent, lens: stale references + unclear terms) found 22 defects in v0.4.61 text; all fixed, quotes disk-verified:
+- editor.md Phase 1 step 5: NEW/updated requirements persist in a fork issue BEFORE execution — processed actionable form, never verbatim; extends the in-flight issue or opens a new one; Issue-Ref discipline applies. Origin: owner correction of the supervisor-scoped draft; live issue leshchenko1979/opencrabs#51.
 
-- 1b dead paths (5): fanout journal path + editor brake path + shadow-log location repointed to the state dir (v0.4.60 migration residue — the brake doc armed NOTHING at the old path); 2 false "archived at tools/archive/oc-consent-check" claims corrected (archive holds only compiler.md; blob in git history).
-- 1d dead test-leg prose (4): test-ontology CODE TESTS cells repointed to pr-checks.yml as the ONLY test locus (carrier leg removed e71dba58); cargo flags made verbatim (`--locked --profile ci --all-features`) at SKILL.md UPSTREAM CI GATE + editor Phase 5 + Phase 6 comment.
-- 1a unmarked retired concepts (2): "CI is the compiler" present-tense -> CI-is-the-only-executor with Compiler RETIRED 2026-08-28 marker (x2).
-- class-2 unclear terms: NEW SKILL.md section "Glossary — official terms" (CI gate incl. legacy synonyms, ORDER gates, S2/S3, lane, roster, lens, selftest vs battery, GREEN/RED terminal truth); "4-lens" -> "5-lens (A–E)"; ontology-rule parenthetical now cites the real ontology terms; lint-gate name variants normalized.
-- supervisor.md: Reviewer A lens STRENGTHENED (owner word same turn) with the churn-drift checklist: one-concept-one-name, glossary conformance, post-migration ROOT-literal path sweep, enumeration consistency, retired-concepts-marked.
+## v0.4.67 (2026-08-31) - qualified fork refs on upstream surfaces
 
-Docs-only; battery 97/0; sync+tag v0.4.62; mirrors at parity.
+- editor.md Phase 7: bare `#N` (fork issue numbers) FORBIDDEN on upstream surfaces outside code spans - GitHub autolinks to adolfo's unrelated issue #N. Qualified `leshchenko1979/opencrabs#N` or full URL required. Origin: owner directive 2026-08-31 (fork #54); live offenders found on PR titles 1273/1268/1266 + issue bodies 1255/1257, patched same day.
 
-## v0.4.63 (2026-08-31) — sync payload root-fix (incident n=1405)
-- oc-ledger sync: stage the FULL skill working tree (tracked+untracked) instead of the hardcoded SKILL.md+CHANGELOG.md list — a bump tag can no longer point at a tree missing its payload (three-strike class: v0.4.58/61/62 strayed files). Swept non-doc payload named loudly on stderr ("PAYLOAD SWEPT").
-- Selftest +3 (69/0): payload probe swept into bump commit + warning present + committed tree verified; bundle fixture de-coupled from leaked untracked dirt; cadence-count fixture updated for the extra bump event.
-- Owner "Go" 2026-08-31 (sync-fix proposal after n=1405 stamp).
+## v0.4.68 (2026-08-31) — oc-prchecks upstream guard
+
+- oc-prchecks: fork-lane gate (rc 2, upstream repo refused pre-API) + carrier-head guard (rc 7, refuses time-window adoption when branches API cannot resolve the carrier head — previously matched ANY run: false GREEN). Finding: suggest-options lane; live-verified both guards; fork lane untouched; selftest 16/16.
+
+## v0.4.69 (2026-08-31) — notification instructions: deferred delivery modes
+
+- SKILL.md §session_notify mechanics: DELIVERY MODES (immediate / deferred via interrupt=true / automatic redirect on channel rebind fork #19 / no-route), refusal-handling rule, CLI --sender/--title form (owner order; evidence: 24 mid-turn refusals = lost wakes, comatose-lanes incident).
+- editor.md §CI-wait item 6 + supervisor.md delivery discipline: operational wakes to mid-turn lanes carry interrupt=true.
+- AGENTS.md waiter form updated (--sender/--title/--interrupt).
+
+Issue-Ref: #56
+
+## v0.4.70 (2026-08-31) — lens G regroup + notify delivery-mode terminology
+
+- Owner corrections: interrupt=true is the #13 FAILSAFE (mid-turn operational wake), NOT deferred mode; deferred/queued delivery = acks + low-urgency (SKILL.md DELIVERY MODES, editor.md, supervisor.md, AGENTS.md).
+- Lens G regroup (fork #57, owner "Lens G go"): HIGH 13 per-commit laws → detached-HEAD+signing Phase 4, writer-exclusivity Phase 2 (6c pointers); standing-laws band reordered (Box→Telegram→CI-wait→drift); Ship — oc-deploy (S3 path) promoted out of Phase 6; CI-wait items 4-9 → supervisor.md §CI-wait & waiter discipline; worktree lifecycle → Phase 2; test placement → Phase 4; oc-issue-log row; SKILL.md gh-run-watch fallback row aligned with the ban; 8 LOW/MED pointer fixes. Verdict: REGROUP, no split.
+
+## v0.4.71 (2026-08-31) — Duty-4 proposal batch + 7-lens mechanics (pass 13/5)
+
+- editor.md CI-wait items 4-7 (Duty-4 P1/P12/P7/P11): terminal-state wake gating, top-level rc reads, waiter pattern-vs-format check, oc-prchecks invoke-once. Evidence: run 33433873373 in_progress wake, pipe-tail false verdicts, run=<id> grep miss, 4-dispatch gate storm.
+- editor.md Phase 1: issue/PR body claims require code-verified evidence (P3; upstream #683 hallucinated root cause). Phase 4: enum-variant grep pre-commit (P14; GluedHost E0004/E0308). Phase 4: trailer-parse verify after amend/rebase/cherry-pick (P2; c4a9ef55 empty trailer scan). Phase 7 2-pre: atomicity+base check BEFORE PR open (P6; #1273 wrong base).
+- Lens A: Ship-section anchors repointed (M1), poll-floor ref to supervisor (M2), oc-index-worktree path+rc in quick table (M3), ORDER-vocabulary scoping (M4), chain-reword (L1), 2c heading renamed (L2), CI-wait ref names standardized (L4), glossary entries carrier/fan-out/state-dir/single-flight (M7).
+- Lens B2: restart-scope sidecar exception (B3), tombstone rows deleted from live table (B15), quick-table/prchecks register fixes.
+- Supervisor: Duty 1 CHANGELOG step (C8 gate), Brief enumerates review set (M5), TOOL_ACCUM enforcement -> oc-tg-audit (L3b).
+- Tools (lens C F4/F5/F7 + lens F): --help exits 0 + positional selftest fleet-wide; oc-review-persist accepts A-G/A1-G9 lens names; oc-ship-audit tail-chains onto oc-ledger commit-pending (OC_SHIP_AUDIT_CHAIN=0 disables); oc-commit + oc-branch-sweep worktree-hostile .git gates -> rev-parse (F1 HIGH); oc-issue-log failure branch no longer deletes the body (F6); oc-tg-audit --days validation + dead code out.
+- CHANGELOG: duplicate v0.4.68 deduped, orphan ## Entries header removed, entries reordered newest-LAST (lens A L5).
+
+Issue-Ref: #51

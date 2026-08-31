@@ -35,7 +35,8 @@ cmd_sweep() {
     --*) die 2 "unknown flag '$1'" ;;
     *) die 2 "unexpected arg '$1'" ;;
   esac; done
-  [ -n "$repo" ] && [ -d "$repo/.git" ] || die 2 "usage: oc-branch-sweep --repo <path> [--base b] [--dry-run] [--keep RE]"
+  [ -n "$repo" ] || die 2 "usage: oc-branch-sweep --repo <path> [--base b] [--dry-run] [--keep RE]"
+git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die 2 "not a git repo: $repo"
   [ -n "$base" ] || base="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" || base="main"
   git -C "$repo" rev-parse --verify "$base" >/dev/null 2>&1 || die 3 "base branch '$base' not resolvable in $repo"
   local deleted=0

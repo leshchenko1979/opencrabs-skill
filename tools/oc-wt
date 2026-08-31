@@ -34,15 +34,16 @@ REPO="${HOME}/opencrabs"
 BASE="origin/main"
 FORCE=0
 
-usage() {
-  cat >&2 <<EOS
+help() {
+  cat <<EOS
 Usage: $PROG add <task> <branch> [--base origin/main] [--force] [--repo P] [--no-log]
        $PROG remove <task> [--force] [--repo P] [--no-log]
        $PROG list [--repo P] [--no-log]   # TSV: task path branch dirty-n
+       $PROG --selftest
 Exit: 0 ok / 2 usage / 3 path-exists-or-dirty / 4 index-failed / 5 repo-or-branch-missing / 6 behind-base
 EOS
-  exit 2
 }
+usage() { help >&2; exit 2; }
 
 slug_ok() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$'; }
 
@@ -137,7 +138,8 @@ do_selftest() {
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
-[ "${1:-}" = "--selftest" ] && { do_selftest; exit $?; }
+case "${1:-}" in -h|--help) help; exit 0 ;; esac
+[ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ] && { do_selftest; exit $?; }
 
 # ---------- arg parse ----------------------------------------------------------
 VERB="${1:-}"; shift 2>/dev/null || true

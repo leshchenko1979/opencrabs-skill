@@ -71,6 +71,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$UUID" ] || usage
 echo "$UUID" | grep -Eq '^[^[:space:]]+$' || usage
+# F#17 (v0.4.71): --days 0 -> empty DATES -> false VIOLATION rc under set -u
+case "$DAYS" in ''|*[!0-9]*) usage ;; esac
+[ "$DAYS" -ge 1 ] || usage
 [ -d "$LOG_DIR" ] || { echo "log dir missing: $LOG_DIR" >&2; exit 3; }
 
 # expand the date window (date list, oldest first)
@@ -94,7 +97,6 @@ for day in "${DATES[@]}"; do
     done; then
     :
   fi
-  n="$(grep -a 'TOOL_ACCUM' "$f" | grep -ac "session_id=$UUID" | head -1)"
   nb="$(grep -a 'TOOL_ACCUM' "$f" | grep -a "session_id=$UUID" | grep -acE "name=($BANNED),")"
   if [ "$nb" -gt 0 ]; then HITS=$((HITS + nb)); continue; fi
   # fallback evidence: actual executions (dates whose emitter rows rotated away)

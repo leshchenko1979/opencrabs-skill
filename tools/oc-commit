@@ -35,7 +35,6 @@ JSON
   R="$d/repo"; git init -q -b main "$R"
   git -C "$R" -c user.email=t@t -c user.name=T commit -q --allow-empty -m seed
   OC="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"; export OC_LEDGER="$d/wl.json"
-  GITOK="git -C $R -c user.email=t@t -c user.name=T"
   # 1. unset OC_ACTOR -> 3
   ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR "$OC" -m test --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: unset OC_ACTOR != 3" >&2; exit 1; }
@@ -74,11 +73,14 @@ while [ $# -gt 0 ]; do
     -m) [ -n "${2:-}" ] || usage; MSGS+=("$1" "$2"); shift 2 ;;
     --issue) ISSUE="${2:-}"; [ -n "$ISSUE" ] || usage; shift 2 ;;
     --repo) REPO="${2:-}"; [ -n "$REPO" ] || usage; shift 2 ;;
+    -h|--help) echo "usage: $0 -m <msg> [-m <msg>...] [--issue N] [--repo <path>] | --selftest"; exit 0 ;;
+    selftest) bash "$0" --selftest; exit $? ;;
     *) usage ;;
   esac
 done
 [ ${#MSGS[@]} -ge 2 ] || usage
-[ -d "$REPO/.git" ] || { echo "gate-fail: not a git repo: $REPO" >&2; exit 3; }
+git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 \
+  || { echo "gate-fail: not a git repo: $REPO" >&2; exit 3; }
 G="git -C $REPO"
 
 # gate 1: HEAD attached (incident class: commits landing nowhere)

@@ -203,7 +203,14 @@ do_selftest() {
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
-[ "${1:-}" = "--selftest" ] && { do_selftest; exit $?; }
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  cat <<'EOH'
+Usage: oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
+Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 7 carrier-head-unresolvable
+EOH
+  exit 0
+fi
+[ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ] && { do_selftest; exit $?; }
 
 # ---------- arg parse ---------------------------------------------------------
 REF=""

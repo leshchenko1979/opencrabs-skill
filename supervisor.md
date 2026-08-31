@@ -33,8 +33,9 @@ simulations, and skill work stay here. Expected reply shape: "routed to
 ## Duty 1 — Update the skill
 
 - Owner directive or validated poll proposal → surgical `edit_file` → VERIFY on
-  disk (grep the markers; parallel writers are a standing hazard) → bump the
-  version in `SKILL.md` frontmatter.
+  disk (grep the markers; parallel writers are a standing hazard) → append the
+  `## v<v>` entry to `CHANGELOG.md` (the C8 sync gate REFUSES a bump without
+  it, v0.4.65) → bump the version in `SKILL.md` frontmatter.
 - One coherent revision per owner-verdict batch (one `v0.4.x`), never scattered
   patches. Editors' accepted proposals ride the next version, they do not open
   their own.
@@ -252,9 +253,11 @@ Method:
      weigh the cost of a split (cross-refs, worker reading load) against the
      cost of growth. First full G pass shipped 2026-08-31 (standing lens from
      v0.4.67).
-2. Brief: five file paths, role map, ontology terms, ref names, strict output
-   contract — numbered findings `file §section · verbatim quote · dimension ·
-   problem · concrete fix · severity`. No pleasantries.
+2. Brief: the review-set file paths (SKILL.md, editor.md, supervisor.md,
+   CHANGELOG.md, s2-swap-journal-spec.md — name the subset in scope per pass),
+   role map, ontology terms, ref names, strict output contract — numbered
+   findings `file §section · verbatim quote · dimension · problem · concrete
+   fix · severity`. No pleasantries.
 3. PERSISTENCE (added after two report losses to bounces, 2026-08-26): the
    Supervisor persists each returned report via `oc-review-persist <lens> @<file>`
    on receipt (read-only reviewers cannot write; the tool re-read-verifies and
@@ -306,9 +309,11 @@ moment it happens; no waiting for a poll.
    semantic goes to the owner.
 
 **Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: the violation pattern
-is caught from evidence, not intuition. On suspicion, grep the ops daily log —
-`grep -a "TOOL_ACCUM" ~/.opencrabs/profiles/ops/logs/opencrabs.<date>` — filtered
-by the accused session id + telegram tool name (telegram_send / tg_send_message /
+is caught from evidence, not intuition. On suspicion run
+`./tools/oc-tg-audit <session-uuid> [--days N]` (v0.4.71 — replaces the
+hand grep; raw fallback: `grep -a "TOOL_ACCUM"
+~/.opencrabs/profiles/ops/logs/opencrabs.<date>` filtered by the accused
+session id + telegram tool name — telegram_send / tg_send_message /
 tg_edit_message / telegram_edit). A matching row → notify the rule (SKILL.md
 §Telegram surface law); repeat → review toggle.
 

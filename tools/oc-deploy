@@ -1375,6 +1375,8 @@ watch_run() { # explicit `oc-deploy watch [--with-delta]` ; exit 0 clean | 2 str
 [ -f "$KILL_FILE2" ] && die 9 "KILL FILE present ($KILL_FILE2) — all oc-deploy invocations abort"
 
 MODE="${1:-}"; [ $# -gt 0 ] && shift
+# C-F5 (v0.4.71): --help / -h exits 0 on stdout, before any validation
+case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 0 ;; esac
 # issue #24 D1: contributors takes its own arg shape (positional range /
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. Kill-file check already ran above.
@@ -1390,7 +1392,7 @@ while [ $# -gt 0 ]; do
     --dry-run)  DRYRUN=1 ;;   # issue #24: fanout rehearsal — never marks done
     --with-delta) WITH_DELTA=1 ;;   # merge B (v0.4.48): watch rides oc-upstream-delta too
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
-    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 1 ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 0 ;;
     *)          die 1 "unknown arg: $1" ;;
   esac
   shift || true
@@ -1525,6 +1527,6 @@ case "$MODE" in
   watch)
     watch_run "${WITH_DELTA:-0}"
     ;;
-  --selftest) selftest "$@" ;;
+  --selftest|selftest) selftest "$@" ;;
   *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest" ;;
 esac

@@ -61,5 +61,5 @@ if [ "$DRY" = "1" ]; then cat "$BODY"; rm -f "$BODY"; echo "dry-run: body compos
 if gh issue comment "$ISSUE" --repo "$FORK" --body-file "$BODY"; then
   rm -f "$BODY"; echo "posted implementation comment on $FORK#$ISSUE for $FULL_SHA"; exit 0
 else
-  rc=$?; rm -f "$BODY"; die 3 "gh issue comment failed (rc=$rc) — body preserved at $BODY (set OC_ISSUE_LOG_REPO if the slug is wrong)"
+  rc=$?; die 3 "gh issue comment failed (rc=$rc) — body preserved at $BODY (set OC_ISSUE_LOG_REPO if the slug is wrong)"
 fi

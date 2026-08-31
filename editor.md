@@ -6,7 +6,7 @@ Scope: work from an issue filed on the FORK (`leshchenko1979/opencrabs` — the 
 upstream receives PRs only, owner directive 2026-08-27), fix the code in a
 worktree, gate it via the CI gate (pr-checks),
 SIGN every commit with the session trailer, push, FAST-FORWARD fork `main` onto it,
-hand off branch + shas, then ship via `oc-deploy ship` (Phase 6).
+hand off branch + shas, then ship via `oc-deploy ship` (§Ship — oc-deploy (S3 path), below).
 After any
 swap containing your commits you TEST what shipped (test-on-notify loop,
 Phase 6b). The Editor NEVER dispatches BUILD runs (`quick-build-linux.yml`), NEVER
@@ -91,6 +91,27 @@ supervisor.md §CI-wait & waiter discipline. Lens G regroup v0.4.70.)*
    only via oc-prchecks re-dispatch (never a second raw watcher) — pr-checks.yml
    now carries a concurrency group (`cancel-in-progress: true`, owner fix) so
    the superseded run is auto-cancelled and minutes stop burning.
+4. **Hand-rolled gate watchers must gate the wake on TERMINAL state** (v0.4.71,
+   Duty-4 P1; incident 2026-08-31 20:14Z run 33433873373): a watcher that
+   fires on elapsed time alone reports `status=in_progress` runs as verdicts.
+   Gate on `gh run view --json status` == `completed` (then read
+   `conclusion`), or use `oc-prchecks --wait`. Verdict fidelity (v0.4.56)
+   covers oc-prchecks only — hand-rolled wrappers do not inherit it.
+5. **Read detached-waiter rc at TOP level** (v0.4.71, Duty-4 P12; two false
+   verdicts 2026-08-31 night): in a pipe, `$?` is the LAST command's exit
+   (`tail`/`head`), not the tool's. Capture the tool's rc before piping
+   (`rc=$?` on the bare invocation, then pipe its output), or use
+   `PIPESTATUS`.
+6. **Waiter self-check includes pattern-vs-format** (v0.4.71, Duty-4 P7;
+   incident 2026-08-31, run 33439469017): before ending the turn, confirm the
+   waiter's grep/jq pattern matches the tool's ACTUAL journal format
+   (oc-prchecks writes `run=<id>`, not `run <id>`) by reading one real log
+   line back.
+7. **oc-prchecks is invoke-once** (v0.4.71, Duty-4 P11; gate-storm 2026-08-31
+   — 4 dispatches in 6 min, each cancelling the previous via the concurrency
+   group): never re-invoke oc-prchecks in a loop. Exit 5 = in-flight; resume
+   via `gh run view <id>` / a read-only poller, `gh run rerun <id>` for a
+   dead run. A looping re-invoke is a self-inflicted dispatch storm.
 ## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52, owner Go 2026-08-30)
 
 Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep
@@ -128,7 +149,7 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 | Tool | Invocation | For | rc |
 |------|-----------|-----|-----|
 | `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add→oc-index-worktree | 0 ok / dirty-tree gate on remove |
-| `oc-index-worktree` | `tools/oc-index-worktree` (inside worktree) | codegraph index — un-skippable Phase 2 final leg (oc-wt chain) | 0 ok |
+| `oc-index-worktree` | `tools/oc-index-worktree <worktree-path>` | codegraph index — un-skippable Phase 2 final leg (oc-wt chain) | 0 ok / 4 index-failed / 5 bad-input |
 | `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume | 0 GREEN / 2 usage / 3 RED / 5 resume |
 | `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) | 0 no-candidates / 1 candidates / 2 usage / 3 api |
 | `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | Phase 6 per-commit implementation comment (body-file discipline inside) | 0 posted / 2 usage / 3 gh |
@@ -142,7 +163,7 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 
 Rules that outlive any table: journal read-back after every `oc-ledger`
 claim/stamp (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
-a tool's exit code alone; the ≥60s detached-poll floor (§CI-wait discipline).
+a tool's exit code alone; the ≥60s detached-poll floor (supervisor.md §CI-wait & waiter discipline, item 1).
 
 ## Phase 0 — Fresh base
 
@@ -209,6 +230,13 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
    raw chat quote. Subsequent commits/claims carry `Issue-Ref: #N` like any
    other work. Why: a session that dies mid-task must leave the requirement
    recoverable from durable state, not chat memory (2026-08-31 stall class).
+
+**Issue/PR body claims require code-verified evidence** (v0.4.71, Duty-4;
+incident 2026-08-31 upstream #683: root cause filed from memory was
+hallucinated — real cause found only by a live `curl`). Before filing or
+updating issue/PR text, every causal claim carries `file:line` or executed
+command output. AGENTS.md's verify-everything covers actions; this gate
+covers WRITTEN ARTIFACT claims.
 
 ## Phase 2 — Worktree per task, before any edits
 
@@ -294,6 +322,11 @@ inline takeover)*
 - One logical change per branch; drive-by refactors go to their own branch + issue.
 - Stage only paths YOU changed: `git add <paths>`. Never `git add -A`, never `commit -a`.
 - Never revert/reset/amend commits you did not write — report and wait, or branch off.
+- **New enum variant → grep ALL matches on it before committing** (v0.4.71,
+  Duty-4 P14; incident 2026-08-31 `PickRewrite::GluedHost`: E0004 non-exhaustive
+  match + E0308 destructure ripple, +1 RED cycle). `grep -rn '<Variant>::' src/`
+  catches both classes pre-commit — box law means they otherwise surface only
+  at the CI gate.
 - **Read back every `edit_file` result** (v0.4.5): re-read the touched region with
   `read_file` before trusting it — the tool's line report and rendered diff are
   UNTRUSTED UI. *(2026-08-26: mangled/misplaced diffs twice + an eaten
@@ -312,6 +345,14 @@ Signing is not optional: an unsigned commit makes you invisible to the
 notification loop — your feature ships untested and your failures go
 unattributed. Your full session UUID is IN YOUR PROMPT (session/runtime
 context) — read it from there when composing the trailer.
+
+**Verify the trailer block parses after ANY amend/rebase/cherry-pick that
+touches the trailer area** (v0.4.71, Duty-4 P2; incident 2026-08-31 c4a9ef55:
+a stray blank line between `Issue-Ref:` and `Session-Id:` made the fork-side
+trailer scan read EMPTY — ORDER gate failed, forced amend + new sha + full
+re-gate, ~30 min lost). `git interpret-trailers --parse` (or a `gh api`
+commit-body scan) must show every expected trailer before the sha enters any
+gate or push.
 
 **Test placement (CONTRIBUTING.md policy — lens G regroup v0.4.70, from
 Phase 7 step 2c):** tests live under `src/tests/*_test.rs` registered in
@@ -429,7 +470,7 @@ per owner 19:21Z):
   --sha <full-40-sha> --features <comma-set> --execute
 ```
 
-The script performs the chain Phase 6 does by hand — fork-main fetch +
+The script performs the chain Phase 6's push legs feed into (ORDER gates + carrier dispatch) beyond the hand-run fork-main fetch +
 fast-forward check → push → 4 ORDER gates (oc-order-validate) → carrier
 dispatch on `ci/quick-build-linux` — appends every verdict to the shadow
 journal (`oc-deploy-shadow.log` in the state dir), and exits 0 with the
@@ -442,7 +483,7 @@ S2 — the stage is S3 since 2026-08-28).** Plan-only
 default: omit `--execute` → full delta printed, nothing touched. Brake:
 `touch /root/.opencrabs/profiles/ops/opencrabs-dev/oc-deploy.kill` (or
 `/root/oc-work/oc-deploy.disabled`) aborts every invocation, exit 9. The
-ORDER vocabulary (COALESCED / QUEUED / intake-verify) is superseded — the
+compiler-era ORDER hand-off lifecycle (COALESCED / intake-verify) is superseded — QUEUED…VOID stays live in oc-seal-state order rows — the
 gates now run inside `oc-deploy ship` itself (tools/archive/compiler.md archived runbook).
 
 - Red run returned → start a fix round (Phase 6c): NEW worktree every time →
@@ -559,7 +600,14 @@ git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
 #     compile+lint evidence = step 2c's pr-checks dispatch (runs on ANY
 #     branch ref).
 
-# 2c. UPSTREAM CI TRIAD GATE (v0.4.22, owner directive 2026-08-27 — encodes
+# 2-pre. ATOMICITY + BASE check runs BEFORE the PR is opened (v0.4.71, Duty-4
+#     P6; incident 2026-08-31 #1273 cut from a fork-main base): an upstream PR
+#     head is a harvest branch off adolfousier/main — NEVER a fork-main-based
+#     branch. A post-open atomicity FALSE (fork-divergence commits) means the
+#     base was wrong before the PR existed; stacked-PR recovery cost a day.
+#     Check base + atomicity pre-open.
+
+# 2c. CI gate (upstream triad) (v0.4.22, owner directive 2026-08-27 — encodes
 #     adolfousier/opencrabs CONTRIBUTING.md: "You MUST pass all three before
 #     submitting a PR"). v0.4.28: the triad runs in CI via pr-checks.yml —
 #     cargo is FORBIDDEN on this box (binaries disabled 2026-08-28), so the old

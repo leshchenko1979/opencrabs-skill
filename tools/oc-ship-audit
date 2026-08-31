@@ -27,7 +27,11 @@ trap 'oc_log_finish $?' EXIT
 
 usage() { echo "usage: $0 [--hours N] [--log <tools.log>] [--journal-dir <dir>] [--grace <min>] | --selftest" >&2; exit 2; }
 
-if [ "${1:-}" = "--selftest" ]; then
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  echo "usage: $0 [--hours N] [--log <tools.log>] [--journal-dir <dir>] [--grace <min>] | --selftest"
+  exit 0
+fi
+if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   d="$(mktemp -d)" || exit 3
   trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
   mkdir -p "$d/journal"
