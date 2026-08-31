@@ -114,7 +114,7 @@ Ask the operator which role this session employs before doing anything:
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
 | **COMPILER** | **RETIRED 2026-08-28 (S3 cutover, owner "let's go to S3" msgid 34717)** — duties now `tools/oc-deploy` (ship/poll/swap-execute) + supervisor watch. Re-enable = one notify per archived runbook | `tools/archive/compiler.md` (ARCHIVED runbook) |
-| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), triage the idea box (Duty 7 — workers push `IDEA:` notifies; ledger kinds `idea` / `idea-verdict`), 5-lens skill review (Duty 6, Reviewers A–E; incl. Reviewer D deletion safety) | `supervisor.md` |
+| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), triage the idea box (Duty 7 — workers push `IDEA:` notifies; **plus `QUIRK:` tool-quirk/failure reports, owner directive 2026-08-31**; ledger kinds `idea` / `idea-verdict`), 5-lens skill review (Duty 6, Reviewers A–E; incl. Reviewer D deletion safety) | `supervisor.md` |
 
 Roles **DO NOT intersect**:
 

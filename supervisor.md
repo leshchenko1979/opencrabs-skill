@@ -272,8 +272,17 @@ moment it happens; no waiting for a poll.
    - KERNEL-SEMANTIC → batched to the owner with a verdict table; ships ONLY
      on his word.
    - REJECT → reason journaled, never silently dropped.
-4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
-   (convergence beats volume); duplicate ideas stamp ONE event, not N.
+4. Overlap: an idea matching an open Duty-4 proposal MERGES into it   (convergence beats volume); duplicate ideas stamp ONE event, not N.
+5. **Tool quirks & failures (owner directive 2026-08-31):** any worker that
+   hits a tool FAILURE or odd behavior — non-zero rc out of documented
+   register, hang/timeout, corrupt/empty output, flag that silently no-ops,
+   log/journal gap — MUST report it to the supervisor lane the same turn,
+   format `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>`
+   + evidence (rc, log rows, journal lines). Do NOT silently retry around a
+   broken tool and move on; do NOT self-patch skill tools. Same Duty-7 flow:
+   supervisor ACKs, stamps an `idea` event (prefix distinguishes
+   idea/quirk/fail), triages — mechanical fix queues into the next batch,
+   semantic goes to the owner.
 
 **Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: the violation pattern
 is caught from evidence, not intuition. On suspicion, grep the ops daily log —
