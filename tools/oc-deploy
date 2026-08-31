@@ -63,7 +63,12 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-deploy" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
-STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/skills/opencrabs-dev}"
+# v0.4.60 (owner order 2026-08-31 06:03Z "move all accounting files and markers
+# out of the skill dir"): deploy artifacts (deployed.sha/meta, fanout.state,
+# oc-deploy/journal, shadow log) default to the STATE dir — the skill repo
+# holds code only. Migration shipped same bump; OC_DEPLOY_STATE_DIR override
+# unchanged (selftest fixtures + test isolation rely on it).
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
 # Ledger resolution (v0.4.38, owner-approved 2026-08-29 "Go"): live runs MUST
 # hit the CANONICAL ledger. The old $STATE_DIR default kept a second ledger in
 # the skill dir — live swap stamps + fanout reads used it while supervisor

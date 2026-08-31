@@ -337,7 +337,11 @@ cmd_enroll() {
 }
 
 # ---- commit-pending (item-2(b) sweep) ----------------------------------------
-RUNTIME_ARTIFACTS="fanout.state deployed.sha deployed.meta.json oc-deploy/journal oc-deploy-shadow.archive.log tools/tests/battery-last.json"
+# v0.4.60 migration: deploy artifacts moved to the STATE dir (owner order
+# 2026-08-31 06:03Z) — skill repo keeps only the battery receipt; the moved
+# set joined the state sweep below (git-tracked in the state repo, where the
+# ledger already lives).
+RUNTIME_ARTIFACTS="tools/tests/battery-last.json"
 cmd_commit_pending() {
   local bundle=0; [ "${1:-}" = "--bundle" ] && bundle=1
   local sd; sd="$(STATE_DIR)"; local did=0
@@ -358,7 +362,7 @@ cmd_commit_pending() {
       # joins too — smoke journals land here, git-tracked since 1232ccd; the
       # overnight cbc77058 swap (smoke-34) proved the gap live.
       local state_hits=""
-      for p in tools.log baseline.json orders.json journal; do
+      for p in tools.log baseline.json orders.json journal deployed.sha deployed.meta.json fanout.state oc-deploy oc-deploy-shadow.log oc-deploy-shadow.archive.log; do
         [ -n "$(git -C "$sd" status --porcelain -- "$p" 2>/dev/null)" ] && state_hits="$state_hits $p"
       done
       if [ -n "$state_hits" ]; then
