@@ -9,6 +9,15 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 
 - editor.md Phase 7: bare `#N` (fork issue numbers) FORBIDDEN on upstream surfaces outside code spans - GitHub autolinks to adolfo's unrelated issue #N. Qualified `leshchenko1979/opencrabs#N` or full URL required. Origin: owner directive 2026-08-31 (fork #54); live offenders found on PR titles 1273/1268/1266 + issue bodies 1255/1257, patched same day.
 
+## v0.4.68 (2026-08-31) — oc-prchecks upstream guard
+
+- oc-prchecks: `--pr` against upstream now exits 2 (fork-lane-only CI verdicts; use gh run list pollers for upstream), unresolvable head exits 7 — false-GREEN shape exit killed (finding: suggest-options lane, owner "harden").
+- selftest 16/16.
+
+## v0.4.68 (2026-08-31) — oc-prchecks upstream guard
+
+- oc-prchecks: fork-lane gate (rc 2, upstream repo refused pre-API) + carrier-head guard (rc 7, refuses time-window adoption when branches API cannot resolve the carrier head — previously matched ANY run: false GREEN). Finding: suggest-options lane; live-verified both guards; fork lane untouched; selftest 16/16.
+
 ## Entries
 
 ## v0.4.66 (2026-08-31) — editor requirement-intake rule (owner 2026-08-31 14:51Z)
