@@ -6,6 +6,21 @@ material, not procedure). Git-tracked in the skill repo; append one entry per
 bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 
 ## Entries
+## v0.4.64 (2026-08-31) — Duty-6 five-lens fix batch, P0–P3 + K-wiring (owner "Go all" 10:39Z)
+
+Five read-only lenses (A ontology / B efficiency / C CLI-automation / D deletion / E topology) reviewed the v0.4.63 tree; all incident-backed HIGHs disk-verified by the supervisor, then fixed on the owner's "Go all":
+
+- **P0 latent ship breaker:** oc-deploy helper-tool defaults were `$STATE_DIR/tools/…` — a dir that does not exist in the post-v0.4.60 state split (found independently by lenses B and E; zero ship journals since the split, so the first post-split `ship --execute` would die at the ORDER gates rc 2). New TOOLS_DIR anchor precedes first use; wire-test fixtures updated to pass explicit `OC_DEPLOY_SEAL`/`OC_DEPLOY_ARTVERIFY` (they had been silently RELYING on the broken defaults).
+- **P0 data preservation:** the 3 un-archived d730e9ca shadow lines (05:01:39/46/54Z) appended to the state archive under flock + state-repo commit (unique copies — three lenses converged).
+- **P1:** adoption-rule docs (SKILL.md oc-prchecks row + editor Phase 5) rewritten to the code-true LATEST-wins v0.4.53 form; swap-execute's seal call passes `--baseline/--orders` explicitly (was sealing a different file than it read the cycle from).
+- **P2 docs:** tool-table rows corrected to real interfaces (oc-job-verify, oc-artifact-verify, oc-seal-state, oc-post-receipts, oc-deploy rc register, branch-sweep rc register); ship wording = dispatch confirmation, not GREEN+run-id; worktree recreate/teardown re-pointed at oc-wt in all six sites (raw-bypass closed; Phase 7 keeps its raw -b add but chains the UN-SKIPPABLE index); drift ritual -> oc-drift-check; Phase 7 CI-flag provenance -> pr-checks.yml; s2 spec short-sha fix; CHANGELOG newest-last reorder.
+- **P2 tool mechanics:** oc-attrib header state-dir fix; OC_LEDGER parity in oc-skew-scan + oc-ping-proof; `--no-log` suppression moved into lib/oc-log.sh (triplicated per-tool loops deleted); oc-ledger stamp: flag-lookalike `--what` guard + read-back self-verify after every write (the n=1361/1372 glitched-argv class can no longer land silently).
+- **P3 new tools:** `oc-smoke-evidence` (running-daemon identity + presence evidence — replaces 15+ hand-assembled smoke-verdicts.log lines), `oc-issue-log` (per-commit implementation comment via gh --body-file only — heredoc-substitution mangling impossible), `oc-harvest-sweep` (pre-gate mechanical legs: trailers / empty-diff / patch-id). All journal via lib/oc-log.sh, selftested, smoke-evidence live-verified green.
+- **K-wiring (zero code):** Phase 1 uniqueness gate -> oc-issue-sweep (+ editor table row), Phase 7 commit listing -> oc-deploy contributors/oc-attrib, carrier feature read -> oc-carrier-features, drift -> oc-drift-check, worktree lifecycle -> oc-wt.
+- **Reviewer C lens STRENGTHENED (owner directive same turn):** every lens-C pass now reads tool logs (tools.log, oc-deploy journals, ledger events, smoke-verdicts) and analyses real usage — invoked verbs/flags, rc distributions, never-invoked tools (deletion evidence), hand-built ritual artifacts. Findings cite log rows.
+
+oc-deploy selftest 145/0; battery 97/0.
+
 
 - "S3 cutover 2026-08-28 (owner msgid 34717: 'let's go to S3'): COMPILER role RETIRED; duties automated into tools/oc-deploy (ship/poll/swap-execute); compiler.md archived as re-enable runbook; ledger meta.oc_deploy_stage = S3, event 1282"
 - "v0.4.32: compiler retirement landing pas (this bump)"
@@ -43,6 +58,11 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 - **Sweep lists:** oc-ledger skill RUNTIME_ARTIFACTS shrinks to the battery receipt; moved set joined the state sweep (git-tracked in the state repo).
 - **Live-verified post-migration:** `poll` reads deployed=d730e9ca from the new path; `fanout --run 33359092769` → skip reason=done (idempotency preserved). oc-deploy selftest 145/0, oc-ledger 66/0, battery **97/0**. Skill `1469b1bc`+`471ca33b`; rc=2-first-attempt pattern (2 ships) noted as dispatch-lock suspect — rc vocabulary documented, no code change.
 
+## v0.4.61 — naming + ontology hard rules; editor tool reference (owner 2026-08-31)
+- SKILL.md Hard rules: worker-naming rule SHARPENED — topic/chat name only on EVERY surface (was: owner reports only; tonight's uuid-laden fleet board was the live violation). Uuids = routing fields only.
+- SKILL.md Hard rules: NEW official-ontology rule — SKILL-defined vocabulary only; new concepts named via poll on owner word; Reviewer A enforces.
+- editor.md: NEW "Tool reference — editor's quick table" (invocation forms + rc contracts + the three rules that outlive any table). Doc-only bump; no tool code touched.
+
 ## v0.4.62 (2026-08-31) — stale-refs/ontology batch + Reviewer A strengthened (owner "Go" 09:17Z)
 
 Duty-6-style read-only review (subagent, lens: stale references + unclear terms) found 22 defects in v0.4.61 text; all fixed, quotes disk-verified:
@@ -54,11 +74,6 @@ Duty-6-style read-only review (subagent, lens: stale references + unclear terms)
 - supervisor.md: Reviewer A lens STRENGTHENED (owner word same turn) with the churn-drift checklist: one-concept-one-name, glossary conformance, post-migration ROOT-literal path sweep, enumeration consistency, retired-concepts-marked.
 
 Docs-only; battery 97/0; sync+tag v0.4.62; mirrors at parity.
-
-## v0.4.61 — naming + ontology hard rules; editor tool reference (owner 2026-08-31)
-- SKILL.md Hard rules: worker-naming rule SHARPENED — topic/chat name only on EVERY surface (was: owner reports only; tonight's uuid-laden fleet board was the live violation). Uuids = routing fields only.
-- SKILL.md Hard rules: NEW official-ontology rule — SKILL-defined vocabulary only; new concepts named via poll on owner word; Reviewer A enforces.
-- editor.md: NEW "Tool reference — editor's quick table" (invocation forms + rc contracts + the three rules that outlive any table). Doc-only bump; no tool code touched.
 
 ## v0.4.63 (2026-08-31) — sync payload root-fix (incident n=1405)
 - oc-ledger sync: stage the FULL skill working tree (tracked+untracked) instead of the hardcoded SKILL.md+CHANGELOG.md list — a bump tag can no longer point at a tree missing its payload (three-strike class: v0.4.58/61/62 strayed files). Swept non-doc payload named loudly on stderr ("PAYLOAD SWEPT").

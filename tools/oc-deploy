@@ -581,6 +581,7 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
     OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
     OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_REPO="$T/crepo" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_SEAL="$SD2/tools/oc-seal-state" OC_DEPLOY_ARTVERIFY="$SD2/tools/oc-artifact-verify" \
     "$SELF_BIN" swap-execute --sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
     --run 777 --features telegram --artifact-dir "$T/art" 2>&1)"; rc=$?
   check_rc "wire-green-rc" $rc 0
@@ -613,6 +614,7 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
     OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
     OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_NOFANOUT=1 \
+    OC_DEPLOY_SEAL="$SD3/tools/oc-seal-state" OC_DEPLOY_ARTVERIFY="$SD3/tools/oc-artifact-verify" \
     "$SELF_BIN" swap-execute --sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
     --run 777 --features telegram --artifact-dir "$T/art" 2>&1)"; rc=$?
   check_rc "wire-nofanout-rc" $rc 0
@@ -649,6 +651,7 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     OC_SWAP_PROC_PREFIX="$SD4/proc" \
     OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
     OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_REPO="$T/crepo" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_SEAL="$SD4/tools/oc-seal-state" OC_DEPLOY_ARTVERIFY="$SD4/tools/oc-artifact-verify" \
     "$SELF_BIN" swap-execute --sha cccccccccccccccccccccccccccccccccccccccc \
     --run 778 --features telegram --artifact-dir "$T/art" 2>&1)"; rc=$?
   check_rc "sidecar-green-rc" $rc 0
@@ -668,6 +671,7 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
     OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
     OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_REPO="$T/crepo" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_SEAL="$SD4/tools/oc-seal-state" OC_DEPLOY_ARTVERIFY="$SD4/tools/oc-artifact-verify" \
     "$SELF_BIN" swap-execute --sha cccccccccccccccccccccccccccccccccccccccc \
     --run 779 --features telegram --artifact-dir "$T/art" 2>&1)"; rc=$?
   check_rc "sidecar-guard-rc" $rc 0
