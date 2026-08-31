@@ -1,0 +1,6 @@
+{"ts":"2026-08-31T03:22:21Z","seq":1,"step":"lock-acquired","exit":0,"run":"33352286653","pid":3077462}
+{"ts":"2026-08-31T03:22:25Z","seq":2,"step":"fanout-start","exit":0,"run":"33352286653","conclusion":"success"}
+{"ts":"2026-08-31T03:22:26Z","seq":3,"step":"contributors","exit":0,"range":"16568074ac6a061500ce4c7595893682bdeadf29..d7afa5698364f16390087739dd7a8e9fffd2c04c","sessions":["1a63f103-b899-4ad2-a5b3-c89f2902bf97","2fbfb2f8-9b08-417a-aae8-c75edc1de1ea"]}
+{"ts":"2026-08-31T03:22:49Z","seq":4,"step":"notified","exit":0,"uuid":"1a63f103-b899-4ad2-a5b3-c89f2902bf97","run":"33352286653","role":"contributor"}
+{"ts":"2026-08-31T03:23:09Z","seq":5,"step":"notified","exit":0,"uuid":"2fbfb2f8-9b08-417a-aae8-c75edc1de1ea","run":"33352286653","role":"contributor"}
+{"ts":"2026-08-31T03:23:09Z","seq":6,"step":"fanout-end","exit":0,"run":"33352286653","notified":2,"skipped":0,"unowned":0}
