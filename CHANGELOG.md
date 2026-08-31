@@ -6,6 +6,18 @@ material, not procedure). Git-tracked in the skill repo; append one entry per
 bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 
 ## Entries
+## v0.4.65 (2026-08-31) — "Do 1+2" batch: deletion ritual, watchdog retirement, lens C MED/LOW tools, ship-chain hardening
+
+Owner "Do 1+2 then explain 3" (afternoon, post-v0.4.64):
+
+- **Deletion batch (ritual-verified):** coma-audit trio (3 DELETE-SAFE files), bare `workers-ledger.lock` (0 bytes), empty skill-dir `oc-deploy-shadow.log` (0 lines, gitignored); CHANGELOG lock-ID correction.
+- **Watchdog wrapper retired:** `oc-watchdog-check` deleted — one invocation on record (08-28), superseded by per-session gate watchdogs + `oc-deploy watch`.
+- **New tools:** `oc-commit` (repo-guarded commit: dirty-tree/branch/protected-path gates + journal), `oc-ship-audit` (tools.log orphan/terminal-missing dispatch scan, rogue-line hardened — live-run surfaced the 08-31 orphaned-GREEN class where the unhardened jq said CLEAN), `oc-tg-audit` (banned telegram-surface row scan from ops daily logs — first live run caught 92 banned rows from an off-roster session), `oc-wt list` verb (TSV: task path branch dirty-n). All selftested + registered in SKILL.md.
+- **C8 sync changelog gate:** `oc-ledger sync` refuses when CHANGELOG lacks the version being shipped.
+- **Duty 7 extended (owner directive):** QUIRK/FAIL prefixes — workers report tool quirks and failures to the supervisor; supervisor triages into ledger + review lens.
+- **YAGNI rejections documented** (C9 oc-waiter, C11 oc-logstats): `tmp/duty6-review-20260831/DECISIONS-lens-C-YAGNI.md`, with revisit triggers.
+- **Ship-chain hardening (found live via battery):** run 33388930453 (#49) executed swap-execute TWICE (stall-hit session relaunch); run 2 corrupted deployed.meta.json prev_sha. Fixes: double-execution guard in swap-execute (dies 2 on same-sha re-swap, selftest 13b, 17o fixture reset, c8f6b77d); battery oc-attrib wire test hardened for degenerate marker state (84af91de); live meta repaired to true prev d730e9ca (ledger n=1410). Residual gap flagged: neither journal captured a restart line despite the daemon bounce.
+
 ## v0.4.64 (2026-08-31) — Duty-6 five-lens fix batch, P0–P3 + K-wiring (owner "Go all" 10:39Z)
 
 Five read-only lenses (A ontology / B efficiency / C CLI-automation / D deletion / E topology) reviewed the v0.4.63 tree; all incident-backed HIGHs disk-verified by the supervisor, then fixed on the owner's "Go all":
