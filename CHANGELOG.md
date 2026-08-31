@@ -43,6 +43,18 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 - **Sweep lists:** oc-ledger skill RUNTIME_ARTIFACTS shrinks to the battery receipt; moved set joined the state sweep (git-tracked in the state repo).
 - **Live-verified post-migration:** `poll` reads deployed=d730e9ca from the new path; `fanout --run 33359092769` → skip reason=done (idempotency preserved). oc-deploy selftest 145/0, oc-ledger 66/0, battery **97/0**. Skill `1469b1bc`+`471ca33b`; rc=2-first-attempt pattern (2 ships) noted as dispatch-lock suspect — rc vocabulary documented, no code change.
 
+## v0.4.62 (2026-08-31) — stale-refs/ontology batch + Reviewer A strengthened (owner "Go" 09:17Z)
+
+Duty-6-style read-only review (subagent, lens: stale references + unclear terms) found 22 defects in v0.4.61 text; all fixed, quotes disk-verified:
+
+- 1b dead paths (5): fanout journal path + editor brake path + shadow-log location repointed to the state dir (v0.4.60 migration residue — the brake doc armed NOTHING at the old path); 2 false "archived at tools/archive/oc-consent-check" claims corrected (archive holds only compiler.md; blob in git history).
+- 1d dead test-leg prose (4): test-ontology CODE TESTS cells repointed to pr-checks.yml as the ONLY test locus (carrier leg removed e71dba58); cargo flags made verbatim (`--locked --profile ci --all-features`) at SKILL.md UPSTREAM CI GATE + editor Phase 5 + Phase 6 comment.
+- 1a unmarked retired concepts (2): "CI is the compiler" present-tense -> CI-is-the-only-executor with Compiler RETIRED 2026-08-28 marker (x2).
+- class-2 unclear terms: NEW SKILL.md section "Glossary — official terms" (CI gate incl. legacy synonyms, ORDER gates, S2/S3, lane, roster, lens, selftest vs battery, GREEN/RED terminal truth); "4-lens" -> "5-lens (A–E)"; ontology-rule parenthetical now cites the real ontology terms; lint-gate name variants normalized.
+- supervisor.md: Reviewer A lens STRENGTHENED (owner word same turn) with the churn-drift checklist: one-concept-one-name, glossary conformance, post-migration ROOT-literal path sweep, enumeration consistency, retired-concepts-marked.
+
+Docs-only; battery 97/0; sync+tag v0.4.62; mirrors at parity.
+
 ## v0.4.61 — naming + ontology hard rules; editor tool reference (owner 2026-08-31)
 - SKILL.md Hard rules: worker-naming rule SHARPENED — topic/chat name only on EVERY surface (was: owner reports only; tonight's uuid-laden fleet board was the live violation). Uuids = routing fields only.
 - SKILL.md Hard rules: NEW official-ontology rule — SKILL-defined vocabulary only; new concepts named via poll on owner word; Reviewer A enforces.
