@@ -18,6 +18,14 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 
 - oc-prchecks: fork-lane gate (rc 2, upstream repo refused pre-API) + carrier-head guard (rc 7, refuses time-window adoption when branches API cannot resolve the carrier head — previously matched ANY run: false GREEN). Finding: suggest-options lane; live-verified both guards; fork lane untouched; selftest 16/16.
 
+## v0.4.69 (2026-08-31) — notification instructions: deferred delivery modes
+
+- SKILL.md §session_notify mechanics: DELIVERY MODES (immediate / deferred via interrupt=true / automatic redirect on channel rebind fork #19 / no-route), refusal-handling rule, CLI --sender/--title form (owner order; evidence: 24 mid-turn refusals = lost wakes, comatose-lanes incident).
+- editor.md §CI-wait item 6 + supervisor.md delivery discipline: operational wakes to mid-turn lanes carry interrupt=true.
+- AGENTS.md waiter form updated (--sender/--title/--interrupt).
+
+Issue-Ref: #56
+
 ## Entries
 
 ## v0.4.66 (2026-08-31) — editor requirement-intake rule (owner 2026-08-31 14:51Z)
