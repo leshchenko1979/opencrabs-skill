@@ -80,7 +80,7 @@ fi
 # C2 (KERNEL 2026-08-28): --deployed composes prev_sha..deployed from markers.
 if [ "$DEPLOYED" -eq 1 ]; then
   [ -z "$RANGE" ] || usage   # --range and --deployed are alternatives
-  SD="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/skills/opencrabs-dev}"
+  SD="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"   # v0.4.60: state dir (owner 06:03Z migration)
   TO_REPO="$(head -1 "$SD/deployed.sha" 2>/dev/null)"
   FROM_REPO="$(jq -r '.prev_sha // empty' "$SD/deployed.meta.json" 2>/dev/null)"
   [ -n "$TO_REPO" ] && [ -n "$FROM_REPO" ] || { echo "deployed markers missing in: $SD" >&2; exit 5; }

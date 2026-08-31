@@ -20,7 +20,7 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-shadow-rotate" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
-STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/skills/opencrabs-dev}"
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"   # v0.4.60: state dir (owner 06:03Z migration)
 LIVE="$STATE_DIR/oc-deploy-shadow.log"
 ARCHIVE="$STATE_DIR/oc-deploy-shadow.archive.log"
 
