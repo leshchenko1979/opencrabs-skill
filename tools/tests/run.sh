@@ -483,6 +483,34 @@ if tool oc-wt; then
   "$TOOLS_DIR/oc-wt" add "Bad_Slug" some-branch >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad slug -> 2 (usage)" || bad "bad slug -> expected 2"
 fi
 
+# ---- 16. lens-C tool builds (v0.4.58, owner Go 2026-08-31 04:20Z) -----------
+section "oc-drift-check"
+run_selftest oc-drift-check
+if tool oc-drift-check; then
+  "$TOOLS_DIR/oc-drift-check" u1 0.4 >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad version shape -> 2" || bad "bad shape -> expected 2"
+fi
+
+section "oc-toolaccum"
+run_selftest oc-toolaccum
+if tool oc-toolaccum; then
+  "$TOOLS_DIR/oc-toolaccum" --log /nonexistent.log u1 >/dev/null 2>&1; [ $? -eq 3 ] && ok "missing log -> 3" || bad "missing log -> expected 3"
+fi
+
+section "oc-branch-sweep"
+run_selftest oc-branch-sweep
+if tool oc-branch-sweep; then
+  "$TOOLS_DIR/oc-branch-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no repo -> 2 (usage)" || bad "no repo -> expected 2"
+fi
+
+section "oc-pr-fault-scope"
+run_selftest oc-pr-fault-scope
+if tool oc-pr-fault-scope; then
+  "$TOOLS_DIR/oc-pr-fault-scope" 1 >/dev/null 2>&1; [ $? -eq 2 ] && ok "missing --run -> 2 (usage)" || bad "missing --run -> expected 2"
+fi
+
+section "oc-ledger confirm + derive_by"
+run_selftest oc-ledger
+
 # ---- battery receipt (oc-ledger sync gate reads this; the file itself rides --
 # ---- the skill repo via commit-pending --bundle) ------------------------------
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL

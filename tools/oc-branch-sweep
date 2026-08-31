@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-branch-sweep — branch-death proof + archive-then-delete (v0.4.58, Duty-6
+# lens C #1: standing supervisor duty, zero judgment).
+#
+# Usage: oc-branch-sweep --repo <path> [--base <branch>] [--dry-run] [--keep RE]
+#   Classifies every local branch against <base> (default: repo HEAD branch):
+#     MERGED   — tip reachable from base  -> DELETE class (history preserved in
+#                base; the 21:56Z owner deletion condition is satisfied by
+#                reachability). Deletion records tip sha in the TSV (archive).
+#     ABSORBED — cherry-detects as already in base (patch-id) -> report only.
+#     STALE    — no commit in 14+ days, not merged  -> report only.
+#     ACTIVE   — everything else                    -> report only.
+#   Protected (never delete): base, HEAD branch, anything matching --keep regex
+#   (default: 'main|master|carrier|keep|port/').
+#
+# Exit: 0 nothing deleted/would-delete · 1 deletions performed or pending ·
+#       2 usage · 3 git failure.
+# =============================================================================
+set -u
+_OC_DIR="$(cd "$(dirname "$0")" && pwd)"
+_OC_LIB="$_OC_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-branch-sweep" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+die() { echo "oc-branch-sweep: $2" >&2; exit "$1"; }
+
+cmd_sweep() {
+  local repo="" base="" dry=0 keep='main|master|carrier|keep|port/'
+  while [ $# -gt 0 ]; do case "$1" in
+    --repo) repo="${2:-}"; shift 2 ;;
+    --base) base="${2:-}"; shift 2 ;;
+    --dry-run) dry=1; shift ;;
+    --keep) keep="${2:-}"; shift 2 ;;
+    --*) die 2 "unknown flag '$1'" ;;
+    *) die 2 "unexpected arg '$1'" ;;
+  esac; done
+  [ -n "$repo" ] && [ -d "$repo/.git" ] || die 2 "usage: oc-branch-sweep --repo <path> [--base b] [--dry-run] [--keep RE]"
+  [ -n "$base" ] || base="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" || base="main"
+  git -C "$repo" rev-parse --verify "$base" >/dev/null 2>&1 || die 3 "base branch '$base' not resolvable in $repo"
+  local deleted=0
+  printf 'branch\tclass\ttip\taction\n'
+  while IFS= read -r b; do
+    b="${b##* }"  # strip leading '* ' markers
+    local tip cls action=""
+    tip="$(git -C "$repo" rev-parse --short "$b")"
+    if [ "$b" = "$base" ] || [ "$b" = "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" ] || printf '%s' "$b" | grep -Eq "$keep"; then
+      cls="PROTECTED"; action="keep"
+    elif git -C "$repo" merge-base --is-ancestor "$b" "$base" 2>/dev/null; then
+      cls="MERGED"
+      if [ "$dry" = "1" ]; then action="would-delete"; else
+        git -C "$repo" branch -D "$b" >/dev/null 2>&1 && action="deleted(tip=$tip archived)" || action="delete-failed"
+      fi
+      printf '%s\t%s\t%s\t%s\n' "$b" "$cls" "$tip" "$action"
+      case "$action" in deleted*|would-delete*) deleted=$((deleted+1)) ;; esac
+      continue
+    elif git -C "$repo" cherry "$base" "$b" >/dev/null 2>&1 && ! git -C "$repo" cherry "$base" "$b" 2>/dev/null | grep -q '^+'; then
+      cls="ABSORBED"; action="report-only"
+    else
+      local last
+      last="$(git -C "$repo" log -1 --format=%ct "$b" 2>/dev/null || echo 0)"
+      if [ -n "$last" ] && [ $(( $(date +%s) - last )) -gt $((14*86400)) ]; then cls="STALE"; else cls="ACTIVE"; fi
+      action="report-only"
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$b" "$cls" "$tip" "$action"
+  done < <(git -C "$repo" for-each-ref --format='%(refname:short)' refs/heads/)
+  oc_log_extra deleted "$deleted"
+  [ "$deleted" -eq 0 ] && return 0 || return 1
+}
+
+cmd_selftest() {
+  export OC_TOOLS_NOLOG=1
+  local T P=0 F=0
+  T="$(mktemp -d)"
+  ok() { P=$((P+1)); }; bad() { F=$((F+1)); echo "  FAIL selftest - $*" >&2; }
+  chk() { [ "$2" = "$3" ] && ok || bad "$1 (want $2 got $3)"; }
+  git init -q "$T/r" 2>/dev/null
+  git -C "$T/r" config user.email t@t; git -C "$T/r" config user.name t
+  echo a > "$T/r/f"; git -C "$T/r" add f; git -C "$T/r" commit -q -m "base"
+  git -C "$T/r" checkout -qb merged
+  echo b > "$T/r/f"; git -C "$T/r" add f; git -C "$T/r" commit -q -m "m1"
+  git -C "$T/r" checkout -q master 2>/dev/null || git -C "$T/r" checkout -q main
+  git -C "$T/r" merge -q --no-ff -m "merge" merged
+  # stale branch: one commit backdated 30 days via env dates
+  git -C "$T/r" checkout -qb stale
+  GIT_AUTHOR_DATE="$(date -u -d '-30 days' +%Y-%m-%dT%H:%M:%S)" GIT_COMMITTER_DATE="$(date -u -d '-30 days' +%Y-%m-%dT%H:%M:%S)" \
+    git -C "$T/r" commit -q --allow-empty -m "old"
+  git -C "$T/r" checkout -q master 2>/dev/null || git -C "$T/r" checkout -q main
+  local ME="$0"
+  bash "$ME" --repo "$T/r" --dry-run > "$T/out.tsv" 2>/dev/null; chk "dry-rc1-would-delete" 1 $?
+  grep -q "^merged	MERGED" "$T/out.tsv" && ok || bad "merged-classified"
+  grep -q "would-delete" "$T/out.tsv" && ok || bad "dry-no-delete"
+  [ "$(git -C "$T/r" branch --list merged | wc -l)" = "1" ]; chk "dry-branch-survives" 0 $?
+  grep -q "^stale	STALE" "$T/out.tsv" && ok || bad "stale-classified"
+  bash "$ME" --repo "$T/r" > "$T/out2.tsv" 2>/dev/null; chk "real-rc1" 1 $?
+  [ -z "$(git -C "$T/r" branch --list merged)" ]; chk "real-branch-deleted" 0 $?
+  [ -n "$(git -C "$T/r" branch --list main master)" ]; chk "base-protected" 0 $?
+  # clean sweep (nothing left to delete) -> rc 0
+  bash "$ME" --repo "$T/r" >/dev/null 2>&1; chk "clean-rc0" 0 $?
+  rm -rf "$T"
+  echo "oc-branch-sweep selftest: PASS=$P FAIL=$F"
+  [ "$F" -eq 0 ]
+}
+
+case "${1:-}" in
+  --selftest) cmd_selftest; exit $? ;;
+esac
+cmd_sweep "$@"

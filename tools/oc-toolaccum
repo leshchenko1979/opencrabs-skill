@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-toolaccum — TOOL_ACCUM scan + repeat-offense arithmetic (v0.4.58, Duty-6
+# lens C #3: the actor-failure accumulation check lived in the supervisor's
+# head; now mechanical).
+#
+# Usage: oc-toolaccum <uuid> [--days N] [--log <path>] [--threshold N]
+#   Scans the unified tools.log (JSONL) for rows with actor == <uuid>, counts
+#   failures (exit != 0) per tool inside the window (default 2 days), and
+#   flags repeat offenders (default threshold 3 failures of the same tool).
+#
+# Output: TSV rows  tool  total  failures  last_seen  + verdict line.
+# Exit: 0 clean · 1 repeat-offense flag · 2 usage · 3 log missing/unparseable.
+# =============================================================================
+set -u
+_OC_DIR="$(cd "$(dirname "$0")" && pwd)"
+_OC_LIB="$_OC_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-toolaccum" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+LOG_DEFAULT="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
+
+die() { echo "oc-toolaccum: $2" >&2; exit "$1"; }
+
+cmd_accum() {
+  local uuid="" days=2 log="$LOG_DEFAULT" threshold=3
+  while [ $# -gt 0 ]; do case "$1" in
+    --days) days="${2:-}"; shift 2 ;;
+    --log) log="${2:-}"; shift 2 ;;
+    --threshold) threshold="${2:-}"; shift 2 ;;
+    --*) die 2 "unknown flag '$1'" ;;
+    *) if [ -z "$uuid" ]; then uuid="$1"; fi; shift ;;
+  esac; done
+  [ -n "$uuid" ] || die 2 "usage: oc-toolaccum <uuid> [--days N] [--log <path>] [--threshold N]"
+  [ -f "$log" ] || die 3 "tools.log not found: $log"
+  local cutoff; cutoff="$(date -u -d "-$days days" +%Y-%m-%dT%H:%M 2>/dev/null || date -u +%Y-%m-%d)"
+  local tsv flag
+  tsv="$(jq -rs --arg u "$uuid" --arg c "$cutoff" '
+    [.[] | select(.actor == $u and (.ts >= $c))] | group_by(.tool)[]
+    | [ .[0].tool, (length), ([ .[] | select((.exit // 0) != 0)] | length), ([.[].ts] | max) ]
+    | @tsv' "$log" 2>/dev/null)" || true
+  [ -n "$tsv" ] || { echo "NO-ROWS: no tools.log rows for $uuid in last ${days}d"; oc_log_extra verdict NO-ROWS; return 0; }
+  printf 'tool\ttotal\tfailures\tlast_seen\n%s\n' "$tsv"
+  flag="$(printf '%s\n' "$tsv" | awk -F'\t' -v th="$threshold" '$3 >= th {print $1 " (" $3 " failures)"}')"
+  if [ -n "$flag" ]; then
+    echo "REPEAT-OFFENSE: $flag — supervisor review required (>= $threshold failures of same tool in ${days}d)"
+    oc_log_extra verdict REPEAT-OFFENSE
+    return 1
+  fi
+  echo "CLEAN: no tool at/over threshold $threshold in ${days}d"
+  oc_log_extra verdict CLEAN
+  return 0
+}
+
+cmd_selftest() {
+  export OC_TOOLS_NOLOG=1
+  local T P=0 F=0
+  T="$(mktemp -d)"
+  ok() { P=$((P+1)); }; bad() { F=$((F+1)); echo "  FAIL selftest - $*" >&2; }
+  chk() { [ "$2" = "$3" ] && ok || bad "$1 (want $2 got $3)"; }
+  local today; today="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  {
+    printf '{"ts":"%s","tool":"oc-prchecks","actor":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","args":"x","exit":2,"secs":0.1,"extra":{}}\n' "$today"
+    printf '{"ts":"%s","tool":"oc-prchecks","actor":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","args":"x","exit":2,"secs":0.1,"extra":{}}\n' "$today"
+    printf '{"ts":"%s","tool":"oc-prchecks","actor":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","args":"x","exit":0,"secs":1.0,"extra":{}}\n' "$today"
+    printf '{"ts":"%s","tool":"oc-ledger","actor":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","args":"x","exit":0,"secs":0.2,"extra":{}}\n' "$today"
+    printf '{"ts":"%s","tool":"oc-prchecks","actor":"other-uuid","args":"x","exit":2,"secs":0.1,"extra":{}}\n' "$today"
+    printf '{"ts":"2026-08-01T00:00:00Z","tool":"oc-prchecks","actor":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","args":"x","exit":3,"secs":0.1,"extra":{}}\n'
+  } > "$T/tools.log"
+  local ME="$0"
+  bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --log "$T/tools.log" >/dev/null 2>&1; chk "clean-window-rc0" 0 $?
+  bash "$ME" other-uuid --log "$T/tools.log" >/dev/null 2>&1; chk "other-actor-single-fail-rc0" 0 $?
+  bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --log "$T/tools.log" --threshold 1 >/dev/null 2>&1; chk "offense-rc1" 1 $?
+  bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --log "$T/tools.log" --threshold 1 2>/dev/null | grep -q 'oc-prchecks (2 failures)'; chk "offense-names-tool" 0 $?
+  bash "$ME" nobody --log "$T/tools.log" >/dev/null 2>&1; chk "no-rows-rc0" 0 $?
+  bash "$ME" --log "$T/tools.log" >/dev/null 2>&1; chk "usage-rc2" 2 $?
+  bash "$ME" u --log "$T/missing" >/dev/null 2>&1; chk "missing-log-rc3" 3 $?
+  # window filter: old row (2026-08-01, exit 3) must not count — proven by clean-window above at threshold 3
+  rm -rf "$T"
+  echo "oc-toolaccum selftest: PASS=$P FAIL=$F"
+  [ "$F" -eq 0 ]
+}
+
+case "${1:-}" in
+  --selftest) cmd_selftest; exit $? ;;
+esac
+cmd_accum "$@"

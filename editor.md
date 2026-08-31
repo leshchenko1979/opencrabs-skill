@@ -117,17 +117,50 @@ re-check, not on disk.)*
    08-30, ≥7 sessions). Lane waits go through `oc-prchecks` (15s poll,
    single-flight dispatch lock + headSha adoption); carrier waits through
    `oc-deploy watch` or a DETACHED ≥60s poller (proven `/tmp/swap-*.sh`
-   pattern). Never hand-roll a short-interval `gh run watch` loop.
+   pattern) — carrier waits are SUPERVISOR-owned; an editor never watches a
+   build. Never hand-roll a short-interval `gh run watch` loop.
 2. **`OC_ACTOR=<session-uuid>` MUST be exported on every `oc-*` tool
    invocation** — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
    making floods and behavior attributable after the fact and feeding the
-   ledger-beats-memory guard. This session's uuid is named in its ROSETTE; a
+   ledger-beats-memory guard (the CONSENT REGISTER live-record rule: ledger
+   beats memory when they disagree). This session's uuid comes from the runtime
+   prompt/session context; a
    lane that cannot recall its own uuid reads it from its Session-Id trailer /
-   the HQ roster before running any tool.
+   the supervisor roster before running any tool.
 3. Re-running the same CI because the head moved is inherent to a fix loop, but
    only via oc-prchecks re-dispatch (never a second raw watcher) — pr-checks.yml
    now carries a concurrency group (`cancel-in-progress: true`, owner fix) so
    the superseded run is auto-cancelled and minutes stop burning.
+4. **Poll floor — EVERY detached gh poller ≥60s.** Waiter, watchdog, courtesy
+   loop: no exceptions by mechanism (Duty-4 2026-08-31, lane 2fbfb2f8: a 30s
+   swap-chain waiter was the same flood class the ≥60s rule was written for).
+5. **`--wait` must fit the ~120s tool-runner ceiling (≤90s).** Longer waits =
+   exit 5 + resume-by-run-id or a detached poller (61161247: `--wait 580` can
+   never fit). The FIRST dispatch call carries an explicit ≥600s tool timeout;
+   a mid-flight dead invocation (no exit code, no run URL) is recovered by API
+   run-search (`gh run list --json`, job name embeds head sha) and ADOPTED —
+   never a blind re-dispatch (7e1ebbb6: the retry double-dispatched and the run
+   was cancelled as its own same-ref supersession).
+6. **Waiter legs verify invocations before launch.** Each leg of a detached
+   chain checks its exact tool invocation against `--help`/tools.log BEFORE the
+   chain launches (same trust level as the journal-start-line read-back), and a
+   mid-chain rc≠0 session-notifies the owning session IMMEDIATELY, not only at
+   chain end (2fbfb2f8: an invented `--run-id` flag made the poll leg rc=1, the
+   swap was skipped, and a GREEN build sat unswapped with no alarm).
+7. **Notify wiring lives in the wrapper script, NEVER as oc-prchecks flags** —
+   the tool has no notify options (212b3c83: v7 glued nonexistent
+   `--notify-session/--notify-text` → usage rc=2 in 0.0s, gate dark ~45min).
+   A detached waiter with NO notify path gets a one-shot cron courier armed
+   before end of turn (c6b1a539: quiet-window re-dispatcher completed its work,
+   lane sat dark until the owner roll call).
+8. **Log-window verification uses line-number cutoffs or full timestamps** —
+   `grep -n marker` → `tail -n +N`, or full-timestamp compare; never prefix/
+   field heuristics (log continuation lines carry no leading timestamp and leak
+   debris into the window — 2fbfb2f8 orphan false-regression).
+9. **`gh api` REST v3 keys are snake_case.** In `--jq` filters
+   `run_started_at`/`updated_at` work; camelCase (`runStartedAt`) silently
+   evaluates to null (d18ce16a: terminal conclusion + null timestamps read as a
+   data anomaly — a near-miss of a false verdict).
 
 ## Phase 1 — Claim on the fork BEFORE editing
 
@@ -156,6 +189,12 @@ re-check, not on disk.)*
    `workers-ledger.json` (first ledger timestamp wins; conflicts are supervisor
    rulings, never GitHub chatter). The uniqueness sweep in step 1 stays
    read-only search.
+4. **Claim read-back (Duty-4 2026-08-31, lane 212b3c83):** after EVERY
+   `oc-ledger claim`/`stamp`, RE-READ the returned event row and verify it
+   carries your uuid + issue + branch + the full non-empty `what` text you
+   passed — a glitched argv (event n=1361 stored `what:"--what"`) silently
+   produced an empty claim the lane cited as proof for ~11h. A read-back mismatch
+   = re-stamp + `tools.log` check before anything cites the event number.
 
 ## Phase 2 — Worktree per task, before any edits
 
@@ -257,7 +296,16 @@ git -C ~/oc-wt-<task> push origin <branch>:main   # fast-forward fork main — n
 EVERY commit's destination is fork `main`: the build (`oc-deploy ship`) compiles
 fork `main` — ALL editors' changes together
 (decision 2026-08-25) — an unmerged branch silently
-never ships. Non-ff rejection = another editor landed first; integrate and retry:
+never ships. **Implementation comment per commit (owner 2026-08-28 22:54Z):**
+after EACH editor commit, post a short summary + commit sha + verification
+state (tests/lint) as a gh comment on the tracked issue — one comment per
+commit, immediately, no batching. Mechanics (Duty-4 2026-08-31, lane
+212b3c83): `--body-file` with a single-quoted heredoc ONLY — inline
+double-quoted bodies run shell command substitution on backticks (gh
+"received 2 arguments", mangled post), and `--edit-last` across commits
+overwrites the PREVIOUS commit's comment (one-comment-per-commit violation).
+
+Non-ff rejection = another editor landed first; integrate and retry:
 
 ```bash
 git -C ~/oc-wt-<task> fetch origin
@@ -504,10 +552,8 @@ gh workflow run pr-checks.yml --repo leshchenko1979/opencrabs \
 # 3. push the head branch to the FORK (PR heads live there)
 git -C ~/oc-wt-up-<feature> push -u origin leshchenko1979/<feature>
 
-# 4. open the upstream PR — detailed description; the link to THE single
-#    original fork issue rides AT THE END of the body (owner directive
-#    2026-08-27). NEVER `Closes #N` — on upstream that resolves against the
-#    WRONG issue space. (atomicity gate: `oc-pr-atomicity <pr>` after filing)
+# 4. open the upstream PR — detailed description; body rules are canonical in
+#    the Rules bullet below (fork-issue link at END, `Closes #N` FORBIDDEN).
 #    PR TITLE TYPE PREFIX (owner 2026-08-30 — release triage): every upstream
 #    AND fork PR title starts with fix: / fix(scope): (bug fix), feat: /
 #    feat(scope): (new capability), or chore: (tooling/CI/docs/deps — zero
@@ -530,6 +576,22 @@ Rules:
   feature's commits, no bare CI-config churn unless it IS the feature.
 - Cherry-pick conflicts → resolve, re-run the Phase 5 gate (pr-checks), continue. NEVER merge fork
   `main` into the PR branch — upstream gets clean commits only.
+- **HARVEST VERIFICATION SWEEP (Duty-4 2026-08-31, 4 lanes converged — c6b1a539,
+  d5863180, 7e1ebbb6 ×2; 3 gate rounds burned overnight proving the gap):** after
+  conflict resolution on a harvested branch, BEFORE the first gate dispatch:
+  (a) `git diff origin/main...HEAD` symbol sweep — grep the branch diff for
+  fork-renamed/fork-only symbols and verify each has a live caller in the
+  UPSTREAM tree (a write-side helper whose fork-paired read side lived in a
+  renamed caller is a guaranteed clippy dead-code RED);
+  (b) fork-side-only attribute sweep — diff fork-main vs PR-tree for
+  `#[allow(clippy::…)]`/cfg gates on every function the PR touches, port them
+  explicitly (trailer-matched cherry-picks miss attributes that rode a
+  trailer-less fork commit);
+  (c) foreign-hunk conflicts (a hunk on fork `main` but absent on the target
+  base) resolve by DROPPING the foreign side, verified by diffstat delta vs the
+  fork-side pick;
+  (d) verify a rebase-ported commit by `git patch-id` before cherry-pick —
+  post-port shas differ from lane records while content is identical.
 - The PR body MUST reference THE issue as a FULL FORK URL at the END of the
   description (`Original issue: https://github.com/leshchenko1979/opencrabs/issues/N`
   — EXACTLY one, atomicity rule). `Closes #N` is FORBIDDEN on upstream PR bodies:
@@ -576,7 +638,7 @@ cosmetic — NEVER ping for fmt alone. Absorption ends the lifecycle: if the
 maintainer merges/reimplements the feature, the PR story closes with a SHIPPED
 UPSTREAM notice (Phase 6b item 5), not more fork-side work.
 Two same-turn checks (v0.4.5): (1) BEFORE any push to a gated/frozen head branch,
-RE-READ live gate state — latest issue comments + HQ notifies — session-start
+RE-READ live gate state — latest issue comments + supervisor notifies — session-start
 knowledge structurally cannot know what changed mid-turn *(a lint-fix push landed
 minutes before the freeze notice arrived)*. (2) Before preparing ANY follow-up
 commit targeting an open PR, check its state via API (`gh pr view <n> --json

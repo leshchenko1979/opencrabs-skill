@@ -109,7 +109,9 @@ process 2026-08-28.) Everything else waits for each lane's next boundary.
 
 Inbox discipline for any (re-enabled) build lane: ORDERs / red-run handoffs /
 owner directives only; ACK bookkeeping stays ledger-internal (moved from
-SKILL.md hard rules 2026-08-29).
+SKILL.md hard rules 2026-08-29). *(Historical: the compiler role was RETIRED
+2026-08-28 — builds fire via `oc-deploy ship`; this paragraph is kept only as
+the runbook for any future re-enabled lane.)*
 
 ### Cycle-aware deferral, roster-delta propagation, freeze (v0.4.17)
 
@@ -165,7 +167,7 @@ incident suggests drift. FIRST RUN fired on adoption (2026-08-26).
 
 Method:
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
-   one per lens (A/B/C/D); they NEVER edit skill files. Owner directive
+   one per lens (A/B/C/D/E); they NEVER edit skill files. Owner directive
    2026-08-26: Duty-6 reviews are ALWAYS sub-agent work, never Supervisor-only
    inline reading. Findings must carry verbatim quotes; Supervisor verifies
    every accepted quote against disk before acting. Hollow report -> ONE retry
@@ -196,10 +198,24 @@ Method:
      2026-08-29 two-file drift incident (SKILL.md §Shared war stories). Nothing
      deletes without the
      Supervisor's poll triple-check + owner word.
-2. Brief: four file paths, role map, ontology terms, ref names, strict output
+   - Reviewer E — INTERFACE/TOPOLOGY (owner directive 2026-08-31 "does our
+     self review rule prescribe a review for possible tool merges? If not,
+     include"): the TOOL SURFACE itself — pairs of tools whose invocations are
+     bound to come one after another in practice (merge candidates, as in the
+     v0.4.45/46/48 batches), verbs that belong in one tool instead of two,
+     a flag duplicating another tool's job, a ritual two tools cover in half
+     each. Lens A reviews duplicate RULES; E reviews duplicate/chainable
+     INTERFACES. Each finding names the merge/verb-move + its single-command
+     shape. EXCLUDES: one-off chains, anything with an approval gate between
+     the steps (a gate is human judgment — never merged away).
+2. Brief: five file paths, role map, ontology terms, ref names, strict output
    contract — numbered findings `file §section · verbatim quote · dimension ·
    problem · concrete fix · severity`. No pleasantries.
-3. PERSISTENCE (added after two report losses to bounces, 2026-08-26): the Supervisor persists each returned report to `/tmp/skill-review-<lens>-<YYYYMMDD>.md` on receipt (read-only reviewers cannot write); a report existing only in push-transit does not count as delivered.
+3. PERSISTENCE (added after two report losses to bounces, 2026-08-26): the
+   Supervisor persists each returned report via `oc-review-persist <lens> @<file>`
+   on receipt (read-only reviewers cannot write; the tool re-read-verifies and
+   indexes by sha256); a report existing only in push-transit does not count as
+   delivered.
 4. Supervisor VALIDATES every finding with the poll triple-check (disk truth /
    evidence / coherence): ACCEPT · KERNEL (already covered) · REJECT (reason
    recorded, never silently dropped).

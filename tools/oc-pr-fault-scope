@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-pr-fault-scope — failing-files ∩ PR-files = IN-SCOPE / BASE-FAULT
+# (v0.4.58, Duty-6 lens C #2: automates the 2026-08-26 clippy-wall
+# misattribution lesson — a RED gate is NOT automatically the PR's fault).
+#
+# Usage: oc-pr-fault-scope <pr#> --run <run-id> [--repo <slug|path>] [--gh <cmd>]
+#   Pulls the PR's changed files and the failed run's failing files (parsed
+#   from `gh run view --log-failed` rust-style `--> path` markers and generic
+#   error lines), intersects, and verdicts:
+#     IN-SCOPE   — at least one failing file is touched by the PR (the lane owns it)
+#     BASE-FAULT — zero intersection (pre-existing/base problem; do NOT chase)
+#
+# Exit: 0 IN-SCOPE · 1 BASE-FAULT · 2 usage · 3 gh failure.
+# =============================================================================
+set -u
+_OC_DIR="$(cd "$(dirname "$0")" && pwd)"
+_OC_LIB="$_OC_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-pr-fault-scope" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+die() { echo "oc-pr-fault-scope: $2" >&2; exit "$1"; }
+
+cmd_scope() {
+  local pr="" run="" repo="${OC_REPO:-leshchenko1979/opencrabs}" gh="${GH_BIN:-gh}"
+  while [ $# -gt 0 ]; do case "$1" in
+    --run) run="${2:-}"; shift 2 ;;
+    --repo) repo="${2:-}"; shift 2 ;;
+    --gh) gh="${2:-}"; shift 2 ;;
+    --*) die 2 "unknown flag '$1'" ;;
+    *) if [ -z "$pr" ]; then pr="$1"; fi; shift ;;
+  esac; done
+  [ -n "$pr" ] && [ -n "$run" ] || die 2 "usage: oc-pr-fault-scope <pr#> --run <run-id> [--repo slug] [--gh cmd]"
+  # PR touched files
+  local pr_files
+  pr_files="$("$gh" pr diff "$pr" --repo "$repo" --name-only 2>/dev/null)" || die 3 "gh pr diff failed for #$pr"
+  [ -n "$pr_files" ] || die 3 "no changed files for PR #$pr (is it merged/closed?)"
+  # failing files from the run's failed-step log
+  local run_log fail_files
+  run_log="$("$gh" run view "$run" --repo "$repo" --log-failed 2>/dev/null)" || die 3 "gh run view --log-failed failed for run $run"
+  fail_files="$(printf '%s\n' "$run_log" | grep -oE '(src|crates|tests)/[A-Za-z0-9_/.-]+\.[A-Za-z0-9]+' | sort -u)"
+  [ -n "$fail_files" ] || die 3 "no file paths parsed from failed log (non-code failure? check manually)"
+  # intersection
+  local inter
+  inter="$(printf '%s\n' "$fail_files" | sort > /tmp/.ocpfs.$$; printf '%s\n' "$pr_files" | sort | comm -12 - /tmp/.ocpfs.$$; rm -f /tmp/.ocpfs.$$)"
+  oc_log_extra failing_files "$(printf '%s' "$fail_files" | wc -l)"
+  if [ -n "$inter" ]; then
+    printf 'IN-SCOPE: PR #%s owns the failure (run %s)\nfailing files:\n%s\nintersection:\n%s\n' "$pr" "$run" "$fail_files" "$inter"
+    oc_log_extra verdict IN-SCOPE
+    return 0
+  fi
+  printf 'BASE-FAULT: PR #%s clean — run %s fails outside the PR diff, do NOT chase\nfailing files:\n%s\n' "$pr" "$run" "$fail_files"
+  oc_log_extra verdict BASE-FAULT
+  return 1
+}
+
+cmd_selftest() {
+  export OC_TOOLS_NOLOG=1
+  local T P=0 F=0
+  T="$(mktemp -d)"
+  ok() { P=$((P+1)); }; bad() { F=$((F+1)); echo "  FAIL selftest - $*" >&2; }
+  chk() { [ "$2" = "$3" ] && ok || bad "$1 (want $2 got $3)"; }
+  # gh shims: canned pr diff + run log
+  printf '#!/bin/sh\ncase " $* " in *" pr diff "*) printf "src/brain/tools/pr_file.rs\nREADME.md\n" ;; *" run view "*) printf "error[E0308]: mismatched types\\n --> src/brain/tools/pr_file.rs:120:5\\n" ;; *) exit 1 ;; esac\n' > "$T/gh-inscope.sh"
+  printf '#!/bin/sh\ncase " $* " in *" pr diff "*) printf "docs/plan.md\n" ;; *" run view "*) printf "error[E0308]: mismatched types\\n --> src/delivery/flow.rs:120:5\\n" ;; *) exit 1 ;; esac\n' > "$T/gh-basefault.sh"
+  printf '#!/bin/sh\nexit 1\n' > "$T/gh-dead.sh"
+  chmod +x "$T"/*.sh
+  local ME="$0"
+  bash "$ME" 42 --run 1000 --gh "$T/gh-inscope.sh" >/dev/null 2>&1; chk "in-scope-rc0" 0 $?
+  bash "$ME" 42 --run 1000 --gh "$T/gh-basefault.sh" >/dev/null 2>&1; chk "base-fault-rc1" 1 $?
+  bash "$ME" 42 --gh "$T/gh-inscope.sh" >/dev/null 2>&1; chk "missing-run-rc2" 2 $?
+  bash "$ME" 42 --run 1000 --gh "$T/gh-dead.sh" >/dev/null 2>&1; chk "gh-dead-rc3" 3 $?
+  rm -rf "$T"
+  echo "oc-pr-fault-scope selftest: PASS=$P FAIL=$F"
+  [ "$F" -eq 0 ]
+}
+
+case "${1:-}" in
+  --selftest) cmd_selftest; exit $? ;;
+esac
+cmd_scope "$@"

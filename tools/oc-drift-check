@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-drift-check — editor skill-drift ritual, mechanical (v0.4.58, Duty-6 lens C
+# #4: highest-frequency editor ritual was in the supervisor's head + prose).
+#
+# Usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]
+#   Compares the version a lane claimed at task-claim time against the LIVE
+#   SKILL.md on disk (editor.md §Mid-cycle skill drift step 1-2). On drift,
+#   --ack delegates the oc-ledger ack so the re-read is mechanically recorded.
+#
+# Exit: 0 no-drift (proceed under current rules) · 1 DRIFT (re-read required;
+#       ack stamped when --ack) · 2 usage · 3 ledger/skill-dir failure.
+# Env:  OC_ACTOR, OC_LEDGER, OC_SKILL_DIR (default: this skill).
+# =============================================================================
+set -u
+_OC_DIR="$(cd "$(dirname "$0")" && pwd)"
+_OC_LIB="$_OC_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-drift-check" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+SKILL_DIR="${OC_SKILL_DIR:-$(cd "$_OC_DIR/.." && pwd)}"
+LEDGER="${OC_LEDGER:-/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
+
+die() { echo "oc-drift-check: $2" >&2; exit "$1"; }
+
+cmd_drift() {
+  local uuid="" claimed="" ack=0
+  while [ $# -gt 0 ]; do case "$1" in
+    --ack) ack=1; shift ;;
+    --skill-dir) SKILL_DIR="${2:-}"; shift 2 ;;
+    --*) die 2 "unknown flag '$1'" ;;
+    *) if [ -z "$uuid" ]; then uuid="$1"; elif [ -z "$claimed" ]; then claimed="$1"; fi; shift ;;
+  esac; done
+  [ -n "$uuid" ] && [ -n "$claimed" ] || die 2 "usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]"
+  printf '%s' "$claimed" | grep -Eq '^v?0\.[0-9]+\.[0-9]+$' || die 2 "claimed-version must be [v]0.N.N, got '$claimed'"
+  local cur
+  cur="$(grep -E '^version:' "$SKILL_DIR/SKILL.md" 2>/dev/null | head -1 | awk '{print $2}')"
+  [ -n "$cur" ] || die 3 "cannot read version from $SKILL_DIR/SKILL.md"
+  local claimed_bare="${claimed#v}"
+  if [ "$claimed_bare" = "$cur" ]; then
+    echo "NO-DRIFT: claimed $claimed_bare == live $cur"
+    oc_log_extra verdict NO-DRIFT; return 0
+  fi
+  echo "DRIFT: claimed $claimed_bare != live $cur — re-read SKILL.md + editor.md IN FULL before next phase boundary"
+  oc_log_extra verdict DRIFT
+  if [ "$ack" = "1" ]; then
+    OC_LEDGER="$LEDGER" OC_SKILL_DIR="$SKILL_DIR" "$_OC_DIR/oc-ledger" ack "$uuid" "$cur" || die 3 "ack failed (oc-ledger rc=$?)"
+    echo "ack stamped for $uuid at $cur"
+  fi
+  return 1
+}
+
+cmd_selftest() {
+  export OC_TOOLS_NOLOG=1
+  local T P=0 F=0
+  T="$(mktemp -d)"
+  ok() { P=$((P+1)); }; bad() { F=$((F+1)); echo "  FAIL selftest - $*" >&2; }
+  chk() { [ "$2" = "$3" ] && ok || bad "$1 (want $2 got $3)"; }
+  mkdir -p "$T/skill/tools/tests"
+  cat > "$T/state-ledger.json" <<EOF
+{"current_skill_version":"0.4.58","updated_at":"2026-01-01T00:00:00Z","workers":[
+ {"uuid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","role":"tester","topic_id":1,"feature":"-","confirmed":true,"last_acked":null,"notes":[],"events":[]}],"events":[]}
+EOF
+  printf 'name: fixture\nversion: 0.4.58\n---\n' > "$T/skill/SKILL.md"
+  git -C "$T" init -q 2>/dev/null
+  local ME="$0"
+  bash "$ME" u1 0.4.58 --skill-dir "$T/skill" >/dev/null 2>&1; chk "no-drift-rc0" 0 $?
+  bash "$ME" u1 v0.4.58 --skill-dir "$T/skill" >/dev/null 2>&1; chk "v-prefix-rc0" 0 $?
+  bash "$ME" u1 0.4.57 --skill-dir "$T/skill" >/dev/null 2>&1; chk "drift-rc1" 1 $?
+  bash "$ME" u1 0.4 --skill-dir "$T/skill" >/dev/null 2>&1; chk "bad-shape-rc2" 2 $?
+  bash "$ME" u1 --skill-dir "$T/skill" >/dev/null 2>&1; chk "usage-rc2" 2 $?
+  # --ack: drift case delegates to oc-ledger ack against fixture ledger
+  OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.57 --ack --skill-dir "$T/skill" >/dev/null 2>&1
+  chk "drift-ack-stamped" "0.4.58" "$(jq -r '.workers[] | select(.uuid=="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") | .last_acked.version // "none"' "$T/state-ledger.json")"
+  rm -rf "$T"
+  echo "oc-drift-check selftest: PASS=$P FAIL=$F"
+  [ "$F" -eq 0 ]
+}
+
+case "${1:-}" in
+  --selftest) cmd_selftest; exit $? ;;
+esac
+cmd_drift "$@"
