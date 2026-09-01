@@ -163,42 +163,8 @@ if tool oc-ci-parity; then
   "$TOOLS_DIR/oc-ci-parity" --bogus >/dev/null 2>&1; [ $? -eq 5 ] && ok "unknown arg -> 5" || bad "unknown arg -> expected 5"
 fi
 
-# ---- 9. oc-contributors ----------------------------------------------------
-section "oc-contributors"
-run_selftest oc-contributors
-if tool oc-contributors; then
-  d="$(mktemp -d)"
-  git -C "$d" init -q -b main
-  git -C "$d" config user.email suite@test; git -C "$d" config user.name suite
-  cm() { printf '%s\n' "$1" > "$d/f"; git -C "$d" add f; printf '%s' "$2" > "$d/.m"; git -C "$d" commit -q -F "$d/.m"; }
-  M1='first
-
-Session-Id: aaaaaaaa-0000-0000-0000-000000000001
-Issue-Ref: #11'
-  M2='second, same lane dup
-
-Session-Id: aaaaaaaa-0000-0000-0000-000000000001'
-  M3='third lane
-
-Session-Id: bbbbbbbb-0000-0000-0000-000000000002'
-  M4='unsigned orphan commit'
-  cm f1 "$M1"; cm f2 "$M2"; cm f3 "$M3"; cm f4 "$M4"
-  OUT="$("$TOOLS_DIR/oc-contributors" --repo "$d" --range main)"; rc=$?
-  [ $rc -eq 0 ] && ok "fixture range exit 0" || bad "fixture exit=$rc"
-  echo "$OUT" | awk -F'\t' '$1=="aaaaaaaa-0000-0000-0000-000000000001" && $2==2 && $3=="#11" {f=1} END{exit !f}' \
-    && ok "dup session merged: 2 commits + issue kept" || bad "dedup row wrong"
-  echo "$OUT" | awk -F'\t' '$1=="bbbbbbbb-0000-0000-0000-000000000002" && $2==1 {f=1} END{exit !f}' \
-    && ok "second session present" || bad "second session missing"
-  echo "$OUT" | awk -F'\t' '$1=="(unsigned)" && $2==1 {f=1} END{exit !f}' \
-    && ok "unsigned commit NOT silently dropped" || bad "(unsigned) bucket missing"
-  [ "$(echo "$OUT" | wc -l)" -eq 3 ] && ok "exactly 3 dedup rows" || bad "row count wrong"
-  J="$("$TOOLS_DIR/oc-contributors" --repo "$d" --range main --json)"
-  echo "$J" | jq -e 'map(select(.session=="aaaaaaaa-0000-0000-0000-000000000001")) | .[0].commits == 2 and .[0].issues == ["#11"]' >/dev/null \
-    && ok "--json shape valid" || bad "--json malformed"
-  "$TOOLS_DIR/oc-contributors" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
-  "$TOOLS_DIR/oc-contributors" --repo "$d" --range main..main >/dev/null 2>&1; [ $? -eq 4 ] && ok "empty range -> 4" || bad "empty range -> expected 4"
-  rm -rf "$d"
-fi
+# ---- 9. oc-contributors RETIRED v0.4.72 (E2 #1: subset of oc-attrib, zero live callers) ----
+# coverage lives in the oc-attrib section; oc-seal-state derives the same list.
 
 # ---- 9b. oc-attrib -----------------------------------------------------------
 section "oc-attrib"
