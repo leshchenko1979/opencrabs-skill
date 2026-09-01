@@ -178,6 +178,10 @@ Method:
    with the prompt narrowed to that single lens; a second hollow result unlocks
    inline fallback, which must be flagged as such in the review record.
    Split lenses for independence:
+
+#### FAMILY: DOCS — role files (wording / reading load / organization)
+
+Grouping axis = WHAT is reviewed (owner 2026-09-01 "reviews seem grouped oddly"). Letters keep chronological birth order — they are stable report/persist keys, not an ordering.
    - Reviewer A — REDUNDANCY + ONTOLOGY (STRENGTHENED owner 2026-08-31,
      after the v0.4.61 stale-terms review found 22 defects hours after
      bumps): same rule stated twice across files; duplicated war stories;
@@ -201,6 +205,7 @@ Method:
      across a phrase list ("fast, deterministic, low-overhead") or spelling
      the same idea out at 2+ sites collapses into a single pretrained leading
      word; a restatement is duplication wearing prose.
+     PLUS PROVENANCE SEDIMENT (owner 2026-09-01 "skills need to be scrubbed regularly for unneeded provenance and history — we have changelogs for that"): live rule text carries the RULE, never its biography — owner-directive parentheticals, incident dates, "first pass shipped ..." notes, STRENGTHENED markers move to CHANGELOG.md at ship time; a lens finding names each offender. The same lens that hunts duplicated content hunts fossilized history.
    - Reviewer B — LLM EFFICIENCY + RESPONSIBILITY CREEP: token weight of each
      role's required reading (a worker must not need another role's
      procedures), prose that should be tables, dead references, duties
@@ -215,6 +220,50 @@ Method:
      reference, external reference); and SPRAWL — a file too long even when
      every line is live and unique (cure: disclose reference, then split by
      branch — not word-trimming).
+   - Reviewer G — ROLE-FILE STRUCTURE (owner directive 2026-08-31 "review if
+     editor.md is well structured or needs to be regrouped or split"; WIDENED
+     owner 2026-09-01 "supervisor does not review its own skill file" — the
+     brief already hands reviewers every skill file, but only editor.md had a
+     structure lens, so supervisor.md and SKILL.md organization went
+     unreviewed): the ORGANIZATION of EACH role file — editor.md,
+     supervisor.md, SKILL.md — phase/duty ordering vs actual work sequence,
+     sections grown past cohesion (one section = one concern), rules living
+     in the wrong section, cross-reference integrity after edits, whether a
+     file should split (e.g. per-phase reference pages) or regroup. Every
+     STEP in a role file must end on a CHECKABLE completion criterion (can
+     the agent tell done from not-done? vague criteria invite premature
+     completion). Before any split verdict, test the cheaper ladder moves
+     first: disclose reference behind a context pointer, regroup for
+     CO-LOCATION (a concept's definition, rules, and caveats under one
+     heading). Findings
+     must weigh the cost of a split (cross-refs, worker reading load) against
+     the cost of growth. First full G pass shipped 2026-08-31 (editor.md-only;
+     standing lens from v0.4.67).
+
+#### FAMILY: TOOLS — the tools/ surface (surface shape / implementation)
+
+   - Reviewer E — INTERFACE/TOPOLOGY (owner directive 2026-08-31 "does our
+     self review rule prescribe a review for possible tool merges? If not,
+     include"): the TOOL SURFACE itself — pairs of tools whose invocations are
+     bound to come one after another in practice (merge candidates, as in the
+     v0.4.45/46/48 batches), verbs that belong in one tool instead of two,
+     a flag duplicating another tool's job, a ritual two tools cover in half
+     each. Lens A reviews duplicate RULES; E reviews duplicate/chainable
+     INTERFACES. Each finding names the merge/verb-move + its single-command
+     shape. EXCLUDES: one-off chains, anything with an approval gate between
+     the steps (a gate is human judgment — never merged away).
+   - Reviewer F — TOOL CODE REVIEW (owner directive 2026-08-31 "make a review
+     of our skill tools code"): the tools/ implementations themselves — shell
+     correctness (quoting, set -e gaps, rc collisions with the documented rc
+     register), journaling completeness (every state-changing step writes its
+     log line BEFORE the next step — owner tool-logging rule), selftest
+     coverage vs the documented interface, dead flags/verbs, divergence
+     between SKILL.md tool-table rows and actual behavior (flags, rc, paths).
+     Findings cite file:line. First full F pass shipped 2026-08-31 (standing
+     lens from v0.4.67).
+
+#### FAMILY: EVIDENCE + LIFECYCLE — logs, artifacts, retirement (C usage-log YAGNI evidence feeds D deletion verdicts)
+
    - Reviewer C — CLI-AUTOMATION (owner directive 2026-08-26): recurring
      multi-step MANUAL rituals in any role's procedure that are deterministic
      enough to be one CLI command (state-file sealing, presence gates,
@@ -240,149 +289,3 @@ Method:
      2026-08-29 two-file drift incident (SKILL.md §Shared war stories). Nothing
      deletes without the
      Supervisor's poll triple-check + owner word.
-   - Reviewer E — INTERFACE/TOPOLOGY (owner directive 2026-08-31 "does our
-     self review rule prescribe a review for possible tool merges? If not,
-     include"): the TOOL SURFACE itself — pairs of tools whose invocations are
-     bound to come one after another in practice (merge candidates, as in the
-     v0.4.45/46/48 batches), verbs that belong in one tool instead of two,
-     a flag duplicating another tool's job, a ritual two tools cover in half
-     each. Lens A reviews duplicate RULES; E reviews duplicate/chainable
-     INTERFACES. Each finding names the merge/verb-move + its single-command
-     shape. EXCLUDES: one-off chains, anything with an approval gate between
-     the steps (a gate is human judgment — never merged away).
-   - Reviewer F — TOOL CODE REVIEW (owner directive 2026-08-31 "make a review
-     of our skill tools code"): the tools/ implementations themselves — shell
-     correctness (quoting, set -e gaps, rc collisions with the documented rc
-     register), journaling completeness (every state-changing step writes its
-     log line BEFORE the next step — owner tool-logging rule), selftest
-     coverage vs the documented interface, dead flags/verbs, divergence
-     between SKILL.md tool-table rows and actual behavior (flags, rc, paths).
-     Findings cite file:line. First full F pass shipped 2026-08-31 (standing
-     lens from v0.4.67).
-   - Reviewer G — ROLE-FILE STRUCTURE (owner directive 2026-08-31 "review if
-     editor.md is well structured or needs to be regrouped or split"; WIDENED
-     owner 2026-09-01 "supervisor does not review its own skill file" — the
-     brief already hands reviewers every skill file, but only editor.md had a
-     structure lens, so supervisor.md and SKILL.md organization went
-     unreviewed): the ORGANIZATION of EACH role file — editor.md,
-     supervisor.md, SKILL.md — phase/duty ordering vs actual work sequence,
-     sections grown past cohesion (one section = one concern), rules living
-     in the wrong section, cross-reference integrity after edits, whether a
-     file should split (e.g. per-phase reference pages) or regroup. Every
-     STEP in a role file must end on a CHECKABLE completion criterion (can
-     the agent tell done from not-done? vague criteria invite premature
-     completion). Before any split verdict, test the cheaper ladder moves
-     first: disclose reference behind a context pointer, regroup for
-     CO-LOCATION (a concept's definition, rules, and caveats under one
-     heading). Findings
-     must weigh the cost of a split (cross-refs, worker reading load) against
-     the cost of growth. First full G pass shipped 2026-08-31 (editor.md-only;
-     standing lens from v0.4.67).
-2. Brief: the review-set file paths (SKILL.md, editor.md, supervisor.md,
-   CHANGELOG.md, s2-swap-journal-spec.md — name the subset in scope per pass),
-   role map, ontology terms, ref names, strict output contract — numbered
-   findings `file §section · verbatim quote · dimension · problem · concrete
-   fix · severity`. No pleasantries. Docs lenses (A/B/G) also carry the
-   vocabulary reference: `skills/writing-great-skills/SKILL.md` (predictability,
-   information hierarchy, leading words, no-op test, failure modes).
-3. PERSISTENCE (added after two report losses to bounces, 2026-08-26): the
-   Supervisor persists each returned report via `oc-review-persist <lens> @<file>`
-   on receipt (read-only reviewers cannot write; the tool re-read-verifies and
-   indexes by sha256); a report existing only in push-transit does not count as
-   delivered.
-4. Supervisor VALIDATES every finding with the poll triple-check (disk truth /
-   evidence / coherence): ACCEPT · KERNEL (already covered) · REJECT (reason
-   recorded, never silently dropped).
-5. Mechanical fixes (dedup, wording, terminology, dead refs) land directly as
-   ONE version batch. Anything SEMANTIC (protocol behavior, authority
-   boundaries) goes to the owner as proposals — a review never widens the
-   Supervisor's own authority by itself.
-6. Verdict table posts to owner topic 30220; registry notes updated.
-
-Rationale: the Supervisor authors most rules — author-blindness is structural
-(owner caveat, 2026-08-26). Independent subagent eyes + the owner gate keep
-the set honest.
-
-## Duty 7 — Idea box: workers push process/tooling fixes (owner directive 2026-08-29)
-
-Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
-a wrong tool or a wrong process MAY report it to the supervisor lane the
-moment it happens; no waiting for a poll.
-
-1. Format = Duty 4's strict format with an `IDEA:` prefix, sent to the
-   supervisor lane via `session_notify`:
-   `IDEA: ADD|CHANGE <rule/tool> in <file+section> BECAUSE <gap actually hit>`
-   + date + evidence. Ideas NEVER edit skill files — the Supervisor authors,
-   the owner approves (Duty 4 discipline applies unchanged).
-2. INBOX = the ledger: on receipt the Supervisor stamps an `idea` event into
-   `workers-ledger.json` (sender session, ts, text) — durable, jq-filterable,
-   cannot die in a session log.
-3. Same-turn ACK to the sender, then triage; the verdict is stamped as an
-   `idea-verdict` ledger event:
-   - ACCEPT-MECHANICAL → queued into the next skill version batch.
-   - KERNEL-SEMANTIC → batched to the owner with a verdict table; ships ONLY
-     on his word.
-   - REJECT → reason journaled, never silently dropped.
-4. Overlap: an idea matching an open Duty-4 proposal MERGES into it   (convergence beats volume); duplicate ideas stamp ONE event, not N.
-5. **Tool quirks & failures (owner directive 2026-08-31):** any worker that
-   hits a tool FAILURE or odd behavior — non-zero rc out of documented
-   register, hang/timeout, corrupt/empty output, flag that silently no-ops,
-   log/journal gap — MUST report it to the supervisor lane the same turn,
-   format `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>`
-   + evidence (rc, log rows, journal lines). Do NOT silently retry around a
-   broken tool and move on; do NOT self-patch skill tools. Same Duty-7 flow:
-   supervisor ACKs, stamps an `idea` event (prefix distinguishes
-   idea/quirk/fail), triages — mechanical fix queues into the next batch,
-   semantic goes to the owner.
-
-**Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: the violation pattern
-is caught from evidence, not intuition. On suspicion run
-`./tools/oc-tg-audit <session-uuid> [--days N]` (v0.4.71 — replaces the
-hand grep; raw fallback: `grep -a "TOOL_ACCUM"
-~/.opencrabs/profiles/ops/logs/opencrabs.<date>` filtered by the accused
-session id + telegram tool name — telegram_send / tg_send_message /
-tg_edit_message / telegram_edit). A matching row → notify the rule (SKILL.md
-§Telegram surface law); repeat → review toggle.
-
-**Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) and
-fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
-canonical text stays in SKILL.md §Upstream relations; this line is the
-supervisor-side ownership pointer.
-
-## CI-wait & waiter discipline (supervisor-scoped items; lens G regroup v0.4.70)
-
-Moved from editor.md §CI-wait (owner fix batch 2026-08-30) — these bind SUPERVISOR waiters and any detached lane polling; the editor keeps items 1–3 (gh-watch ban, OC_ACTOR stamping, oc-prchecks re-dispatch). Numbering here is local:
-
-1. **Poll floor — EVERY detached gh poller ≥60s.** Waiter, watchdog, courtesy
-   loop: no exceptions by mechanism (Duty-4 2026-08-31, lane 2fbfb2f8: a 30s
-   swap-chain waiter was the same flood class the ≥60s rule was written for).
-2. **`--wait` must fit the ~120s tool-runner ceiling (≤90s).** Longer waits =
-   exit 5 + resume-by-run-id or a detached poller (61161247: `--wait 580` can
-   never fit). The FIRST dispatch call carries an explicit ≥600s tool timeout;
-   a mid-flight dead invocation (no exit code, no run URL) is recovered by API
-   run-search (`gh run list --json`, job name embeds head sha) and ADOPTED —
-   never a blind re-dispatch (7e1ebbb6: the retry double-dispatched and the run
-   was cancelled as its own same-ref supersession).
-3. **Waiter legs verify invocations before launch.** Each leg of a detached
-   chain checks its exact tool invocation against `--help`/tools.log BEFORE the
-   chain launches (same trust level as the claim read-back, editor.md Phase 1 step 4), and a
-   mid-chain rc≠0 session-notifies the owning session IMMEDIATELY, not only at
-   chain end (2fbfb2f8: an invented `--run-id` flag made the poll leg rc=1, the
-   swap was skipped, and a GREEN build sat unswapped with no alarm). Operational
-   wakes carry `interrupt=true` (mid-turn failsafe delivery — queues at the target's
-   turn boundary; a default send REFUSES mid-turn and the alarm is lost,
-   SKILL.md §session_notify mechanics DELIVERY MODES).
-4. **Notify wiring lives in the wrapper script, NEVER as oc-prchecks flags** —
-   the tool has no notify options (212b3c83: v7 glued nonexistent
-   `--notify-session/--notify-text` → usage rc=2 in 0.0s, gate dark ~45min).
-   A detached waiter with NO notify path gets a one-shot cron courier armed
-   before end of turn (c6b1a539: quiet-window re-dispatcher completed its work,
-   lane sat dark until the owner roll call).
-5. **Log-window verification uses line-number cutoffs or full timestamps** —
-   `grep -n marker` → `tail -n +N`, or full-timestamp compare; never prefix/
-   field heuristics (log continuation lines carry no leading timestamp and leak
-   debris into the window — 2fbfb2f8 orphan false-regression).
-6. **`gh api` REST v3 keys are snake_case.** In `--jq` filters
-   `run_started_at`/`updated_at` work; camelCase (`runStartedAt`) silently
-   evaluates to null (d18ce16a: terminal conclusion + null timestamps read as a
-   data anomaly — a near-miss of a false verdict).

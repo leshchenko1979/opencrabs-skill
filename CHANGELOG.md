@@ -151,3 +151,10 @@ Issue-Ref: #51
 - Duty-6 docs lenses (A/B/G) grounded in the writing-great-skills vocabulary (owner 2026-09-01 "read writing good skills skill and apply its findings to the docs reviews"). Lens A: SEDIMENT added to the defect list, churn-drift checklist gains (f) LEADING-WORD COLLAPSE (restated phrase-lists/spelled-out triads collapse into one pretrained word — duplication wearing prose). Lens B: NO-OP TEST sentence-by-sentence (a line the model obeys by default is load for nothing), PROGRESSIVE DISCLOSURE (reference behind context pointers; information hierarchy), SPRAWL (too long even when every line is live — cure is disclosure then split, not word-trimming). Lens G: every STEP must end on a CHECKABLE completion criterion (premature-completion defence); ladder-before-split — disclose + regroup for CO-LOCATION tested before any split verdict. Review brief (method step 2) carries the vocabulary reference `skills/writing-great-skills/SKILL.md` to every A/B/G pass.
 
 Issue-Ref: #51
+
+## v0.4.75 (2026-09-01)
+
+- Duty-6 lens roster REGROUPED by target axis (owner 2026-09-01 "Regroup", approving the family proposal): DOCS (A wording · B reading-load · G organization) · TOOLS (E surface-shape · F implementation) · EVIDENCE+LIFECYCLE (C usage-log→proposals · D deletion-safety, C YAGNI evidence is D input). Letters keep chronological birth order — stable report/persist keys, not an ordering; fusion glue stated per family header. SKILL.md role-table row carries the family axis.
+- Lens A gains PROVENANCE SEDIMENT element (owner 2026-09-01 "skills need to be scrubbed regularly for unneeded provenance and history — we have changelogs for that"): live rule text carries the RULE, never its biography — owner-directive parentheticals, incident dates, first-pass notes, STRENGTHENED markers move to CHANGELOG.md at ship time.
+
+Issue-Ref: #51

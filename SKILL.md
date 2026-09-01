@@ -8,7 +8,7 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.74
+version: 0.4.75
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -111,7 +111,7 @@ Ask the operator which role this session employs before doing anything:
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
 | **COMPILER** | **RETIRED 2026-08-28 (S3 cutover, owner "let's go to S3" msgid 34717)** — duties now `tools/oc-deploy` (ship/poll/swap-execute) + supervisor watch. Re-enable = one notify per archived runbook | `tools/archive/compiler.md` (ARCHIVED runbook) |
-| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), triage the idea box (Duty 7 — workers push `IDEA:` notifies; **plus `QUIRK:` tool-quirk/failure reports, owner directive 2026-08-31**; ledger kinds `idea` / `idea-verdict`), 7-lens skill review (Duty 6, Reviewers A–G; incl. Reviewer D deletion safety, Reviewer F tools-code, Reviewer G role-file structure — editor.md + supervisor.md + SKILL.md, owner 2026-09-01) | `supervisor.md` |
+| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), triage the idea box (Duty 7 — workers push `IDEA:` notifies; **plus `QUIRK:` tool-quirk/failure reports, owner directive 2026-08-31**; ledger kinds `idea` / `idea-verdict`), 7-lens skill review (Duty 6, Reviewers A–G, grouped by target — DOCS A/B/G · TOOLS E/F · EVIDENCE+LIFECYCLE C/D; incl. Reviewer D deletion safety, Reviewer F tools-code, Reviewer G role-file structure — editor.md + supervisor.md + SKILL.md, owner 2026-09-01) | `supervisor.md` |
 
 Roles **DO NOT intersect**:
 
