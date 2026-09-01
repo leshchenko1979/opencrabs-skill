@@ -510,20 +510,27 @@ no cargo needed.
    `tool_search` BEFORE any smoke invocation — a restart kills activated schemas
    and intents misfire onto wrong tools *(2026-08-26/27: ~7 misfires landed on
    session_context instead of session_notify before root cause)*.
-2. Drive your feature end-to-end against the RUNNING unit on its normal
+2. **IDENTITY RECEIPT first (C-F3, v0.4.72 — tool born v0.4.64, zero
+   invocations since; wired here to give it a duty):** run `oc-smoke-evidence`
+   BEFORE driving the feature — it compares the RUNNING unit's exe sha against
+   the deployed markers (rc 0 IDENTITY-MATCH / 1 MISMATCH / 3 unit fail).
+   MISMATCH → STOP: you would be smoking a binary that is not the one that was
+   built — report the mismatch to the sender, do not smoke on a stale unit.
+3. Drive your feature end-to-end against the RUNNING unit on its normal
    surfaces (Telegram, cron, MCP — whatever the feature touches). Happy path
    plus one edge case.
-3. PASS → reply to the sender (`session_notify`, `target_session` = the `from`
-   header): feature OK + one line of evidence. If the feature is COMPLETE,
+4. PASS → reply to the sender (`session_notify`, `target_session` = the `from`
+   header): feature OK + one line of evidence + the oc-smoke-evidence
+   IDENTITY-MATCH receipt. If the feature is COMPLETE,
    this same evidence goes to your forum topic as the Phase 7 approval
    request — do NOT open any upstream PR until Alexey approves it
    (APPROVAL GATE — Phase 7 step 0).
-4. FAIL → FILE THE ISSUE FIRST (Phase 1 procedure: symptom + evidence — you
+5. FAIL → FILE THE ISSUE FIRST (Phase 1 procedure: symptom + evidence — you
    found it, you file it). Then send raw evidence + the issue link to the
    supervisor lane (`session_notify`) — do NOT attribute, do NOT fix another
    editor's feature; attribution via Session-Id trailers is MECHANICAL
    (`oc-attrib`; decision 2026-08-25 2a, fan-out per issue #24).
-5. SHIPPED UPSTREAM notice (v0.4.0): if the supervisor (or the post-swap
+6. SHIPPED UPSTREAM notice (v0.4.0): if the supervisor (or the post-swap
    fan-out) reports your feature was
    absorbed by upstream (maintainer merged or reimplemented it), your fork-side
    duty for it ENDS — no further fork maintenance, no fix rounds. Future work
