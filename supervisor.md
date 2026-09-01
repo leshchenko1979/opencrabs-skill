@@ -244,15 +244,19 @@ Method:
      between SKILL.md tool-table rows and actual behavior (flags, rc, paths).
      Findings cite file:line. First full F pass shipped 2026-08-31 (standing
      lens from v0.4.67).
-   - Reviewer G — EDITOR.MD STRUCTURE (owner directive 2026-08-31 "review if
-     editor.md is well structured or needs to be regrouped or split"): the
-     file's organization — phase ordering vs actual work sequence, sections
-     grown past cohesion (one section = one concern), rules living in the
-     wrong phase, cross-reference integrity after edits, whether the file
-     should split (e.g. per-phase reference pages) or regroup. Findings must
-     weigh the cost of a split (cross-refs, worker reading load) against the
-     cost of growth. First full G pass shipped 2026-08-31 (standing lens from
-     v0.4.67).
+   - Reviewer G — ROLE-FILE STRUCTURE (owner directive 2026-08-31 "review if
+     editor.md is well structured or needs to be regrouped or split"; WIDENED
+     owner 2026-09-01 "supervisor does not review its own skill file" — the
+     brief already hands reviewers every skill file, but only editor.md had a
+     structure lens, so supervisor.md and SKILL.md organization went
+     unreviewed): the ORGANIZATION of EACH role file — editor.md,
+     supervisor.md, SKILL.md — phase/duty ordering vs actual work sequence,
+     sections grown past cohesion (one section = one concern), rules living
+     in the wrong section, cross-reference integrity after edits, whether a
+     file should split (e.g. per-phase reference pages) or regroup. Findings
+     must weigh the cost of a split (cross-refs, worker reading load) against
+     the cost of growth. First full G pass shipped 2026-08-31 (editor.md-only;
+     standing lens from v0.4.67).
 2. Brief: the review-set file paths (SKILL.md, editor.md, supervisor.md,
    CHANGELOG.md, s2-swap-journal-spec.md — name the subset in scope per pass),
    role map, ontology terms, ref names, strict output contract — numbered

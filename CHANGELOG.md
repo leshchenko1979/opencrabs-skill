@@ -139,3 +139,9 @@ Issue-Ref: #51
 - Task 7/F8 battery: section 17 covers 7 never-battered tools (shadow-rotate, smoke-evidence, issue-log, commit, ship-audit, tg-audit, harvest-sweep) — 86->104 checks; oc-shadow-rotate now validates args (usage rc 1); oc-smoke-evidence loop double-shift bug fixed (two-flag invocations died on usage); battery 104/0 GREEN (359d1d25).
 
 Issue-Ref: #51
+
+## v0.4.73 (2026-09-01)
+
+- Duty-6 lens G widened: EDITOR.MD STRUCTURE -> ROLE-FILE STRUCTURE, now covers the organization of ALL three role files (editor.md + supervisor.md + SKILL.md). Owner 2026-09-01: "supervisor does not review its own skill file" — the review-set brief handed reviewers every file, but only editor.md had a structure lens, so supervisor.md and SKILL.md organization went unreviewed. SKILL.md role-table row updated; oc-review-persist whitelist unchanged (letters A-G).
+
+Issue-Ref: #51
