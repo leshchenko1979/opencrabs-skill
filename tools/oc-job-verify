@@ -24,6 +24,7 @@
 # Deps: gh (authenticated for the fork), jq.
 # =============================================================================
 set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-job-verify" "$@"; else oc_log_finish() { :; }; fi
 _OC_EMBED="$(cd "$(dirname "$0")" && pwd)/lib/oc-embed.sh"

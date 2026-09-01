@@ -14,6 +14,7 @@
 # Env overrides: OC_FORK_REPO, OC_UPSTREAM_REPO, OC_BRANCH (default main)
 # Exit: 0 identical - 4 DRIFT (listing printed) - 5 usage/input - 6 gh/api failure
 set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-ci-parity" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT   # early exits — cleanup traps below supersede but also log
