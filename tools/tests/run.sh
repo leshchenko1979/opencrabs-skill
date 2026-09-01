@@ -476,6 +476,59 @@ fi
 section "oc-ledger confirm + derive_by"
 run_selftest oc-ledger
 
+# ---- 17. lens-F coverage batch (v0.4.72, F8: tools the battery never ran) ---
+section "oc-shadow-rotate"
+if tool oc-shadow-rotate; then
+  d="$(mktemp -d)"
+  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" --dry-run >/dev/null 2>&1; [ $? -eq 0 ] && ok "no live log -> noop rc 0" || bad "no live log -> expected 0"
+  printf 'line1\nline2\n' > "$d/oc-deploy-shadow.log"
+  OUTS="$(OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" --dry-run 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && case "$OUTS" in *"PLAN: append 2 lines"*) true ;; *) false ;; esac && ok "dry-run PLAN names 2 lines" || bad "dry-run PLAN (rc=$rc, got: $OUTS)"
+  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] && [ ! -s "$d/oc-deploy-shadow.log" ] && grep -q line1 "$d/oc-deploy-shadow.archive.log" \
+    && ok "rotate: archive appended + live truncated" || bad "rotate (rc=$rc)"
+  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" --bogus >/dev/null 2>&1; [ $? -eq 1 ] && ok "unknown arg -> 1 (usage)" || bad "unknown arg -> expected 1"
+  rm -rf "$d"
+fi
+
+section "oc-smoke-evidence"
+run_selftest oc-smoke-evidence
+if tool oc-smoke-evidence; then
+  "$TOOLS_DIR/oc-smoke-evidence" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/oc-smoke-evidence" --unit oc-no-such-unit --strings m1 >/dev/null 2>&1; [ $? -eq 3 ] && ok "--strings deprecated alias parses (unit-fail rc 3, E2 #6)" || bad "--strings alias -> expected 3"
+fi
+
+section "oc-issue-log"
+run_selftest oc-issue-log
+if tool oc-issue-log; then
+  "$TOOLS_DIR/oc-issue-log" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  OC_ISSUE_LOG_REPO=x/y "$TOOLS_DIR/oc-issue-log" 1 zznotasha --dry-run >/dev/null 2>&1; [ $? -eq 3 ] && ok "bad sha -> 3 (not found)" || bad "bad sha -> expected 3"
+fi
+
+section "oc-commit"
+run_selftest oc-commit
+if tool oc-commit; then
+  "$TOOLS_DIR/oc-commit" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+fi
+
+section "oc-ship-audit"
+run_selftest oc-ship-audit
+if tool oc-ship-audit; then
+  "$TOOLS_DIR/oc-ship-audit" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+fi
+
+section "oc-tg-audit"
+run_selftest oc-tg-audit
+if tool oc-tg-audit; then
+  "$TOOLS_DIR/oc-tg-audit" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+fi
+
+section "oc-harvest-sweep"
+run_selftest oc-harvest-sweep
+if tool oc-harvest-sweep; then
+  "$TOOLS_DIR/oc-harvest-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+fi
+
 # ---- battery receipt (oc-ledger sync gate reads this; the file itself rides --
 # ---- the skill repo via commit-pending --bundle) ------------------------------
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
