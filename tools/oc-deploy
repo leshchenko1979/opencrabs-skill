@@ -984,6 +984,18 @@ fanout_run() { # $1=run id $2=dry-run(0/1)
   # no stale marker, no reaper). exec 9<> = no-truncate open so the holder
   # record survives; flock -n -E 4 = non-blocking, EWOULDBLOCK -> rc 4.
   local lockfile="$STATE_DIR/fanout.lock.$run"
+  # stale-lock reaper (lens D 2026-08-31): holder records pid=; a dead pid +
+  # existing file = leftover from a finished fan-out (exit releases flock but
+  # intentionally never unlinks — unlink-after-release would let a second
+  # process flock a fresh inode and break single-flight). Reap on entry only.
+  if [ -f "$lockfile" ]; then
+    local stale_pid
+    stale_pid="$(grep -o 'pid=[0-9]*' "$lockfile" 2>/dev/null | head -1 | cut -d= -f2)"
+    if [ -n "$stale_pid" ] && ! kill -0 "$stale_pid" 2>/dev/null; then
+      rm -f "$lockfile"
+      jline lock-reaped 0 "{\"run\":\"$run\",\"stale-pid\":\"$stale_pid\"}"
+    fi
+  fi
   exec 9<>"$lockfile" || die 3 "fanout: cannot open lock $lockfile"
   if ! flock -n -E 4 9; then
     local holder

@@ -46,6 +46,33 @@ oc_log_init() {
   fi
   OC_LOG_ENABLED=1
   OC_LOG_START="$(date +%s.%N)"
+  oc_log_flood_guard
+  return 0
+}
+
+# oc_log_flood_guard — C-F1 (lens C 2026-08-31, owner "Go all"): a runaway
+# lane re-invoking a failing tool in a loop (evidence: 140-row storm, one
+# night) is refused at init. Counts PRIOR failed invocations with identical
+# tool+args in the last 120s; >=4 prior failures -> the 5th attempt exits 8
+# with a loud stderr banner. Bypass: OC_NO_FLOODGUARD=1 (selftests always
+# bypass — a selftest replaying failures must not trip its own guard).
+oc_log_flood_guard() {
+  [ "${OC_NO_FLOODGUARD:-0}" = "1" ] && return 0
+  case " $OC_LOG_ARGS " in *" --selftest "*) return 0 ;; esac
+  command -v jq >/dev/null 2>&1 || return 0
+  local logf="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
+  [ -f "$logf" ] || return 0
+  local cutoff n
+  cutoff="$(($(date +%s) - 120))"
+  n="$(tail -n 300 "$logf" 2>/dev/null | jq -R -r \
+    --arg tool "$OC_LOG_TOOL" --arg args "${OC_LOG_ARGS:0:500}" --argjson cutoff "$cutoff" '
+    fromjson? | select(.tool == $tool and .args == $args and ((.exit // 0) != 0))
+    | ((.ts // "" | fromdateiso8601? // 0)) | select(. >= $cutoff)' 2>/dev/null | wc -l)"
+  if [ "${n:-0}" -ge 4 ]; then
+    echo "FLOOD-GUARD (rc 8): $OC_LOG_TOOL with identical args already failed ${n}x in the last 120s — refusing to run again." >&2
+    echo "  Fix the underlying failure, change the args, or set OC_NO_FLOODGUARD=1 to bypass (and say why in the lane journal)." >&2
+    exit 8
+  fi
   return 0
 }
 
