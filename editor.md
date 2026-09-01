@@ -59,6 +59,14 @@ editor-facing duties:
   `IDEA:` + Duty-7's strict format (canonical template in supervisor.md
   §Duty 7). You propose; the supervisor triages and stamps the ledger; you
   never edit skill files.
+- Tool PROBLEMS — failures, inconsistencies, quirks (rc out of register,
+  silent no-op, corrupt output, doc/behavior drift) → **HQ**, not the idea
+  box: `session_notify` to the HQ session, format
+  `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>` + evidence
+  (supervisor.md §Duty 7 items 5–6). Report the SAME TURN it bites you; do
+  not retry-around silently, do not self-patch — HQ triages and routes the
+  fix to the owning editor (or creates one). If HQ is unreachable, the
+  fallback target is the supervisor lane; never sit on a broken tool.
 - Reads: `tg_get_messages` in your own topic only; no `tg_search_global`, no
   cross-chat/list probing. Reactions allowed (owner consent signal).
 - The `/tq-approve` forum-topic flow and Gatus DM reports are OTHER lanes'

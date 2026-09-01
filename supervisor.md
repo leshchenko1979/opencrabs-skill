@@ -192,16 +192,29 @@ moment it happens; no waiting for a poll.
    - REJECT → reason journaled, never silently dropped.
 4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
    (convergence beats volume); duplicate ideas stamp ONE event, not N.
-5. **Tool quirks & failures:** any worker that hits a tool FAILURE or odd
-   behavior — non-zero rc out of documented register, hang/timeout, corrupt
-   /empty output, flag that silently no-ops, log/journal gap — MUST report
-   it to the supervisor lane the same turn, format
+5. **Tool quirks & failures → HQ (owner order 2026-09-01 22:2xZ):** any worker
+   that hits a tool FAILURE, INCONSISTENCY, or QUIRK — non-zero rc out of
+   documented register (see tools/RC-CONTRACT.md), hang/timeout, corrupt
+   /empty output, flag that silently no-ops, log/journal gap, doc that
+   contradicts tool behavior — MUST report it to the HQ lane the same turn
+   (`session_notify` to the HQ session; format
    `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>`
-   + evidence (rc, log rows, journal lines). Do NOT silently retry around a
-   broken tool and move on; do NOT self-patch skill tools. Same Duty-7 flow:
-   supervisor ACKs, stamps an `idea` event (prefix distinguishes
-   idea/quirk/fail), triages — mechanical fix queues into the next batch,
-   semantic goes to the owner.
+   + evidence: rc, log rows, journal lines). Do NOT silently retry around a
+   broken tool and move on; do NOT self-patch skill tools — not even your own
+   area's tool (cross-lane blast radius beats local convenience). HQ ACKs,
+   stamps the ledger (`idea` event, prefix distinguishes idea/quirk/fail),
+   and TRIAGES per item 6.
+6. **HQ triage & routing (owner order 2026-09-01 22:2xZ):** HQ verifies the
+   evidence, then routes the FIX to the right executor — the editor lane that
+   owns the tool/area (by TOPIC name, never uuid-from-memory; find it via
+   session_search), briefed via `session_notify` with the quirk report +
+   evidence attached. NO existing lane covers the area → HQ creates a NEW
+   editor per the standing authority (AGENTS.md §Creating new editors:
+   messages.CreateForumTopic + "Load opencrabs-dev skill. You are an editor."
+   + roster-enroll). Routing verdict stamps `idea-verdict` ROUTED (target
+   topic named); the fix itself ships through the normal editor flow
+   (worktree, CI gate, ledger discipline) — Duty-7 documents the report,
+   it does not bypass Phase-7. REJECT stays possible: reason journaled.
 
 **Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: the violation pattern
 is caught from evidence, not intuition. On suspicion run

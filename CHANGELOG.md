@@ -284,3 +284,14 @@ Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b
 
 Issue-Ref: leshchenko1979/opencrabs#51
 Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b
+
+## v0.4.82 (2026-09-01)
+
+Tool-problem reports rewire (owner order 2026-09-01 22:2xZ):
+
+- supervisor.md Duty 7 item 5: QUIRK reports (failures, inconsistencies, quirks — rc out of register, silent no-op, corrupt output, doc/behavior drift) go to the HQ lane, not the supervisor idea box; no self-patching even in the reporter's own area.
+- supervisor.md Duty 7 item 6 (NEW): HQ triage & routing — verify evidence, route the fix to the owning editor lane by TOPIC name, or create a new editor per the standing authority; `idea-verdict` ROUTED names the target; fixes ship through the normal editor flow.
+- editor.md: lane duty mirror — tool problems to HQ same turn (`QUIRK:` format), fallback target = supervisor lane; never sit on a broken tool.
+
+Issue-Ref: leshchenko1979/opencrabs#51
+Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b
