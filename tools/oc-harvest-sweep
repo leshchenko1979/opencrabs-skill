@@ -47,11 +47,16 @@ git -C "$REPO" rev-parse --verify -q "$BRANCH" >/dev/null || die 3 "branch not f
 git -C "$REPO" rev-parse --verify -q "$BASE"   >/dev/null || die 3 "base ref not found in $REPO: $BASE (fetch first)"
 
 rc=0
-# Leg T — trailer sweep
+# Leg T — trailer sweep (delegates to oc-attrib --trailers-only, E2 finding 5:
+# ONE Session-Id extraction implementation; the old inline %(trailers:) here
+# and the sed in oc-attrib had drifted)
 MISSING=0
+ATTRIB="$(dirname "$0")/oc-attrib"
+T_OUT="$("$ATTRIB" --repo "$REPO" --trailers-only --range "$BASE..$BRANCH" 2>/dev/null)" \
+  || die 3 "oc-attrib trailers-only failed on $BASE..$BRANCH"
 while IFS=$'\t' read -r c s; do
-  if [ -z "$s" ]; then echo -e "trailer-missing\t$c\t$(git -C "$REPO" log -1 --format=%s "$c")"; MISSING=$((MISSING+1)); fi
-done < <(git -C "$REPO" log --format='%H%x09%(trailers:key=Session-Id,valueonly)' "$BASE..$BRANCH")
+  if [ -z "$s" ] || [ "$s" = "(unsigned)" ]; then echo -e "trailer-missing\t$c\t$(git -C "$REPO" log -1 --format=%s "$c")"; MISSING=$((MISSING+1)); fi
+done <<< "$T_OUT"
 [ "$MISSING" -eq 0 ] && echo -e "trailers\tOK (all $BRANCH commits carry Session-Id)" || { echo -e "trailers\t$MISSING commit(s) MISSING Session-Id"; rc=1; }
 
 # Leg E — empty diff

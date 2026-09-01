@@ -17,24 +17,31 @@
 # Exit codes: 0 VERIFIED | 1 invocation | 2 IN-FLIGHT (still running) |
 #             3 FAILED (conclusion != success) | 4 REF-MISMATCH | 5 RUN-NOT-FOUND
 #
+# --identity-only: skip the OUTCOME gates (2/3) — verify ONLY the job-name
+#   identity embed. Works on any terminal run regardless of conclusion; use
+#   for provenance of RED runs (which build sha produced this failure?).
+#
 # Deps: gh (authenticated for the fork), jq.
 # =============================================================================
 set -u
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-job-verify" "$@"; else oc_log_finish() { :; }; fi
+_OC_EMBED="$(cd "$(dirname "$0")" && pwd)/lib/oc-embed.sh"
+[ -f "$_OC_EMBED" ] && source "$_OC_EMBED"   # single embed decoder (E2 finding 3, v0.4.72)
 trap 'oc_log_finish $?' EXIT
 
 REPO="${OC_REPO:-leshchenko1979/opencrabs}"
 WAIT=0            # 0 = no polling; N = poll every 15s up to N seconds
 FEATURES=""
 JSON_OUT=0
+IDENTITY_ONLY=0
 VERBOSE=0
 
 fail() { echo "oc-job-verify: $2" >&2; exit "$1"; }
 say()  { [ "$VERBOSE" = 1 ] && echo "$*" >&2 || true; }
 
 usage() {
-  echo "Usage: oc-job-verify <run-id> <source-ref-40hex> [--features SET] [--wait N] [--repo R] [--json] [--verbose] [--selftest]" >&2
+  echo "Usage: oc-job-verify <run-id> <source-ref-40hex> [--features SET] [--wait N] [--repo R] [--json] [--identity-only] [--verbose] [--selftest]" >&2
   echo "Exit: 0 VERIFIED | 1 invocation | 2 IN-FLIGHT | 3 FAILED | 4 REF-MISMATCH | 5 RUN-NOT-FOUND" >&2
 }
 
@@ -56,6 +63,7 @@ while [ $# -gt 0 ]; do
     --wait)     WAIT="$2"; shift 2 ;;
     --repo)     REPO="$2"; shift 2 ;;
     --json)     JSON_OUT=1; shift ;;
+    --identity-only) IDENTITY_ONLY=1; shift ;;
     --verbose)  VERBOSE=1; shift ;;
     --selftest) selftest; exit $? ;;
     -h|--help)  usage; exit 1 ;;
@@ -92,17 +100,24 @@ if [ "$STATUS" != "completed" ]; then
     done
   fi
 fi
-[ "$STATUS" = "completed" ] || fail 2 "IN-FLIGHT: run $RUN_ID status=$STATUS (use --wait N to poll)"
-[ "$CONCLUSION" = "success" ] || fail 3 "FAILED: run $RUN_ID conclusion=$CONCLUSION — diagnose first error: gh run view $RUN_ID -R $REPO --log-failed"
+if [ "$IDENTITY_ONLY" != 1 ]; then
+  [ "$STATUS" = "completed" ] || fail 2 "IN-FLIGHT: run $RUN_ID status=$STATUS (use --wait N to poll)"
+  [ "$CONCLUSION" = "success" ] || fail 3 "FAILED: run $RUN_ID conclusion=$CONCLUSION — diagnose first error: gh run view $RUN_ID -R $REPO --log-failed"
+else
+  say "--identity-only: skipping outcome gates (status=$STATUS conclusion=$CONCLUSION)"
+fi
 
 # ---- 3. IDENTITY (job-name embed vs expected ref+features) -----------------
 JOB_NAMES="$(gh run view "$RUN_ID" -R "$REPO" --json jobs | jq -r '.jobs[] | .name')" \
   || fail 5 "cannot read jobs for run $RUN_ID"
-EMBED="$(printf '%s\n' "$JOB_NAMES" | sed -nE 's/.*\(([0-9a-f]{40}),[[:space:]]*([^)]*)\).*/\1|\2/p' | head -1)"
-if [ -z "$EMBED" ]; then
-  # tolerant: some names may truncate — accept any 40-hex inside parens
-  EMBED="$(printf '%s\n' "$JOB_NAMES" | sed -nE 's/.*\(([0-9a-f]{40}),[[:space:]]*([^)]*)\).*/\1|\2/p' | head -1)"
-fi
+EMBED=""
+while IFS= read -r jn; do
+  [ -n "$jn" ] || continue
+  EMBED="$(oc_decode_job_embed "$jn")"
+  [ -n "$EMBED" ] && break
+done <<EOF
+$JOB_NAMES
+EOF
 [ -n "$EMBED" ] || fail 4 "REF-MISMATCH: no '(sha, features)' embed found in job names of run $RUN_ID"
 E_REF="${EMBED%%|*}"
 E_FEAT="${EMBED#*|}"

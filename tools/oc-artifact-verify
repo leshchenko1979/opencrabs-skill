@@ -27,6 +27,8 @@
 set -u
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-artifact-verify" "$@"; else oc_log_finish() { :; }; fi
+_OC_EMBED="$(cd "$(dirname "$0")" && pwd)/lib/oc-embed.sh"
+[ -f "$_OC_EMBED" ] && source "$_OC_EMBED"   # single embed decoder (E2 finding 3, v0.4.72)
 trap 'oc_log_finish $?' EXIT
 
 REPO="${OC_REPO:-leshchenko1979/opencrabs}"
@@ -131,12 +133,20 @@ fi
 SRC_MATCH="not-checked"
 if [ -n "$RUN_ID" ] && [ -n "$SOURCE" ]; then
   printf '%s' "$SOURCE" | grep -Eq '^[0-9a-fA-F]{40}$' || fail 1 "source_ref must be a FULL 40-char sha"
-  # select the JOB whose name carries the "(<sha>, <features>)" embed — the
-  # ORDER gates job (\`ORDER gates (<sha>)\`) comes FIRST in the job list but
-  # has no comma after the sha, so head -1 would always read embed=none.
-  JOB="$(gh run view "$RUN_ID" -R "$REPO" --json jobs 2>/dev/null | jq -r '.jobs[] | .name' | grep -E '\([0-9a-f]{40},' | head -1)"
+  # select the JOB whose name carries the "(<sha>, <features>)" embed via the
+  # SHARED decoder (lib/oc-embed.sh) — first job whose name decodes non-empty
+  # (the ORDER gates job has no comma after the sha, so it decodes empty).
+  JOB=""
+  EMBED=""
+  while IFS= read -r jn; do
+    [ -n "$jn" ] || continue
+    EMBED="$(oc_decode_job_embed "$jn")"
+    if [ -n "$EMBED" ]; then JOB="$jn"; break; fi
+  done <<EOF
+$(gh run view "$RUN_ID" -R "$REPO" --json jobs 2>/dev/null | jq -r '.jobs[] | .name')
+EOF
   [ -n "$JOB" ] || fail 4 "PROVENANCE: no embed-carrying job (name with '(<sha>,' pattern) for run $RUN_ID"
-  E="$(printf '%s' "$JOB" | sed -nE 's/.*\(([0-9a-f]{40}),.*/\1/p' | head -1)"
+  E="${EMBED%%|*}"
   if [ "$E" = "$SOURCE" ] || { [ -n "$E" ] && [ "${E:0:12}" = "${SOURCE:0:12}" ]; }; then
     SRC_MATCH="verified"
   else

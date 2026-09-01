@@ -10,8 +10,10 @@
 #
 # BEHAVIORAL JUDGMENT STAYS HUMAN — this tool produces IDENTITY evidence only.
 #
-# Usage: oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2]
+# Usage: oc-smoke-evidence [--unit opencrabs-ops] [--markers m1,m2]
 #                          [--negative-control <backup-binary>] [--selftest]
+#   --markers is canonical (matches oc-artifact-verify); --strings is a
+#   deprecated alias kept for back-compat (E2 finding 6, v0.4.72).
 # Exit:  0 IDENTITY-MATCH / 1 MISMATCH / 2 usage / 3 unit-or-proc-fail
 # =============================================================================
 set -u
@@ -19,7 +21,7 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-smoke-evidence" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
-usage() { echo "usage: $0 [--unit <systemd-user-unit>] [--strings m1,m2] [--negative-control <binary>] | --selftest" >&2; exit 2; }
+usage() { echo "usage: $0 [--unit <systemd-user-unit>] [--markers m1,m2] [--negative-control <binary>] | --selftest" >&2; exit 2; }
 die() { echo "oc-smoke-evidence: $2" >&2; exit "$1"; }
 
 STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
@@ -27,7 +29,7 @@ UNIT="opencrabs-ops"; MARKERS=""; NEGCTRL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --unit) UNIT="${2:-}"; shift 2 ;;
-    --strings) MARKERS="${2:-}"; shift 2 ;;
+    --markers|--strings) MARKERS="${2:-}"; shift 2 ;;   # --strings = deprecated alias
     --negative-control) NEGCTRL="${2:-}"; shift 2 ;;
     --selftest)
       d="$(mktemp -d)"
