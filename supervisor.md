@@ -289,3 +289,104 @@ Grouping axis = WHAT is reviewed (owner 2026-09-01 "reviews seem grouped oddly")
      2026-08-29 two-file drift incident (SKILL.md §Shared war stories). Nothing
      deletes without the
      Supervisor's poll triple-check + owner word.
+3. PERSISTENCE (added after two report losses to bounces, 2026-08-26): the
+   Supervisor persists each returned report via `oc-review-persist <lens> @<file>`
+   on receipt (read-only reviewers cannot write; the tool re-read-verifies and
+   indexes by sha256); a report existing only in push-transit does not count as
+   delivered.
+4. Supervisor VALIDATES every finding with the poll triple-check (disk truth /
+   evidence / coherence): ACCEPT · KERNEL (already covered) · REJECT (reason
+   recorded, never silently dropped).
+5. Mechanical fixes (dedup, wording, terminology, dead refs) land directly as
+   ONE version batch. Anything SEMANTIC (protocol behavior, authority
+   boundaries) goes to the owner as proposals — a review never widens the
+   Supervisor's own authority by itself.
+6. Verdict table posts to owner topic 30220; registry notes updated.
+
+Rationale: the Supervisor authors most rules — author-blindness is structural
+(owner caveat, 2026-08-26). Independent subagent eyes + the owner gate keep
+the set honest.
+
+## Duty 7 — Idea box: workers push process/tooling fixes (owner directive 2026-08-29)
+
+Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
+a wrong tool or a wrong process MAY report it to the supervisor lane the
+moment it happens; no waiting for a poll.
+
+1. Format = Duty 4's strict format with an `IDEA:` prefix, sent to the
+   supervisor lane via `session_notify`:
+   `IDEA: ADD|CHANGE <rule/tool> in <file+section> BECAUSE <gap actually hit>`
+   + date + evidence. Ideas NEVER edit skill files — the Supervisor authors,
+   the owner approves (Duty 4 discipline applies unchanged).
+2. INBOX = the ledger: on receipt the Supervisor stamps an `idea` event into
+   `workers-ledger.json` (sender session, ts, text) — durable, jq-filterable,
+   cannot die in a session log.
+3. Same-turn ACK to the sender, then triage; the verdict is stamped as an
+   `idea-verdict` ledger event:
+   - ACCEPT-MECHANICAL → queued into the next skill version batch.
+   - KERNEL-SEMANTIC → batched to the owner with a verdict table; ships ONLY
+     on his word.
+   - REJECT → reason journaled, never silently dropped.
+4. Overlap: an idea matching an open Duty-4 proposal MERGES into it   (convergence beats volume); duplicate ideas stamp ONE event, not N.
+5. **Tool quirks & failures (owner directive 2026-08-31):** any worker that
+   hits a tool FAILURE or odd behavior — non-zero rc out of documented
+   register, hang/timeout, corrupt/empty output, flag that silently no-ops,
+   log/journal gap — MUST report it to the supervisor lane the same turn,
+   format `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>`
+   + evidence (rc, log rows, journal lines). Do NOT silently retry around a
+   broken tool and move on; do NOT self-patch skill tools. Same Duty-7 flow:
+   supervisor ACKs, stamps an `idea` event (prefix distinguishes
+   idea/quirk/fail), triages — mechanical fix queues into the next batch,
+   semantic goes to the owner.
+
+**Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: the violation pattern
+is caught from evidence, not intuition. On suspicion run
+`./tools/oc-tg-audit <session-uuid> [--days N]` (v0.4.71 — replaces the
+hand grep; raw fallback: `grep -a "TOOL_ACCUM"
+~/.opencrabs/profiles/ops/logs/opencrabs.<date>` filtered by the accused
+session id + telegram tool name — telegram_send / tg_send_message /
+tg_edit_message / telegram_edit). A matching row → notify the rule (SKILL.md
+§Telegram surface law); repeat → review toggle.
+
+**Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) and
+fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
+canonical text stays in SKILL.md §Upstream relations; this line is the
+supervisor-side ownership pointer.
+
+## CI-wait & waiter discipline (supervisor-scoped items; lens G regroup v0.4.70)
+
+Moved from editor.md §CI-wait (owner fix batch 2026-08-30) — these bind SUPERVISOR waiters and any detached lane polling; the editor keeps items 1–3 (gh-watch ban, OC_ACTOR stamping, oc-prchecks re-dispatch). Numbering here is local:
+
+1. **Poll floor — EVERY detached gh poller ≥60s.** Waiter, watchdog, courtesy
+   loop: no exceptions by mechanism (Duty-4 2026-08-31, lane 2fbfb2f8: a 30s
+   swap-chain waiter was the same flood class the ≥60s rule was written for).
+2. **`--wait` must fit the ~120s tool-runner ceiling (≤90s).** Longer waits =
+   exit 5 + resume-by-run-id or a detached poller (61161247: `--wait 580` can
+   never fit). The FIRST dispatch call carries an explicit ≥600s tool timeout;
+   a mid-flight dead invocation (no exit code, no run URL) is recovered by API
+   run-search (`gh run list --json`, job name embeds head sha) and ADOPTED —
+   never a blind re-dispatch (7e1ebbb6: the retry double-dispatched and the run
+   was cancelled as its own same-ref supersession).
+3. **Waiter legs verify invocations before launch.** Each leg of a detached
+   chain checks its exact tool invocation against `--help`/tools.log BEFORE the
+   chain launches (same trust level as the claim read-back, editor.md Phase 1 step 4), and a
+   mid-chain rc≠0 session-notifies the owning session IMMEDIATELY, not only at
+   chain end (2fbfb2f8: an invented `--run-id` flag made the poll leg rc=1, the
+   swap was skipped, and a GREEN build sat unswapped with no alarm). Operational
+   wakes carry `interrupt=true` (mid-turn failsafe delivery — queues at the target's
+   turn boundary; a default send REFUSES mid-turn and the alarm is lost,
+   SKILL.md §session_notify mechanics DELIVERY MODES).
+4. **Notify wiring lives in the wrapper script, NEVER as oc-prchecks flags** —
+   the tool has no notify options (212b3c83: v7 glued nonexistent
+   `--notify-session/--notify-text` → usage rc=2 in 0.0s, gate dark ~45min).
+   A detached waiter with NO notify path gets a one-shot cron courier armed
+   before end of turn (c6b1a539: quiet-window re-dispatcher completed its work,
+   lane sat dark until the owner roll call).
+5. **Log-window verification uses line-number cutoffs or full timestamps** —
+   `grep -n marker` → `tail -n +N`, or full-timestamp compare; never prefix/
+   field heuristics (log continuation lines carry no leading timestamp and leak
+   debris into the window — 2fbfb2f8 orphan false-regression).
+6. **`gh api` REST v3 keys are snake_case.** In `--jq` filters
+   `run_started_at`/`updated_at` work; camelCase (`runStartedAt`) silently
+   evaluates to null (d18ce16a: terminal conclusion + null timestamps read as a
+   data anomaly — a near-miss of a false verdict).

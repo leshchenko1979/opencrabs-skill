@@ -158,3 +158,18 @@ Issue-Ref: #51
 - Lens A gains PROVENANCE SEDIMENT element (owner 2026-09-01 "skills need to be scrubbed regularly for unneeded provenance and history — we have changelogs for that"): live rule text carries the RULE, never its biography — owner-directive parentheticals, incident dates, first-pass notes, STRENGTHENED markers move to CHANGELOG.md at ship time.
 
 Issue-Ref: #51
+
+## v0.4.76 (2026-09-01)
+
+HOTFIX — supervisor.md data-loss repair (lens G finding F1/F2, this pass):
+
+- v0.4.75's Duty-6 regroup script dropped the 97-line file tail: method steps
+  3-6 + rationale, `## Duty 7` (IDEA/QUIRK box), `## CI-wait & waiter
+  discipline` — all physically absent from the shipped file while 5+ live
+  inbound refs (editor.md x3, SKILL.md role table + 3 tool rows, README)
+  pointed into them. Restored verbatim from v0.4.74 (59439851); regrouped
+  roster preserved intact (diff vs v0.4.74 = roster region only, 0 section
+  headers touched); 7 reviewer bullets verified once each in family order;
+  battery 104/0.
+- Lesson queued for lens A: ship gate must verify section presence for every
+  file a CHANGELOG entry claims to edit (battery grows a doc-integrity case).
