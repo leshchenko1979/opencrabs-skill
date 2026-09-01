@@ -10,10 +10,19 @@
 # refuses when the index is empty instead of improvising a stage.
 #
 # Usage:
-#   oc-commit -m <msg> [-m <msg>...] [--issue N] [--repo <path>] | --selftest
+#   oc-commit -m <msg> [-m <msg>...] [--issue N] [--repo <path>]
+#             [--no-comment] [--state <text>] | --selftest
 #
-# Exit codes: 0 committed · 2 usage · 3 gate-fail (detached HEAD / no actor /
-#             nothing staged / no issue derivable) · 4 git-commit failure
+# E2 finding 2 (v0.4.72): the post leg is FOLDED — after a gated commit the
+# one-implementation-comment (owner law 2026-08-28 22:54Z) is posted via the
+# oc-issue-log composer (delegated, never re-implemented). --no-comment is
+# for drills/selftests; OC_COMMIT_COMMENT=0 is the env equivalent. A commit
+# that landed but whose comment failed is rc 5 (LOUD — never silently skip
+# the owner law; commit is NOT rolled back).
+#
+# Exit codes: 0 committed+commented · 2 usage · 3 gate-fail (detached HEAD /
+#             no actor / nothing staged / no issue derivable) · 4
+#             git-commit failure · 5 commit landed but comment FAILED
 # Env: OC_ACTOR (required) · OC_LEDGER (ledger override) · OC_TOOLS_LOG
 # =============================================================================
 set -u
@@ -21,7 +30,7 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-commit" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
-usage() { echo "usage: $0 -m <msg> [-m <msg>...] [--issue N] [--repo <path>] | --selftest" >&2; exit 2; }
+usage() { echo "usage: $0 -m <msg> [-m <msg>...] [--issue N] [--repo <path>] [--no-comment] [--state <text>] | --selftest" >&2; exit 2; }
 
 if [ "${1:-}" = "--selftest" ]; then
   d="$(mktemp -d)" || exit 3
@@ -36,6 +45,13 @@ JSON
   git -C "$R" -c user.email=t@t -c user.name=T commit -q --allow-empty -m seed
   OC="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"; export OC_LEDGER="$d/wl.json"
   # 1. unset OC_ACTOR -> 3
+  STUB_OK="$d/il-ok"; printf '#!/usr/bin/env bash
+echo "posted on $1"
+' > "$STUB_OK"; chmod +x "$STUB_OK"
+  STUB_FAIL="$d/il-fail"; printf '#!/usr/bin/env bash
+exit 3
+' > "$STUB_FAIL"; chmod +x "$STUB_FAIL"
+  export OC_ISSUE_LOG_BIN="$STUB_OK"
   ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR "$OC" -m test --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: unset OC_ACTOR != 3" >&2; exit 1; }
   # 2. detached HEAD -> 3
@@ -46,9 +62,15 @@ JSON
   # 3. nothing staged -> 3
   OC_ACTOR=u-fix "$OC" -m test --repo "$R" >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: nothing-staged != 3" >&2; exit 1; }
-  # 4. success: trailers derived (Session-Id + Issue-Ref #149 from claim)
+  # 4. success: trailers derived (Session-Id + Issue-Ref #149 from claim) + comment posted via stub
   ( cd "$R" && echo z > h && git add h && OC_ACTOR=u-fix "$OC" -m "fix: trailers" --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 0 ] || { echo "selftest: gated commit failed" >&2; exit 1; }
+  # 4b. comment leg folded: stub fails -> rc 5 (commit landed, comment FAILED)
+  ( cd "$R" && echo q > k && git add k && OC_ISSUE_LOG_BIN="$STUB_FAIL" OC_ACTOR=u-fix "$OC" -m "fix: comment-fail" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 5 ] || { echo "selftest: comment-fail-after-commit != 5" >&2; exit 1; }
+  # 4c. --no-comment skips the post leg entirely (stub-fail but rc 0)
+  ( cd "$R" && echo r > l && git add l && OC_ISSUE_LOG_BIN="$STUB_FAIL" OC_ACTOR=u-fix "$OC" -m "chore: drill" --no-comment --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: --no-comment drill != 0" >&2; exit 1; }
   LOG="$(git -C "$R" log -1 --format=%B)"
   printf '%s' "$LOG" | grep -q "Session-Id: u-fix" || { echo "selftest: Session-Id trailer missing" >&2; exit 1; }
   printf '%s' "$LOG" | grep -q "Issue-Ref: #149" || { echo "selftest: Issue-Ref #149 missing" >&2; exit 1; }
@@ -67,13 +89,15 @@ JSON
   echo "selftest OK"; exit 0
 fi
 
-REPO="$(pwd)"; MSGS=(); ISSUE=""
+REPO="$(pwd)"; MSGS=(); ISSUE=""; NO_COMMENT=0; CSTATE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -m) [ -n "${2:-}" ] || usage; MSGS+=("$1" "$2"); shift 2 ;;
     --issue) ISSUE="${2:-}"; [ -n "$ISSUE" ] || usage; shift 2 ;;
     --repo) REPO="${2:-}"; [ -n "$REPO" ] || usage; shift 2 ;;
-    -h|--help) echo "usage: $0 -m <msg> [-m <msg>...] [--issue N] [--repo <path>] | --selftest"; exit 0 ;;
+    --no-comment) NO_COMMENT=1; shift ;;
+    --state) CSTATE="${2:-}"; [ -n "$CSTATE" ] || usage; shift 2 ;;
+    -h|--help) echo "usage: $0 -m <msg> [-m <msg>...] [--issue N] [--repo <path>] [--no-comment] [--state <text>] | --selftest"; exit 0 ;;
     selftest) bash "$0" --selftest; exit $? ;;
     *) usage ;;
   esac
@@ -94,9 +118,8 @@ $G diff --cached --quiet 2>/dev/null \
 
 # derive Issue-Ref from the actor's latest claim (mirrors oc-ledger cmd_confirm)
 LEDGER="${OC_LEDGER:-/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
-if [ -z "$ISSUE" ] && [ -f "$LEDGER" ]; then
-  claim="$(jq -r --arg u "$OC_ACTOR" '[.events[] | select(.kind=="claim" and ((.by // "") | contains($u)))][-1].what // ""' "$LEDGER" 2>/dev/null)"
-  ISSUE="$(printf '%s' "$claim" | grep -oE '#[0-9]+' | head -1 | tr -d '#')"
+if [ -z "$ISSUE" ]; then
+  ISSUE="$("$(cd "$(dirname "$0")" && pwd)/oc-ledger" claim-ref "$OC_ACTOR" 2>/dev/null || true)"
 fi
 if [ -n "$ISSUE" ]; then
   printf '%s' "$ISSUE" | grep -Eq '^[0-9]+$' || { echo "gate-fail: bad --issue '$ISSUE'" >&2; exit 3; }
@@ -108,7 +131,18 @@ fi
 
 # gated commit
 if $G commit --trailer "Session-Id: $OC_ACTOR" --trailer "Issue-Ref: #$ISSUE" "${MSGS[@]}"; then
-  echo "committed on $($G rev-parse --abbrev-ref HEAD): $($G rev-parse --short HEAD) (actor $OC_ACTOR, issue #$ISSUE)"
+  CSHA="$($G rev-parse --short HEAD)"
+  echo "committed on $($G rev-parse --abbrev-ref HEAD): $CSHA (actor $OC_ACTOR, issue #$ISSUE)"
+  # folded post leg (E2 finding 2): one implementation comment per commit
+  if [ "$NO_COMMENT" = 0 ] && [ "${OC_COMMIT_COMMENT:-1}" = 1 ]; then
+    IL="${OC_ISSUE_LOG_BIN:-$(cd "$(dirname "$0")" && pwd)/oc-issue-log}"
+    if "$IL" "$ISSUE" "$CSHA" ${CSTATE:+--state "$CSTATE"} --repo "${OC_ISSUE_LOG_REPO:-leshchenko1979/opencrabs}" >/dev/null 2>&1; then
+      echo "implementation comment posted on #$ISSUE"
+    else
+      echo "COMMENT FAILED after commit $CSHA — post it NOW: $IL $ISSUE $CSHA --state '<verification>'" >&2
+      exit 5
+    fi
+  fi
   exit 0
 fi
 echo "git commit failed (see git output above)" >&2

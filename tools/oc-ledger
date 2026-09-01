@@ -577,6 +577,21 @@ EOF
 }
 
 # ---- confirm (v0.4.58, Duty-6 lens C #5) ------------------------------------
+cmd_claim_ref() { # oc-ledger claim-ref <uuid> — print the #N from the worker's
+  # latest claim event (E2 finding 4, v0.4.72: oc-commit + cmd_confirm shared
+  # this derivation as duplicate inline jq; the verb is now the single owner).
+  # Pure read: no existence check, no ledger mutation. rc 0 + "#N" | rc 3.
+  [ "${1:-}" != "" ] || die 2 "usage: oc-ledger claim-ref <uuid>"
+  local uuid="$1"
+  ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+  local claim issue
+  claim="$(jq -r --arg u "$uuid" '[.events[] | select(.kind=="claim" and ((.by // "") | contains($u)))][-1].what // ""' "$LEDGER")"
+  [ -n "$claim" ] || die 3 "claim-ref: no claim event by $uuid"
+  issue="$(printf '%s' "$claim" | grep -oE '#[0-9]+' | head -1 | tr -d '#')"
+  [ -n "$issue" ] || die 3 "claim-ref: latest claim by $uuid carries no #N issue ref: $claim"
+  echo "$issue"
+}
+
 cmd_confirm() { # oc-ledger confirm <uuid> [--gh <cmd>] — verify the worker's
   # latest claim against the live fork, then flip workers[].confirmed=true.
   # Lens-C gap closed: until today NO verb flipped confirmed — "confirmation"
@@ -631,7 +646,7 @@ oc_ship_audit_chain() {
 
 # ---- dispatch -----------------------------------------------------------------
 parse_global "$@"
-case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm> | --selftest"; exit 0 ;; esac
+case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm|claim-ref> | --selftest"; exit 0 ;; esac
 if [ "$SELFTEST" -eq 1 ]; then cmd_selftest; exit $?; fi
 sub="${ARGS[0]:-}"; rest=("${ARGS[@]:1}")
 case "$sub" in
@@ -643,6 +658,7 @@ case "$sub" in
   enroll) cmd_enroll "${rest[@]+"${rest[@]}"}" ;;
   commit-pending) cmd_commit_pending "${rest[@]+"${rest[@]}"}"; oc_ship_audit_chain ;;
   confirm) cmd_confirm "${rest[@]+"${rest[@]}"}" ;;
+  claim-ref) cmd_claim_ref "${rest[@]+"${rest[@]}"}" ;;
   selftest) cmd_selftest; exit $? ;;
-  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm> | --selftest" ;;
+  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm|claim-ref> | --selftest" ;;
 esac
