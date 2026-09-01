@@ -304,7 +304,7 @@ Issue-Ref: #77"
 #!/usr/bin/env bash
 SD="$(cd "$(dirname "$0")" && pwd)"
 case "$*" in
-  *actions/runs/222/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (cccccccccccccccccccccccccccccccccccccccc, telegram)"}]}' ;;
+  *actions/runs/222/jobs*) echo '{"jobs":[{"name":"ORDER gates (cccccccccccccccccccccccccccccccccccccccc)","conclusion":"success"},{"name":"Linux amd64 (cccccccccccccccccccccccccccccccccccccccc, telegram)","conclusion":"success"}]}' ;;
   *actions/runs/222*) echo '{"status":"completed","conclusion":"success"}' ;;
   *actions/runs/666/jobs*) echo '{"jobs":[{"name":"Linux amd64 (build)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9001"}]}' ;;
   *check-runs/9001/annotations*) echo '[{"path":"bad.txt","start_line":3}]' ;;

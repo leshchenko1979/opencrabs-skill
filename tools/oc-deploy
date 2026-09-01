@@ -220,7 +220,9 @@ case "$*" in
   *actions/runs/777*) echo '{"status":"completed","conclusion":"success"}' ;;
   *actions/runs/888/jobs*) echo '{"jobs":[{"name":"ORDER gates","conclusion":"success"},{"name":"Linux amd64 (eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9001"}]}' ;;
   *runs?status=success*)
-    if [ -n "${OC_TEST_STALE_FIRST:-}" ]; then echo '{"workflow_runs":[{"id":999},{"id":111}]}'; else echo '{"workflow_runs":[{"id":111}]}'; fi ;;
+    if [ -n "${OC_TEST_GATES_FIRST:-}" ]; then echo '{"workflow_runs":[{"id":334}]}'
+    elif [ -n "${OC_TEST_STALE_FIRST:-}" ]; then echo '{"workflow_runs":[{"id":999},{"id":111}]}'; else echo '{"workflow_runs":[{"id":111}]}'; fi ;;
+  *actions/runs/334/jobs*) echo '{"jobs":[{"name":"ORDER gates (dddddddddddddddddddddddddddddddddddddddd)","conclusion":"success"},{"name":"Linux amd64 (dddddddddddddddddddddddddddddddddddddddd, telegram)","conclusion":"success"}]}' ;;
   *actions/runs/999/jobs*) echo '{"jobs":[{"name":"ORDER gates (2f604e56...)"}]}' ;;
   *actions/runs/998/jobs*) echo '{"jobs":[{"name":"ORDER gates (2f604e56...)"}]}' ;;
   *actions/runs/998*) echo '{"status":"completed","conclusion":"success"}' ;;
@@ -322,8 +324,8 @@ Issue-Ref: #99"
     OC_DEPLOY_VALIDATE="$SD/tools/val-fail" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
     "$SELF_BIN" ship --sha "$SHA2" --execute >/dev/null 2>&1); check_rc "ship-gate-fail" $? 2
   grep -q "gate-fail" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no gate-fail shadow row"; }
-  # 8. poll plan mode at S0: swap LOCKED, sha decoded from BUILD job name
-  #    (jobs[0] is the ORDER gates job with no sha embed — decoder must skip it)
+  # 8. poll plan mode at S0: swap LOCKED, sha decoded from the build job name
+  #    (jobs[0] here is an ORDER gates job with NO sha at all — nothing decodes)
   out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" "$SELF_BIN" poll 2>&1)"; rc=$?
   check_rc "poll-plan-rc" $rc 0
   check_has "poll-decodes-sha" "$out" "built sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -371,6 +373,15 @@ Issue-Ref: #99"
     "$SELF_BIN" fanout --run 998 2>&1)"; rc=$?
   check_rc "fanout-998-retry-rc" $rc 0
   check_has "fanout-998-retry-idempotent" "$out" "reason=done"
+  # 10g. #72: gates-FIRST job ordering with the bare-sha gates name
+  #      (`ORDER gates (<40-hex>)`, no comma) at jobs[0] and the build job at
+  #      jobs[1] — the GREEN run is FOUND (built sha decoded), never skipped
+  out="$(OC_TEST_GATES_FIRST=1 OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_NOFANOUT=1 "$SELF_BIN" poll --wait 0 2>&1)"; rc=$?
+  check_rc "poll-gates-first-rc" $rc 0
+  check_has "poll-gates-first-found" "$out" "built sha=dddddddddddddddddddddddddddddddddddddddd"
+  check_has "poll-gates-first-run-id" "$out" "run=334"
+  case "$out" in *"skip run 334"*) fail=$((fail+1)); echo "SELFTEST FAIL: poll-gates-first wrongly skipped run 334";; *) pass=$((pass+1));; esac
   # 10d. C-#2: handoff wakes --notify-session
   rm -f "$SD/deployed.sha"
   : > "$T/notify.log"
@@ -894,12 +905,25 @@ fanout_mark_done() { # $1=run $2=verdict $3=notified $4=skipped $5=unowned
   fi
 }
 
-decode_built_sha() { # $1=run id -> echoes 40-hex sha from BUILD job name; rc 0/3
-  local jn dec
-  jn="$("$GH" api "repos/$FORK/actions/runs/$1/jobs" 2>/dev/null \
-    | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')" || return 3
-  dec="$(oc_decode_job_embed "$jn")"   # shared decoder (lib/oc-embed.sh, E2 v0.4.77)
-  printf '%s' "${dec%%|*}"
+decode_job_sha_any() { # $1=job name -> 40-hex sha from EITHER name shape (#72): the build-job embed "(<sha>, <features>)" or the gates-job bare form "(<sha>)"; empty if none
+  local s
+  s="$(oc_decode_job_embed "$1" 2>/dev/null | cut -d'|' -f1)"
+  [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+  printf '%s\n' "${1:-}" | sed -nE 's/.*\(([0-9a-f]{40})\).*/\1/p'
+}
+
+run_built_sha() { # $1=run id -> echo sha from the FIRST job name that decodes (ANY shape, ALL jobs scanned — #72); rc 0/3
+  local jn s
+  while IFS= read -r jn; do
+    [ -n "$jn" ] || continue
+    s="$(decode_job_sha_any "$jn")" || continue
+    [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+  done < <("$GH" api "repos/$FORK/actions/runs/$1/jobs" 2>/dev/null | jq -r '.jobs[].name // empty')
+  return 3
+}
+
+decode_built_sha() { # $1=run id -> echoes 40-hex sha from first decodable job name (any shape — #72); rc 0/3
+  run_built_sha "$1"
 }
 
 notify_one() { # $1=uuid $2=role $3=title $4=text $5=run -> journals notified|skip
@@ -1581,16 +1605,14 @@ case "$MODE" in
     while :; do
       RUNS_JSON="$("$GH" api "repos/$FORK/actions/workflows/$WF/runs?status=success&per_page=3" 2>/dev/null)" \
         || { shadow_log poll "-" "-" "api-fail"; die 2 "gh api runs query failed"; }
-      # #63 fix (v0.4.79): iterate the latest runs and SKIP those whose job
-      # names carry no decodable 40-hex embed (stale ORDER-gates / pre-rename
-      # formats) instead of fatal-exiting on runs[0] — interleaved ships put a
-      # stale newest run in the list routinely. First decodable run wins;
-      # skips are diagnosed on stderr, never fatal.
+      # #63 fix (v0.4.79) + #72 fix (this change): iterate the latest runs,
+      # scanning ALL jobs of each run (gates-first ordering puts the build job
+      # at jobs[1]) and accepting BOTH name shapes (embed + bare-sha gates
+      # form). Skip a run only when NO job decodes (stale ORDER-gates /
+      # pre-rename formats); skips are diagnosed on stderr, never fatal.
       RUN_ID=""; B_SHA=""
       for RID in $(printf '%s' "$RUNS_JSON" | jq -r '.workflow_runs[].id // empty' 2>/dev/null); do
-        JN="$("$GH" api "repos/$FORK/actions/runs/$RID/jobs" 2>/dev/null \
-          | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')"
-        CAND="$(oc_decode_job_embed "$JN" 2>/dev/null | cut -d'|' -f1)"   # shared decoder (E2 v0.4.77)
+        CAND="$(run_built_sha "$RID")"   # all jobs, both shapes (#72)
         if [ -n "$CAND" ]; then RUN_ID="$RID"; B_SHA="$CAND"; break; fi
         echo "poll: skip run $RID — no decodable build job (stale/non-build name)" >&2
       done
