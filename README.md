@@ -16,6 +16,7 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `supervisor.md` | SUPERVISOR role — worker roster, duty cadence, CI-wait & waiter discipline, review lenses |
 | `review-lenses.md` | Full Duty-6 lens briefs (A–G) — split from supervisor.md v0.4.78 |
 | `editor-phase7-rules.md` | Phase-7 reference rules disclosed from editor.md (v0.4.78) |
+| `war-stories.md` | Incident histories behind the hard rules (disclosed from SKILL.md, v0.4.80) |
 | `s2-swap-journal-spec.md` | Journal vocabulary spec for the oc-deploy swap leg |
 | `CHANGELOG.md` | Version history, **newest entry LAST** |
 | `tools/` | The `oc-*` tool fleet (30 executables) + `lib/` + `tests/` |

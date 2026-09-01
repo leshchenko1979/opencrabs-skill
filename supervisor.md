@@ -71,11 +71,14 @@ event notes (deviations, incidents, rulings applied).
 
 ## Duty 3 — Push updates to idle workers
 
-**DEFAULT = DISK ABSORPTION:** every published version lands on shared disk at ship time, and every worker re-reads SKILL.md + its role file at turn start — propagation is zero-ping. On a version bump the Supervisor's notify work is: stamp ONE ledger event (version published, no per-worker rows) AND commit BOTH git repos (skill-dir: one commit per bump; state-dir: one commit per ledger stamp, inside the same flock as the write, git-history regime). TOOL-written stamps (`oc-deploy` swap-execute etc.) are committed by the HOSTING session — the turn that observes the stamp on disk — bundling its adjacent stamp in one commit if both are pending. Pending-stamp sweep = `oc-ledger commit-pending [--bundle]`, on Duty-3/4 cadence (design: `oc-work/oc-ledger-design-20260829.md`).
-Target ONLY (a) lanes actively MID-CYCLE at publish time whose duties the change touches and which would hit the gap within THIS cycle, and (b) workers >3 versions behind acting substantively (mechanical drift, ack-row read).
-**`[ALL]` broadcast** survives solely for breaking security/deploy-gate changes — rules whose absence produces wrong rulings the same day. Everything else waits for each lane's next boundary.
-**Operational wakes carry `interrupt=true`** (mid-turn failsafe; default sends refuse and the ping is lost). Roster/cadence pings and any operational directive to a MID-TURN lane also require it.
-**Roster `idle` != cycle-idle:** a worker mid build-cycle gets NO reload notify unless the version fixes a blocker it will hit this cycle.
+| Situation | Action |
+|---|---|
+| ANY version bump (default) | **DISK ABSORPTION** — workers re-read SKILL.md + role file at turn start; propagation is zero-ping. Notify NO ONE. |
+| Supervisor notify work on a bump | stamp ONE ledger event (version published, no per-worker rows) AND commit BOTH git repos (skill-dir: one commit per bump; state-dir: one commit per ledger stamp, inside the same flock as the write, git-history regime). TOOL-written stamps (`oc-deploy` swap-execute etc.) are committed by the HOSTING session — the turn that observes the stamp — bundling its adjacent stamp if both pending. Pending-stamp sweep = `oc-ledger commit-pending [--bundle]`, on Duty-3/4 cadence (design: `oc-work/oc-ledger-design-20260829.md`) |
+| Lane MID-CYCLE at publish, change touches its duties, gap hits THIS cycle | targeted notify — operational wakes carry `interrupt=true` (mid-turn failsafe; default sends refuse and the ping is lost). Roster/cadence pings and any operational directive to a MID-TURN lane also require it |
+| Worker >3 versions behind, acting substantively | targeted notify (mechanical drift and ack-row reads don't count) |
+| Breaking security/deploy-gate change | `[ALL]` broadcast — rules whose absence produces wrong rulings the same day. Everything else waits for each lane's next boundary |
+| Roster `idle` but mid build-cycle | NO reload notify unless the version fixes a blocker it will hit this cycle |
 
 > Delivery discipline per SKILL.md §session_notify mechanics (DELIVERY ≠
 > QUEUE ACCEPTANCE canonical there): live roster check SAME turn; silent
@@ -204,6 +207,63 @@ tg_edit_message / telegram_edit). A matching row → notify the rule (SKILL.md
 fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
 canonical text stays in SKILL.md §Upstream relations; this line is the
 supervisor-side ownership pointer.
+
+## Upstream sync — watch, REBASE-PORT, parity (re-homed v0.4.80, lens B F3/F15; ex-compiler.md Step 7)
+
+Sync is SUPERVISOR-owned (SKILL.md §Upstream relations items 1/2/6 carry the
+one-line summaries; this section is the procedure — re-homed from the archived
+compiler runbook, where it had been stranded since the 2026-08-28 S3 cutover).
+
+### Watch — every build cycle
+
+    git -C ~/opencrabs fetch adolfousier
+    ./tools/oc-upstream-delta    # base/ahead/behind TSV + ABSORBED-CANDIDATE rows
+
+- Delta small and clean → run the PORT below without asking.
+- Mass absorption (our features merged/reimplemented upstream) or conflicts
+  beyond trivial → notify Alexey with the delta summary and WAIT for the word.
+  Never improvise a history rewrite.
+
+### Port — REBASE-PORT model (merge-sync retired 2026-08-26)
+
+1. BACKUP REF FIRST, always: `git -C ~/opencrabs branch backup/pre-port-<date> origin/main`
+2. Classify EVERY fork-only commit over `adolfousier/main..origin/main`:
+
+   | Verdict | Test | Action |
+   |---|---|---|
+   | absorbed | patch-id match OR title-twin inside upstream's new commits | DROP |
+   | superseded | upstream reimplemented it better (read his commits) | DROP |
+   | survivor | neither test hits | PORT |
+
+3. Temp worktree off `adolfousier/main` → cherry-pick survivors in CHRONOLOGICAL
+   order. Conflict on a pick → triage: collides with maintainer's redesign =
+   DROP permanently and log why; genuinely additive = resolve keep-both, then
+   VERIFY THE SEAM COMPILES (brace-level check — the 2026-08-26 TaskScope seam
+   bug shipped a broken concat) before continuing.
+4. Port-seam evidence = pr-checks GREEN with zero errors in ported lines
+   (modum RETIRED 2026-08-28). Warnings in files no ported commit touches =
+   upstream noise; note them, don't chase. Fixup commits carry the EXECUTING
+   lane's Session-Id trailer.
+5. Force-push WITH LEASE:
+   `git push --force-with-lease=main:<old-tip> origin main`
+6. Verify carrier dispatch still works and proof-dispatch the ported tip
+   before reporting done.
+7. Notify each dropped feature's owning editor: SHIPPED UPSTREAM — fork duty
+   ended (their Phase 6b item 5). Record verdicts next to `baseline.json`.
+
+Boundary: port-seam conflict fixups only — keep-both resolutions on
+genuinely-additive picks + the SEAM-COMPILES brace-level verification; never
+feature logic, never new behavior (ex-ROLE_EXCEPTION, bounded the same way).
+Anything beyond a port seam → editor work.
+
+### Parity — after every upstream merge/port
+
+`./tools/oc-ci-parity` (exit 0 identical / 4 DRIFT listing / 6 api-fail) +
+carrier proof-dispatch (`--ref ci/quick-build-linux`). **DRIFT PERMANENT
+(owner ruling):** fork `ci.yml` stays REMOVED (zombie-run risk, order
+cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4`
+naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired
+by restoring the file.
 
 ## CI-wait & waiter discipline (supervisor-scoped items; local numbering W1-W6)
 

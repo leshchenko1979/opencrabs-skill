@@ -117,6 +117,31 @@ supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
    waiting on it — a dispatch that fired on the wrong ref wastes the whole
    wait. oc-prchecks headSha adoption enforces this for its own runs; the
    check covers hand-dispatched `gh workflow run` uses.
+10. **Waiter notify payload-validation (Duty-4 P1, v0.4.80):** detached gate
+   waiters MUST be the standard oc-prchecks wait+notify path; hand-rolled
+   pollers whose notify text interpolates shell variables are FORBIDDEN unless
+   the verdict payload is validated BEFORE notify — an unfilled run-id
+   variable wakes the lane on garbage while the real verdict sits undiscovered
+   (2026-09-01: wake read "Gate on 76066bbd terminal: 404 Not Found, runs/" —
+   empty id — while the real run 33522305418 was RED). The journal-start check
+   proves the waiter LAUNCHED; it does not prove its payload — check both.
+11. **oc-prchecks detaches or fails fast (Duty-4 P2, v0.4.80):** never run
+   oc-prchecks INLINE inside a bounded bash tool call — an orphaned inline
+   poll keeps polling after the caller moves on and can adopt a peer run by
+   time-window (false RED, journal-corrected 2026-09-01, ledger n=1366). Run
+   it detached with journal-start verify, or bound it to the tool budget and
+   treat a timeout as an ERROR, never a verdict.
+12. **Per-run-id journal filenames (Duty-4 P5, v0.4.80):** waiter/driver
+   journal files embed the run id (the `/tmp/swap-<sha>-*.log` pattern) — two
+   waiters sharing one journal path nearly read an old run's verdict as the
+   new one (2026-09-01). New file or append-only per run; never append a
+   second wait to a finished run's journal.
+13. **Full shas from rev-parse only (Duty-4 P8, v0.4.80):** any 40-char sha in
+   a command or report is copied from SAME-TURN `git rev-parse` / `gh api`
+   output — never completed from a remembered prefix (2026-09-01 incident
+   n=1452: a fabricated tail burned two gh dispatches; the first hypothesis
+   after a lookup failure following a from-memory sha is SELF-FABRICATION —
+   re-derive before blaming GitHub).
 ## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52)
 
 Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep
@@ -348,6 +373,16 @@ gate or push.
 **Test placement (CONTRIBUTING.md policy, from Phase 7 step 2c):** tests live under `src/tests/*_test.rs` registered in
 `mod.rs`, never inline `#[cfg(test)]` blocks — upstream CI enforces both.
 
+**rustfmt = NON-FATAL diagnostic pre-pass (Duty-4 P6, v0.4.80):** run fmt
+before `oc-commit`; a fmt failure is a diagnostic to fix and re-run — never a
+hard abort ahead of git (that forces manual trailers + a hand-posted
+implementation comment).
+
+**Post-fmt scope audit BEFORE staging (Duty-4 P7, v0.4.80):** after any fmt
+pass, audit the diff before staging — rustfmt can reformat unrelated
+pre-existing lines (2026-09-01: flow.rs:418); revert out-of-scope hunks and
+keep the commit pure (atomicity law).
+
 ## Phase 5 — CI gate before every commit (CI-only since v0.4.34)
 
 No local lint tooling on this box. The lint/static-analysis
@@ -461,11 +496,9 @@ fast-forward check → push → 4 ORDER gates (oc-order-validate) → carrier
 dispatch on `ci/quick-build-linux` — appends every verdict to the shadow
 journal (`oc-deploy-shadow.log` in the state dir), and exits 0 with the
 dispatch confirmation (poll discovers the run id) or exit 2 + failing
-gate to the invoking session. **Ship semantics: dispatch
-is real always; deploys are real from S2 (poll mode, sha-bound, auto-swap on
-GREEN — deploy consent eliminated; journaled, auto-rollback on
-post-bounce verify fail stays, smoke-FAIL rollback = owner call; ledger `meta.oc_deploy_stage` gates it, exit 4 below
-S2 — the stage is S3 since 2026-08-28).** Plan-only
+gate to the invoking session. **Ship semantics: dispatch is real always; deploys are real — auto-swap on
+GREEN (consent eliminated 2026-08-28; smoke-FAIL rollback = owner call;
+stage is S3 — no consent step, no sub-S2 exit path).** Plan-only
 default: omit `--execute` → full delta printed, nothing touched. Brake:
 `touch /root/.opencrabs/profiles/ops/opencrabs-dev/oc-deploy.kill` (or
 `/root/oc-work/oc-deploy.disabled`) aborts every invocation, exit 9. The
@@ -581,11 +614,19 @@ git -C ~/opencrabs log --format='%H%x09%s%x09%(trailers:key=Session-Id,valueonly
   adolfousier/main..origin/main
 
 # 2. harvest onto a branch off UPSTREAM main — NEW worktree, usual hygiene
-#    (-b creation is beyond oc-wt: it validates branches, never creates them —
-#     so raw add here, then the UN-SKIPPABLE index chain immediately after)
-git -C ~/opencrabs worktree add ~/oc-wt-up-<feature> -b leshchenko1979/<feature> adolfousier/main
-tools/oc-index-worktree ~/oc-wt-up-<feature>
+#    (E1, v0.4.80: `oc-wt add --create` IS the sanctioned creation path — the
+#     UN-SKIPPABLE index chain runs INSIDE it. The old "oc-wt never creates"
+#     raw `worktree add -b` ritual taught a false interface fact; raw add +
+#     standalone oc-index-worktree stays the fallback only when --create is
+#     unavailable.)
+tools/oc-wt add up-<feature> leshchenko1979/<feature> --create --from adolfousier/main --repo ~/opencrabs
 git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
+# 2-fresh. BASE FRESHNESS before the gate dispatch (Duty-4 P4, v0.4.80):
+git -C ~/opencrabs fetch adolfousier
+git -C ~/opencrabs rev-parse adolfousier/main   # must equal the sha the port was cut from
+#    upstream moved since the port? RE-PORT onto the new base — a late gate on
+#    a stale base tests the wrong tree and invites surprise conflicts.
+
 # Phase 5 gate: pr-checks GREEN on the PR branch — zero errors in ported lines
 
 # 2-pre. ATOMICITY + BASE check BEFORE the PR opens — standing rule
@@ -617,6 +658,10 @@ git -C ~/oc-wt-up-<feature> push -u origin leshchenko1979/<feature>
 #    user-visible change). The head-branch slug mirrors the type:
 #    leshchenko1979/fix/<slug> | feat/<slug> | chore/<slug> (existing branches
 #    untouched).
+#    CROSS-REPO --HEAD LAW (Duty-4 P3, v0.4.80): --head is OWNER:BRANCH —
+#    `leshchenko1979:<branch>`, literal branch name kept whole. The bare
+#    `--head leshchenko1979/<branch>` form fails cross-repo with
+#    "No commits between" (2026-09-01, adolfousier/opencrabs#1277 filing).
 gh pr create -R adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/<feature> \
   --title "<fix:|feat:|chore:> <concise feature title>" \
   --body "<detailed what/why, implementation notes, green run link, smoke-test evidence. Original issue: https://github.com/leshchenko1979/opencrabs/issues/N (exactly one)>"

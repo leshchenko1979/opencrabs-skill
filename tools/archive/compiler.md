@@ -339,6 +339,9 @@ bounds above).
 
 ## Step 7 — Upstream watch & rebase-port sync (v0.4.0, owner-approved 2026-08-26)
 
+> **RE-HOMED v0.4.80 (lens B F3):** the live procedure is `supervisor.md`
+> §Upstream sync — REBASE-PORT. This archived copy is re-enable context only.
+
 ### Watch — every build cycle, part of Step 1 pre-flight
 
 ```bash

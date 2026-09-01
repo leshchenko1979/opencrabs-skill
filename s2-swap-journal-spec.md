@@ -74,3 +74,26 @@ as an incident. No receipt post before the stamp lands.
 `kill -9` a staging swap mid-flight. From journal + deployed.* markers ALONE an
 operator must answer: which binary is on disk, which step crashed, and whether
 consent covered the attempt. Any answer requiring chat history = spec not met.
+
+## Fan-out legs (re-homed from SKILL.md §Session-notify loop, v0.4.80 — lens B F4)
+
+- After a healthy swap the fan-out extracts contributors over
+  `<prev-swapped-sha>..<verified-run-headSha>` (right edge = the run's VERIFIED
+  headSha, never "current main" — a merge landing mid-build leaves main ahead of
+  the binary), notifies each contributing editor's session
+  about the new binary, then records `{sha, run_id, contributors}` to the
+  baseline state file (`oc-seal-state`; canonical:
+  `/root/.opencrabs/profiles/ops/opencrabs-dev/baseline.json`) — its `sha` is
+  the left edge of the next attribution range. LIVE since v0.4.37: `oc-deploy
+  fanout --run <id>` ([#24](https://github.com/leshchenko1979/opencrabs/issues/24),
+  on top of the [#23](https://github.com/leshchenko1979/opencrabs/issues/23)
+  session-notify verb `49125f8c`). GREEN leg: git-range → trailers →
+  `opencrabs session notify --profile ops`, dead uuid = journal `skip` + note;
+  auto-fired at the `swap_execute` tail, idempotent via `fanout.state`;
+  `--dry-run` journals but never notifies or marks done. RED leg (`poll` scans
+  the latest FAILED run): gh annotations → `git blame` → culprit `Session-Id`
+  trailer notified (`role=blamed`), suspect cc on same-file later touchers,
+  zero-sites fallback HUMAN-FLAGs all range sessions. Both legs suppressed by
+  `OC_DEPLOY_NOFANOUT=1` (drills), subshell-isolated. Journal:
+  `/root/.opencrabs/profiles/ops/opencrabs-dev/oc-deploy/journal/fanout-<run>-*.jsonl` (state dir since v0.4.60), steps `fanout-start /
+  contributors / attributed / notified / skip / unowned / fanout-end`.
