@@ -165,6 +165,7 @@ while [ $# -gt 0 ]; do
     --fork-origin) shift; FORK_REMOTE="${1:-}"; [ -n "$FORK_REMOTE" ] || usage ;;
     --upstream)    shift; UP_REMOTE="${1:-}"; [ -n "$UP_REMOTE" ] || usage ;;
     --no-log)      : ;;
+    -h|--help)     echo "usage: oc-upstream-delta [--repo <path>] [--fork-origin R] [--upstream R]"; echo "Exit: 0 clean / 1 delta (verdict) / 2 usage / 3 fetch-or-git failure"; exit 0 ;;  # C-#3: help=0
     *)             usage ;;
   esac
   shift

@@ -37,6 +37,7 @@ to_epoch() {
   printf '%s' "$e"
 }
 
+[ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { echo "usage: oc-ping-proof <uuid> <ping-ts> [--ledger <file>]"; echo "Exit: 0 WOKEN / 1 SILENT / 2 usage / 3 UNREACHABLE / 4 parse failure"; exit 0; }  # C-#3: help=0
 if [ "${1:-}" = "--selftest" ]; then
   d="$(mktemp -d)" || exit 3
   trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT

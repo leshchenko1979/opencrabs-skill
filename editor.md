@@ -155,6 +155,7 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 | `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume | 0 GREEN / 2 usage / 3 RED / 5 resume |
 | `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) | 0 no-candidates / 1 candidates / 2 usage / 3 api |
 | `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | Phase 6 per-commit implementation comment (body-file discipline inside) | 0 posted / 2 usage / 3 gh |
+| `oc-commit` | `tools/oc-commit -m "<msg>" [--issue N] [--no-comment]` | gated SIGNED commit: Session-Id + Issue-Ref trailers derived from OC_ACTOR + ledger claim; implementation comment folded in (oc-issue-log leg) — Phase 6c step 2 default | 0 committed / 2 usage / 3 gate-fail / 4 git-fail / 5 comment-fail |
 | `oc-ledger` | `stamp claim --what "…"` (canonical: `--what`; bare positional also accepted) · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack | 0 ok / 2 usage |
 | `oc-drift-check` | `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` | §Mid-cycle skill drift step 1–2 | 0 no-drift / 1 DRIFT |
 | `oc-deploy` | `ship --execute` · `poll` · `watch` · `fanout` | ship chain (dispatch → watch → swap); ship dispatch is leg 1 ONLY — watch+swap REQUIRED | see SKILL.md |
@@ -538,8 +539,11 @@ Your answer is always the SAME sequence:
 ```bash
 # 1. fresh worktree at the relevant sha (worktree lifecycle, Phase 2)
 tools/oc-wt add <task> <branch>
-# 2. reproduce → fix → Phase 5 CI gate → SIGNED commit
-git -C ~/oc-wt-<task> commit --trailer "Session-Id: <full session uuid>" --trailer "Issue-Ref: #<issue-n>"
+# 2. reproduce → fix → Phase 5 CI gate → SIGNED commit (E1, v0.4.78)
+tools/oc-commit -m "<msg>"   # gated wrapper: Session-Id from OC_ACTOR, Issue-Ref
+#    derived from your latest ledger claim, implementation comment folded in
+#    (oc-issue-log leg). RAW FALLBACK — rebase/cherry-pick/harvest contexts only:
+#    git -C ~/oc-wt-<task> commit --trailer "Session-Id: <full session uuid>" --trailer "Issue-Ref: #<issue-n>"
 #    (Session-Id = you; Issue-Ref = the ONE issue this change fixes — atomicity,
 #     v0.4.15: every commit links to exactly one issue, matching the PR that will carry it)
 # 3. push branch, then fast-forward fork main onto it (non-ff rejected)
@@ -583,18 +587,8 @@ tools/oc-index-worktree ~/oc-wt-up-<feature>
 git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
 # Phase 5 gate: pr-checks GREEN on the PR branch — zero errors in ported lines
 
-# 2b. RETIRED (A3 owner ruling 2026-08-29): the direct quick-build PR-head
-#     dispatch is GONE — BUILD TRIGGERS = exactly TWO, no exceptions; ORDER
-#     gate 3 (CONTAINMENT, oc-order-validate) rejects any PR-head sha. PR-head
-#     compile+lint evidence = step 2c's pr-checks dispatch (runs on ANY
-#     branch ref).
-
-# 2-pre. ATOMICITY + BASE check runs BEFORE the PR is opened (v0.4.71, Duty-4
-#     P6): an upstream PR
-#     head is a harvest branch off adolfousier/main — NEVER a fork-main-based
-#     branch. A post-open atomicity FALSE (fork-divergence commits) means the
-#     base was wrong before the PR existed.
-#     Check base + atomicity pre-open.
+# 2-pre. ATOMICITY + BASE check BEFORE the PR opens — standing rule
+#     PR-BASE-PRE-OPEN in the Rules list below.
 
 # 2c. CI gate (upstream triad) (v0.4.22 — encodes adolfousier/opencrabs
 #     CONTRIBUTING.md: "You MUST pass all three before
@@ -606,17 +600,10 @@ gh workflow run pr-checks.yml --repo leshchenko1979/opencrabs \
   --ref ci/quick-build-linux -f ref=leshchenko1979/<feature>
 #   (v0.4.46: one command does all of it — tools/oc-prchecks leshchenko1979/<feature>;
 #    prints the GREEN/RED verdict + run URL for the PR-body citation below)
-#   fmt (soft-fail, mirrors upstream) + clippy --locked --lib --bins --tests
-#   --all-features -D warnings + cargo test --locked --profile ci
-#   --all-features — flags VERBATIM from pr-checks.yml (the triad mirrors
-#   adolfousier's CI), so green here predicts green on his full gate.
-#   ANY red = fix cycle + re-dispatch,
-#   never a filed PR. Cite the green run URL in the PR body prep next to the
-#   smoke/run evidence. Iterate clippy fixes by EDITING CODE and re-dispatching
-#   pr-checks — NEVER run cargo locally (box law); test-placement policy →
-#   §Phase 4. (The yml lives
-#   ONLY on the carrier branch — never fork main,
-#   never the PR-head branch: zero infra commits in Adolfo's diff.)
+#   Standing rules PR-GATE-STANDING in the Rules list below (flags verbatim
+#   from pr-checks.yml; ANY red = fix cycle + re-dispatch, never a filed PR;
+#   cite the green run URL in the PR body prep next to the smoke/run
+#   evidence).
 
 # 3. push the head branch to the FORK (PR heads live there)
 git -C ~/oc-wt-up-<feature> push -u origin leshchenko1979/<feature>
@@ -645,36 +632,24 @@ Rules:
   feature's commits, no bare CI-config churn unless it IS the feature.
 - Cherry-pick conflicts → resolve, re-run the Phase 5 gate (pr-checks), continue. NEVER merge fork
   `main` into the PR branch — upstream gets clean commits only.
-- **HARVEST VERIFICATION SWEEP (Duty-4, v0.4.71):** after
-  conflict resolution on a harvested branch, BEFORE the first gate dispatch:
-  (a) `git diff origin/main...HEAD` symbol sweep — grep the branch diff for
-  fork-renamed/fork-only symbols and verify each has a live caller in the
-  UPSTREAM tree (a write-side helper whose fork-paired read side lived in a
-  renamed caller is a guaranteed clippy dead-code RED);
-  (b) fork-side-only attribute sweep — diff fork-main vs PR-tree for
-  `#[allow(clippy::…)]`/cfg gates on every function the PR touches, port them
-  explicitly (trailer-matched cherry-picks miss attributes that rode a
-  trailer-less fork commit);
-  (c) foreign-hunk conflicts (a hunk on fork `main` but absent on the target
-  base) resolve by DROPPING the foreign side, verified by diffstat delta vs the
-  fork-side pick;
-  (d) verify a rebase-ported commit by `git patch-id` before cherry-pick —
-  post-port shas differ from lane records while content is identical.
+- **HARVEST VERIFICATION SWEEP (Duty-4, v0.4.71):** after conflict resolution
+  on a harvested branch, BEFORE the first gate dispatch — 4-leg sweep: symbol
+  callers in the UPSTREAM tree, fork-side attribute port, foreign-hunk drop,
+  `git patch-id` verify of rebase-ported commits. Full checklist:
+  `editor-phase7-rules.md` (same dir).
 - The PR body MUST reference THE issue as a FULL FORK URL at the END of the
   description (`Original issue: https://github.com/leshchenko1979/opencrabs/issues/N`
   — EXACTLY one, atomicity rule). `Closes #N` is FORBIDDEN on upstream PR bodies:
   it resolves against adolfousier's issue space, not ours (issues live on the
   fork). WE close the fork issue (step 5) right
   after the PR is up — do not wait for the maintainer merge.
-- **QUALIFIED FORK REFS on upstream surfaces (fork [#54](https://github.com/leshchenko1979/opencrabs/issues/54)):**
-  a bare `#N` where N is a FORK issue number must never appear on an upstream
-  surface (PR body, PR title, issue body, comment) OUTSIDE a code span — GitHub
-  autolinks it against adolfousier's issue space and the tooltip points at an
-  unrelated upstream issue (upstream #29 = memory-process question vs fork #29 =
-  compaction signal). Write `leshchenko1979/opencrabs#N` or the full URL. Bare
-  `#N` stays reserved for UPSTREAM-local references. Code spans are exempt
-  (GitHub does not autolink inside backticks) — literal log-line quotes stay
-  verbatim. Fork-side surfaces are unaffected (bare #N resolves correctly there).
+- **QUALIFIED FORK REFS (fork [#54](https://github.com/leshchenko1979/opencrabs/issues/54)):**
+  no bare `#N` with FORK issue numbers on any upstream surface (PR body,
+  PR title, issue body, comment) OUTSIDE a code span — write
+  `leshchenko1979/opencrabs#N` or the full URL (GitHub autolinks bare `#N`
+  against adolfo's issue space). Code spans exempt. Bare `#N` stays reserved
+  for UPSTREAM-local references. Incident + rationale:
+  `editor-phase7-rules.md`.
 - One feature = one PR; never bundle two features to save a PR.
 - **ATOMICITY:** issues, PRs and commits are atomic —
   one problem per issue, one logical change per commit, one issue per PR. Every
@@ -686,6 +661,22 @@ Rules:
   FORWARD on the same PR or the PR is closed — no draft limbo. A MERGED PR is
   closed forever: follow-up work = new branch + new PR, NEVER extend a merged
   branch.
+- **BUILD TRIGGERS = exactly TWO, no exceptions (A3 owner ruling 2026-08-29):**
+  no direct quick-build PR-head dispatch; ORDER gate 3 (CONTAINMENT,
+  oc-order-validate) rejects any PR-head sha — PR-head compile+lint evidence
+  = step 2c's pr-checks dispatch (runs on ANY branch ref). The workflow yml
+  lives ONLY on the carrier branch `ci/quick-build-linux` — never fork main,
+  never the PR-head branch: zero infra commits in Adolfo's diff.
+- **PR-BASE-PRE-OPEN (v0.4.71, Duty-4 P6):** an upstream PR head is a harvest
+  branch off `adolfousier/main` — NEVER a fork-main-based branch; base +
+  atomicity check runs BEFORE the PR opens (a post-open atomicity FALSE
+  (fork-divergence commits) means the base was wrong before the PR existed).
+- **PR-GATE-STANDING (step 2c):** triad flags VERBATIM from pr-checks.yml
+  (fmt soft-fail mirrors upstream; clippy --locked --lib --bins --tests
+  --all-features -D warnings; cargo test --locked --profile ci
+  --all-features) — green here predicts green on adolfo's full gate. Iterate
+  by EDITING CODE and re-dispatching pr-checks — NEVER run cargo locally
+  (box law); test-placement policy → §Phase 4.
 - Pre-flight gate (step 2c) is MANDATORY (v0.4.0): read the fmt STEP outcome,
   not just the run conclusion — soft-fail hides failures from the run.
 - `leshchenko1979/<slug>` is the RESERVED PR-head namespace (`leshchenko1979/…`

@@ -33,6 +33,7 @@ cmd_sweep() {
     --base) base="${2:-}"; shift 2 ;;
     --dry-run) dry=1; shift ;;
     --keep) keep="${2:-}"; shift 2 ;;
+    -h|--help) echo "usage: oc-branch-sweep --repo <path> [--base b] [--dry-run] [--keep RE]"; echo "Exit: 0 nothing-deleted / 1 deletions / 2 usage / 3 git-fail"; exit 0 ;;  # C-#3: help=0
     --*) die 2 "unknown flag '$1'" ;;
     *) die 2 "unexpected arg '$1'" ;;
   esac; done

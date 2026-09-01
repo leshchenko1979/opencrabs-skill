@@ -200,3 +200,35 @@ Battery: 104 → 109/0.
 
 Issue-Ref: leshchenko1979/opencrabs#51
 Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b
+
+## v0.4.78 (2026-09-01)
+
+Duty 4+6 consolidated verdict — class 3 (owner "Do the rest"). Mechanics batch classes 1+2 shipped as v0.4.77.
+
+Interfaces (E-lens):
+- E5: `oc-prchecks --fault-scope PR` — RED verdict auto-runs `oc-pr-fault-scope` (IN-SCOPE/BASE-FAULT triage line; RED stays rc 3; rc journaled). Selftest 17 → 18/18.
+- E6: `oc-attrib --contributors` — 3-col projection (session/issues/shas) owned by oc-attrib; TSV-only (JSON combo rejected); `oc-deploy contributors` delegates (private awk deleted, output unchanged). oc-deploy selftest still 159/0.
+- E8: `oc-wt add --create [--from REF]` — fenced escape hatch for PR-head branches off foreign bases: refuses existing branch / unknown --from (rc 5), journals `created branch@from`, un-skippable index chain still runs. Selftest 14 → 17/17.
+- E1: editor.md Phase 6c step 2 re-pointed to `oc-commit` as default; raw `--trailer` pair kept as documented fallback (rebase/cherry-pick/harvest).
+
+Diagnostics + rc contract (C-lens):
+- C-#1: `oc-prchecks` usage() takes a reason, prints WHY before the usage block; identical-arg rc=2 repeats within 120s back off 2s..10s (60-row storm 2026-08-31); 6 parse sites pass diagnostics; selftest case `usage_diag`.
+- C-#3: `--help`/`-h` exits 0 with an Exit: register in 12 more tools (oc-attrib, oc-branch-sweep, oc-carrier-features, oc-ci-parity, oc-drift-check, oc-ping-proof, oc-pr-fault-scope, oc-review-persist, oc-shadow-rotate — unknown-arg 1→2, oc-tg-audit, oc-toolaccum, oc-upstream-delta); NEW `tools/RC-CONTRACT.md` (fleet conventions + 29-tool register); battery section enforces help=0 fleet-wide.
+- C-#2: `oc-deploy poll --wait N` (bounded wait, timeout rc 5 + run URL, optional `--notify-session <uuid>` wake on handoff AND timeout; `--wait 0` = classic single pass) — hand-rolled detached poll loops retired; selftest 10b/10c/10d.
+
+Truthfulness + hooks (F-lens):
+- F-H1: swap auto-rollback restore legs rc-captured; restore failure journals `rollback exit:1 restore_failed:true` + "MANUAL RECOVERY REQUIRED" stderr; ledger stamps ROLLBACK-FAILED (was: silent success-lie). Forced-failure drill case 11b; test hook `OC_SWAP_ROLLBACK_FAIL`.
+- F-M1: drill receipt journal line now lands BEFORE the ledger stamp (matches GREEN leg order).
+- F-M2: `ship --execute` writes the `pushed` shadow row (shadow_log parity with the swap leg).
+
+Docs (B/G-lens):
+- B4+G-F4: Duty-6 7-lens catalog moved verbatim from supervisor.md to NEW `review-lenses.md`; supervisor keeps the family map + pointer (supervisor.md 329 → 237 lines).
+- B11: editor.md Phase 7 retired 2b block deleted; standing rules promoted to Rules bullets (BUILD TRIGGERS = exactly TWO, PR-BASE-PRE-OPEN, PR-GATE-STANDING).
+- B12: Phase 7 reference bullets (HARVEST VERIFICATION SWEEP, QUALIFIED FORK REFS) moved verbatim to NEW `editor-phase7-rules.md` behind one-line pointers; §Phase 7 heading kept (cross-refs resolve).
+
+SKILL.md rows updated for every new flag; version 0.4.77 → 0.4.78.
+
+Battery: 109 → 138/0 (C-#3 fleet help=0 section). oc-deploy selftest 155 → 159/0 (C-#2 + F-H1 cases).
+
+Issue-Ref: leshchenko1979/opencrabs#51
+Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b

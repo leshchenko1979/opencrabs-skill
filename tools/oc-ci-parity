@@ -81,6 +81,7 @@ do_selftest() {
 }
 
 case "${1:-}" in
+  -h|--help)   printf 'Usage: %s [--selftest | --maps FORK.tsv UP.tsv]\nExit: 0 identical / 4 drift / 5 usage / 6 api failure\n' "$PROG"; exit 0 ;;  # C-#3: help=0 (usage stays rc 5)
   "")          do_live ;;
   --selftest)  do_selftest ;;
   --maps)      [ $# -eq 3 ] || usage_rc5; diff_maps "$2" "$3"; exit $? ;;

@@ -13,7 +13,7 @@
 # bump cadence IS the rotation cadence now — mechanical, not prose. Standalone
 # invocation remains the manual fallback (and what sync execs under the hood).
 #
-# Exit codes: 0 ok/noop | 1 usage | 2 io-fail
+# Exit codes: 0 ok/noop | 2 usage-or-io-fail (C-#3: usage 1->2; rc 1 retired)
 # =============================================================================
 set -uo pipefail
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
@@ -25,9 +25,9 @@ LIVE="$STATE_DIR/oc-deploy-shadow.log"
 ARCHIVE="$STATE_DIR/oc-deploy-shadow.archive.log"
 
 case "${1:-}" in
-  --help|-h) echo "usage: oc-shadow-rotate [--dry-run]"; exit 1 ;;
+  --help|-h) echo "usage: oc-shadow-rotate [--dry-run]"; echo "Exit: 0 ok/noop | 2 usage-or-io-fail"; exit 0 ;;  # C-#3: help=0
   ""|--dry-run) : ;;
-  *) echo "oc-shadow-rotate: unknown arg: $1 (usage: oc-shadow-rotate [--dry-run])" >&2; exit 1 ;;  # F8 lens-F (v0.4.72): fail loud on bad input
+  *) echo "oc-shadow-rotate: unknown arg: $1 (usage: oc-shadow-rotate [--dry-run])" >&2; exit 2 ;;  # F8 lens-F (v0.4.72) fail loud; C-#3 usage=2
 esac
 
 [ -f "$LIVE" ] || { echo "oc-shadow-rotate: no live shadow log ($LIVE) — noop"; exit 0; }

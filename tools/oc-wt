@@ -10,10 +10,13 @@
 #         destroyed listing FIRST — Lens-D deletion-safety posture).
 #
 # oc-wt validates branches, it NEVER creates them (lanes own branch naming
-# per the /opencrabs-dev skill). Worktree paths stay frozen at ~/oc-wt-<task>.
+# per the /opencrabs-dev skill) — EXCEPT via the EXPLICIT --create flag (E8
+# v0.4.78 escape hatch: PR-head branches off a foreign base; the lane still
+# names the branch, oc-wt only executes creation + the un-skippable index
+# chain). Worktree paths stay frozen at ~/oc-wt-<task>.
 #
 # Usage:
-#   oc-wt add <task> <branch> [--base origin/main] [--force] [--repo P] [--no-log]
+#   oc-wt add <task> <branch> [--base origin/main] [--create [--from REF]] [--force] [--repo P] [--no-log]
 #   oc-wt remove <task> [--force] [--repo P] [--no-log]
 #   oc-wt list [--repo P] [--no-log]     (lens C10, v0.4.65: task/branch/dirty TSV)
 #   oc-wt --selftest          offline fixture repo (no network)
@@ -34,10 +37,12 @@ INDEX_TOOL="${OC_INDEX_WORKTREE:-$(cd "$(dirname "$0")" && pwd)/oc-index-worktre
 REPO="${HOME}/opencrabs"
 BASE="origin/main"
 FORCE=0
+CREATE=0
+FROM=""
 
 help() {
   cat <<EOS
-Usage: $PROG add <task> <branch> [--base origin/main] [--force] [--repo P] [--no-log]
+Usage: $PROG add <task> <branch> [--base origin/main] [--create [--from REF]] [--force] [--repo P] [--no-log]
        $PROG remove <task> [--force] [--repo P] [--no-log]
        $PROG list [--repo P] [--no-log]   # TSV: task path branch dirty-n
        $PROG --selftest
@@ -136,6 +141,18 @@ do_selftest() {
   env OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" remove t4 --force --repo "$D/repo" --no-log >/dev/null 2>&1
   [ ! -s "$D/tools.log" ] && t_ok "--no-log suppresses journal" || t_bad "--no-log leaked"
 
+  # 13. E8: --create escape hatch — branch created from --from, then normal add + index
+  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t8 up/feat-new --create --from main --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  if [ "$RC" -eq 0 ] && git -C "$D/repo" rev-parse --verify -q refs/heads/up/feat-new >/dev/null && [ -d "$HOME/oc-wt-t8" ]; then
+    t_ok "--create: branch created from --from + tree indexed"
+  else t_bad "--create happy (rc=$RC)"; fi
+  # 13b. --create refuses existing branch -> 5
+  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t9 feat-x --create --from main --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 5 ] && t_ok "--create existing branch -> 5 (no clobber)" || t_bad "--create clobber (rc=$RC)"
+  # 13c. unknown --from -> 5
+  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t10 up/nope2 --create --from no-such-ref --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 5 ] && t_ok "--create unknown --from -> 5" || t_bad "--create bad from (rc=$RC)"
+
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
@@ -155,6 +172,8 @@ BRANCH=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --base)  shift; BASE="${1:-}"; [ -n "$BASE" ] || usage ;;
+    --create) CREATE=1 ;;   # E8 (v0.4.78): explicit escape hatch — create the branch first (never default)
+    --from)  shift; FROM="${1:-}"; [ -n "$FROM" ] || usage ;;   # E8: branch point for --create (default --base)
     --force) FORCE=1 ;;
     --repo)  shift; REPO="${1:-}"; [ -n "$REPO" ] || usage ;;
     --no-log) : ;;
@@ -190,6 +209,16 @@ if [ "$VERB" = "add" ]; then
   # 2. fresh base (ref-only fetch) + branch validation
   "$GIT_BIN" -C "$REPO" fetch --quiet origin 2>/dev/null || {
     echo "$PROG: fetch origin failed on $REPO" >&2; exit 5; }
+  if [ "$CREATE" = 1 ]; then   # E8 (v0.4.78): explicit escape hatch — create the branch first (never default)
+    FROM="${FROM:-$BASE}"
+    "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null && {
+      echo "$PROG: branch '$BRANCH' already exists (--create refuses to clobber)" >&2; exit 5; }
+    "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$FROM" >/dev/null || {
+      echo "$PROG: --from ref '$FROM' not found" >&2; exit 5; }
+    "$GIT_BIN" -C "$REPO" branch "$BRANCH" "$FROM" \
+      || { echo "$PROG: branch create failed: $BRANCH from $FROM" >&2; exit 3; }
+    oc_log_extra "created" "$BRANCH@$FROM"
+  fi
   "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || {
     echo "$PROG: no local branch '$BRANCH' (oc-wt never creates branches — lane owns naming)" >&2; exit 5; }
   "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || {

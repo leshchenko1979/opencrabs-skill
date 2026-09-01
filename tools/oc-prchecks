@@ -61,10 +61,28 @@ RESOLVE_POLL="${OC_PRCHECKS_RESOLVE_POLL:-5}"
 LOCK_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
 LOCK_FILE="$LOCK_DIR/.oc-prchecks-dispatch.lock"
 LOCK_WAIT="${OC_PRCHECKS_LOCK_WAIT:-90}"
+FAULT_TOOL="${OC_PRCHECKS_FAULT_SCOPE:-$(cd "$(dirname "$0")" && pwd)/oc-pr-fault-scope}"   # E5: RED triage backend
 
-usage() {
+CALL_ARGS="$*"   # C-#1: backoff identity — same args dying rc=2 repeatedly
+usage() { # [reason] — C-#1: prints WHY before the usage block. A repeat of the
+  # SAME args inside 120s sleeps 2s..10s (60-row storm 2026-08-31 20:51Z: a
+  # silent sub-second rc=2 got retried in a tight loop).
+  [ $# -gt 0 ] && echo "$PROG: $1" >&2
+  local _h _cf _now _ts=0 _cnt=0
+  _h="$(printf '%s' "$CALL_ARGS" | cksum | cut -d' ' -f1)"
+  _cf="$LOCK_DIR/.oc-prchecks-rc2"
+  _now="$(date +%s)"
+  if [ -f "$_cf" ]; then
+    _ts="$(cut -d' ' -f1 "$_cf" 2>/dev/null)"; _ts="${_ts:-0}"
+    [ "$(cut -d' ' -f2 "$_cf" 2>/dev/null)" = "$_h" ] || _cnt=0
+    [ "$(( _now - _ts ))" -le 120 ] || _cnt=0
+    case "$_cnt" in ''|*[!0-9]*) _cnt=0 ;; esac
+  fi
+  _cnt=$(( _cnt + 1 ))
+  printf '%s %s %s\n' "$_now" "$_h" "$_cnt" > "$_cf" 2>/dev/null || :
+  [ "$_cnt" -gt 1 ] && sleep $(( _cnt * 2 < 10 ? _cnt * 2 : 10 ))
   cat >&2 <<EOS
-Usage: $PROG <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
+Usage: $PROG <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
 Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable
 EOS
   exit 2
@@ -142,6 +160,14 @@ do_selftest() {
 
   run_t none abc123;                 [ "$T_RC" -eq 2 ] && t_ok "short sha -> 2" || t_bad "short sha (rc=$T_RC)"
   run_t unknown_ref some-branch;     [ "$T_RC" -eq 2 ] && t_ok "unknown ref -> 2" || t_bad "unknown ref (rc=$T_RC)"
+  run_t usage_diag some-branch --wait zzz
+  [ "$T_RC" -eq 2 ] && case "$T_OUT" in *"--wait needs an integer"*) t_ok "usage prints why (C-#1)";; *) t_bad "usage diagnostic missing (out=$T_OUT)";; esac
+  printf '#!/usr/bin/env bash\necho "FAULT-SCOPE SHIM IN-SCOPE"\nexit 0\n' > "$D/fault-in"; chmod +x "$D/fault-in"
+  mk_shim "$D/gh" run_failed
+  T_OUT="$(OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+    OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+    OC_TOOLS_NOLOG=1 OC_PRCHECKS_FAULT_SCOPE="$D/fault-in" "$SELF" "$SHA" --fault-scope 42 2>&1)"; T_RC=$?
+  [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"FAULT-SCOPE SHIM IN-SCOPE"*) t_ok "fault-scope auto-run on RED (E5)";; *) t_bad "fault-scope (rc=$T_RC out=$T_OUT)";; esac
   run_t yml_missing "$SHA";          [ "$T_RC" -eq 4 ] && t_ok "yml missing on carrier -> 4 (LOUD)" || t_bad "yml missing (rc=$T_RC)"
   run_t dispatch_fail "$SHA";        [ "$T_RC" -eq 4 ] && t_ok "dispatch fail -> 4" || t_bad "dispatch fail (rc=$T_RC)"
   run_t green "$SHA"
@@ -206,27 +232,30 @@ do_selftest() {
 }
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   cat <<'EOH'
-Usage: oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
+Usage: oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
 Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable
 EOH
   exit 0
 fi
 [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ] && { do_selftest; exit $?; }
+CALL_ARGS="$*"   # C-#1: backoff identity — same args dying rc=2 repeatedly
 
 # ---------- arg parse ---------------------------------------------------------
 REF=""
+FAULT_PR=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --wait)    shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage ;; esac ;;
-    --repo)    shift; REPO="${1:-}"; [ -n "$REPO" ] || usage ;;
-    --carrier) shift; CARRIER="${1:-}"; [ -n "$CARRIER" ] || usage ;;
+    --wait)    shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage "--wait needs an integer (got '$WAIT_SECS')" ;; esac ;;
+    --repo)    shift; REPO="${1:-}"; [ -n "$REPO" ] || usage "--repo needs a value" ;;
+    --carrier) shift; CARRIER="${1:-}"; [ -n "$CARRIER" ] || usage "--carrier needs a value" ;;
+    --fault-scope) shift; FAULT_PR="${1:-}"; [ -n "$FAULT_PR" ] || usage "--fault-scope needs a PR number" ;;   # E5 (v0.4.78)
     --no-log)  : ;;
-    -*)        usage ;;
-    *)         [ -z "$REF" ] || usage; REF="$1" ;;
+    -*)        usage "unknown flag '$1'" ;;
+    *)         [ -z "$REF" ] || usage "only one <branch-or-sha> allowed ('$REF' and '$1')"; REF="$1" ;;
   esac
   shift
 done
-[ -n "$REF" ] || usage
+[ -n "$REF" ] || usage "missing <branch-or-sha> argument"
 
 # ---------- step 0: --repo SLUG-or-PATH (v0.4.48 Duty-7 fix) -----------------
 # A path (repo checkout or worktree) resolves via its origin remote; anything
@@ -447,4 +476,15 @@ echo "VERDICT $VERDICT${REASON:+ (reason: $REASON)}"
 echo "RUN $RUN_URL"
 if [ "$VERDICT" = "GREEN" ]; then exit 0; fi
 echo "$PROG: RED — $REASON" >&2
+if [ -n "$FAULT_PR" ]; then   # E5 (v0.4.78): RED triage auto-runs fault-scope — RED stays rc 3
+  echo "--- fault-scope (RED triage: failing-files vs PR-files) ---"
+  FS_OUT="$("$FAULT_TOOL" "$FAULT_PR" --run "$RUN_ID" --repo "$REPO" 2>&1)"; FS_RC=$?
+  printf '%s\n' "$FS_OUT"
+  oc_log_extra "fault_scope_rc" "$FS_RC"
+  case "$FS_RC" in
+    0) echo "FAULT-SCOPE: IN-SCOPE — the PR touches failing files (the lane owns it)" ;;
+    1) echo "FAULT-SCOPE: BASE-FAULT — zero intersection (pre-existing; do NOT chase)" ;;
+    *) echo "FAULT-SCOPE: inconclusive (rc=$FS_RC)" ;;
+  esac
+fi
 exit 3

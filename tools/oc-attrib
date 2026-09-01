@@ -31,22 +31,26 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-attrib" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT   # early exits (usage/git-fail) — cleanup traps below supersede but also log
 
-usage() { echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--json] | --trailers-only --range <A..B> | --selftest" >&2; exit 2; }
+usage() { echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--json] | --trailers-only --range <A..B> | --contributors | --selftest" >&2; exit 2; }
+help()   { echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--json] | --trailers-only --range <A..B> | --contributors | --selftest"; echo "Exit: 0 ok / 2 usage / 3 git failure / 4 empty range / 5 deployed-markers-missing"; }  # C-#3: help=0
 
-SELFTEST=0; JSON=0; REPO="."; RANGE=""; LEDGER=""; DEPLOYED=0; TRAILERS_ONLY=0
+SELFTEST=0; JSON=0; REPO="."; RANGE=""; LEDGER=""; DEPLOYED=0; TRAILERS_ONLY=0; CONTRIB=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="${2:-}"; shift ;;
     --range) RANGE="${2:-}"; shift ;;
     --deployed) DEPLOYED=1 ;;
     --trailers-only) TRAILERS_ONLY=1 ;;
+    --contributors) CONTRIB=1 ;;
     --ledger) LEDGER="${2:-}"; shift ;;
     --json) JSON=1 ;;
     --selftest) SELFTEST=1 ;;
+    -h|--help) help; exit 0 ;;  # C-#3
     *) usage ;;
   esac
   shift
 done
+if [ "$CONTRIB" -eq 1 ] && [ "$JSON" -eq 1 ]; then usage; fi   # E6: --contributors is TSV-only
 
 if [ "$SELFTEST" -eq 1 ]; then
   d="$(mktemp -d)" || exit 3
@@ -85,6 +89,10 @@ Issue-Ref: #1239'
     || { echo "selftest: --trailers-only nonzero exit" >&2; exit 1; }
   printf '%s\n' "$OUT_T" | awk -F'\t' '$2=="cccccccc-4444-5555-6666-777777777777"{m=1} $2=="(unsigned)"{u=1} END{exit (m&&u)?0:1}' \
     || { echo "selftest: --trailers-only output wrong: $OUT_T" >&2; exit 1; }
+  OUT_C="$("$0" --repo "$d" --range "4b825dc642cb6eb9a060e54bf8d69288fbee4904..main" --contributors)" \
+    || { echo "selftest: --contributors nonzero exit" >&2; exit 1; }
+  printf '%s\n' "$OUT_C" | awk -F'\t' 'NF!=3{bad=1} END{exit bad?1:(NR>0?0:1)}' \
+    || { echo "selftest: --contributors output not 3-col TSV: $OUT_C" >&2; exit 1; }
   echo "selftest OK"; exit 0
 fi
 
@@ -153,6 +161,10 @@ DEDUP="$(awk -F'\t' -v mf="$MF" '
   }
 ' "$TMP" | LC_ALL=C sort)"
 [ -n "$MF" ] && rm -f "$MF"
+
+if [ "$CONTRIB" -eq 1 ]; then   # E6 (v0.4.78): contributors row = session, issues, shas (was oc-deploy's private awk)
+  DEDUP="$(printf '%s\n' "$DEDUP" | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}')"
+fi
 
 if [ "$JSON" -eq 1 ]; then
   printf '%s\n' "$DEDUP" | jq -Rn '

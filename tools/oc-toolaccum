@@ -29,6 +29,7 @@ cmd_accum() {
     --days) days="${2:-}"; shift 2 ;;
     --log) log="${2:-}"; shift 2 ;;
     --threshold) threshold="${2:-}"; shift 2 ;;
+    -h|--help) echo "usage: oc-toolaccum <uuid> [--days N] [--log <path>] [--threshold N]"; echo "Exit: 0 clean / 1 repeat-offense flag / 2 usage / 3 log missing-unparseable"; exit 0 ;;  # C-#3: help=0
     --*) die 2 "unknown flag '$1'" ;;
     *) if [ -z "$uuid" ]; then uuid="$1"; fi; shift ;;
   esac; done

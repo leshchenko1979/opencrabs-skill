@@ -54,7 +54,7 @@
 #
 # Exit codes: 0 ok/noop | 1 usage | 2 rebase/gate/push/verify/rollback fail
 #             / watch stray | 3 retired (was consent) | 4 stage gate / launch fail
-#             | 9 kill file
+#             | 5 poll --wait timeout (C-#2) | 9 kill file
 # Deps: git, gh, jq, curl; oc-order-validate (ship execute);
 #       oc-artifact-verify + oc-seal-state (swap-execute real mode)
 # =============================================================================
@@ -338,6 +338,29 @@ Issue-Ref: #99"
   grep -q -- "--features telegram" "$T/launch.log" \
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: carrier-resolved features not handed to swap"; }
   grep -q "handed-off" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no handed-off shadow row"; }
+  # 10b. C-#2: poll --wait with nothing new -> timeout rc 5 + notify wake
+  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$SD/deployed.sha"
+  : > "$T/notify.log"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_NOFANOUT=1 OC_DEPLOY_POLL_INTERVAL=0 OC_DEPLOY_NOTIFY="$SD/notify" \
+    "$SELF_BIN" poll --wait 1 --notify-session aaaaaaaa-1111-2222-3333-444444444444 2>&1)"; rc=$?
+  check_rc "poll-wait-timeout-rc" $rc 5
+  check_has "poll-wait-timeout-msg" "$out" "timed out"
+  grep -q "timed out" "$T/notify.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: poll --wait timeout did not notify session"; }
+  # 10c. C-#2: --wait 0 keeps the classic single-pass "nothing to do" rc 0
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_NOFANOUT=1 "$SELF_BIN" poll --wait 0 2>&1)"; rc=$?
+  check_rc "poll-wait0-rc" $rc 0
+  check_has "poll-wait0-noop" "$out" "nothing to do"
+  # 10d. C-#2: handoff wakes --notify-session
+  rm -f "$SD/deployed.sha"
+  : > "$T/notify.log"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_NOFANOUT=1 OC_SWAP_LAUNCH="$SD/launch" OC_DEPLOY_NOTIFY="$SD/notify" \
+    "$SELF_BIN" poll --execute --notify-session aaaaaaaa-1111-2222-3333-444444444444 2>&1)"; rc=$?
+  check_rc "poll-wait-handoff-rc" $rc 0
+  grep -q "HANDOFF" "$T/notify.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: handoff did not notify session"; }
+  : > "$T/notify.log"   # drill case 11 asserts a CLEAN notify log — restore it
   # 11. swap-execute DRILL in sandbox: full auto-swap->backup->install->marker->
   #     restart->post-verify-FAIL->rollback->re-verify->stamp chain, no bounce
   printf 'v1-fake-binary' > "$T/bin/oc-fake"; chmod +x "$T/bin/oc-fake"
@@ -362,6 +385,24 @@ Issue-Ref: #99"
   jq -e '[.events[] | select(.kind=="swap-result")] | length == 1' "$SD/workers-ledger.json" >/dev/null \
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no swap-result ledger stamp"; }
   grep -lq "v1-fake-binary" "$SD/backups/"* 2>/dev/null && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: backup file missing/wrong content"; }
+  # 11b. F-H1: forced failed-restore branch — journal records rollback rc=1
+  #      with restore_failed:true, ledger stamps ROLLBACK-FAILED (never a
+  #      false ROLLED_BACK). OC_SWAP_ROLLBACK_FAIL=1 is a test-only hook.
+  printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD/workers-ledger.json"
+  echo prev > "$SD/deployed.sha"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_TARGET="$T/bin/oc-fake" \
+    OC_SWAP_BACKUP_DIR="$SD/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_A2A_URL="" \
+    OC_SWAP_ROLLBACK_FAIL=1 OC_DEPLOY_NOTIFY="$SD/notify" \
+    "$SELF_BIN" swap-execute --sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    --run 113 --features telegram --drill 2>&1)"; rc=$?
+  check_rc "drill-rollbackfail-rc" $rc 0
+  check_has "drill-rollbackfail-echo" "$out" "MANUAL RECOVERY REQUIRED"
+  local JLB; JLB="$(ls -t "$SD/oc-deploy/journal/"swap-* | head -1)"
+  grep -q '"step":"rollback","exit":1' "$JLB" && grep -q 'restore_failed' "$JLB" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: failed restore not journaled truthfully (rc=1 + restore_failed)"; }
+  grep -q 'ROLLBACK-FAILED' "$SD/workers-ledger.json" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: ledger did not stamp ROLLBACK-FAILED"; }
   # 12. RETIRED 2026-08-28 (was swap-consent-missing; consent process eliminated)
   # 13. swap-execute below S2 -> exit 4 (stage gate)
   printf '{"meta":{"oc_deploy_stage":"S1"}}' > "$SD/workers-ledger.json"
@@ -779,11 +820,11 @@ contributors_run() { # <old>..<new> | --deployed  [--repo <path>]
   done
   [ -n "$range" ] || die 1 "contributors: needs <old>..<new> or --deployed"
   if [ "$range" = "--deployed" ]; then
-    "$ATTRIB" --repo "$repo" --deployed --ledger "$LEDGER" | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}'
+    "$ATTRIB" --repo "$repo" --contributors --deployed --ledger "$LEDGER"   # E6 (v0.4.78): projection owned by oc-attrib
   else
     echo "$range" | grep -Eq '^[0-9a-fA-F]{4,40}\.\.[0-9a-fA-F]{4,40}$' \
       || die 1 "contributors: range not <old>..<new>: $range"
-    "$ATTRIB" --repo "$repo" --range "$range" --ledger "$LEDGER" | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}'
+    "$ATTRIB" --repo "$repo" --contributors --range "$range" --ledger "$LEDGER"
   fi
 }
 
@@ -1254,10 +1295,13 @@ swap_execute() {
     jline post-verify 0 "$PV_DETAIL"
     local BY_LBL="oc-deploy swap-execute"; [ "$DRILL" = "1" ] && BY_LBL="oc-deploy swap-execute DRILL"
     if [ "$DRILL" = "1" ]; then
-      ledger_stamp "$BY_LBL" "swap-result DEPLOYED sha=$SHA run=$RUN_ID features=$FEATURES: install(seq5)+post-verify(seq$SEQ match=true)+marker-write; journal=$JF backup=$BAK auth=auto-swap" "swap-result"
       # drill with a match means the deliberately-wrong expected matched —
       # impossible by construction; treat as drill anomaly
+      # (F-M1, v0.4.78: receipt journals BEFORE the ledger stamp — the stamp
+      # lands last, matching the GREEN leg; a crash in between leaves receipt
+      # evidence, never an unbacked stamp)
       jline receipt 1 "$(jq -cn '{note:"drill expected a rollback but verify matched — anomaly"}')"
+      ledger_stamp "$BY_LBL" "swap-result DEPLOYED sha=$SHA run=$RUN_ID features=$FEATURES: install(seq5)+post-verify(seq$SEQ match=true)+marker-write; journal=$JF backup=$BAK auth=auto-swap" "swap-result"
       die 2 "drill anomaly: post-verify matched a deliberately wrong expected sha"
     fi
     sidecar_sync "$EXPECTED"
@@ -1282,22 +1326,34 @@ swap_execute() {
   fi
   jline post-verify 1 "$PV_DETAIL"
 
-  # --- 10. AUTO-ROLLBACK ---
+  # --- 10. AUTO-ROLLBACK --- (F-H1, v0.4.78: every restore leg rc-captured;
+  #     the journal records what ACTUALLY happened — never an unconditional 0)
   echo "oc-deploy: post-verify FAILED — auto-rollback engaged (backup $BAK)" >&2
-  cp "$BAK" "$SWAP_TARGET.new" && chmod +x "$SWAP_TARGET.new" && mv -f "$SWAP_TARGET.new" "$SWAP_TARGET"
-  # restore markers + baseline + orders to pre-swap truth
-  if [ -f "$WORKDIR/state-backup/deployed.sha" ]; then cp -p "$WORKDIR/state-backup/deployed.sha" "$DEPLOYED"; else rm -f "$DEPLOYED"; fi
-  if [ -f "$WORKDIR/state-backup/deployed.meta.json" ]; then cp -p "$WORKDIR/state-backup/deployed.meta.json" "$DEPLOYED_META"; else rm -f "$DEPLOYED_META"; fi
-  [ -f "$WORKDIR/state-backup/baseline.json" ] && cp -p "$WORKDIR/state-backup/baseline.json" "$BASELINE"
-  [ -f "$WORKDIR/state-backup/orders.json" ] && cp -p "$WORKDIR/state-backup/orders.json" "$ORDERS"
-  jline rollback 0 "$(jq -cn --arg b "$BAK" --arg s "$BAK_SHA" --arg r "post-verify mismatch after bounce" '{restored_backup:$b, restored_sha256:$s, reason:$r, also_restored:"deployed.sha+meta+baseline+orders"}')"
+  RB_FAIL=0
+  cp "$BAK" "$SWAP_TARGET.new" && chmod +x "$SWAP_TARGET.new" && mv -f "$SWAP_TARGET.new" "$SWAP_TARGET" || RB_FAIL=1
+  # restore markers + baseline + orders to pre-swap truth (each leg rc-checked)
+  if [ -f "$WORKDIR/state-backup/deployed.sha" ]; then cp -p "$WORKDIR/state-backup/deployed.sha" "$DEPLOYED" || RB_FAIL=1; else rm -f "$DEPLOYED" || RB_FAIL=1; fi
+  if [ -f "$WORKDIR/state-backup/deployed.meta.json" ]; then cp -p "$WORKDIR/state-backup/deployed.meta.json" "$DEPLOYED_META" || RB_FAIL=1; else rm -f "$DEPLOYED_META" || RB_FAIL=1; fi
+  if [ -f "$WORKDIR/state-backup/baseline.json" ]; then cp -p "$WORKDIR/state-backup/baseline.json" "$BASELINE" || RB_FAIL=1; fi
+  if [ -f "$WORKDIR/state-backup/orders.json" ]; then cp -p "$WORKDIR/state-backup/orders.json" "$ORDERS" || RB_FAIL=1; fi
+  [ "${OC_SWAP_ROLLBACK_FAIL:-0}" = 1 ] && RB_FAIL=1   # test-only hook (F-H1 selftest 11b): force the failed-restore branch
+  if [ "$RB_FAIL" = 1 ]; then
+    jline rollback 1 "$(jq -cn --arg b "$BAK" --arg s "$BAK_SHA" --arg r "post-verify mismatch after bounce" '{restored_backup:$b, restored_sha256:$s, reason:$r, restore_failed:true, error:"restore leg failed — binary state UNVERIFIED, manual recovery required"}')"
+    echo "oc-deploy: ROLLBACK RESTORE FAILED — journal records rc=1; backup $BAK; MANUAL RECOVERY REQUIRED" >&2
+  else
+    jline rollback 0 "$(jq -cn --arg b "$BAK" --arg s "$BAK_SHA" --arg r "post-verify mismatch after bounce" '{restored_backup:$b, restored_sha256:$s, reason:$r, also_restored:"deployed.sha+meta+baseline+orders"}')"
+  fi
   local RRC2
   $RESTART_CMD >/dev/null 2>&1; RRC2=$?
   jline restart "$RRC2" "$(jq -cn --arg u "opencrabs-ops.service" --argjson e "$RRC2" '{note:"post-rollback restart", unit:$u, systemd_run_exit:$e}')"
   post_verify "$BAK_SHA" "$PREV_SHA" "$HAD_META"
   jline post-verify "$([ "$PV_MATCH" = 1 ] && echo 0 || echo 1)" "$PV_DETAIL"
   local BY_LBL2="oc-deploy swap-execute"; [ "$DRILL" = "1" ] && BY_LBL2="oc-deploy swap-execute DRILL"
-  ledger_stamp "$BY_LBL2" "swap-result ROLLED_BACK sha=$SHA run=$RUN_ID: post-verify mismatch after bounce (seq8 exit=1); backup $BAK restored + re-verified match=$([ "$PV_MATCH" = 1 ] && echo true || echo false); markers+baseline restored; journal=$JF" "swap-result"
+  if [ "$RB_FAIL" = 1 ]; then
+    ledger_stamp "$BY_LBL2" "swap-result ROLLBACK-FAILED sha=$SHA run=$RUN_ID: post-verify mismatch after bounce (seq8 exit=1); restore leg FAILED — binary state UNVERIFIED, manual recovery required (backup $BAK); journal=$JF" "swap-result"
+  else
+    ledger_stamp "$BY_LBL2" "swap-result ROLLED_BACK sha=$SHA run=$RUN_ID: post-verify mismatch after bounce (seq8 exit=1); backup $BAK restored + re-verified match=$([ "$PV_MATCH" = 1 ] && echo true || echo false); markers+baseline restored; journal=$JF" "swap-result"
+  fi
   A2A_RC=1; a2a_notify_retry "[oc-deploy PHASE B] ROLLBACK sha=$SHA run=$RUN_ID — post-verify failed after bounce, backup restored, re-verify match=$([ "$PV_MATCH" = 1 ] && echo true || echo false). DRILL=$DRILL. Journal: $JF" && A2A_RC=0
   jline receipt "$A2A_RC" "$(jq -cn --argjson a "$A2A_RC" '{result:"rolled-back", a2a_accepted:($a==0)}')"
   shadow_log swap "$SHA" "$FEATURES" "rolled-back"
@@ -1398,6 +1454,7 @@ case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] 
 # positional range survives. Kill-file check already ran above.
 if [ "$MODE" = contributors ]; then contributors_run "$@"; exit $?; fi
 SHA=""; FEATURES=""; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
+WAIT_SECS=0; NOTIFY_SESSION=""   # C-#2: poll --wait / --notify-session
 while [ $# -gt 0 ]; do
   case "$1" in
     --sha)      SHA="${2:-}"; shift ;;
@@ -1407,8 +1464,10 @@ while [ $# -gt 0 ]; do
     --drill)    DRILL=1 ;;
     --dry-run)  DRYRUN=1 ;;   # issue #24: fanout rehearsal — never marks done
     --with-delta) WITH_DELTA=1 ;;   # merge B (v0.4.48): watch rides oc-upstream-delta too
+    --wait)     WAIT_SECS="${2:-}"; shift ;;   # C-#2: poll blocks until a NEW green run (or timeout, rc 5)
+    --notify-session) NOTIFY_SESSION="${2:-}"; shift ;;   # C-#2: session uuid woken on handoff/timeout
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
-    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 0 ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 0 ;;
     *)          die 1 "unknown arg: $1" ;;
   esac
   shift || true
@@ -1454,6 +1513,7 @@ case "$MODE" in
     if [ "$EXECUTE" = 1 ]; then
       git push -q "$REMOTE" "$SHA:refs/heads/main" \
         || { shadow_log ship "$SHA" "$FEATURES" "push-fail"; die 2 "push to fork main failed"; }
+      shadow_log ship "$SHA" "$FEATURES" "pushed"   # F-M2: remote mutation journaled before the next step can fail
       echo "pushed $SHA -> fork main"
       OC_REPO="$FORK" OC_LEDGER="$LEDGER" "$VALIDATE" --repo "$FORK" --ledger "$LEDGER" "$SHA" \
         || { shadow_log ship "$SHA" "$FEATURES" "gate-fail"; die 2 "ORDER gates failed post-push (see validator exit code)"; }
@@ -1492,24 +1552,43 @@ case "$MODE" in
         echo "RED scan: run=$RED_ID fanout rc=$FO_RC $(printf '%s' "$FO_OUT" | tail -1)"
       fi
     fi
-    RUNS_JSON="$("$GH" api "repos/$FORK/actions/workflows/$WF/runs?status=success&per_page=3" 2>/dev/null)" \
-      || { shadow_log poll "-" "-" "api-fail"; die 2 "gh api runs query failed"; }
-    RUN_ID="$(printf '%s' "$RUNS_JSON" | jq -r '.workflow_runs[0].id // empty')"
-    [ -n "$RUN_ID" ] || die 2 "no successful carrier runs found"
-    # Built sha comes from the BUILD job name "Linux amd64 (<sha>, <features>)"
-    # — select the job whose name embeds a 40-hex sha (the ORDER gates job
-    # carries no embed; jobs[0] is NOT assumed — oc-artifact-verify regression
-    # lesson 2026-08-28).
-    JOB_NAME="$("$GH" api "repos/$FORK/actions/runs/$RUN_ID/jobs" 2>/dev/null \
-      | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')"
-    B_SHA="$(oc_decode_job_embed "$JOB_NAME" | cut -d'|' -f1)"   # shared decoder (E2 v0.4.77)
-    [ -n "$B_SHA" ] || die 2 "cannot decode built sha from job name: $JOB_NAME"
-    DEP="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
-    plan "latest green run=$RUN_ID built sha=$B_SHA deployed=$DEP"
-    if [ "$B_SHA" = "$DEP" ]; then
-      echo "nothing to do: $B_SHA already deployed"
-      exit 0
-    fi
+    # C-#2 (v0.4.78): --wait N blocks until a NEW green run (built sha !=
+    # deployed) appears or N seconds elapse (rc 5, optional --notify-session
+    # wake) — absorbs the hand-rolled fetch+poll loops (lens C, 2026-08-31).
+    case "$WAIT_SECS" in ''|*[!0-9]*) die 1 "--wait needs an integer (seconds)" ;; esac
+    POLL_DEADLINE=$(( $(date +%s) + WAIT_SECS ))
+    POLL_INTERVAL="${OC_DEPLOY_POLL_INTERVAL:-30}"
+    while :; do
+      RUNS_JSON="$("$GH" api "repos/$FORK/actions/workflows/$WF/runs?status=success&per_page=3" 2>/dev/null)" \
+        || { shadow_log poll "-" "-" "api-fail"; die 2 "gh api runs query failed"; }
+      RUN_ID="$(printf '%s' "$RUNS_JSON" | jq -r '.workflow_runs[0].id // empty')"
+      if [ -z "$RUN_ID" ]; then
+        [ "$(date +%s)" -lt "$POLL_DEADLINE" ] && { sleep "$POLL_INTERVAL"; continue; }
+        [ -n "$NOTIFY_SESSION" ] && notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: no successful carrier run found"
+        die 5 "poll: no successful carrier runs found within --wait ${WAIT_SECS}s"
+      fi
+      # Built sha comes from the BUILD job name "Linux amd64 (<sha>, <features>)"
+      # — select the job whose name embeds a 40-hex sha (the ORDER gates job
+      # carries no embed; jobs[0] is NOT assumed — oc-artifact-verify regression
+      # lesson 2026-08-28).
+      JOB_NAME="$("$GH" api "repos/$FORK/actions/runs/$RUN_ID/jobs" 2>/dev/null \
+        | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')"
+      B_SHA="$(oc_decode_job_embed "$JOB_NAME" | cut -d'|' -f1)"   # shared decoder (E2 v0.4.77)
+      [ -n "$B_SHA" ] || die 2 "cannot decode built sha from job name: $JOB_NAME"
+      DEP="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
+      plan "latest green run=$RUN_ID built sha=$B_SHA deployed=$DEP"
+      [ "$B_SHA" != "$DEP" ] && break
+      if [ "$WAIT_SECS" -eq 0 ]; then
+        echo "nothing to do: $B_SHA already deployed"
+        exit 0
+      fi
+      if [ "$(date +%s)" -ge "$POLL_DEADLINE" ]; then
+        [ -n "$NOTIFY_SESSION" ] && notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: latest green $B_SHA already deployed — nothing new to swap"
+        die 5 "poll --wait ${WAIT_SECS}s timed out: $B_SHA already deployed (nothing new)"
+      fi
+      plan "poll --wait: $B_SHA already deployed — next attempt in ${POLL_INTERVAL}s"
+      sleep "$POLL_INTERVAL"
+    done
     if [ "$STAGE" = S2 ] || [ "$STAGE" = S3 ]; then
       plan "auto-swap armed: GREEN run + artifact verify -> swap (consent eliminated owner 2026-08-28)"
       if [ "$EXECUTE" = 1 ]; then
@@ -1519,6 +1598,7 @@ case "$MODE" in
           || { shadow_log swap "$B_SHA" "$FEATURES" "launch-fail"; die 4 "systemd-run handoff failed — nothing touched"; }
         shadow_log swap "$B_SHA" "$FEATURES" "handed-off:$UNIT"
         echo "HANDOFF: Phase B transient unit $UNIT owns the swap (sha=$B_SHA run=$RUN_ID) — poll (Phase A) exits pre-bounce by design"
+        [ -n "$NOTIFY_SESSION" ] && notify_session "$NOTIFY_SESSION" "oc-deploy poll" "HANDOFF: swap unit $UNIT owns sha=$B_SHA run=$RUN_ID (features=$FEATURES) — Phase B owns the bounce"   # C-#2
         exit 0
       fi
       plan "swap path armed at stage $STAGE — pass --execute when S2 pilot authorized"

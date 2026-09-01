@@ -507,7 +507,7 @@ if tool oc-shadow-rotate; then
   OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 0 ] && [ ! -s "$d/oc-deploy-shadow.log" ] && grep -q line1 "$d/oc-deploy-shadow.archive.log" \
     && ok "rotate: archive appended + live truncated" || bad "rotate (rc=$rc)"
-  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" --bogus >/dev/null 2>&1; [ $? -eq 1 ] && ok "unknown arg -> 1 (usage)" || bad "unknown arg -> expected 1"
+  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage, C-#3: was 1)" || bad "unknown arg -> expected 2"
   rm -rf "$d"
 fi
 
@@ -551,6 +551,14 @@ fi
 
 # ---- battery receipt (oc-ledger sync gate reads this; the file itself rides --
 # ---- the skill repo via commit-pending --bundle) ------------------------------
+# ---- 60. rc contract: --help exits 0 fleet-wide (C-#3, tools/RC-CONTRACT.md)
+section "rc contract --help=0 fleet-wide (C-#3)"
+for t in "$TOOLS_DIR"/oc-*; do
+  [ -x "$t" ] || continue
+  tn="$(basename "$t")"
+  OC_TOOLS_NOLOG=1 timeout 20 "$t" --help >/dev/null 2>&1     && ok "$tn --help rc=0" || bad "$tn --help rc!=0 (RC-CONTRACT.md violated)"
+done
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \
