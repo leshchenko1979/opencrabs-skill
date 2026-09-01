@@ -31,7 +31,7 @@
 #
 # Exit: 0 GREEN (terminal, run conclusion success, zero FAILED steps/jobs)
 #       2 usage / sha-shape / unknown ref / repo-path-no-origin
-#       3 RED (run conclusion cancelled/failure/timed_out/startup_failure,
+#       3 RED (run conclusion failure/timed_out/startup_failure,
 #         or a FAILED step — soft-fail exposed; skipped/neutral steps pass)
 #       5 non-terminal at verdict time (resume: gh run view <id>)
 # Verdict rule (v0.4.56, owner Go 08-31 03:05Z): the RUN conclusion is the
@@ -64,7 +64,7 @@ LOCK_WAIT="${OC_PRCHECKS_LOCK_WAIT:-90}"
 usage() {
   cat >&2 <<EOS
 Usage: $PROG <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
-Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 7 carrier-head-unresolvable
+Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable
 EOS
   exit 2
 }
@@ -158,8 +158,8 @@ do_selftest() {
   else t_bad "fmt skipped pass (rc=$T_RC out=$T_OUT)"; fi
   run_t job_failed "$SHA";           [ "$T_RC" -eq 3 ] && t_ok "job failed -> 3 RED" || t_bad "job failed (rc=$T_RC)"
   run_t cancelled "$SHA"
-  if [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"run-cancelled"*) true ;; *) false ;; esac; then
-    t_ok "run conclusion cancelled -> 3 RED reason run-cancelled (false GREEN killed)"
+  if [ "$T_RC" -eq 6 ] && case "$T_OUT" in *"VERDICT CANCELLED"*"superseded"*) true ;; *) false ;; esac; then
+    t_ok "run conclusion cancelled -> 6 CANCELLED superseded (P4: churn is not gate failure)"
   else t_bad "cancelled (rc=$T_RC out=$T_OUT)"; fi
   run_t run_failed "$SHA"
   if [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"run-failure"*) true ;; *) false ;; esac; then
@@ -206,7 +206,7 @@ do_selftest() {
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   cat <<'EOH'
 Usage: oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
-Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 7 carrier-head-unresolvable
+Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable
 EOH
   exit 0
 fi
@@ -292,6 +292,32 @@ flock -w "$LOCK_WAIT" 8 || {
   exit 4
 }
 DISPATCH_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# C-F2 resume-before-dispatch (owner "Go all" 2026-08-31): a looping waiter
+# re-dispatched 4 runs in 6 min, each concurrency-cancelling the previous.
+# If a <10-min-old invocation for the SAME full sha exited on a still-queued
+# run (rc 5 rows carry extra.run_id) and that run is STILL non-terminal,
+# adopt it instead of dispatching a canceller.
+if command -v jq >/dev/null 2>&1 && [ -f "${OC_TOOLS_LOG:-/nonexistent}" ]; then
+  PR_CUTOFF="$(($(date +%s) - 600))"
+  PR_PRIOR="$(tail -n 300 "$OC_TOOLS_LOG" 2>/dev/null | jq -R -r --arg sha "$SHA" --argjson cutoff "$PR_CUTOFF" '
+    fromjson? | select(.tool == "oc-prchecks" and (.exit == 5))
+    | select((.args // "") | contains($sha))
+    | select(((.ts // "" | fromdateiso8601? // 0)) >= $cutoff)
+    | (.extra.run_id // empty)' 2>/dev/null | tail -1)"
+  if [ -n "$PR_PRIOR" ]; then
+    PR_ST="$("$GH_BIN" run view "$PR_PRIOR" --repo "$REPO" --json status 2>/dev/null | jq -r '.status // empty' 2>/dev/null)"
+    if [ -n "$PR_ST" ] && [ "$PR_ST" != "completed" ]; then
+      echo "$PROG: C-F2 resume: run=$PR_PRIOR for sha ${SHA:0:8} still non-terminal — adopting instead of re-dispatching (a new dispatch would concurrency-cancel it)" >&2
+      RUN_ID="$PR_PRIOR"
+      oc_log_extra "resume" "$PR_PRIOR"
+      flock -u 8
+      RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
+      # jump straight to the watch loop: mark dispatch/adoption as skipped
+      OC_PR_SKIPPED_DISPATCH=1
+    fi
+  fi
+fi
+if [ "${OC_PR_SKIPPED_DISPATCH:-0}" != 1 ]; then
 "$GH_BIN" workflow run pr-checks.yml --repo "$REPO" --ref "$CARRIER" -f "ref=$SHA" >/dev/null 2>&1 || {
   echo "$PROG: dispatch failed (repo=$REPO carrier=$CARRIER)" >&2
   oc_log_extra "dispatch" "failed"
@@ -340,12 +366,13 @@ done
 flock -u 8
 echo "adopted run=$RUN_ID (time-window attribution under dispatch lock)" >&2
 oc_log_extra "run_id" "$RUN_ID"
-RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
+fi  # C-F2 resume-skipped dispatch+adoption
+RUN_URL="${RUN_URL:-}"; RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
 
 # ---------- step 4: watch ------------------------------------------------------
 deadline=$(( $(date +%s) + WAIT_SECS ))
 while :; do
-  ST="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json status,conclusion 2>/dev/null)" || {
+  ST="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json status,conclusion,createdAt 2>/dev/null)" || {
     echo "$PROG: run view $RUN_ID failed" >&2; exit 4; }
   STATUS="$(printf '%s' "$ST" | jq -r '.status')"
   [ "$STATUS" = "completed" ] && break
@@ -357,6 +384,7 @@ while :; do
   sleep "$POLL"
 done
 CONCLUSION="$(printf '%s' "$ST" | jq -r '.conclusion')"
+RUN_CREATED_AT="$(printf '%s' "$ST" | jq -r '.createdAt // empty')"
 oc_log_extra "conclusion" "$CONCLUSION"
 
 # ---------- step 5: verdict — RUN conclusion authoritative (v0.4.56) ----------
@@ -386,7 +414,24 @@ case "$CONCLUSION" in
       REASON="fmt-skipped-pass"
     fi
     ;;
-  cancelled|failure|timed_out|startup_failure)
+  cancelled)
+    # P4 (owner "Go all" 2026-08-31): cancelled = superseded by the concurrency
+    # group, NOT a gate failure. v0.4.56 read it RED; field evidence (two wait
+    # cycles burned on cross-lane churn, runs 33338254820 / 33344104187) says
+    # that treats concurrency cleanup as code failure. Exit 6 = superseded,
+    # never GREEN — the false-GREEN hole stays closed; the lane re-arms on the
+    # superseding run instead of treating the gate as RED.
+    SUP="$("$GH_BIN" run list --workflow pr-checks.yml --repo "$REPO" --branch "$CARRIER" --limit 10 \
+      --json databaseId,createdAt 2>/dev/null | jq -r --arg rid "$RUN_ID" --arg since "$RUN_CREATED_AT" \
+      '[.[] | select(.databaseId != ($rid|tonumber) and .createdAt >= $since)] | sort_by(.createdAt) | .[-1].databaseId // empty' 2>/dev/null)"
+    oc_log_extra "verdict" "CANCELLED"
+    oc_log_extra "verdict_reason" "superseded${SUP:+; superseding=$SUP}"
+    echo "VERDICT CANCELLED (run $RUN_ID was concurrency-cancelled — superseded, not failed)"
+    echo "  superseding run: ${SUP:-unknown}${SUP:+ — https://github.com/$REPO/actions/runs/$SUP} (re-arm: oc-prchecks gate <sha> --wait)"
+    echo "RUN $RUN_URL"
+    exit 6
+    ;;
+  failure|timed_out|startup_failure)
     VERDICT="RED"; REASON="run-$CONCLUSION"
     ;;
   *)
