@@ -34,6 +34,7 @@
 # Deps: jq, git (only for contributor scan).
 # =============================================================================
 set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-seal-state" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
@@ -54,14 +55,19 @@ usage() {
 }
 
 selftest() {
-  local passed=0 total=7 rc d
+  local passed=0 total=9 rc d
   d="$(mktemp -d)"
   printf '{"sha":"aaaa","run_id":1,"name":"keep-me"}' > "$d/b.json"
   printf '{"orders":[]}' > "$d/o.json"
   "$0" --baseline "$d/b.json" --orders "$d/o.json" --sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --run-id 42 --marker width=1600 --found 1 --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
   "$0" --baseline "$d/b.json" --orders "$d/o.json" --add-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --order-features telegram --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  # F2 (v0.4.72): --order-features unset + carrier features unreadable (empty HOME) -> loud rc 3
+  HOME="$d" "$0" --baseline "$d/b.json" --orders "$d/o.json" --add-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 3 ] && passed=$((passed+1))
+  # seed one real order row so mark/purge have a target
+  "$0" --baseline "$d/b.json" --orders "$d/o.json" --add-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --order-features telegram >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
   "$0" --baseline "$d/b.json" --orders "$d/o.json" --mark-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --with-run 99 --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
-  "$0" --baseline "$d/b.json" --orders "$d/o.json" --mark-order cccccccccccccccccccccccccccccccccccccccc --status deployed --order-evidence "disk==proc" --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  # F3 (v0.4.72): mark on UNKNOWN sha fails loud rc 1 (was silent no-op rc 0)
+  "$0" --baseline "$d/b.json" --orders "$d/o.json" --mark-order cccccccccccccccccccccccccccccccccccccccc --status deployed --order-evidence "disk==proc" --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
   "$0" --baseline "$d/b.json" --orders "$d/o.json" --mark-order cccccccccccccccccccccccccccccccccccccccc --with-run 9 --status BOGUS --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
   "$0" --baseline "$d/b.json" --orders "$d/o.json" --purge-order dddddddddddddddddddddddddddddddddddddddd --dry-run >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
   "$0" >/dev/null 2>&1; rc=$?; [ "$rc" = 1 ] && passed=$((passed+1))
@@ -167,7 +173,15 @@ if [ -n "$ADD_ORDER" ] || [ -n "$MARK_ORDER" ] || [ -n "$PURGE_ORDER" ]; then
   [ -f "$ORDERS" ] || fail 3 "orders ledger not found: $ORDERS"
   if [ -n "$ADD_ORDER" ]; then
     printf '%s' "$ADD_ORDER" | grep -Eq '^[0-9a-fA-F]{40}$' || fail 1 "--add-order must be full 40-char"
-    NEWORDERS="$(jq --arg s "$ADD_ORDER" --arg f "${ADD_ORDER_FEAT:-telegram}" \
+    if [ -z "$ADD_ORDER_FEAT" ]; then
+      # F2 (lens F, v0.4.72): NO hardcoded feature default — the carrier yml is
+      # the single source of truth (SKILL.md:53); resolve via oc-carrier-features,
+      # abort loudly on read failure (same law as oc-deploy ship).
+      ADD_ORDER_FEAT="$("$(cd "$(dirname "$0")" && pwd)/oc-carrier-features" 2>/dev/null)" \
+        || fail 3 "--order-features unset and oc-carrier-features failed — pass --order-features explicitly"
+      [ -n "$ADD_ORDER_FEAT" ] || fail 3 "oc-carrier-features returned an empty feature set"
+    fi
+    NEWORDERS="$(jq --arg s "$ADD_ORDER" --arg f "$ADD_ORDER_FEAT" \
       '.orders += [{"sha":$s, "features":$f, "status":"queued"}] | .orders |= unique_by(.sha)' "$ORDERS")" \
       || fail 3 "orders add failed"
   fi
@@ -175,6 +189,11 @@ if [ -n "$ADD_ORDER" ] || [ -n "$MARK_ORDER" ] || [ -n "$PURGE_ORDER" ]; then
     printf '%s' "$MARK_ORDER" | grep -Eq '^[0-9a-fA-F]{40}$' || fail 1 "--mark-order must be full 40-char"
     [ -n "$WITH_RUN" ] || [ -n "$MARK_STATUS" ] || fail 1 "--mark-order needs --with-run and/or --status"
     BASE_ORD="${NEWORDERS:-$(cat "$ORDERS")}"
+    # F3 (lens F, v0.4.72): mark on unknown sha must fail loud (purge already does)
+    MARK_MATCH="$(printf '%s' "$BASE_ORD" | jq -c --arg s "$MARK_ORDER" \
+      '[.orders[] | select((.sha // .order_sha) == $s)]')" \
+      || fail 3 "orders mark scan failed"
+    [ "$MARK_MATCH" != "[]" ] || fail 1 "--mark-order: no row with sha $MARK_ORDER"
     NEWORDERS="$(printf '%s' "$BASE_ORD" | jq --arg s "$MARK_ORDER" --arg r "$WITH_RUN" \
       --arg st "${MARK_STATUS:-DISPATCHED}" --arg ev "$ORDER_EVIDENCE" \
       '(.orders[] | select((.sha // .order_sha) == $s)) |=
