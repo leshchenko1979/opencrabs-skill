@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
       subj="$(git -C "$d" log -1 --format=%s "$s")"
       [ "$subj" = "test subject" ] || { echo "selftest: subject extraction broken" >&2; exit 1; }
       echo "selftest OK"; exit 0 ;;
-    -h|--help) usage ;;
+    -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) if [ -z "$ISSUE" ]; then ISSUE="$1"; elif [ -z "$SHA" ]; then SHA="$1"; else usage; fi; shift ;;
   esac
 done

@@ -39,7 +39,7 @@ while [ $# -gt 0 ]; do
       p="$(git -C "$d" log -1 --format='%H%x09%(trailers:key=Session-Id,valueonly)' pr | cut -f2)"
       [ -z "$p" ] || { echo "selftest: empty-trailer probe broken" >&2; exit 1; }
       echo "selftest OK"; exit 0 ;;
-    -h|--help) usage ;;
+    -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) if [ -z "$BRANCH" ]; then BRANCH="$1"; else usage; fi; shift ;;
   esac
 done

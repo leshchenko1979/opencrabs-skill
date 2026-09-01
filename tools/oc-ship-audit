@@ -35,6 +35,7 @@ fi
 if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   d="$(mktemp -d)" || exit 3
   trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"   # selftest re-invocations need an absolute path (v0.4.77)
   mkdir -p "$d/journal"
   OLD="$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
   NEW="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
@@ -46,7 +47,7 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
 {"ts":"$NEW","tool":"oc-deploy","actor":"a3","args":"ship --sha ddddddd444444444444444444444444444444444 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}
 EOF
   printf '{"ts":"%s","seq":1,"step":"auto-swap","exit":0,"sha":"aaaaaaa111111111111111111111111111111111","run_id":"123"}\n' "$OLD" > "$d/journal/swap-aaaaaaa-1788000000.jsonl"
-  OUT="$("$0" --log "$d/tools.log" --journal-dir "$d/journal")"; RC=$?
+  OUT="$("$SELF" --log "$d/tools.log" --journal-dir "$d/journal")"; RC=$?
   [ $RC -eq 1 ] || { echo "selftest: orphan present but rc=$RC" >&2; exit 1; }
   printf '%s\n' "$OUT" | grep -q $'^ORPHANED\tccccccc' || { echo "selftest: ccccccc not ORPHANED" >&2; exit 1; }
   printf '%s\n' "$OUT" | grep -q $'^SWAPPED\taaaaaaa' || { echo "selftest: aaaaaaa not SWAPPED" >&2; exit 1; }
@@ -54,18 +55,18 @@ EOF
   printf '%s\n' "$OUT" | grep -q 'bbbbbbb' && { echo "selftest: failed dispatch bbbbbbb must be skipped" >&2; exit 1; }
   # all swapped -> 0
   printf '{"ts":"%s","seq":1,"step":"auto-swap","exit":0,"sha":"ccccccc333333333333333333333333333333333"}\n' "$OLD" > "$d/journal/swap-ccccccc-1788000100.jsonl"
-  "$0" --log "$d/tools.log" --journal-dir "$d/journal" >/dev/null 2>&1
+  "$SELF" --log "$d/tools.log" --journal-dir "$d/journal" >/dev/null 2>&1
   [ $? -eq 0 ] || { echo "selftest: audit not clean after ccccccc swap journal (IN-FLIGHT ddddddd must not alarm)" >&2; exit 1; }
   # usage
-  "$0" --nonsense >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: bad flag != 2" >&2; exit 1; }
+  "$SELF" --nonsense >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: bad flag != 2" >&2; exit 1; }
   # missing log -> 3
-  "$0" --log "$d/nope.log" >/dev/null 2>&1; [ $? -eq 3 ] || { echo "selftest: missing log != 3" >&2; exit 1; }
+  "$SELF" --log "$d/nope.log" >/dev/null 2>&1; [ $? -eq 3 ] || { echo "selftest: missing log != 3" >&2; exit 1; }
   # rogue non-JSON lines must NOT truncate the scan into a false clean:
   # append a fresh orphan dispatch + insert garbage BEFORE it; orphan must still be found (rc 1)
   OLD2="$(date -u -d '5 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
   printf '{"ts":"%s","tool":"oc-deploy","actor":"a9","args":"ship --sha eeeee55555555555555555555555555555555555 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}\n' "$OLD2" >> "$d/tools.log"
   sed -i "1i 2026-08-29T16:44:18Z stamp rogue-writer action=ledger-append outcome=ok n=1325" "$d/tools.log"
-  "$0" --log "$d/tools.log" --journal-dir "$d/journal" >/dev/null 2>/dev/null
+  "$SELF" --log "$d/tools.log" --journal-dir "$d/journal" >/dev/null 2>/dev/null
   [ $? -eq 1 ] || { echo "selftest: rogue line truncated scan into false clean" >&2; exit 1; }
   echo "selftest OK"; exit 0
 fi

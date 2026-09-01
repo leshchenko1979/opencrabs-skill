@@ -38,7 +38,7 @@ while [ $# -gt 0 ]; do
       h1="$(sha256sum "$d/a" | cut -d' ' -f1)"; h2="$(sha256sum "$d/b" | cut -d' ' -f1)"; h3="$(sha256sum "$d/c" | cut -d' ' -f1)"
       [ "$h1" = "$h2" ] && [ "$h1" != "$h3" ] || { echo "selftest: hash discrimination broken" >&2; exit 1; }
       echo "selftest OK"; exit 0 ;;
-    -h|--help) usage ;;
+    -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) usage ;;
   esac
 done

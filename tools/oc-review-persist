@@ -30,7 +30,7 @@ LENSES=" A B C D E F G self redundancy-ontology efficiency-creep cli-automation 
 die() { echo "oc-review-persist: $2" >&2; exit "$1"; }
 
 # ---- selftest (8 cases) -------------------------------------------------------
-if [ "${1:-}" = "--selftest" ]; then
+if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   export OC_TOOLS_NOLOG=1
   T="$(mktemp -d)"; P=0; F=0; day="$(date -u +%Y%m%d)"
   chk() { if [ "$2" = "$3" ]; then P=$((P+1)); else F=$((F+1)); echo "  FAIL rp - $1 (want rc=$2 got rc=$3)" >&2; fi; }

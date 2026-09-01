@@ -102,8 +102,8 @@ while [ $# -gt 0 ]; do
     --dry-run)  DRY=1; shift ;;
     --verbose)  VERBOSE=1; shift ;;
     --selftest) selftest; exit $? ;;
-    -h|--help)  usage; exit 1 ;;
-    *) usage; exit 1 ;;
+    -h|--help)  usage; exit 0 ;;
+    *) usage; exit 2 ;;   # F-L1 (v0.4.77): usage-fail = 2, help = 0
   esac
 done
 
@@ -114,11 +114,12 @@ NEW_CONTRIB=""
 if [ -n "$CONTRIB_TO" ]; then
   [ -n "$CONTRIB_FROM" ] || fail 1 "--contrib-to needs --contrib-from (left edge = previous baseline sha)"
   [ -d "$GIT/.git" ] || fail 2 "clone not found: $GIT"
-  OUT="$(git -C "$GIT" log --format='%H%x09%(trailers:key=Session-Id,valueonly,separator=|)' "$CONTRIB_FROM..$CONTRIB_TO" 2>/dev/null)" \
+  ATTRIB="$(cd "$(dirname "$0")" && pwd)/oc-attrib"
+  OUT="$("$ATTRIB" --repo "$GIT" --trailers-only --range "$CONTRIB_FROM..$CONTRIB_TO" 2>/dev/null)" \
     || fail 2 "contributor scan failed ($CONTRIB_FROM..$CONTRIB_TO in $GIT); fetch the clone first"
   NEW_CONTRIB="$(printf '%s\n' "$OUT" | cut -f2 | tr '|' '\n' \
     | grep -E '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' | sort -u \
-    | jq -R . | jq -s 'if length==0 then . else . end')"
+    | jq -R . | jq -s 'if length==0 then . else . end')"   # extraction delegated to oc-attrib (E3, v0.4.77 — single owner)
   say "contributors($CONTRIB_FROM..$CONTRIB_TO): $(printf '%s' "$NEW_CONTRIB" | jq -c .)"
 fi
 

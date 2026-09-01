@@ -3,25 +3,24 @@
 **Load only after SKILL.md confirmed the role is EDITOR.**
 
 Scope: work from an issue filed on the FORK (`leshchenko1979/opencrabs` — the issues home;
-upstream receives PRs only, owner directive 2026-08-27), fix the code in a
+upstream receives PRs only), fix the code in a
 worktree, gate it via the CI gate (pr-checks),
 SIGN every commit with the session trailer, push, FAST-FORWARD fork `main` onto it,
-hand off branch + shas, then ship via `oc-deploy ship` (§Ship — oc-deploy (S3 path), below).
+hand off branch + shas, then ship via `oc-deploy ship` (§Phase 6a — Ship — oc-deploy (S3 path), below).
 After any
 swap containing your commits you TEST what shipped (test-on-notify loop,
 Phase 6b). The Editor NEVER dispatches BUILD runs (`quick-build-linux.yml`), NEVER
 watches build runs, and NEVER touches binaries — all automation territory via
-`oc-deploy` (NO dispatch exceptions: BUILD TRIGGERS = exactly TWO with no
-exceptions — SKILL.md §Hard rules, A3 ruling 2026-08-29).
+`oc-deploy` (NO dispatch exceptions: BUILD TRIGGERS = exactly TWO — SKILL.md §Hard rules).
 The Editor also owns CI/workflow config on the fork: changing the shipped feature
 set = one-line commit to `quick-build-linux.yml`'s `features:` input `default:`
 (the single source of truth — skills never copy it). When a feature is COMPLETE
 (merged to fork `main`, shipped green, smoke test PASS **and that smoke
 evidence owner-approved** — Phase 7 gate), the Editor additionally
 owns its upstream contribution — Phase 7: harvest fork-only commits → upstream
-PR → close the tracked FORK issues (owner directive 2026-08-25).
+PR → close the tracked FORK issues.
 
-## Box law — no local cargo, ever (ruling 2026-06-16, hardened owner-GO 2026-08-28)
+## Box law — no local cargo, ever
 
 cargo/rustc/clippy are FORBIDDEN on this box in ANY form: PATH, login shell,
 `PATH="$HOME/.cargo/bin:$PATH"` prepends, explicit paths
@@ -30,8 +29,7 @@ other bypass. The BLOCKED stubs in `/usr/local/bin` are the floor of the rule,
 not the rule — a working rustup tree survives here (kept for the owner-approved
 rustfmt wrapper), and its compile binaries were DISABLED 2026-08-28
 (`/root/toolchain-disabled-20260828/` — manifest + `restore.sh`). A local
-invocation that WORKS is still a ruling violation (observed and killed
-2026-08-28: editor lanes running `cargo test` in worktrees). Sanctioned local
+invocation that WORKS is still a ruling violation. Sanctioned local
 tools ONLY: `/usr/local/bin/rustfmt` wrapper (fmt only — `--edition 2024`
 + entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, Phase 5 —
 the generic CI ritual; Phase 7 step 2c reuses it on upstream PR heads).
@@ -42,7 +40,7 @@ quick-build-linux dispatched via `oc-deploy ship`. Need
 Iterating clippy fixes? Edit code, re-dispatch pr-checks, read the run log.
 Never compile locally.
 
-## Telegram surface law — inter-role = session_notify ONLY (v0.4.31, owner 2026-08-28)
+## Telegram surface law — inter-role = session_notify ONLY (v0.4.31)
 
 Full law + audit history: SKILL.md §Telegram surface law (canonical). Your
 editor-facing duties:
@@ -66,15 +64,14 @@ editor-facing duties:
 - The `/tq-approve` forum-topic flow and Gatus DM reports are OTHER lanes'
   documented jobs — not yours.
 
-## CI-wait discipline & actor attribution (owner 2026-08-30 — fix batch)
+## CI-wait discipline & actor attribution
 
-*(Waiter-discipline items 4–9 — poll floor, --wait ceiling, invocation
+*(Waiter-discipline items — poll floor, --wait ceiling, invocation
 verify, notify wiring, log-window cuts, REST casing — are SUPERVISOR-scoped:
-supervisor.md §CI-wait & waiter discipline. Lens G regroup v0.4.70.)*
+supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
 
 1. **Raw `gh run watch` / `gh watch` are BANNED.** The 3s default refresh across
-   concurrent sessions caused the overnight gh flood (704 refs 08-29 + 126 on
-   08-30, ≥7 sessions). Lane waits go through `oc-prchecks` (15s poll,
+   concurrent sessions caused the overnight gh flood. Lane waits go through `oc-prchecks` (15s poll,
    single-flight dispatch lock + headSha adoption); carrier waits through
    `oc-deploy watch` or a DETACHED ≥60s poller (proven `/tmp/swap-*.sh`
    pattern) — carrier waits are SUPERVISOR-owned; an editor never watches a
@@ -92,27 +89,35 @@ supervisor.md §CI-wait & waiter discipline. Lens G regroup v0.4.70.)*
    now carries a concurrency group (`cancel-in-progress: true`, owner fix) so
    the superseded run is auto-cancelled and minutes stop burning.
 4. **Hand-rolled gate watchers must gate the wake on TERMINAL state** (v0.4.71,
-   Duty-4 P1; incident 2026-08-31 20:14Z run 33433873373): a watcher that
+   Duty-4 P1): a watcher that
    fires on elapsed time alone reports `status=in_progress` runs as verdicts.
    Gate on `gh run view --json status` == `completed` (then read
    `conclusion`), or use `oc-prchecks --wait`. Verdict fidelity (v0.4.56)
    covers oc-prchecks only — hand-rolled wrappers do not inherit it.
-5. **Read detached-waiter rc at TOP level** (v0.4.71, Duty-4 P12; two false
-   verdicts 2026-08-31 night): in a pipe, `$?` is the LAST command's exit
+5. **Read detached-waiter rc at TOP level** (v0.4.71, Duty-4 P12): in a pipe,
    (`tail`/`head`), not the tool's. Capture the tool's rc before piping
    (`rc=$?` on the bare invocation, then pipe its output), or use
    `PIPESTATUS`.
-6. **Waiter self-check includes pattern-vs-format** (v0.4.71, Duty-4 P7;
-   incident 2026-08-31, run 33439469017): before ending the turn, confirm the
+6. **Waiter self-check includes pattern-vs-format** (v0.4.71, Duty-4 P7): before ending the turn, confirm the
    waiter's grep/jq pattern matches the tool's ACTUAL journal format
    (oc-prchecks writes `run=<id>`, not `run <id>`) by reading one real log
    line back.
-7. **oc-prchecks is invoke-once** (v0.4.71, Duty-4 P11; gate-storm 2026-08-31
-   — 4 dispatches in 6 min, each cancelling the previous via the concurrency
-   group): never re-invoke oc-prchecks in a loop. Exit 5 = in-flight; resume
+7. **oc-prchecks is invoke-once** (v0.4.71, Duty-4 P11): never re-invoke oc-prchecks in a loop. Exit 5 = in-flight; resume
    via `gh run view <id>` / a read-only poller, `gh run rerun <id>` for a
    dead run. A looping re-invoke is a self-inflicted dispatch storm.
-## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52, owner Go 2026-08-30)
+8. **Checkout-ref is terminal truth (Duty-4 P2, v0.4.77):** the job NAME only
+   identifies the DISPATCH; the run's checkout log line identifies the TESTED
+   TREE — only the checkout-ref is terminal truth for code-level verdicts.
+   Verify the run checked out your head sha before reading any verdict as lane
+   evidence; a mismatch is a carrier bug against the dispatch path — come
+   straight to the supervisor with run id + checkout-ref + ledger incident
+   stamp (suspect the single-flight dispatch lock adoption).
+9. **Dispatch identity check (Duty-4 P3, v0.4.77):** after dispatching, verify
+   the run actually carries your head (job name embeds the head sha) before
+   waiting on it — a dispatch that fired on the wrong ref wastes the whole
+   wait. oc-prchecks headSha adoption enforces this for its own runs; the
+   check covers hand-dispatched `gh workflow run` uses.
+## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52)
 
 Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep
 shipping mid-flight (cadence is FIRE territory). Skill files are plain disk
@@ -136,11 +141,8 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
 
 No reload volley is owed to you (v0.4.19 disk absorption stands) — the
 pull-check is YOUR duty; supervisor notifies stay targeted per Duty 3.
-*(Commissioned 2026-08-30 with the overnight gh-flood / CI-re-run
-investigation — stale rituals are suspected to survive in sessions that never
-re-check, not on disk.)*
 
-## Tool reference — editor's quick table (owner 2026-08-31)
+## Tool reference — editor's quick table
 
 Canonical descriptions + selftest contracts: SKILL.md tool table. The
 editor-relevant subset, invocation forms only (all paths relative to the skill
@@ -163,7 +165,7 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 
 Rules that outlive any table: journal read-back after every `oc-ledger`
 claim/stamp (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
-a tool's exit code alone; the ≥60s detached-poll floor (supervisor.md §CI-wait & waiter discipline, item 1).
+a tool's exit code alone; the ≥60s detached-poll floor (supervisor.md §CI-wait & waiter discipline, item W1).
 
 ## Phase 0 — Fresh base
 
@@ -177,51 +179,45 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
 - **The shared `~/opencrabs` checkout is NEVER evidence** (v0.4.5): it may sit on any
   session's leftover branch. Verify shipped behavior against `origin/main`
   explicitly (`git fetch origin && git show origin/main:<path>`) or in a fresh
-  worktree — never by grepping the shared tree. *(learned 2026-08-26: a grep into the
-  shared checkout surfaced OUR dropped fix and nearly concluded the maintainer's build
-  still carried it — the regression was live on main)*
 - Before building on an existing branch: diff it against its merge-base to confirm no
   foreign WIP rode along from parallel agents. Take a backup branch ref before any
-  `rebase --onto`. *(SKILL.md war story: foreign-WIP diff vs merge-base, 2026-08-25)*
+  `rebase --onto`. *(SKILL.md §Shared war stories)*
 
 ## Phase 1 — Claim on the fork BEFORE editing
 
 0. **Claim-time fresh re-read (v0.4.14, proposal P2)**: FIRST action after
    claiming — re-read `SKILL.md` + `editor.md` in FULL from disk (never from
    recalled memory). A claim opens a fresh working window; pre-read memory from
-   earlier turns carries stale mechanics. *(2026-08-26: multiple turns ran on
-   pre-read understanding, mis-stating mechanics until a reload mandate
-   restored fidelity)*
+   earlier turns carries stale mechanics. DONE = both files re-read in full
+   THIS turn.
 
 1. Search existing issues first — MECHANIZED: `tools/oc-issue-sweep '<query>'`
    (closed-issue hygiene sweep: fork open + fork closed + upstream closed,
    harvests `close-reason:` lines from comments, TSV; the raw form is
    `gh search issues ... -R leshchenko1979/opencrabs`
-   (the issues home, owner directive 2026-08-27). UNIQUENESS GATE (v0.4.17):
+   (the issues home). UNIQUENESS GATE (v0.4.17):
    "no issue covers this" may be asserted only after a CLOSED-state sweep AND
-   paginated comments (--paginate) — an open-only page-one check missed the
-   entire #652/#845/#950/#1213 family (incident 2026-08-26, Ai-antispam).
+   paginated comments (--paginate) — an open-only page-one check missed entire
+   closed-issue families.
    TWO histories to sweep: the fork (open + closed — ours) AND upstream closed
    issues (pre-2026-08-27 issues were filed on `adolfousier/opencrabs`; the
    reason for any close is always in the comments — read with `--paginate`).
 2. None fits → open ONE issue ON THE FORK:
    `gh issue create -R leshchenko1979/opencrabs` (symptom + evidence: error
    text, run link, sha). Routing + body rules: SKILL.md §ISSUE ROUTING.
-3. **NO CLAIMING ON THE FORK** (SKILL.md §ISSUE ROUTING, owner directive
-   2026-08-27 17:07Z): no tackling comments, self-assignment, labels/reactions
+3. **NO CLAIMING ON THE FORK** (SKILL.md §ISSUE ROUTING): no tackling comments, self-assignment, labels/reactions
    on fork issues — the owner's notification surface stays clean. Claim
    record = `Issue-Ref: #N` trailer on commits/PR + your feature row in
    `workers-ledger.json` (first ledger timestamp wins; conflicts are supervisor
    rulings, never GitHub chatter). The uniqueness sweep in step 1 stays
    read-only search.
-4. **Claim read-back (Duty-4 2026-08-31, lane 212b3c83):** after EVERY
+4. **Claim read-back (Duty-4, v0.4.71):** after EVERY
    `oc-ledger claim`/`stamp`, RE-READ the returned event row and verify it
    carries your uuid + issue + branch + the full non-empty `what` text you
-   passed — a glitched argv (event n=1361 stored `what:"--what"`) silently
-   produced an empty claim the lane cited as proof for ~11h. A read-back mismatch
+   passed — a glitched argv can silently produce an empty claim the lane cites
+   as proof. A read-back mismatch
    = re-stamp + `tools.log` check before anything cites the event number.
-5. **Requirement intake — persist processed, not verbatim (owner 2026-08-31
-   14:51Z):** when the editor receives a NEW or MATERIALLY UPDATED requirement
+5. **Requirement intake — persist processed, not verbatim:** when the editor receives a NEW or MATERIALLY UPDATED requirement
    (owner word, or a clarification that changes scope/shape mid-task), persist
    it in a fork issue BEFORE executing: update the issue already being worked
    when the requirement extends it; open a new one when it is a distinct
@@ -229,11 +225,10 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
    the actionable statement (what changes, acceptance, out-of-scope) — never a
    raw chat quote. Subsequent commits/claims carry `Issue-Ref: #N` like any
    other work. Why: a session that dies mid-task must leave the requirement
-   recoverable from durable state, not chat memory (2026-08-31 stall class).
+   recoverable from durable state, not chat memory.
 
-**Issue/PR body claims require code-verified evidence** (v0.4.71, Duty-4;
-incident 2026-08-31 upstream #683: root cause filed from memory was
-hallucinated — real cause found only by a live `curl`). Before filing or
+**Issue/PR body claims require code-verified evidence** (v0.4.71, Duty-4).
+Before filing or
 updating issue/PR text, every causal claim carries `file:line` or executed
 command output. AGENTS.md's verify-everything covers actions; this gate
 covers WRITTEN ARTIFACT claims.
@@ -257,16 +252,14 @@ for Phase 7 — its own rules live there).
 Worktrees are cut from FRESHLY FETCHED `origin/main`, never from the shared
 checkout's current branch state (v0.4.5). After any upstream rebase-port, RELOCATE
 your own merged fixes by Session-Id trailer or commit MESSAGE, never by old shas —
-porting rewrites history and shas dangle *(2026-08-26: d42c445e → 91d7d579 —
-a merge-base --is-ancestor check screamed "fix lost" through a rename)*.
+porting rewrites history and shas dangle.
 
 ALL edits happen in the worktree, never in the shared checkout. One task = one
 worktree = one branch. Parallel agents share the repo; the shared checkout can be
 switched under you mid-task at any moment.
 
-`oc-wt add` prunes stale worktree entries on every invocation — run
-`git -C ~/opencrabs worktree list` only to view live trees, never as a
-pre-check; never reuse another live task's path.
+Never reuse another live task's path — `oc-wt` prunes stale entries and
+validates on every add (lifecycle below).
 
 **Worktree lifecycle — delete early, recreate on demand**
 
@@ -300,10 +293,7 @@ plan-driven tasks included (isolated=false), never auto-spawned isolated
 sub-agents of ANY scope**: auto-spawned isolated workers
 report "done" while the diff is still empty, then their edits surface LATE and
 UNCOMMITTED in your tree, racing the parent's verification reads. Deliverable
-ops (surgical fixes, merge landings) are editor-own. *(2026-08-26, TWO editors
-independently: plan-task subagents reported complete with empty diffs / stale
-origin/main / orphaned worktrees — each cost several diagnostic turns before
-inline takeover)*
+ops (surgical fixes, merge landings) are editor-own.
 
 ## Phase 3 — Explore before writing
 
@@ -316,6 +306,8 @@ inline takeover)*
   writing a new one. Reuse beats re-implement.
 - **Module size:** prefer extracting a NEW module over growing any file past
   ~1000 lines.
+DONE = callers enumerated (or confirmed absent) and every new API call
+verified against its trait/docs before the first edit.
 
 ## Phase 4 — Shape the change
 
@@ -323,23 +315,23 @@ inline takeover)*
 - Stage only paths YOU changed: `git add <paths>`. Never `git add -A`, never `commit -a`.
 - Never revert/reset/amend commits you did not write — report and wait, or branch off.
 - **New enum variant → grep ALL matches on it before committing** (v0.4.71,
-  Duty-4 P14; incident 2026-08-31 `PickRewrite::GluedHost`: E0004 non-exhaustive
-  match + E0308 destructure ripple, +1 RED cycle). `grep -rn '<Variant>::' src/`
+  Duty-4 P14). `grep -rn '<Variant>::' src/`
   catches both classes pre-commit — box law means they otherwise surface only
   at the CI gate.
+- **Revert hygiene (Duty-4 P1, v0.4.77):** after any `git revert`, grep the
+  tree for stranded references to the reverted code (callers, args, fields,
+  flags) BEFORE committing — a revert that leaves callers is a guaranteed CI
+  RED.
 - **Read back every `edit_file` result** (v0.4.5): re-read the touched region with
   `read_file` before trusting it — the tool's line report and rendered diff are
-  UNTRUSTED UI. *(2026-08-26: mangled/misplaced diffs twice + an eaten
-  fn-signature tail — only direct re-reads caught both; the gate would have
-  waved the signature-eaten file through to red CI)*
+  UNTRUSTED UI.
 
 
 **Branch-attached HEAD before signing (v0.4.14, proposal P5)**: confirm
 `git symbolic-ref -q HEAD` resolves (non-empty) BEFORE committing + signing — a
 detached HEAD commits silently to a nameless sha, invisible to branch pushes and
 unreachable by remote-tracking name. If detached: land the sha to an explicit
-ref immediately. *(2026-08-26: a resolution committed on detached HEAD in a PR
-worktree — only an explicit-sha push recovered it)*
+ref immediately.
 
 Signing is not optional: an unsigned commit makes you invisible to the
 notification loop — your feature ships untested and your failures go
@@ -347,15 +339,11 @@ unattributed. Your full session UUID is IN YOUR PROMPT (session/runtime
 context) — read it from there when composing the trailer.
 
 **Verify the trailer block parses after ANY amend/rebase/cherry-pick that
-touches the trailer area** (v0.4.71, Duty-4 P2; incident 2026-08-31 c4a9ef55:
-a stray blank line between `Issue-Ref:` and `Session-Id:` made the fork-side
-trailer scan read EMPTY — ORDER gate failed, forced amend + new sha + full
-re-gate, ~30 min lost). `git interpret-trailers --parse` (or a `gh api`
+touches the trailer area** (v0.4.71, Duty-4 P2). `git interpret-trailers --parse` (or a `gh api`
 commit-body scan) must show every expected trailer before the sha enters any
 gate or push.
 
-**Test placement (CONTRIBUTING.md policy — lens G regroup v0.4.70, from
-Phase 7 step 2c):** tests live under `src/tests/*_test.rs` registered in
+**Test placement (CONTRIBUTING.md policy, from Phase 7 step 2c):** tests live under `src/tests/*_test.rs` registered in
 `mod.rs`, never inline `#[cfg(test)]` blocks — upstream CI enforces both.
 
 ## Phase 5 — CI gate before every commit (CI-only since v0.4.34)
@@ -386,9 +374,11 @@ re-dispatch pr-checks, read the run log — that loop replaces every local lint 
   not leave the editor. Zero errors required in YOUR changed lines; pre-existing
   warnings in untouched files ≠ blocker.
 - **NEVER chain a gate/push onto another command with `;`** — one command per line,
-  verdict checked BEFORE the next command. *(learned 2026-08-26: a `;`-chained
-  `git branch -D` executed despite a force-with-lease REJECTION; a backgrounded
-  full-repo gate died exit-143 with its parent shell)*
+  verdict checked BEFORE the next command.
+- **Gate-idle question sweep:** a gate wait is idle time —
+  do not sit silent on open questions. Circle back to the user in your topic
+  with anything unresolved (scope doubts, naming, approach forks) while the
+  gate runs; waiting is never a reason to hold a question or to guess.
 
 ## Phase 6 — Push, merge into fork main, hand off
 
@@ -409,13 +399,13 @@ git -C ~/oc-wt-<task> push origin <branch>:main   # fast-forward fork main — n
 
 EVERY commit's destination is fork `main`: the build (`oc-deploy ship`) compiles
 fork `main` — ALL editors' changes together
-(decision 2026-08-25) — an unmerged branch silently
-never ships. **Implementation comment per commit (owner 2026-08-28 22:54Z):**
+— an unmerged branch silently
+never ships. **Implementation comment per commit:**
 after EACH editor commit, post a short summary + commit sha + verification
 state (tests/lint) as a gh comment on the tracked issue — one comment per
 commit, immediately, no batching. Mechanics: `tools/oc-issue-log <issue-n> <sha>`
 posts it (gh `--body-file` discipline + `--edit-last` pitfalls handled inside;
-SKILL.md tool table — Duty-4 2026-08-31, lane 212b3c83).
+SKILL.md tool table).
 
 Non-ff rejection = another editor landed first; integrate and retry:
 
@@ -429,8 +419,8 @@ git -C ~/oc-wt-<task> push origin <branch>:main
 ```
 
 **Conflict-quality gate — MANDATORY before any push carrying hand-resolved code**
-*(run #32879949542: a hand-resolved merge shipped `Result<(), String>` against the
-crate's aliased `Result<T>` — five E0308s, red CI, a 15-minute round-trip)*:
+*(a hand-resolved merge shipping a crate-alias mismatch is five E0308s and a
+red CI round-trip)*:
 
 1. Re-read every hand-merged function END-TO-END — not just the conflict hunk.
 2. Match crate-wide type aliases: open the alias definition; the error type is
@@ -443,9 +433,7 @@ crate's aliased `Result<T>` — five E0308s, red CI, a 15-minute round-trip)*:
 Report to the ops chat: branch name + pushed sha + post-merge `main` tip — code
 locations cited STRUCTURALLY (function name + matching pattern, e.g. "stash-empty
 warn in agent.rs handle_followup_callback"), never bare line numbers: main moves
-hourly under multi-editor concurrency and line anchors rot same-day *(#1205's line
-anchors were already stale when posted; one editor watched :281→:287→:297 across
-three builds in ~4 h)*. The hand-off ends the Editor's part — dispatching,
+hourly under multi-editor concurrency and line anchors rot same-day. The hand-off ends the Editor's part — dispatching,
 watching, reading conclusions are automation territory (`oc-deploy ship/poll`;
 SKILL.md router).
 
@@ -454,16 +442,12 @@ runs the S3 SHIP PATH below (`oc-deploy ship`) — one call carries BOTH dimensi
 (full-40 sha + `features=<comma-set>`; there is NO `--all-features` vocabulary in
 the carrier yml; a different-set build of the same sha is a DISTINCT build under
 single-flight).
-*(Pre-S3 ordering is archived — `oc-deploy ship` now runs the gates itself and
-returns GREEN/RED; the old failure mode was a silently dropped ORDER hand-off
-(04f64d8a never reached the compiler while the issue read "awaiting
-Compiler").)*
+*(Pre-S3 ordering is archived — `oc-deploy ship` runs the gates itself and returns GREEN/RED.)*
 
-## Ship — oc-deploy (S3 path)
+## Phase 6a — Ship — oc-deploy (S3 path)
 
 **S3 SHIP PATH — oc-deploy IS the ship path (S3 cutover, live 2026-08-28; compiler retired).**
-The lane runs its own ship as an agent-launched BACKGROUND task (timer retired
-per owner 19:21Z):
+The lane runs its own ship as an agent-launched BACKGROUND task:
 
 ```bash
 /root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-deploy ship \
@@ -477,7 +461,7 @@ journal (`oc-deploy-shadow.log` in the state dir), and exits 0 with the
 dispatch confirmation (poll discovers the run id) or exit 2 + failing
 gate to the invoking session. **Ship semantics: dispatch
 is real always; deploys are real from S2 (poll mode, sha-bound, auto-swap on
-GREEN — consent eliminated owner 2026-08-28 18:50Z; journaled, auto-rollback on
+GREEN — deploy consent eliminated; journaled, auto-rollback on
 post-bounce verify fail stays, smoke-FAIL rollback = owner call; ledger `meta.oc_deploy_stage` gates it, exit 4 below
 S2 — the stage is S3 since 2026-08-28).** Plan-only
 default: omit `--execute` → full delta printed, nothing touched. Brake:
@@ -508,10 +492,8 @@ no cargo needed.
 1. Read run id + built sha from the notification body. **If the daemon bounced**
    (any restart since your last turn), RE-SURFACE lazy tool schemas via
    `tool_search` BEFORE any smoke invocation — a restart kills activated schemas
-   and intents misfire onto wrong tools *(2026-08-26/27: ~7 misfires landed on
-   session_context instead of session_notify before root cause)*.
-2. **IDENTITY RECEIPT first (C-F3, v0.4.72 — tool born v0.4.64, zero
-   invocations since; wired here to give it a duty):** run `oc-smoke-evidence`
+   and intents misfire onto wrong tools.
+2. **IDENTITY RECEIPT first (C-F3, v0.4.72):** run `oc-smoke-evidence`
    BEFORE driving the feature — it compares the RUNNING unit's exe sha against
    the deployed markers (rc 0 IDENTITY-MATCH / 1 MISMATCH / 3 unit fail).
    MISMATCH → STOP: you would be smoking a binary that is not the one that was
@@ -529,15 +511,15 @@ no cargo needed.
    found it, you file it). Then send raw evidence + the issue link to the
    supervisor lane (`session_notify`) — do NOT attribute, do NOT fix another
    editor's feature; attribution via Session-Id trailers is MECHANICAL
-   (`oc-attrib`; decision 2026-08-25 2a, fan-out per issue #24).
+   (`oc-attrib`; decision 2026-08-25 2a, mechanical fan-out above).
 6. SHIPPED UPSTREAM notice (v0.4.0): if the supervisor (or the post-swap
    fan-out) reports your feature was
    absorbed by upstream (maintainer merged or reimplemented it), your fork-side
    duty for it ENDS — no further fork maintenance, no fix rounds. Future work
    on that feature happens upstream only: new claim via Phase 1, normal rules.
 
-**Swap timing is NOT coordinated with smokes** (owner decision 2026-08-26, closing
-editor proposal #8): NO advance announce, NO swap delay — deploys land whenever the
+**Swap timing is NOT coordinated with smokes** (owner decision, closing editor
+proposal #8): NO advance announce, NO swap delay — deploys land whenever the
 pipeline is ready, even mid-smoke; loss of in-flight in-memory state is ACCEPTED
 until Alexey fixes it otherwise. If a bounce kills your smoke mid-run: re-arm tool
 schemas (step 1), re-run from scratch — NEVER report the bounce itself as a feature
@@ -547,7 +529,7 @@ FAIL.
 
 A RED `oc-deploy ship`/poll run or a failed smoke attributes the failure (via
 `oc-attrib` Session-Id trailers) and routes the fix to the guilty editor WITH evidence.
-Your answer is always the SAME sequence (decision 2026-08-25):
+Your answer is always the SAME sequence:
 
 0. GATE — the bug must already HAVE an issue; the red-run hand-off names
    it. Missing? File it first (Phase 1 procedure). Fixing before filing
@@ -567,17 +549,17 @@ git -C ~/oc-wt-<task> push origin <branch>:main
 tools/oc-wt remove <task>
 ```
 
-**Per-commit laws live in their phases (lens G regroup v0.4.70):** branch-attached HEAD + signing → §Phase 4; worktree-writer exclusivity → §Phase 2. They bind EVERY commit in ANY phase — read them there.
+**Per-commit laws live in their phases:** branch-attached HEAD + signing → §Phase 4; worktree-writer exclusivity → §Phase 2. They bind EVERY commit in ANY phase — read them there.
 
-5. Re-ship fork `main` via oc-deploy: `oc-deploy ship --sha <NEW-head-sha> --features <comma-set> --execute` (S3 2026-08-28 — the compiler role is retired; shipping is the editor's own background task, it dispatches fork `main`, which now carries your fix alongside every other editor's merged work).
+5. Re-ship fork `main` via oc-deploy: `oc-deploy ship --sha <NEW-head-sha> --features <comma-set> --execute` (S3 — the compiler role is retired; shipping is the editor's own background task, it dispatches fork `main`, which now carries your fix alongside every other editor's merged work).
 
-## Phase 7 — Feature complete → upstream PR (owner directive 2026-08-25)
+## Phase 7 — Feature complete → upstream PR
 
 Trigger: the feature is COMPLETE — merged into fork `main`, shipped inside a
 green swapped build, smoke test PASS **and that smoke evidence approved by
 Alexey** (APPROVAL GATE, v0.4.1). Development-time contact stays issues-only;
-this PR is the ONE sanctioned exception (supersedes the 2026-08-22 never-PR
-rule for completed features) — but it fires ONLY on owner approval.
+this PR is the ONE sanctioned exception (completed features only) — but it fires
+ONLY on owner approval.
 
 ```bash
 # 0. OWNER APPROVAL GATE (v0.4.1): post the smoke-test EVIDENCE + an explicit
@@ -608,18 +590,16 @@ git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
 #     branch ref).
 
 # 2-pre. ATOMICITY + BASE check runs BEFORE the PR is opened (v0.4.71, Duty-4
-#     P6; incident 2026-08-31 #1273 cut from a fork-main base): an upstream PR
+#     P6): an upstream PR
 #     head is a harvest branch off adolfousier/main — NEVER a fork-main-based
 #     branch. A post-open atomicity FALSE (fork-divergence commits) means the
-#     base was wrong before the PR existed; stacked-PR recovery cost a day.
+#     base was wrong before the PR existed.
 #     Check base + atomicity pre-open.
 
-# 2c. CI gate (upstream triad) (v0.4.22, owner directive 2026-08-27 — encodes
-#     adolfousier/opencrabs CONTRIBUTING.md: "You MUST pass all three before
-#     submitting a PR"). v0.4.28: the triad runs in CI via pr-checks.yml —
-#     cargo is FORBIDDEN on this box (binaries disabled 2026-08-28), so the old
-#     "run in the worktree" text was unprovable; a green run URL IS the v0.4.22
-#     citation now.
+# 2c. CI gate (upstream triad) (v0.4.22 — encodes adolfousier/opencrabs
+#     CONTRIBUTING.md: "You MUST pass all three before
+#     submitting a PR"). v0.4.28: the triad runs in CI via pr-checks.yml (cargo is
+#     FORBIDDEN on this box — box law); a green run URL IS the citation now.
 #     FIRST push the head branch (step 3's command — the workflow checks the
 #     branch out from the fork), then dispatch:
 gh workflow run pr-checks.yml --repo leshchenko1979/opencrabs \
@@ -633,8 +613,8 @@ gh workflow run pr-checks.yml --repo leshchenko1979/opencrabs \
 #   ANY red = fix cycle + re-dispatch,
 #   never a filed PR. Cite the green run URL in the PR body prep next to the
 #   smoke/run evidence. Iterate clippy fixes by EDITING CODE and re-dispatching
-#   pr-checks — NEVER run cargo locally (box law, top of this file: binaries
-#   disabled 2026-08-28); test-placement policy → §Phase 4. (The yml lives
+#   pr-checks — NEVER run cargo locally (box law); test-placement policy →
+#   §Phase 4. (The yml lives
 #   ONLY on the carrier branch — never fork main,
 #   never the PR-head branch: zero infra commits in Adolfo's diff.)
 
@@ -643,7 +623,7 @@ git -C ~/oc-wt-up-<feature> push -u origin leshchenko1979/<feature>
 
 # 4. open the upstream PR — detailed description; body rules are canonical in
 #    the Rules bullet below (fork-issue link at END, `Closes #N` FORBIDDEN).
-#    PR TITLE TYPE PREFIX (owner 2026-08-30 — release triage): every upstream
+#    PR TITLE TYPE PREFIX: every upstream
 #    AND fork PR title starts with fix: / fix(scope): (bug fix), feat: /
 #    feat(scope): (new capability), or chore: (tooling/CI/docs/deps — zero
 #    user-visible change). The head-branch slug mirrors the type:
@@ -665,8 +645,7 @@ Rules:
   feature's commits, no bare CI-config churn unless it IS the feature.
 - Cherry-pick conflicts → resolve, re-run the Phase 5 gate (pr-checks), continue. NEVER merge fork
   `main` into the PR branch — upstream gets clean commits only.
-- **HARVEST VERIFICATION SWEEP (Duty-4 2026-08-31, 4 lanes converged — c6b1a539,
-  d5863180, 7e1ebbb6 ×2; 3 gate rounds burned overnight proving the gap):** after
+- **HARVEST VERIFICATION SWEEP (Duty-4, v0.4.71):** after
   conflict resolution on a harvested branch, BEFORE the first gate dispatch:
   (a) `git diff origin/main...HEAD` symbol sweep — grep the branch diff for
   fork-renamed/fork-only symbols and verify each has a live caller in the
@@ -684,10 +663,10 @@ Rules:
 - The PR body MUST reference THE issue as a FULL FORK URL at the END of the
   description (`Original issue: https://github.com/leshchenko1979/opencrabs/issues/N`
   — EXACTLY one, atomicity rule). `Closes #N` is FORBIDDEN on upstream PR bodies:
-  it resolves against adolfousier's issue space, not ours (owner directive
-  2026-08-27 — issues live on the fork). WE close the fork issue (step 5) right
+  it resolves against adolfousier's issue space, not ours (issues live on the
+  fork). WE close the fork issue (step 5) right
   after the PR is up — do not wait for the maintainer merge.
-- **QUALIFIED FORK REFS on upstream surfaces (owner directive 2026-08-31, fork #54):**
+- **QUALIFIED FORK REFS on upstream surfaces (fork [#54](https://github.com/leshchenko1979/opencrabs/issues/54)):**
   a bare `#N` where N is a FORK issue number must never appear on an upstream
   surface (PR body, PR title, issue body, comment) OUTSIDE a code span — GitHub
   autolinks it against adolfousier's issue space and the tooltip points at an
@@ -697,22 +676,20 @@ Rules:
   (GitHub does not autolink inside backticks) — literal log-line quotes stay
   verbatim. Fork-side surfaces are unaffected (bare #N resolves correctly there).
 - One feature = one PR; never bundle two features to save a PR.
-- **ATOMICITY (owner directive 2026-08-26):** issues, PRs and commits are atomic —
+- **ATOMICITY:** issues, PRs and commits are atomic —
   one problem per issue, one logical change per commit, one issue per PR. Every
   harvested commit carries an `Issue-Ref: #N` trailer matching EXACTLY the single
   issue the PR claims; no commit without one, no PR claiming more than one. A PR
   whose diff mixes fixed and unfixed concerns forces a binary status on a mixed bag
   and mislabels both. Gate with `./tools/oc-pr-atomicity <pr>` (trailer scan + body
-  claim cross-check) BEFORE closing the issue. PR LIFECYCLE (decision
-  2026-08-27): one PR = one atomic change; a bug found in review is fixed
+  claim cross-check) BEFORE closing the issue. PR LIFECYCLE: one PR = one atomic change; a bug found in review is fixed
   FORWARD on the same PR or the PR is closed — no draft limbo. A MERGED PR is
   closed forever: follow-up work = new branch + new PR, NEVER extend a merged
   branch.
 - Pre-flight gate (step 2c) is MANDATORY (v0.4.0): read the fmt STEP outcome,
   not just the run conclusion — soft-fail hides failures from the run.
-- `leshchenko1979/<slug>` is the RESERVED PR-head namespace (2026-08-27, renamed
-  from `up/<slug>` per the Alexey↔Adolfo decision set — `leshchenko1979/…` branch
-  names stand out in the upstream branch list): branches with that
+- `leshchenko1979/<slug>` is the RESERVED PR-head namespace (`leshchenko1979/…`
+  branch names stand out in the upstream branch list): branches with that
   prefix are created ONLY in this phase, never developed on, never merged into
   fork `main` — and NOT deleted while their PR is still open (GitHub needs the
   head alive).
@@ -724,25 +701,21 @@ harvested commits. When a PR is not mergeable, route by BLOCKER CLASS:
 
 | Blocker | Who acts | Action |
 |---|---|---|
-| fmt/clippy/test failure in THIS feature's files | Owning editor (notified with log evidence via the mechanical post-swap fan-out — `oc-deploy fanout`, LIVE since v0.4.37) | fresh worktree off the PR head → fix → Phase 5 gate (pr-checks) + conflict-quality gate → signed push to the head |
+| fmt/clippy/test failure in THIS feature's files | Owning editor (notified with log evidence via the mechanical post-swap fan-out — `oc-deploy fanout`) | fresh worktree off the PR head → fix → Phase 5 gate (pr-checks) + conflict-quality gate → signed push to the head |
 | Merge conflicts with new upstream `main` | Owning editor | rebase / re-cherry-pick onto fresh `adolfousier/main`, force-push head |
 | PRE-EXISTING upstream red (base fails in files we never touched) | ❌ NO editor pings — our code is innocent | housekeeping-PR candidate: issue filed + ledger-registered first (v0.3.8), Alexey decides |
 | Maintainer rejects/closes the PR | Owning editor | REOPEN the linked issues with a pointer comment; record the outcome |
 
 Hard rules: verify the failing log names files THIS PR actually touches BEFORE
-pinging anyone (2026-08-26 lesson: identical clippy walls appeared in every
-PR's log while the culprit lived on upstream base). Soft-fail fmt diffs are
+pinging anyone (identical clippy walls on every PR can live on the upstream base). Soft-fail fmt diffs are
 cosmetic — NEVER ping for fmt alone. Absorption ends the lifecycle: if the
 maintainer merges/reimplements the feature, the PR story closes with a SHIPPED
 UPSTREAM notice (Phase 6b item 5), not more fork-side work.
 Two same-turn checks (v0.4.5): (1) BEFORE any push to a gated/frozen head branch,
 RE-READ live gate state — latest issue comments + supervisor notifies — session-start
-knowledge structurally cannot know what changed mid-turn *(a lint-fix push landed
-minutes before the freeze notice arrived)*. (2) Before preparing ANY follow-up
+knowledge structurally cannot know what changed mid-turn. (2) Before preparing ANY follow-up
 commit targeting an open PR, check its state via API (`gh pr view <n> --json
-state,mergedAt`) — it may have been maintainer-merged under you (#1208 was OPEN
-when filed, merged hours later). **The state gate ALSO spans every port /
+state,mergedAt`) — it may have been maintainer-merged under you. **The state gate ALSO spans every port /
 cherry-pick round toward a PR head (v0.4.14, proposal P4)**: before investing a
 round, fresh `gh pr view <n> --json state` — if MERGED/CLOSED, STOP and report,
-do not invest the round. *(2026-08-26: two port conflict-dances on #1225 were
-dead weight — PR merged at head 2139a030 before the final picks)*
+do not invest the round.

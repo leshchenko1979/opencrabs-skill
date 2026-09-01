@@ -15,7 +15,7 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `editor.md` | EDITOR role procedure — Phases 0–7b (issue claim → worktree → edit → gate → commit → ship → upstream PR) |
 | `supervisor.md` | SUPERVISOR role — worker roster, duty cadence, CI-wait & waiter discipline, review lenses |
 | `s2-swap-journal-spec.md` | Journal vocabulary spec for the oc-deploy swap leg |
-| `CHANGELOG.md` | Version history, **newest entry LAST** (sorted v0.4.60 → v0.4.72) |
+| `CHANGELOG.md` | Version history, **newest entry LAST** (sorted v0.4.60 → v0.4.76) |
 | `tools/` | The `oc-*` tool fleet (30 executables) + `lib/` + `tests/` |
 | `tools/lib/` | Shared shell libs: `oc-log.sh` (journal + rc register + flood guard), `oc-embed.sh` (job-embed decoder) |
 | `tools/tests/run.sh` | Battery: full selftest suite + coverage sections. Receipt → `tools/tests/battery-last.json` |
@@ -59,5 +59,5 @@ Highlights:
 
 ## Repo status
 
-Local-only (no remote). Off-box durability is a follow-up on owner word.
-Tags `v0.1.0` … `v0.4.72` (143 tags). Current: **v0.4.72**.
+Mirrored to `leshchenko1979/opencrabs-skill` (pushed on owner word; state repo `leshchenko1979/opencrabs-dev-state`).
+Tags `v0.1.0` … `v0.4.76` (150 tags). Current: **v0.4.76**.

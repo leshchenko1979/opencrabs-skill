@@ -123,11 +123,31 @@ if tool oc-seal-state; then
   rm -rf "$d"
 fi
 
+# ---- 00b. lib/oc-embed.sh (F-M5, v0.4.77): direct unit coverage -------------
+section "lib/oc-embed.sh (job-name embed decoder)"
+if [ -f "$TOOLS_DIR/lib/oc-embed.sh" ]; then
+  bash -n "$TOOLS_DIR/lib/oc-embed.sh" && ok "embed-lib syntax (bash -n)" || bad "embed-lib syntax"
+  # shellcheck disable=SC1091
+  . "$TOOLS_DIR/lib/oc-embed.sh"
+  out="$(oc_decode_job_embed "Linux amd64 (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, telegram)")"
+  [ "$out" = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|telegram" ] \
+    && ok "embed: well-formed job name -> sha|features" || bad "embed decode got: '$out'"
+  out="$(oc_decode_job_embed "Linux amd64 (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, local-stt,local-tts)")"
+  [ "$out" = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|local-stt,local-tts" ] \
+    && ok "embed: comma feature set survives" || bad "embed comma-set got: '$out'"
+  out="$(oc_decode_job_embed "ORDER gates / validate (no embed here)")"
+  [ -z "$out" ] && ok "embed: ORDER job without embed -> empty" || bad "embed no-embed got: '$out'"
+  out="$(oc_decode_job_embed "Linux amd64 (shortsha, x)")"
+  [ -z "$out" ] && ok "embed: non-40-hex parenthetical -> empty" || bad "embed short-sha got: '$out'"
+else
+  bad "lib/oc-embed.sh missing"
+fi
+
 # ---- 5. oc-post-receipts ----------------------------------------------------
 section "oc-post-receipts"
-if tool oc-post-receipts; then
-  "$TOOLS_DIR/oc-post-receipts" --dry-run --topic 30129 --text "suite-triggered" >/dev/null 2>&1; rc=$?
-  map_out="$(OC_FORUM_CHAT_ID=-100777000111 "$TOOLS_DIR/oc-post-receipts" --dry-run --topic 30129 --text "mapping" 2>&1)"
+if tool archive/oc-post-receipts; then
+  "$TOOLS_DIR/archive/oc-post-receipts" --dry-run --topic 30129 --text "suite-triggered" >/dev/null 2>&1; rc=$?
+  map_out="$(OC_FORUM_CHAT_ID=-100777000111 "$TOOLS_DIR/archive/oc-post-receipts" --dry-run --topic 30129 --text "mapping" 2>&1)"
   case "$map_out" in
     *"chat_id=-100777000111 -d message_thread_id=30129"*)
       ok "topic->chat/message_thread mapping (defect fix: bare topic as chat_id => Telegram 400)" ;;
@@ -138,8 +158,8 @@ if tool oc-post-receipts; then
     *) ok "no bare-topic-as-chat_id regression" ;;
   esac
   [ $rc -eq 0 ] && ok "dry-run topic exit 0" || bad "dry-run topic exit $rc (expected 0)"
-  "$TOOLS_DIR/oc-post-receipts" --receipt-artifact --unit oc-restart-suite --dry-run >/dev/null 2>&1; [ $? -eq 0 ] && ok "receipt-artifact dry-run exit 0" || bad "receipt-artifact dry-run failed"
-  "$TOOLS_DIR/oc-post-receipts" --bogus >/dev/null 2>&1; [ $? -eq 3 ] && ok "bad args -> 3" || bad "bad args -> expected 3"
+  "$TOOLS_DIR/archive/oc-post-receipts" --receipt-artifact --unit oc-restart-suite --dry-run >/dev/null 2>&1; [ $? -eq 0 ] && ok "receipt-artifact dry-run exit 0" || bad "receipt-artifact dry-run failed"
+  "$TOOLS_DIR/archive/oc-post-receipts" --bogus >/dev/null 2>&1; [ $? -eq 3 ] && ok "bad args -> 3" || bad "bad args -> expected 3"
 fi
 
 # ---- 6. oc-index-worktree --------------------------------------------------

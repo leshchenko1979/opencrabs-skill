@@ -56,7 +56,9 @@ SKILL_DIR="${OC_SKILL_DIR:-$(cd "$_OC_DIR/.." && pwd)}"
 STATE_DIR_DEFAULT="/root/.opencrabs/profiles/ops/opencrabs-dev"
 LEDGER=""
 SELFTEST=0
-KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident note ack roster-enroll claim "
+# confirm + swap-result: tool-written mechanical kinds (cmd_confirm, oc-deploy
+# ledger_stamp) admitted v0.4.77 — the enum is closed to EVERY writer now.
+KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident note ack roster-enroll claim confirm swap-result "
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 die() { echo "oc-ledger: $2" >&2; exit "$1"; }
@@ -65,7 +67,7 @@ parse_global() { # fills LEDGER, strips global flags, leaves subcommand args
   while [ $# -gt 0 ]; do
     case "$1" in
       --ledger) LEDGER="${2:-}"; [ -n "$LEDGER" ] || die 2 "--ledger needs a path"; shift 2 ;;
-      --selftest) SELFTEST=1; shift ;;
+      selftest|--selftest) SELFTEST=1; shift ;;
       *) break ;;
     esac
   done
@@ -155,6 +157,7 @@ cmd_stamp() {
   [ -n "$kind" ] || die 2 "usage: oc-ledger stamp <kind> \"<what>\" [--by <label>]"
   [ -n "$what" ] || die 2 "stamp: what must be non-empty"
   [ -n "$by" ] || by="$(derive_by)"
+  kind="${kind//_/-}"   # C-#7 (v0.4.77): underscore input normalizes to enum hyphen form
   [ "$kind" = "skill-bump" ] && die 2 "stamp: kind skill-bump is sync-only — use: oc-ledger sync --version <v>"
   case "$KINDS" in *" $kind "*) ;; *) die 2 "stamp: unknown kind '$kind' (v1.1 vocabulary — see header)" ;; esac
   case "$what" in --*) die 2 "stamp: what looks like a lost flag (\"$what\") — pass text with --what explicitly (glitched-argv class, ledger n=1361/n=1372)" ;; esac
@@ -572,25 +575,39 @@ EOF
   bash "$ME" confirm "$W2" --gh "$T/gh-fail.sh" >/dev/null 2>&1; chk "confirm-gh-fail-rc3" 3 $?
   bash "$ME" confirm "$W2" >/dev/null 2>&1  # real gh absent in test env -> expect nonzero
   chk "confirm-no-github-rc3" 3 $?
+  # 41-45 (v0.4.77 F-M4): claim-ref — the oc-commit Issue-Ref backend
+  bash "$ME" claim-ref "$W2" >/dev/null 2>&1; chk "claim-ref-after-claim" 0 $?
+  chk "claim-ref-value" "999" "$(bash "$ME" claim-ref "$W2" 2>/dev/null)"
+  local W3="22222222-3333-4444-5555-666666666666"
+  OC_ACTOR="$W3" bash "$ME" stamp claim "CLAIM without issue ref" >/dev/null 2>&1
+  bash "$ME" claim-ref "$W3" >/dev/null 2>&1; chk "claim-ref-no-ref-rc3" 3 $?
+  bash "$ME" claim-ref "00000000-0000-0000-0000-000000000000" >/dev/null 2>&1; chk "claim-ref-no-claim-rc3" 3 $?
   rm -rf "$T"
   echo "oc-ledger selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
 }
 
 # ---- confirm (v0.4.58, Duty-6 lens C #5) ------------------------------------
+_latest_claim_issue() { # $1=uuid -> stdout: issue number (rc 0) or failure
+  # diagnostic (rc 3). Single owner of the claim->issue derivation —
+  # cmd_claim_ref and cmd_confirm both consume it (E4, v0.4.77).
+  local claim issue
+  claim="$(jq -r --arg u "$1" '[.events[] | select(.kind=="claim" and ((.by // "") | contains($u)))][-1].what // ""' "$LEDGER")"
+  [ -n "$claim" ] || { echo "no claim event by $1"; return 3; }
+  issue="$(printf '%s' "$claim" | grep -oE '#[0-9]+' | head -1 | tr -d '#')"
+  [ -n "$issue" ] || { echo "latest claim by $1 carries no #N issue ref: $claim"; return 3; }
+  echo "$issue"
+}
+
 cmd_claim_ref() { # oc-ledger claim-ref <uuid> — print the #N from the worker's
-  # latest claim event (E2 finding 4, v0.4.72: oc-commit + cmd_confirm shared
-  # this derivation as duplicate inline jq; the verb is now the single owner).
+  # latest claim event (E2 finding 4, v0.4.72; derivation shared with
+  # cmd_confirm via _latest_claim_issue since v0.4.77).
   # Pure read: no existence check, no ledger mutation. rc 0 + "#N" | rc 3.
   [ "${1:-}" != "" ] || die 2 "usage: oc-ledger claim-ref <uuid>"
-  local uuid="$1"
+  local uuid="$1" out
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
-  local claim issue
-  claim="$(jq -r --arg u "$uuid" '[.events[] | select(.kind=="claim" and ((.by // "") | contains($u)))][-1].what // ""' "$LEDGER")"
-  [ -n "$claim" ] || die 3 "claim-ref: no claim event by $uuid"
-  issue="$(printf '%s' "$claim" | grep -oE '#[0-9]+' | head -1 | tr -d '#')"
-  [ -n "$issue" ] || die 3 "claim-ref: latest claim by $uuid carries no #N issue ref: $claim"
-  echo "$issue"
+  out="$(_latest_claim_issue "$uuid")" || die 3 "claim-ref: $out"
+  echo "$out"
 }
 
 cmd_confirm() { # oc-ledger confirm <uuid> [--gh <cmd>] — verify the worker's
@@ -607,15 +624,13 @@ cmd_confirm() { # oc-ledger confirm <uuid> [--gh <cmd>] — verify the worker's
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   jq -e --arg u "$uuid" '.workers[] | select(.uuid==$u)' "$LEDGER" >/dev/null 2>&1 \
     || die 3 "confirm: unknown worker uuid $uuid"
-  # latest claim whose by-label CONTAINS the uuid (by is a free label, not a bare uuid)
-  local claim issue
-  claim="$(jq -r --arg u "$uuid" '[.events[] | select(.kind=="claim" and ((.by // "") | contains($u)))][-1].what // ""' "$LEDGER")"
-  [ -n "$claim" ] || die 3 "confirm: no claim event by $uuid"
-  issue="$(printf '%s' "$claim" | grep -oE '#[0-9]+' | head -1 | tr -d '#')"
-  [ -n "$issue" ] || die 3 "confirm: latest claim by $uuid carries no #N issue ref: $claim"
+  # claim->issue derivation delegated to the single owner (E4, v0.4.77)
+  local out issue
+  out="$(_latest_claim_issue "$uuid")" || die 3 "confirm: $out"
+  issue="$out"
   # live fork-issue existence check (injectable gh shim keeps selftest offline)
   "$gh" issue view "$issue" --repo leshchenko1979/opencrabs --json number >/dev/null 2>&1 \
-    || die 3 "confirm: fork issue #$issue not resolvable (claim: $claim)"
+    || die 3 "confirm: fork issue #$issue not resolvable"
   local t; t="$(now_iso)"
   _confirm_locked() {
     atomic_jq --arg u "$uuid" --arg t "$t" --arg i "$issue" \
@@ -647,7 +662,7 @@ oc_ship_audit_chain() {
 
 # ---- dispatch -----------------------------------------------------------------
 parse_global "$@"
-case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm|claim-ref> | --selftest"; exit 0 ;; esac
+case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm|claim-ref> | [selftest|--selftest]"; exit 0 ;; esac
 if [ "$SELFTEST" -eq 1 ]; then cmd_selftest; exit $?; fi
 sub="${ARGS[0]:-}"; rest=("${ARGS[@]:1}")
 case "$sub" in

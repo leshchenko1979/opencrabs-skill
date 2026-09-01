@@ -8,13 +8,13 @@ description: >
   tools/archive/compiler.md archived as re-enable runbook), SUPERVISOR (skill set + worker ledger).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.76
+version: 0.4.77
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
   references:
-    - https://github.com/adolfousier/opencrabs (upstream — PRs only; new issues NEVER filed here, owner 2026-08-27)
-    - https://github.com/leshchenko1979/opencrabs (fork — push target + ISSUES HOME, owner 2026-08-27)
+    - https://github.com/adolfousier/opencrabs (upstream — PRs only; new issues NEVER filed here)
+    - https://github.com/leshchenko1979/opencrabs (fork — push target + ISSUES HOME)
   provenance:
     - "Full release history moved out of the load path at v0.4.43 (B6, Duty-6 run-2) — every v0.4.31+ bump entry lives in CHANGELOG.md (git-tracked, appended newest-last). This pointer replaces the inline list (~3k tokens loaded on every role-file claim). Current version: see CHANGELOG.md."
 ---
@@ -42,7 +42,7 @@ register + test source of truth (archived compiler-step anchors stripped
 | `./tools/oc-job-verify <run-id> <source-ref> [--features] [--identity-only]` | standalone run-identity gate — oc-deploy poll inlines its own job-name decode; `--identity-only` skips outcome gates (provenance of RED runs; embed decode via shared `lib/oc-embed.sh`, E2 #3) | 0 VERIFIED / 2 IN-FLIGHT / 3 FAILED / 4 REF-MISMATCH / 5 NOT-FOUND |
 | `./tools/oc-artifact-verify <artifact-path> [--source <sha>] [--run-id <id>] [--markers m1,m2] [--expect-sha <sha256>] [--expect-version <v>] [--repo R] [--json]` | EXECUTION SANITY SIGNAL + FEATURE-PRESENCE CHECK | 0 PASS / 1 invocation / 2 NOT-ELF-MISSING / 3 MARKER-MISSING / 4 SHA-PROVENANCE-MISMATCH / 5 VERSION-MISMATCH |
 | `./tools/oc-seal-state [--sha S] [...]` | baseline/orders seal (flag-based interface — no positional `<sha>`); order vocabulary QUEUED…VOID, per-row `--order-evidence`, `--purge-order`; matches legacy `order_sha` rows | 0 ok / 1 invocation / 2 scan-fail / 3 write-fail |
-| `./tools/oc-post-receipts ...` | **INTERNAL/ARCHIVED** (E2 #7, v0.4.72 — was compiler-era manual fallback): zero live consumers, raw-bot posting violates the Telegram surface law; kept for archaeology only, do NOT call | 0 ok / 1 no-token / 2 send-failed / 3 bad-args |
+| `./tools/archive/oc-post-receipts ...` | **INTERNAL/ARCHIVED** (E2 #7, v0.4.72 — was compiler-era manual fallback): zero live consumers, raw-bot posting violates the Telegram surface law; kept for archaeology only, do NOT call | 0 ok / 1 no-token / 2 send-failed / 3 bad-args |
 | `./tools/oc-index-worktree <path>` | INTERNAL since v0.4.47 — chained automatically by `oc-wt add` (worktrees inherit NO index; standalone call = legacy fallback) | 0 ok / 4 index-failed / 5 bad-input |
 | `./tools/oc-ci-parity` | workflows parity fork↔upstream post-merge (live: editor Phase 7 parity) | 0 identical / 4 DRIFT / 5 usage / 6 api |
 | `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>]` | commit-range → worker-lane attribution via Session-Id join against roster (`(unsigned)`/`(unmapped)` rows never dropped); `--deployed` composes the range from `deployed.sha` + `deployed.meta.json` `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) | 0 ok / 2 usage / 3 git-fail / 4 empty-range / 5 marker-missing |
@@ -110,8 +110,8 @@ Ask the operator which role this session employs before doing anything:
 | Role | Owns | Procedure file |
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
-| **COMPILER** | **RETIRED 2026-08-28 (S3 cutover, owner "let's go to S3" msgid 34717)** — duties now `tools/oc-deploy` (ship/poll/swap-execute) + supervisor watch. Re-enable = one notify per archived runbook | `tools/archive/compiler.md` (ARCHIVED runbook) |
-| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), triage the idea box (Duty 7 — workers push `IDEA:` notifies; **plus `QUIRK:` tool-quirk/failure reports, owner directive 2026-08-31**; ledger kinds `idea` / `idea-verdict`), 7-lens skill review (Duty 6, Reviewers A–G, grouped by target — DOCS A/B/G · TOOLS E/F · EVIDENCE+LIFECYCLE C/D; incl. Reviewer D deletion safety, Reviewer F tools-code, Reviewer G role-file structure — editor.md + supervisor.md + SKILL.md, owner 2026-09-01) | `supervisor.md` |
+| **COMPILER** | **RETIRED 2026-08-28 (S3 cutover)** — duties now `tools/oc-deploy` (ship/poll/swap-execute) + supervisor watch. Re-enable = one notify per archived runbook | `tools/archive/compiler.md` (ARCHIVED runbook) |
+| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), triage the idea box (Duty 7 — workers push `IDEA:` notifies; **plus `QUIRK:` tool-quirk/failure reports**; ledger kinds `idea` / `idea-verdict`), 7-lens skill review (Duty 6, Reviewers A–G, grouped by target — DOCS A/B/G · TOOLS E/F · EVIDENCE+LIFECYCLE C/D; incl. Reviewer D deletion safety, Reviewer F tools-code, Reviewer G role-file structure — editor.md + supervisor.md + SKILL.md) | `supervisor.md` |
 
 Roles **DO NOT intersect**:
 
@@ -176,7 +176,7 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
 - Same-process only: pushes into a LIVE session's queue on THIS box. Target must
   have messaged since boot; dead/cross-instance targets error → fall back to
   `a2a_send`, else list UNREACHABLE in the report.
-- DELIVERY ≠ QUEUE ACCEPTANCE (2026-08-26, Alexey): a ping counts as delivered
+- DELIVERY ≠ QUEUE ACCEPTANCE: a ping counts as delivered
   ONLY with post-ping proof — same-turn live roster check (`session_search`),
   target PINGED-WOKEN (`last_active` > ping time) or PINGED-SILENT. Ledger
   entries saying "pinged" without wake evidence are forbidden (both roles).
@@ -210,14 +210,11 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   (oc-deploy fanout precedent) — the mechanical `from=<uuid>` header is added
   on top and cannot be forged or stripped.
 
-### Telegram surface law (v0.4.31, owner directive 2026-08-28)
+### Telegram surface law (v0.4.31)
 
 Inter-role communication is **session_notify ONLY**. No lane ever uses telegram
 send/edit tools to talk to another session, another role's topic, the forum
-General area, an unrelated chat, or the owner DM. *(2026-08-28 audit: ~1.3k
-telegram_send calls/day traced across lanes — every destination belonged to the
-sender's own surface, but tool-driven sends that escape the own topic read as
-board-wide broadcast and duplicate the session's auto-routed text.)*
+General area, an unrelated chat, or the owner DM.
 
 - An Editor's telegram surface is ITS OWN TOPIC and nothing else. Normal replies
   auto-route there as session text — that is the ONLY sanctioned output.
@@ -296,6 +293,9 @@ nothing about behavior.
   ANY version bump.
 - **GREEN / RED** — a GitHub Actions run conclusion read by terminal truth
   (`gh run view --json conclusion`), never exit-code inference.
+- **TOOL_ACCUM** — the per-session tool-usage rows accumulated in the unified
+  tools log; the evidence base for `oc-toolaccum` repeat-offense scans and
+  Telegram surface-law audits (supervisor.md Duty 7).
 
 ## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
 
@@ -314,9 +314,7 @@ uses them as a licence to fix outside its scope.
   a RED report vs an ACK calling that run "in_progress"), resolve with
   `gh run view <id> --json status,conclusion` FIRST — even ACKs can be
   stale. v0.4.6 predicates govern claims WE pass on; nothing sanitizes claims
-  that ARRIVE — the receiver checks. *(2026-08-26 cycle-18: run 32999957533
-  concluded `failure` at 18:36:56Z while a Compiler ACK still called it
-  in_progress/queued)*
+  that ARRIVE — the receiver checks.
 
 ## Shared environment facts (both roles)
 
@@ -334,23 +332,19 @@ uses them as a licence to fix outside its scope.
   fork `main`, never a dispatch source. Any lane reads the prefix and knows
   what it is looking at.
 - This box has **no sanctioned Rust toolchain** — CI is the only sanctioned
-  compile/test executor (Compiler role RETIRED 2026-08-28; ruling
-  2026-06-16, hardened owner-GO 2026-08-28). No cargo/rustc/clippy in ANY form —
+  compile/test executor (Compiler role RETIRED 2026-08-28). No cargo/rustc/clippy in ANY form —
   install, PATH-prepend, explicit path, even an invocation that exits 0 is a
   violation. Sanctioned local: `/usr/local/bin/rustfmt` wrapper (fmt only) —
   **the wrapper is NEWER than CI's rustfmt: cosmetic diffs it flags on
   CI-green committed code are KEPT AS-IS, not applied; fix only formatting
-  artifacts you introduced yourself** (Duty-4 2026-08-31, hit ×2: ed126fcb
-  re-round + #30 port lane); modum
-  RETIRED 2026-08-28; lint evidence = GREEN pr-checks.yml run. Full ban list:
+  artifacts you introduced yourself**; modum RETIRED 2026-08-28; lint evidence =
+  GREEN pr-checks.yml run. Full ban list:
   editor.md §Box law.
 - Live binary: `/usr/local/bin/opencrabs`. Daemons run as systemd **user** units
   (`systemctl --user`) — system-scope queries (`systemctl`, `/etc/systemd`) find nothing.
 - Daemon PID identity (v0.4.15): NEVER `pgrep | head -1` — three daemons share
   this box (family, default, ops) and pgrep can grab the wrong one. The ops unit's
-  PID comes only from `systemctl --user show opencrabs-ops -p MainPID --value`
-  *(2026-08-26 cycle-18: pgrep caught the old family daemon 1545179, Aug-25 boot,
-  vs the ops unit 1779537 — disk-vs-proc split until MainPID settled it)*.
+  PID comes only from `systemctl --user show opencrabs-ops -p MainPID --value`.
 - Builds are MINIMAL-FEATURE by design: `cargo build --locked --profile ci
   --no-default-features --features "<set>"` *(profile ci = thin LTO /
 codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing #[cfg]
@@ -375,8 +369,7 @@ codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing 
   sha cannot identify WHICH build is meant under single-flight. The carrier yml has
   NO `--all-features` path — the build step hardwires `--no-default-features --features "$features"`
   — optional features order ONLY as `features=<comma-set>`, and a different-set build
-  of the SAME sha is a DISTINCT build, serialized by the single-flight invariant
-  *(2026-08-26: cycle-19 vs cycle-19b, both ordered on sha 2217191c)*.
+  of the SAME sha is a DISTINCT build, serialized by the single-flight invariant.
 - `source_ref` accepts a branch NAME (`main`) or the FULL 40-char commit sha —
   NEVER an 8-char short form: actions/checkout treats it as a glob and fetches a
   branch literally named `<sha>*` (war story below). PASS THE FULL SHA ALWAYS —
@@ -417,11 +410,11 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    conflicts → owning editor rebases onto fresh upstream main; PRE-EXISTING
    upstream red → NO editor pings, housekeeping-PR decision escalates to
    Alexey; maintainer rejects/closes → owning editor reopens linked issues.
-5. **Maintainer behavior (facts, owner briefed 2026-08-26)**: Adolfo AUTO-ASSIGNS
+5. **Maintainer behavior (facts)**: Adolfo AUTO-ASSIGNS
    new upstream issues to himself — that is a CI workflow, NOT intent to work on
    them; an assignee is not a worker. He may also CLOSE our upstream PRs (and any
    legacy upstream issues) — the reason is ALWAYS in the comments. Our NEW issues
-   live on the fork (item routing, owner 2026-08-27) where WE are the assigner. An issue/PR that looks "missing" is almost
+   live on the fork (item routing) where WE are the assigner. An issue/PR that looks "missing" is almost
    always CLOSED: find it among closed ones and read the comments BEFORE
    concluding anything. CLI comment output PAGINATES — later pages may hold the
    decisive comment (`gh api ... --paginate` / `--page N`); never conclude from
@@ -432,8 +425,8 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    toward upstream. Dispatch locally via `gh workflow run --ref ci/<name>`.
    After every upstream merge/port verify parity mechanically:
    `./tools/oc-ci-parity` (exit 0 identical / 4 DRIFT listing / 6 api-fail) +
-   carrier proof-dispatch (archived: tools/archive/compiler.md Step 7). *(owner order 2026-08-26)* **DRIFT PERMANENT — owner ruling via "Fix all" 2026-08-27:** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by restoring the file.
-7. **Fork branch lifecycle (v0.4.24, owner "clean" sweep 2026-08-27)**: the fork carries
+   carrier proof-dispatch (archived: tools/archive/compiler.md Step 7). **DRIFT PERMANENT (owner ruling):** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by restoring the file.
+7. **Fork branch lifecycle (v0.4.24)**: the fork carries
    PERMANENT refs only — `main` (sync mirror; pre-S3: compiler rebase-port), `ci/quick-build-linux`
    (carrier), `backup/pre-port-*` (until the port cycle settles) — plus short-lived
    `leshchenko1979/<slug>` work branches. A work branch dies when its PR merges or the task
@@ -442,14 +435,13 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    branch · a MERGED PR (either repo) whose head is the branch. Deletion without proof is
    forbidden — unproven branches stay and get reported to the owner. Every sweep archives
    BEFORE deleting: tip tags `archive/<date>/<branch>`, an `--all` bundle, and a manifest,
-   so any deletion is reversible in one command. Sweep 2026-08-27: fork remote 92→13 heads,
-   53 local counterparts (both with full tag archives); branch heads riding OPEN PRs are
+   so any deletion is reversible in one command. Branch heads riding OPEN PRs are
    never deletable.
 
 
 ## Hard rules (both roles)
 
-- Reports to Alexey (owner directive 2026-08-26): every issue/PR reference
+- Reports to Alexey: every issue/PR reference
   carries the LINK behind the number (issues: `https://github.com/leshchenko1979/opencrabs/issues/N`
   — the fork is the issues home; PRs: `https://github.com/adolfousier/opencrabs/pull/N`) — a bare `#N` is never enough.
 - Refer to workers by TOPIC/CHAT NAME only (owner 2026-08-31): Mermaid, Push to
@@ -506,7 +498,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
   [ALL]; otherwise send strictly to the owning role. CC-everyone is noise.
 - ONE formal SMOKE verdict per editor-feature lane: exactly one PASS/FAIL;
   duplicate confirmations are noise (#1227 lane double-report, 2026-08-26).
-- SMOKE-EVIDENCE PRECEDENCE (v0.4.18, owner directive 2026-08-27): prefer
+- SMOKE-EVIDENCE PRECEDENCE (v0.4.18): prefer
   smoke tests verifiable from LOGS over those requiring human verification.
   A machine-checkable verdict — CI run conclusion via API, parsed build/test
   logs, captured runtime or endpoint output — outranks "a human said it
@@ -514,7 +506,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
   the claim (visual rendering, interactive UX), and then name EXACTLY what to
   observe. Design smoke captures to be self-sufficient: every claim cites run
   id + sha + step evidence, so any verdict is re-derivable from logs alone. Source-precedence ranks EVIDENCE quality only - it never conflates kinds: a green CI/build log stays CODE-TEST/build evidence and substitutes nothing for a behavioral SMOKE pass.
-- UPSTREAM CI GATE (v0.4.22, owner directive 2026-08-27; encodes
+- UPSTREAM CI GATE (v0.4.22; encodes
   adolfousier/opencrabs CONTRIBUTING.md): NO upstream PR leaves a lane until
   the owning worktree passed the CI gate — and since v0.4.28 CI is the only
   executor, never local (Box law; local cargo in ANY form is a violation;
@@ -528,8 +520,8 @@ links; development-time upstream contact is PR-comments only (supersedes the
   owner approval + SMOKE pass remain separate required conditions.
 - Issue-first, no exceptions (2026-08-25): a DISCOVERED problem gets its issue
   FILED before any fix work starts — on the FORK `leshchenko1979/opencrabs`
-  (owner directive 2026-08-27: ALL new issues, upstream-code bugs and fork-only
-  infra alike; upstream receives PRs only). Discoverer
+  (ALL new issues — upstream-code bugs and fork-only infra alike; upstream
+  receives PRs only). Discoverer
   files it (symptom + evidence); fixer claims via a `gh` comment on the issue +
   an `oc-ledger claim` row (the `Tackling`-comment instruction is RETIRED —
   upstream issue comments on OUR fork issues are the owner's lane only,
@@ -568,5 +560,10 @@ links; development-time upstream contact is PR-comments only (supersedes the
 | Rebase-port, never resurrect duplicates | 2026-08-26: maintainer absorbed 4 of our PRs overnight (#1207/#1208/#1214/flood-governors); a literal 40-commit rebase would have replayed duplicate implementations against his reviewed rework — classification dropped 20+, ported 9 |
 | ORDER-era triggers + bounded ROLE_EXCEPTION | 2026-08-26 07:20 UTC: compiler authored the governor.rs E0308 fix while its author (61161247) slept through the owner's night window — a silent role breach. Now builds fire only via `oc-deploy ship` or owner word (sim-validated — sim = ORDER/queue simulation, paired-seed 600 reps, run 2026-08-26), and the breach is legal only as the bounded ROLE_EXCEPTION (archived: `tools/archive/compiler.md` Step 2) |
 | Two-file ledger drift | 2026-08-29: `oc-deploy` default LEDGER hit a skill-dir copy while supervisor stamped canonical; the "stale duplicate" deletion proved LIVE (fresh swap stamp + fan-out reads) — restored in 6 min, zero data lost. Fix A (v0.4.38) points every tool at canonical; Reviewer D born from this |
+
+| Telegram surface law | 2026-08-28 audit: ~1.3k telegram_send calls/day traced across lanes — every destination was the sender's own surface, but tool sends escaping the own topic read as board-wide broadcast |
+| Live-API verdict settlement | 2026-08-26 cycle-18: run 32999957533 concluded failure while a Compiler ACK still called it in_progress — contradictory incoming verdicts settle via the live GH API, never memory |
+| Daemon PID via MainPID | 2026-08-26 cycle-18: pgrep caught the old family daemon (Aug-25 boot) instead of the ops unit — disk-vs-proc split until MainPID settled it |
+| Single-flight sha+set ordering | 2026-08-26: cycle-19 vs cycle-19b ordered the same sha with different sets — same sha, different set = DISTINCT build |
 
 *Source of truth for procedure = these skill files. AGENTS.md carries only the pointer.*

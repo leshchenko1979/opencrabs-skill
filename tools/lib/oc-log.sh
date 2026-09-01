@@ -56,6 +56,9 @@ oc_log_init() {
 # tool+args in the last 120s; >=4 prior failures -> the 5th attempt exits 8
 # with a loud stderr banner. Bypass: OC_NO_FLOODGUARD=1 (selftests always
 # bypass — a selftest replaying failures must not trip its own guard).
+# Known limit (F-L4, v0.4.77): the guard matches IDENTICAL tool+args only —
+# varying-arg storms (timestamps/run-ids interpolated into args) never trip
+# rc 8; identical-args loops do.
 oc_log_flood_guard() {
   [ "${OC_NO_FLOODGUARD:-0}" = "1" ] && return 0
   case " $OC_LOG_ARGS " in *" --selftest "*) return 0 ;; esac

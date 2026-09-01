@@ -61,6 +61,8 @@
 set -uo pipefail
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-deploy" "$@"; else oc_log_finish() { :; }; fi
+_OC_EMBED="$(cd "$(dirname "$0")" && pwd)/lib/oc-embed.sh"
+[ -f "$_OC_EMBED" ] && source "$_OC_EMBED"   # single embed decoder (E2 finding 3, v0.4.72; oc-deploy re-threaded v0.4.77)
 trap 'oc_log_finish $?' EXIT
 
 # v0.4.60 (owner order 2026-08-31 06:03Z "move all accounting files and markers
@@ -140,6 +142,7 @@ jline() { # $1=step  $2=exit(int|null)  $3=extra-json-object (optional)
 
 # -------------------------------------------------- ledger stamp (flock'd) --
 ledger_stamp() { # $1=by  $2=what  $3=kind
+  [ "$3" = "swap-result" ] || { echo "oc-deploy: ledger_stamp kind must be swap-result (enum write-side guard, v0.4.77)" >&2; return 2; }
   (
     flock -x 9
     local n tmp
@@ -658,7 +661,7 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
   : > "$NOTIFY_LOG"
   out="$(OC_DEPLOY_STATE_DIR="$SD4" OC_SWAP_TARGET="$T/bin/oc-fake2" \
     OC_SWAP_BACKUP_DIR="$SD4/backups" OC_SWAP_RESTART_CMD=true \
-    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_PID_CMD="echo 222" OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
     OC_SWAP_SIDECARS=2 OC_SWAP_PRIMARY_UNIT=opencrabs-ops.service \
     OC_SWAP_SIDECAR_LISTER="$SD4/sc-lister" OC_SWAP_SIDECAR_SHOW="$SD4/sc-show" \
     OC_SWAP_SIDECAR_ACTIVE="$SD4/sc-active" OC_SWAP_SIDECAR_RESTART="$SD4/sc-restart" \
@@ -832,10 +835,11 @@ fanout_mark_done() { # $1=run $2=verdict $3=notified $4=skipped $5=unowned
 }
 
 decode_built_sha() { # $1=run id -> echoes 40-hex sha from BUILD job name; rc 0/3
-  local jn
+  local jn dec
   jn="$("$GH" api "repos/$FORK/actions/runs/$1/jobs" 2>/dev/null \
     | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')" || return 3
-  printf '%s' "$jn" | sed -n 's/.*(\([0-9a-f]\{40\}\).*/\1/p'
+  dec="$(oc_decode_job_embed "$jn")"   # shared decoder (lib/oc-embed.sh, E2 v0.4.77)
+  printf '%s' "${dec%%|*}"
 }
 
 notify_one() { # $1=uuid $2=role $3=title $4=text $5=run -> journals notified|skip
@@ -1234,8 +1238,8 @@ swap_execute() {
       if [ "$ACTIVE" = "active" ] && [ "$DISK_SHA" = "$1" ] && [ "$MARK_MARKER" = "$2" ] && [ "$META_OK" = "1" ]; then
         if [ "$SKIP_PROC" = "1" ]; then PV_MATCH=1; break; fi
         PID="$($PID_CMD 2>/dev/null || echo 0)"
-        if [ -n "$PID" ] && [ "$PID" != "0" ] && [ -r "/proc/$PID/exe" ]; then
-          PROC_SHA="$(sha256sum "/proc/$PID/exe" 2>/dev/null | cut -d' ' -f1)"
+        if [ -n "$PID" ] && [ "$PID" != "0" ] && [ -r "${OC_SWAP_PROC_PREFIX:-/proc}/$PID/exe" ]; then
+          PROC_SHA="$(sha256sum "${OC_SWAP_PROC_PREFIX:-/proc}/$PID/exe" 2>/dev/null | cut -d' ' -f1)"
           [ "$PROC_SHA" = "$1" ] && { PV_MATCH=1; break; }
         fi
       fi
@@ -1498,7 +1502,7 @@ case "$MODE" in
     # lesson 2026-08-28).
     JOB_NAME="$("$GH" api "repos/$FORK/actions/runs/$RUN_ID/jobs" 2>/dev/null \
       | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')"
-    B_SHA="$(printf '%s' "$JOB_NAME" | sed -n 's/.*(\([0-9a-f]\{40\}\).*/\1/p')"
+    B_SHA="$(oc_decode_job_embed "$JOB_NAME" | cut -d'|' -f1)"   # shared decoder (E2 v0.4.77)
     [ -n "$B_SHA" ] || die 2 "cannot decode built sha from job name: $JOB_NAME"
     DEP="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
     plan "latest green run=$RUN_ID built sha=$B_SHA deployed=$DEP"

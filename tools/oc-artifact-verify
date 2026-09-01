@@ -77,7 +77,7 @@ while [ $# -gt 0 ]; do
     --json)        JSON_OUT=1; shift ;;
     --verbose)     VERBOSE=1; shift ;;
     --selftest)    selftest; exit $? ;;
-    -h|--help)     usage; exit 1 ;;
+    -h|--help)     usage; exit 0 ;;
     *)
       if [ -z "$BIN" ]; then BIN="$1"; else usage; exit 1; fi
       shift ;;

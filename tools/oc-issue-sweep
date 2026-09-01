@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
     --upstream) UPSTREAM="${2:-}"; shift ;;
     --limit) LIMIT="${2:-}"; shift ;;
     --selftest) SELFTEST=1 ;;
-    -h|--help) usage ;;
+    -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) [ -z "$QUERY" ] && QUERY="$1" || usage ;;
   esac
   shift

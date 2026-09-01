@@ -173,3 +173,30 @@ HOTFIX — supervisor.md data-loss repair (lens G finding F1/F2, this pass):
   battery 104/0.
 - Lesson queued for lens A: ship gate must verify section presence for every
   file a CHANGELOG entry claims to edit (battery grows a doc-integrity case).
+
+## v0.4.77 (2026-09-01)
+
+Duty 4+6 consolidated verdict — classes 1+2 (owner "Go all"). Class 3 items stay owner-gated.
+
+Docs (class 1):
+- Sediment scrub: SKILL.md (24 ops — owner-dates, incident narratives, run-ids moved to §Shared war stories), editor.md, supervisor.md trims; rule text carries the RULE, never its biography.
+- README truth fix (B20): local-only claim replaced with real mirror targets (opencrabs-skill + opencrabs-dev-state), tag range v0.1.0…v0.4.76 (150 tags).
+- D1: `tools/oc-post-receipts` archived to `tools/archive/`; run.sh re-pointed; archive lib path fallback added.
+- Landed owner rules: Reviewer-performance loop (Duty 6 item 7 — supervisor folds reviewer-execution lessons into lens briefs after every pass); gate-idle question sweep (editor.md Phase 5 — idle gate time circles back open questions).
+
+Tools (class 2):
+- E2: oc-deploy embed decoding absorbed into `lib/oc-embed.sh` (`oc_decode_job_embed`); both drifted private copies removed (built-sha decode + poll-plan site).
+- E3: oc-seal-state contrib-leg extraction delegates to `oc-attrib --trailers-only --range` — single owner of the trailer grammar.
+- E4: oc-ledger claim→issue derivation absorbed into `_latest_claim_issue()`; `claim-ref` and `confirm` both consume it.
+- F-L1: `--help`/`-h` exits 0 fleet-wide (was 2); unknown-arg usage failures standardized to 2 (oc-seal-state).
+- F-L3: post_verify proc reads honor `OC_SWAP_PROC_PREFIX` (testable without touching /proc).
+- F-L4: flood-guard documented limit — matches identical tool+args only; varying-arg storms noted as out of scope.
+- F-M4: oc-ledger selftest +5 cases (41-45: claim-ref rc contract, unknown uuid).
+- F-M5: run.sh section 00b — `lib/oc-embed.sh` unit tests (4 cases).
+- C-#6: bare `selftest` verb alias wherever `--selftest` works (oc-ledger, oc-commit, oc-review-persist; oc-wt/oc-ship-audit already had it). Bonus: oc-ship-audit selftest re-invocations now use an absolute SELF path (bare-relative invocation died rc=127).
+- C-#7: ledger kind enum is closed to EVERY writer — KINDS admits tool-written mechanical kinds `confirm` + `swap-result`; cmd_stamp normalizes `_`→`-` before the enum check; oc-deploy `ledger_stamp` guards its kind to `swap-result`.
+
+Battery: 104 → 109/0.
+
+Issue-Ref: leshchenko1979/opencrabs#51
+Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b

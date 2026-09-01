@@ -67,7 +67,7 @@ while [ $# -gt 0 ]; do
     --identity-only) IDENTITY_ONLY=1; shift ;;
     --verbose)  VERBOSE=1; shift ;;
     --selftest) selftest; exit $? ;;
-    -h|--help)  usage; exit 1 ;;
+    -h|--help)  usage; exit 0 ;;
     *)
       if [ -z "$RUN_ID" ]; then RUN_ID="$1"
       elif [ -z "$REF" ]; then REF="$1"

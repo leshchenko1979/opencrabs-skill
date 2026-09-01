@@ -59,7 +59,7 @@ while [ $# -gt 0 ]; do
     --force-init)  FORCE=1; shift ;;
     --verbose)     VERBOSE=1; shift ;;
     --selftest)    selftest; exit $? ;;
-    -h|--help)     usage; exit 1 ;;
+    -h|--help)     usage; exit 0 ;;
     *)
       if [ -z "$PATH_ARG" ]; then PATH_ARG="$1"; else usage; exit 5; fi
       shift ;;

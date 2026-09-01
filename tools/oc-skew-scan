@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
     --ledger) LEDGER="${2:-}"; shift ;;
     --current) CURRENT="${2:-}"; shift ;;
     --selftest) SELFTEST=1 ;;
-    -h|--help) usage ;;
+    -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) usage ;;
   esac
   shift

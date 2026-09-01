@@ -60,7 +60,7 @@ while [ $# -gt 0 ]; do
     --repo)     REPO="$2"; shift 2 ;;
     --verbose)  VERBOSE=1; shift ;;
     --selftest) selftest; exit $? ;;
-    -h|--help)  usage; exit 1 ;;
+    -h|--help)  usage; exit 0 ;;
     *)
       if [ -z "$PR" ]; then PR="$1"; else usage; exit 1; fi
       shift ;;
