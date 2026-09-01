@@ -126,3 +126,16 @@ Issue-Ref: #56
 - CHANGELOG: duplicate v0.4.68 deduped, orphan ## Entries header removed, entries reordered newest-LAST (lens A L5).
 
 Issue-Ref: #51
+
+## v0.4.72 (2026-08-31) — owner "Go all" 8-item batch: lens F MED builds + flood guard + CI-wait fixes
+
+- Task 1: deletions ritual — state-repo stale-lock reaper + entry-side stale-lock reaper in oc-deploy fanout (state commit 3844bfd; oc-deploy leg in task-2 commit).
+- Task 2 (C-F1): oc_log_flood_guard() in lib/oc-log.sh — >=4 identical failed invocations in 120s -> exit 8; OC_NO_FLOODGUARD=1 bypass (52d5f395).
+- Task 3 (C-F2+P4): oc-prchecks resume-before-dispatch (single-flight lock adoption) + CANCELLED rc 6 (74325d0a).
+- Task 4 (P10): carrier yml already-shipped, no-op (852175a4).
+- Task 5 (C-F3): editor.md Phase 6b oc-smoke-evidence identity receipt wiring (a5e6b8b3).
+- Task 6 (lens E merges): oc-ledger cmd_claim_ref() dispatch+usage (5f28e50c); oc-contributors retired (b5c7e79b); lib/oc-embed.sh shared job-embed decoder; oc-job-verify --identity-only; oc-artifact-verify embed reuse; oc-attrib --trailers-only; oc-harvest-sweep Leg T delegation; oc-smoke-evidence --markers canonical / --strings deprecated alias; SKILL.md rows (64888c9a).
+- Task 7 (lens F): F2/F3 oc-seal-state order-feature resolution via oc-carrier-features + mark-order fails loud on unknown sha, selftest 7->9 (1add673e); F5 oc-toolaccum unparseable tools.log -> die 3, F9 oc-review-persist LENSES +E F G, F10 oc-branch-sweep journals branch-delete (0a2e06d8); F7 set -o pipefail across all tools, oc-ledger selftests de-pipefied (grep -q SIGPIPE + intentional-nonzero inheritance) (cda85365); F4 already-shipped (7 carrier-head-unresolvable), F6 REJECTED with evidence (failure branch never deletes the body).
+- Task 7/F8 battery: section 17 covers 7 never-battered tools (shadow-rotate, smoke-evidence, issue-log, commit, ship-audit, tg-audit, harvest-sweep) — 86->104 checks; oc-shadow-rotate now validates args (usage rc 1); oc-smoke-evidence loop double-shift bug fixed (two-flag invocations died on usage); battery 104/0 GREEN (359d1d25).
+
+Issue-Ref: #51
