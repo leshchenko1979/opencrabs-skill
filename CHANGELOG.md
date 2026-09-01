@@ -145,3 +145,9 @@ Issue-Ref: #51
 - Duty-6 lens G widened: EDITOR.MD STRUCTURE -> ROLE-FILE STRUCTURE, now covers the organization of ALL three role files (editor.md + supervisor.md + SKILL.md). Owner 2026-09-01: "supervisor does not review its own skill file" — the review-set brief handed reviewers every file, but only editor.md had a structure lens, so supervisor.md and SKILL.md organization went unreviewed. SKILL.md role-table row updated; oc-review-persist whitelist unchanged (letters A-G).
 
 Issue-Ref: #51
+
+## v0.4.74 (2026-09-01)
+
+- Duty-6 docs lenses (A/B/G) grounded in the writing-great-skills vocabulary (owner 2026-09-01 "read writing good skills skill and apply its findings to the docs reviews"). Lens A: SEDIMENT added to the defect list, churn-drift checklist gains (f) LEADING-WORD COLLAPSE (restated phrase-lists/spelled-out triads collapse into one pretrained word — duplication wearing prose). Lens B: NO-OP TEST sentence-by-sentence (a line the model obeys by default is load for nothing), PROGRESSIVE DISCLOSURE (reference behind context pointers; information hierarchy), SPRAWL (too long even when every line is live — cure is disclosure then split, not word-trimming). Lens G: every STEP must end on a CHECKABLE completion criterion (premature-completion defence); ladder-before-split — disclose + regroup for CO-LOCATION tested before any split verdict. Review brief (method step 2) carries the vocabulary reference `skills/writing-great-skills/SKILL.md` to every A/B/G pass.
+
+Issue-Ref: #51

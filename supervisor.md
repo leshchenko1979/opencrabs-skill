@@ -183,7 +183,9 @@ Method:
      bumps): same rule stated twice across files; duplicated war stories;
      terms violating the SKILL.md test ontology (SMOKE TEST / CODE TESTS /
      FEATURE-PRESENCE CHECK / EXECUTION SANITY SIGNAL); undefined coinages;
-     stale ref names. PLUS the churn-drift checklist, EVERY lens-A pass:
+     stale ref names; SEDIMENT — stale layers that survive because adding
+     feels safe and removing feels risky (docs-lens vocabulary reference:
+     `skills/writing-great-skills/SKILL.md`). PLUS the churn-drift checklist, EVERY lens-A pass:
      (a) ONE CONCEPT = ONE NAME — sweep for synonyms of the same
      gate/tool/artifact (v0.4.61 found ≥5 names for the CI gate);
      (b) GLOSSARY CONFORMANCE — every load-bearing term in a rule must
@@ -195,11 +197,24 @@ Method:
      gates/phases in prose must match their defining sections (found:
      "4-lens" vs five reviewers); (e) RETIRED CONCEPTS MARKED — any
      mention of a retired role/tool carries RETIRED + date, never
-     present-tense.
+     present-tense; (f) LEADING-WORD COLLAPSE — prose restating one quality
+     across a phrase list ("fast, deterministic, low-overhead") or spelling
+     the same idea out at 2+ sites collapses into a single pretrained leading
+     word; a restatement is duplication wearing prose.
    - Reviewer B — LLM EFFICIENCY + RESPONSIBILITY CREEP: token weight of each
      role's required reading (a worker must not need another role's
      procedures), prose that should be tables, dead references, duties
      migrating across Supervisor/Editor scope lines (Compiler archived).
+     PLUS the NO-OP TEST sentence by sentence (docs-lens vocabulary
+     reference: `skills/writing-great-skills/SKILL.md`) — a line the model
+     already obeys by default is load paid for nothing (does it change
+     behavior vs the default? the fix is a stronger term, not a longer
+     sentence); reference that belongs behind a context pointer to a linked
+     file instead of inline (progressive disclosure — the information
+     hierarchy: in-skill steps with checkable completion criteria, in-skill
+     reference, external reference); and SPRAWL — a file too long even when
+     every line is live and unique (cure: disclose reference, then split by
+     branch — not word-trimming).
    - Reviewer C — CLI-AUTOMATION (owner directive 2026-08-26): recurring
      multi-step MANUAL rituals in any role's procedure that are deterministic
      enough to be one CLI command (state-file sealing, presence gates,
@@ -253,7 +268,13 @@ Method:
      supervisor.md, SKILL.md — phase/duty ordering vs actual work sequence,
      sections grown past cohesion (one section = one concern), rules living
      in the wrong section, cross-reference integrity after edits, whether a
-     file should split (e.g. per-phase reference pages) or regroup. Findings
+     file should split (e.g. per-phase reference pages) or regroup. Every
+     STEP in a role file must end on a CHECKABLE completion criterion (can
+     the agent tell done from not-done? vague criteria invite premature
+     completion). Before any split verdict, test the cheaper ladder moves
+     first: disclose reference behind a context pointer, regroup for
+     CO-LOCATION (a concept's definition, rules, and caveats under one
+     heading). Findings
      must weigh the cost of a split (cross-refs, worker reading load) against
      the cost of growth. First full G pass shipped 2026-08-31 (editor.md-only;
      standing lens from v0.4.67).
@@ -261,7 +282,9 @@ Method:
    CHANGELOG.md, s2-swap-journal-spec.md — name the subset in scope per pass),
    role map, ontology terms, ref names, strict output contract — numbered
    findings `file §section · verbatim quote · dimension · problem · concrete
-   fix · severity`. No pleasantries.
+   fix · severity`. No pleasantries. Docs lenses (A/B/G) also carry the
+   vocabulary reference: `skills/writing-great-skills/SKILL.md` (predictability,
+   information hierarchy, leading words, no-op test, failure modes).
 3. PERSISTENCE (added after two report losses to bounces, 2026-08-26): the
    Supervisor persists each returned report via `oc-review-persist <lens> @<file>`
    on receipt (read-only reviewers cannot write; the tool re-read-verifies and
