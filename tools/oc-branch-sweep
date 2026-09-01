@@ -18,6 +18,7 @@
 #       2 usage · 3 git failure.
 # =============================================================================
 set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
 _OC_DIR="$(cd "$(dirname "$0")" && pwd)"
 _OC_LIB="$_OC_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-branch-sweep" "$@"; else oc_log_finish() { :; }; fi
@@ -51,6 +52,8 @@ git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die 2 "not a git repo: $re
       cls="MERGED"
       if [ "$dry" = "1" ]; then action="would-delete"; else
         git -C "$repo" branch -D "$b" >/dev/null 2>&1 && action="deleted(tip=$tip archived)" || action="delete-failed"
+        # F10 (lens F, v0.4.72): tip sha must survive in the journal, not only in stdout TSV
+        case "$action" in deleted*) oc_log_extra branch-delete "$b@$tip" ;; esac
       fi
       printf '%s\t%s\t%s\t%s\n' "$b" "$cls" "$tip" "$action"
       case "$action" in deleted*|would-delete*) deleted=$((deleted+1)) ;; esac

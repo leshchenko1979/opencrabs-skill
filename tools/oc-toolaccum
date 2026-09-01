@@ -13,6 +13,7 @@
 # Exit: 0 clean · 1 repeat-offense flag · 2 usage · 3 log missing/unparseable.
 # =============================================================================
 set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
 _OC_DIR="$(cd "$(dirname "$0")" && pwd)"
 _OC_LIB="$_OC_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-toolaccum" "$@"; else oc_log_finish() { :; }; fi
@@ -38,7 +39,7 @@ cmd_accum() {
   tsv="$(jq -rs --arg u "$uuid" --arg c "$cutoff" '
     [.[] | select(.actor == $u and (.ts >= $c))] | group_by(.tool)[]
     | [ .[0].tool, (length), ([ .[] | select((.exit // 0) != 0)] | length), ([.[].ts] | max) ]
-    | @tsv' "$log" 2>/dev/null)" || true
+    | @tsv' "$log" 2>/dev/null)" || die 3 "tools.log unparseable by jq: $log (F5, v0.4.72 — parse failure is never NO-ROWS)"
   [ -n "$tsv" ] || { echo "NO-ROWS: no tools.log rows for $uuid in last ${days}d"; oc_log_extra verdict NO-ROWS; return 0; }
   printf 'tool\ttotal\tfailures\tlast_seen\n%s\n' "$tsv"
   flag="$(printf '%s\n' "$tsv" | awk -F'\t' -v th="$threshold" '$3 >= th {print $1 " (" $3 " failures)"}')"
@@ -70,8 +71,8 @@ cmd_selftest() {
   local ME="$0"
   bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --log "$T/tools.log" >/dev/null 2>&1; chk "clean-window-rc0" 0 $?
   bash "$ME" other-uuid --log "$T/tools.log" >/dev/null 2>&1; chk "other-actor-single-fail-rc0" 0 $?
-  bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --log "$T/tools.log" --threshold 1 >/dev/null 2>&1; chk "offense-rc1" 1 $?
-  bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --log "$T/tools.log" --threshold 1 2>/dev/null | grep -q 'oc-prchecks (2 failures)'; chk "offense-names-tool" 0 $?
+  bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --log "$T/tools.log" --threshold 1 > "$T/offense.out" 2>/dev/null; chk "offense-rc1" 1 $?
+  grep -q 'oc-prchecks (2 failures)' "$T/offense.out"; chk "offense-names-tool" 0 $?   # v0.4.72 pipefail: capture-then-grep, pipeline rc no longer inherits tool rc
   bash "$ME" nobody --log "$T/tools.log" >/dev/null 2>&1; chk "no-rows-rc0" 0 $?
   bash "$ME" --log "$T/tools.log" >/dev/null 2>&1; chk "usage-rc2" 2 $?
   bash "$ME" u --log "$T/missing" >/dev/null 2>&1; chk "missing-log-rc3" 3 $?
