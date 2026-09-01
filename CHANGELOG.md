@@ -274,3 +274,13 @@ Duty 4+6 run-2 residual classes, executed as one pass on base v0.4.79:
 
 Issue-Ref: leshchenko1979/opencrabs#51
 Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b
+
+## v0.4.81 (2026-09-01)
+
+- LENS REGROUP (owner word "I like this" on the grouping diagnosis): family identity is now explicitly the OBJECT under review, not the evidence flow between lenses. Reviewer C moved from EVIDENCE+LIFECYCLE into FAMILY TOOLS (gaps/shape/implementation pipeline: C proposes, E shapes, F builds/verifies; boundary watch vs A/B added). FAMILY ARTIFACTS = Reviewer D sole member (files/state/ledgers/flags — the family IS the deletion owner gate); C→D YAGNI feed and C→E rc-cluster feed survive as cross-family arrows noted in the headers.
+- LENS CENSUS (supervisor.md step 7): every consolidated verdict appends a per-lens census (yield/overlap/cost) computed from persisted reports; standing owner-gated triggers — clean x2 → automate or shrink brief; convergence x2 → merge or sharpen boundary; stale object list → re-brief before spawn. Anti-rules: no lens-per-incident, no auto-growth.
+- G brief object list de-rotted: enumeration replaced by spawn-time `ls *.md` re-derivation (role files + split-out reference pages) — objects rot, dimensions don't.
+- Map lockstep: supervisor.md Duty-6 step 2 = DOCS=A,B,G · TOOLS=C,E,F · ARTIFACTS=D.
+
+Issue-Ref: leshchenko1979/opencrabs#51
+Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b

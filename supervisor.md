@@ -132,8 +132,8 @@ Method:
    disk before acting. Hollow report → ONE retry with the prompt narrowed to
    that single lens; a second hollow result unlocks inline fallback, which
    must be flagged as such in the review record.
-2. Split lenses for independence by family (DOCS=A,B,G · TOOLS=E,F ·
-   EVIDENCE+LIFECYCLE=C,D) — letters keep chronological birth order (stable
+2. Split lenses for independence by family (DOCS=A,B,G · TOOLS=C,E,F ·
+   ARTIFACTS=D) — letters keep chronological birth order (stable
    report/persist keys, not an ordering). FULL LENS CATALOG: `review-lenses.md`
    (same dir as this file) — read it before spawning reviewers; each brief
    names the lens scope, exclusions, and evidence format.
@@ -156,7 +156,16 @@ Method:
    mis-scope → narrower lens brief; hollow reports → sharper evidence-format
    requirement; failed spot-checks → tighter citation rule. Edits ship with
    the next version batch, attributed to the reviewer that produced the
-   evidence.
+   evidence. PLUS THE LENS CENSUS (v0.4.81): every consolidated verdict
+   appends a per-lens census computed from the already-persisted reports —
+   yield (findings accepted), overlap (convergence with another lens), cost
+   (spawns/waves lost). Standing triggers, owner-gated: clean x2 cycles →
+   automate the lens's mechanical half or shrink the brief; convergence with
+   another lens x2 → merge or sharpen the boundary; object list stale at
+   spawn → re-brief BEFORE spawning. Anti-rules: no lens-per-incident
+   (incidents become rules/proposals, not lenses); no auto-growth. Lenses
+   are quality dimensions (stable, few); objects change every batch and are
+   re-derived from the skill root at spawn time.
 
 Rationale: the Supervisor authors most rules — author-blindness is structural.
 Independent subagent eyes + the owner gate keep the set honest.

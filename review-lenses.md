@@ -6,7 +6,11 @@ persistence, poll triple-check, verdict table) and keeps only the family map
 there; this file owns the per-lens scope briefs. Letters keep chronological
 birth order (stable report/persist keys, not an ordering). Reviewer-performance
 loop lessons (supervisor.md step 7) fold INTO these briefs at ship time,
-attributed to the reviewer that produced the evidence.
+attributed to the reviewer that produced the evidence. Family identity is the
+OBJECT under review, not the evidence flow between lenses (regrouped v0.4.81:
+C joined TOOLS — gaps/shape/implementation pipeline; D is sole in ARTIFACTS,
+the family IS the deletion owner gate). Membership and grouping change only
+on census evidence + owner word (supervisor.md step 7).
 
 #### FAMILY: DOCS — role files (wording / reading load / organization)
 
@@ -48,7 +52,9 @@ attributed to the reviewer that produced the evidence.
      every line is live and unique (cure: disclose reference, then split by
      branch — not word-trimming).
    - **Reviewer G — ROLE-FILE STRUCTURE:** the ORGANIZATION of EACH role file
-     — editor.md, supervisor.md, SKILL.md, review-lenses.md — phase/duty ordering vs actual
+     — the three role files (editor.md, supervisor.md, SKILL.md) plus every
+     split-out reference page in the skill root, re-derived from `ls *.md`
+     at spawn time (objects rot, the dimension doesn't) — phase/duty ordering vs actual
      work sequence, sections grown past cohesion (one section = one concern),
      rules living in the wrong section, cross-reference integrity after
      edits, whether a file should split (e.g. per-phase reference pages) or
@@ -60,7 +66,25 @@ attributed to the reviewer that produced the evidence.
      heading). Findings must weigh the cost of a split (cross-refs, worker
      reading load) against the cost of growth.
 
-#### FAMILY: TOOLS — the tools/ surface (surface shape / implementation)
+#### FAMILY: TOOLS — the tools/ surface (gaps / shape / implementation)
+
+   - **Reviewer C — CLI-AUTOMATION + USAGE GAPS:** recurring multi-step MANUAL
+     rituals in
+     any role's procedure that are deterministic enough to be one CLI command
+     (state-file sealing, presence gates, checksums, roster pulls, receipt
+     delivery). Each finding names the proposed tool + its single-command
+     interface. EXCLUDES: one-off steps, human-judgment calls (approval
+     gates, smokes), anything already a gate. Candidates feed the
+     Supervisor's process-tool ownership (scope above). PLUS USAGE-LOG
+     ANALYSIS: every C pass reads the actual tool records — state-dir
+     `tools.log`, `oc-deploy/journal/*.jsonl`, `workers-ledger.json` events,
+     smoke-verdicts — and derives ground truth no prose review can: which
+     verbs/flags are really invoked and how often, rc distributions (a tool
+     whose calls cluster on rc 2 is a broken interface), documented tools
+     never invoked in the window (YAGNI/deletion evidence for Reviewer D),
+     hand-built ritual artifacts that a proposal should replace. Findings
+     cite the log rows they rest on. Boundary watch vs A/B: C's dimension is
+     GAPS (what should be a command), not doc wording or weight.
 
    - **Reviewer E — INTERFACE/TOPOLOGY:** the TOOL SURFACE itself — pairs of
      tools whose invocations are bound to come one after another in practice
@@ -78,23 +102,8 @@ attributed to the reviewer that produced the evidence.
      divergence between SKILL.md tool-table rows and actual behavior (flags,
      rc, paths). Findings cite file:line.
 
-#### FAMILY: EVIDENCE + LIFECYCLE — logs, artifacts, retirement (C usage-log YAGNI evidence feeds D deletion verdicts)
+#### FAMILY: ARTIFACTS — files, state, ledgers, flags (deletion verdicts — the family IS the owner gate; C usage-log YAGNI evidence feeds it from TOOLS)
 
-   - **Reviewer C — CLI-AUTOMATION:** recurring multi-step MANUAL rituals in
-     any role's procedure that are deterministic enough to be one CLI command
-     (state-file sealing, presence gates, checksums, roster pulls, receipt
-     delivery). Each finding names the proposed tool + its single-command
-     interface. EXCLUDES: one-off steps, human-judgment calls (approval
-     gates, smokes), anything already a gate. Candidates feed the
-     Supervisor's process-tool ownership (scope above). PLUS USAGE-LOG
-     ANALYSIS: every C pass reads the actual tool records — state-dir
-     `tools.log`, `oc-deploy/journal/*.jsonl`, `workers-ledger.json` events,
-     smoke-verdicts — and derives ground truth no prose review can: which
-     verbs/flags are really invoked and how often, rc distributions (a tool
-     whose calls cluster on rc 2 is a broken interface), documented tools
-     never invoked in the window (YAGNI/deletion evidence for Reviewer D),
-     hand-built ritual artifacts that a proposal should replace. Findings
-     cite the log rows they rest on.
    - **Reviewer D — DELETION SAFETY:** enumerate retired / stale /
      duplicate-looking artifacts in the skill scope (files, state files,
      ledgers, markers, tool flags) and for EACH list what reads or writes it
