@@ -48,7 +48,7 @@ attributed to the reviewer that produced the evidence.
      every line is live and unique (cure: disclose reference, then split by
      branch — not word-trimming).
    - **Reviewer G — ROLE-FILE STRUCTURE:** the ORGANIZATION of EACH role file
-     — editor.md, supervisor.md, SKILL.md — phase/duty ordering vs actual
+     — editor.md, supervisor.md, SKILL.md, review-lenses.md — phase/duty ordering vs actual
      work sequence, sections grown past cohesion (one section = one concern),
      rules living in the wrong section, cross-reference integrity after
      edits, whether a file should split (e.g. per-phase reference pages) or

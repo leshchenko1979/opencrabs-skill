@@ -79,7 +79,7 @@ STAMPS="$(jq -r --arg u "$UUID" '.workers[] | select(.uuid==$u) | [.last_acked.a
 WOKEN=0; EVID=""
 while IFS= read -r st; do
   [ -n "$st" ] || continue
-  EP="$(to_epoch "$st")" || { echo "unparseable worker stamp: $st" >&2; exit 4; }
+  EP="$(to_epoch "$st")" || { echo "oc-ping-proof: skipping unparseable worker stamp: $st" >&2; continue; }   # lens F MED (v0.4.79): one bad stamp must not kill the probe
   if [ "$EP" -ge "$PING" ]; then WOKEN=1; EVID="$st"; break; fi
 done <<EOF
 $STAMPS

@@ -3,8 +3,8 @@
 **Load only after SKILL.md confirmed the role is SUPERVISOR.** This is the HQ
 session's standing role.
 
-Scope: own the skill set (`SKILL.md` / `editor.md` / `supervisor.md`;
-`tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
+Scope: own the skill set (`SKILL.md` / `editor.md` / `supervisor.md` /
+`review-lenses.md`; `tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
 turn field evidence into rules. The Supervisor NEVER dispatches builds, NEVER swaps
 binaries, NEVER touches the binary, NEVER writes feature code.
 
@@ -208,8 +208,9 @@ supervisor-side ownership pointer.
 ## CI-wait & waiter discipline (supervisor-scoped items; local numbering W1-W6)
 
 Moved from editor.md §CI-wait — these bind SUPERVISOR waiters and any detached
-lane polling; the editor keeps items 1–3 (gh-watch ban, OC_ACTOR stamping,
-oc-prchecks re-dispatch). Cross-references to these items use the W-prefix to
+lane polling. The editor carries its OWN full set in editor.md §CI-wait
+(items 1–9 since v0.4.71 — lens B F10, v0.4.79: the "editor keeps items 1–3"
+partition is retired). Cross-references to these items use the W-prefix to
 avoid collision with the editor's local numbering.
 
 - **W1. Poll floor — EVERY detached gh poller ≥60s.** Waiter, watchdog,

@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-log-search — real-telemetry-only search over the ops daily daemon log
+# (ops lane 1a63f103 request, owner-ordered 2026-09-01; built by HQ same day).
+#
+# Problem it kills: raw grep against logs/opencrabs.YYYY-MM-DD is structurally
+# unreliable — the daemon logs its own LLM streaming, so any grep term returns
+# hundreds of thousands of [TEXT_ACCUM]/[TOOL_*] stream-echo lines (own
+# narration + other lanes' narration polluting the same file). Concrete
+# incident: a full incident report built on log "hits" that were the reporter's
+# own stream echo (retraction 2026-09-01 17:33Z, smoke-verdicts ledger).
+#
+# Guarantees:
+#   - Only INFO/WARN/ERROR telemetry lines are returned (DEBUG stream noise
+#     excluded unless --all-levels).
+#   - HARD FENCE: a line whose source module is brain::provider / any
+#     provider:: module / custom_openai_compatible can NEVER be returned —
+#     applied last, unconditional, even for INFO-looking lines. This is the
+#     self-echo class; the fence is the tool's reason to exist.
+#   - Known stream tags ([TEXT_ACCUM] etc.) excluded unconditionally as belt.
+#
+# Exit codes: 0 matches found · 1 ran clean, zero matches (grep-like)
+#             2 usage error · 3 log file missing · 4 selftest failed
+# =============================================================================
+PROG=oc-log-search
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute — $0 unqualified dies under `bash tools/oc-*` (oc-ship-audit lesson, v0.4.77)
+_LOG_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_LOG_LIB" ]; then source "$_LOG_LIB"; oc_log_init "$PROG" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() { echo "usage: $PROG <pattern> [--date YYYY-MM-DD] [--log-dir P] [--session UUID] [--module SUBSTR] [--since HH:MM|ISO] [--tail N] [--all-levels] | --help | --selftest" >&2; exit 2; }
+
+DATE="$(date -u +%F)"
+LOG_DIR="${HOME}/.opencrabs/profiles/ops/logs"
+SESSION=""; MODULE=""; SINCE=""; TAIL_N=""; ALL_LEVELS=0; PATTERN=""; SELFTEST=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help) sed -n '2,20p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --selftest) SELFTEST=1 ;;
+    --date) shift; DATE="${1:-}"; [ -n "$DATE" ] || usage ;;
+    --log-dir) shift; LOG_DIR="${1:-}"; [ -n "$LOG_DIR" ] || usage ;;
+    --session) shift; SESSION="${1:-}"; [ -n "$SESSION" ] || usage ;;
+    --module) shift; MODULE="${1:-}"; [ -n "$MODULE" ] || usage ;;
+    --since) shift; SINCE="${1:-}"; [ -n "$SINCE" ] || usage ;;
+    --tail) shift; TAIL_N="${1:-}"; case "$TAIL_N" in ''|*[!0-9]*) usage ;; esac ;;
+    --all-levels) ALL_LEVELS=1 ;;
+    -*) usage ;;
+    *) [ -n "$PATTERN" ] && usage; PATTERN="$1" ;;
+  esac
+  shift   # house style: ONE trailing shift consumes flag or value (double-shift bug class, Task 3 lesson)
+done
+[ -n "$PATTERN" ] || [ "$SELFTEST" -eq 1 ] || usage
+
+if [ "$SELFTEST" -eq 1 ]; then
+  d="$(mktemp -d)"
+  cat > "$d/opencrabs.2026-09-01" <<FIXTURE
+2026-09-01T12:00:00.000Z  INFO ThreadId(01) run_tool_loop{session_id=1111aaaa}: opencrabs::channels::telegram::rich::mermaid: src/channels/telegram/rich/mermaid.rs:10: rendered diagram ok
+2026-09-01T12:00:01.000Z DEBUG ThreadId(02) run_tool_loop{session_id=1111aaaa}: opencrabs::brain::provider::llm: src/brain/provider/llm.rs:4385: [TEXT_ACCUM] I grepped for mermaid and found hits
+2026-09-01T12:01:00.000Z DEBUG ThreadId(06) run_tool_loop{session_id=1111aaaa}: opencrabs::core::bus: src/core/bus.rs:3: debug telemetry line
+2026-09-01T12:00:02.000Z  INFO ThreadId(03) run_tool_loop{session_id=2222bbbb}: opencrabs::brain::provider: src/brain/provider/mod.rs:7: INFO-looking line that must be fenced
+2026-09-01T12:05:00.000Z  WARN ThreadId(04) run_tool_loop{session_id=2222bbbb}: opencrabs::tools::oc_something: src/tools.rs:5: something WARNed about mermaid
+2026-09-01T12:06:00.000Z  INFO ThreadId(05) run_tool_log{session_id=1111aaaa}: opencrabs::channels::telegram: src/x.rs:9: [TOOL_ACCUM] tagged noise mentioning mermaid
+FIXTURE
+  F=0
+  tele() { printf '%s\n' "$1" | grep -vE '^(---|'"$PROG"':)'; }   # strip footer + zero-hits message; assert TELEMETRY lines only
+  out="$("$SELF" mermaid --log-dir "$d" --date 2026-09-01)"; [ "$(tele "$out" | grep -c .)" -eq 2 ] || { echo "selftest: expected 2 telemetry mermaid hits, got $(tele "$out" | grep -c .)"; F=1; }
+  tele "$out" | grep -q 'TEXT_ACCUM\|TOOL_ACCUM' && { echo "selftest: stream tag leaked"; F=1; }
+  tele "$out" | grep -q 'brain::provider' && { echo "selftest: HARD FENCE FAILED — provider module returned"; F=1; }
+  out="$("$SELF" 'debug telemetry' --log-dir "$d" --date 2026-09-01)"; RC=$?
+  { [ "$RC" -eq 1 ] && [ "$(tele "$out" | grep -c .)" -eq 0 ]; } || { echo "selftest: DEBUG leaked without --all-levels (rc=$RC)"; F=1; }
+  out="$("$SELF" 'debug telemetry' --log-dir "$d" --date 2026-09-01 --all-levels)"; RC=$?
+  { [ "$RC" -eq 0 ] && tele "$out" | grep -q 'core::bus'; } || { echo "selftest: --all-levels lost DEBUG telemetry (rc=$RC)"; F=1; }
+  out="$("$SELF" mermaid --log-dir "$d" --date 2026-09-01 --session 2222bbbb)"
+  { [ "$(tele "$out" | grep -c .)" -eq 1 ] && tele "$out" | grep -q 'WARN'; } || { echo "selftest: --session filter broken"; F=1; }
+  out="$("$SELF" mermaid --log-dir "$d" --date 2026-09-01 --since 12:04)"
+  [ "$(tele "$out" | grep -c .)" -eq 1 ] || { echo "selftest: --since filter broken"; F=1; }
+  out="$("$SELF" mermaid --log-dir "$d" --date 2026-09-01 --tail 1)"
+  { [ "$(tele "$out" | grep -c .)" -eq 1 ] && tele "$out" | grep -q '12:05'; } || { echo "selftest: --tail broken"; F=1; }
+  "$SELF" mermaid --log-dir "$d" --date 1999-01-01 >/dev/null 2>&1; [ $? -eq 3 ] || { echo "selftest: missing log must be rc 3"; F=1; }
+  "$SELF" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: no-args must be rc 2"; F=1; }
+  "$SELF" --help >/dev/null 2>&1; [ $? -eq 0 ] || { echo "selftest: --help must be rc 0"; F=1; }
+  rm -rf "$d"
+  [ "$F" -eq 0 ] && { echo "selftest OK: fence + level + session/since/tail + rc contract all green"; exit 0; }
+  exit 4
+fi
+
+LOG="$LOG_DIR/opencrabs.$DATE"
+[ -f "$LOG" ] || { echo "$PROG: log not found: $LOG" >&2; exit 3; }
+
+# --since: lexical compare on the ISO timestamp prefix (log lines start with it).
+if [ -n "$SINCE" ]; then
+  case "$SINCE" in
+    *T*) WHEN="$SINCE" ;;
+  *)  WHEN="${DATE}T${SINCE}" ;;
+  esac
+  _since_stage() { awk -v w="$WHEN" 'substr($0,1,length(w)) >= w'; }
+else
+  _since_stage() { cat; }
+fi
+if [ "$ALL_LEVELS" -eq 1 ]; then
+  _lvl_stage() { cat; }
+else
+  _lvl_stage() { grep -E ' (INFO|WARN|ERROR) '; }
+fi
+
+OUT="$(_since_stage < "$LOG" \
+  | _lvl_stage \
+  | grep -vE '\[(TEXT_ACCUM|TOOL_ACCUM|TOOL_EMIT|STREAM_USAGE|STREAM_RECONCILE|HANDLE_ERROR|TRUNCATION|STREAM_ERROR)\]' \
+  | { [ -n "$SESSION" ] && grep -F "session_id=$SESSION" || cat; } \
+  | { [ -n "$MODULE" ] && grep -F "$MODULE" || cat; } \
+  | grep -vE 'brain::provider|provider::|custom_openai_compatible' \
+  | grep -E -- "$PATTERN" \
+  | { [ -n "$TAIL_N" ] && tail -n "$TAIL_N" || cat; })"
+HITS="$(printf '%s\n' "$OUT" | grep -c .)"
+if [ "$HITS" -eq 0 ]; then
+  echo "$PROG: 0 telemetry hits for '$PATTERN' in $LOG (fence held)"
+  exit 1
+fi
+printf '%s\n' "$OUT"
+echo "--- $HITS telemetry hit(s) [INFO+ only, provider-fenced]"
+exit 0

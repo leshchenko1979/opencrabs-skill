@@ -49,7 +49,7 @@ Usage: $PROG add <task> <branch> [--base origin/main] [--create [--from REF]] [-
 Exit: 0 ok / 2 usage / 3 path-exists-or-dirty / 4 index-failed / 5 repo-or-branch-missing / 6 behind-base
 EOS
 }
-usage() { help >&2; exit 2; }
+usage() { [ -n "${1:-}" ] && echo "oc-wt: $1" >&2; help >&2; exit 2; }   # lens C MED-2 (v0.4.79): diagnostics, not bare rc 2
 
 slug_ok() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$'; }
 
@@ -177,8 +177,8 @@ while [ $# -gt 0 ]; do
     --force) FORCE=1 ;;
     --repo)  shift; REPO="${1:-}"; [ -n "$REPO" ] || usage ;;
     --no-log) : ;;
-    -*) usage ;;
-    *) [ "$VERB" = "add" ] && [ -z "$BRANCH" ] && BRANCH="$1" || usage ;;
+    -*) usage "unknown flag: $1" ;;
+    *) [ "$VERB" = "add" ] && [ -z "$BRANCH" ] && BRANCH="$1" || usage "unexpected argument: $1" ;;
   esac
   shift
 done

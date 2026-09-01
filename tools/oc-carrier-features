@@ -23,7 +23,7 @@ if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-carrier-features" 
 trap 'oc_log_finish $?' EXIT
 
 PROG="$(basename "$0")"
-usage() { echo "usage: $0 [--repo <path>] [--ref <branch>] [--fetch] | --selftest" >&2; exit 2; }
+usage() { [ -n "${1:-}" ] && echo "oc-carrier-features: $1" >&2; echo "usage: $0 [--repo <path>] [--ref <branch>] [--fetch] | --selftest" >&2; exit 2; }   # lens C MED-2 (v0.4.79)
 help()   { echo "usage: $0 [--repo <path>] [--ref <branch>] [--fetch] | --selftest"; echo "Exit: 0 set printed / 2 usage / 3 carrier yml unfetchable / 4 no-features-input"; }  # C-#3: help=0
 
 REPO="$HOME/opencrabs"; REF="ci/quick-build-linux"; FETCH=0; SELFTEST=0
@@ -34,11 +34,11 @@ while [ $# -gt 0 ]; do
     --fetch) FETCH=1 ;;
     --selftest) SELFTEST=1 ;;
     -h|--help) help; exit 0 ;;  # C-#3
-    *) usage ;;
+    *) usage "unknown flag: $1" ;;
   esac
   shift
 done
-[ -n "$REPO" ] && [ -n "$REF" ] || usage
+[ -n "$REPO" ] && [ -n "$REF" ] || usage "--ref is required"
 
 # extract <yml-text> — features: input default on stdout; empty if absent
 extract_features_default() {

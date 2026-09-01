@@ -219,6 +219,11 @@ case "$*" in
   *actions/runs/777/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, telegram)","conclusion":"success"}]}' ;;
   *actions/runs/777*) echo '{"status":"completed","conclusion":"success"}' ;;
   *actions/runs/888/jobs*) echo '{"jobs":[{"name":"ORDER gates","conclusion":"success"},{"name":"Linux amd64 (eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9001"}]}' ;;
+  *runs?status=success*)
+    if [ -n "${OC_TEST_STALE_FIRST:-}" ]; then echo '{"workflow_runs":[{"id":999},{"id":111}]}'; else echo '{"workflow_runs":[{"id":111}]}'; fi ;;
+  *actions/runs/999/jobs*) echo '{"jobs":[{"name":"ORDER gates (2f604e56...)"}]}' ;;
+  *actions/runs/998/jobs*) echo '{"jobs":[{"name":"ORDER gates (2f604e56...)"}]}' ;;
+  *actions/runs/998*) echo '{"status":"completed","conclusion":"success"}' ;;
   *workflows/quick-build-linux.yml/runs*) echo '{"workflow_runs":[{"id":111}]}' ;;
   *actions/runs/222/jobs*|*actions/runs/555/jobs*|*actions/runs/789/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (cccccccccccccccccccccccccccccccccccccccc, telegram)"}]}' ;;
   *actions/runs/333/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (dddddddddddddddddddddddddddddddddddddddd, telegram)"}]}' ;;
@@ -352,6 +357,20 @@ Issue-Ref: #99"
     OC_DEPLOY_NOFANOUT=1 "$SELF_BIN" poll --wait 0 2>&1)"; rc=$?
   check_rc "poll-wait0-rc" $rc 0
   check_has "poll-wait0-noop" "$out" "nothing to do"
+  # 10e. #63 (v0.4.79): stale FIRST run skipped, older decodable run wins
+  out="$(OC_TEST_STALE_FIRST=1 OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_NOFANOUT=1 "$SELF_BIN" poll --wait 0 2>&1)"; rc=$?
+  check_rc "poll-stale-first-rc" $rc 0
+  check_has "poll-stale-skip-note" "$out" "skip run 999"
+  check_has "poll-stale-picks-111" "$out" "nothing to do: aaaaaaaa"
+  # 10f. #63 family (v0.4.79): fanout decode-fail -> rc 3, marked, idempotent on retry
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_NOTIFY="$SD/notify" \
+    "$SELF_BIN" fanout --run 998 2>&1)"; rc=$?
+  check_rc "fanout-decode-fail-rc" $rc 3
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_NOTIFY="$SD/notify" \
+    "$SELF_BIN" fanout --run 998 2>&1)"; rc=$?
+  check_rc "fanout-998-retry-rc" $rc 0
+  check_has "fanout-998-retry-idempotent" "$out" "reason=done"
   # 10d. C-#2: handoff wakes --notify-session
   rm -f "$SD/deployed.sha"
   : > "$T/notify.log"
@@ -913,8 +932,9 @@ green_leg() { # $1=run id $2=built sha — one notify per contributing session
   prev="$(jq -r '.prev_sha // empty' "$DEPLOYED_META" 2>/dev/null)"
   feat="$(jq -r '.features // "-"' "$DEPLOYED_META" 2>/dev/null)"
   range="${prev:-?}..${bsha}"
-  rows="$("$ATTRIB" --repo "$REPO_DIR" --deployed --ledger "$LEDGER" 2>/dev/null \
-    | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}')" || true
+  local ATTRIB_RC=0 ATTRIB_OUT=""
+  ATTRIB_OUT="$("$ATTRIB" --repo "$REPO_DIR" --deployed --ledger "$LEDGER" 2>/dev/null)" || ATTRIB_RC=$?
+  rows="$(printf '%s\n' "$ATTRIB_OUT" | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}')"
   [ -n "$rows" ] || { jline contributors 3 "{\"range\":\"$range\",\"error\":\"attrib-fail-or-empty\"}"; die 3 "fanout: oc-attrib returned nothing for deployed range $range"; }
   sessions="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$/ {print $1}' | LC_ALL=C sort -u)"
   jline contributors 0 "{\"range\":\"$range\",\"sessions\":[$(printf '%s\n' "$sessions" | sed '/^$/d' | sed 's/.*/"&"/' | paste -sd, -)]}"
@@ -1067,7 +1087,7 @@ fanout_run() { # $1=run id $2=dry-run(0/1)
   case "$conclusion" in
     success)
       bsha="$(decode_built_sha "$run")"
-      [ -n "$bsha" ] || { jline fanout-end 3 "{\"run\":\"$run\",\"error\":\"built-sha-decode-fail\"}"; die 3 "fanout: cannot decode built sha for run $run"; }
+      [ -n "$bsha" ] || { jline fanout-end 3 "{\"run\":\"$run\",\"error\":\"built-sha-decode-fail\"}"; fanout_mark_done "$run" "decode-error" 0 0 0; die 3 "fanout: cannot decode built sha for run $run (marked decode-error — will not block future scans)"; }   # #63 family (v0.4.79): mark, don't re-strike forever
       dep="$(head -1 "$DEPLOYED" 2>/dev/null || echo none)"
       if [ "$bsha" != "$dep" ]; then
         jline fanout-end 0 "{\"run\":\"$run\",\"reason\":\"not-deployed-yet\",\"built\":\"$bsha\",\"deployed\":\"$dep\"}"
@@ -1317,6 +1337,7 @@ swap_execute() {
     if [ "${OC_DEPLOY_NOFANOUT:-0}" != "1" ]; then
       FO_OUT="$( ( fanout_run "$RUN_ID" 0 ) 2>&1 )" || FO_RC=$?
       FO_NOTE="rc=$FO_RC"
+      jline fanout "$FO_RC" "{\"run\":\"$RUN_ID\"}"   # lens F HIGH-2 (v0.4.79): fanout rc in the swap journal — stderr-only surfacing was a silent-loss path
       [ "$FO_RC" = 0 ] || { echo "oc-deploy: GREEN fan-out rc=$FO_RC — swap stands; re-run 'oc-deploy fanout --run $RUN_ID'" >&2; printf '%s\n' "$FO_OUT" >&2; }
     fi
     ledger_stamp "$BY_LBL" "swap-result DEPLOYED sha=$SHA run=$RUN_ID features=$FEATURES: install(seq5)+post-verify(seq$SEQ match=true)+marker-write+receipt; journal=$JF backup=$BAK auth=auto-swap fanout=$FO_NOTE" "swap-result"
@@ -1465,7 +1486,7 @@ while [ $# -gt 0 ]; do
     --dry-run)  DRYRUN=1 ;;   # issue #24: fanout rehearsal — never marks done
     --with-delta) WITH_DELTA=1 ;;   # merge B (v0.4.48): watch rides oc-upstream-delta too
     --wait)     WAIT_SECS="${2:-}"; shift ;;   # C-#2: poll blocks until a NEW green run (or timeout, rc 5)
-    --notify-session) NOTIFY_SESSION="${2:-}"; shift ;;   # C-#2: session uuid woken on handoff/timeout
+    --notify-session) [ -n "${2:-}" ] || die 2 "--notify-session needs a session uuid"; NOTIFY_SESSION="${2:-}"; shift ;;   # C-#2: session uuid woken on handoff/timeout; guard lens C MED-3 (v0.4.79)
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
     -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 0 ;;
     *)          die 1 "unknown arg: $1" ;;
@@ -1545,12 +1566,11 @@ case "$MODE" in
     #     Subshell: fanout_run's own exits must not kill the poll.
     if [ "${OC_DEPLOY_NOFANOUT:-0}" != "1" ]; then
       RED_JSON="$("$GH" api "repos/$FORK/actions/workflows/$WF/runs?status=failure&per_page=3" 2>/dev/null || true)"
-      RED_ID="$(printf '%s' "$RED_JSON" | jq -r '.workflow_runs[0].id // empty' 2>/dev/null || true)"
-      if [ -n "$RED_ID" ]; then
+      for RED_ID in $(printf '%s' "$RED_JSON" | jq -r '.workflow_runs[].id // empty' 2>/dev/null || true); do
         FO_RC=0; FO_OUT=""
         FO_OUT="$( ( fanout_run "$RED_ID" 0 ) 2>&1 )" || FO_RC=$?
         echo "RED scan: run=$RED_ID fanout rc=$FO_RC $(printf '%s' "$FO_OUT" | tail -1)"
-      fi
+      done   # v0.4.79: iterate (idempotence makes repeats no-ops) — stale newest failure no longer masks older real ones
     fi
     # C-#2 (v0.4.78): --wait N blocks until a NEW green run (built sha !=
     # deployed) appears or N seconds elapse (rc 5, optional --notify-session
@@ -1561,20 +1581,24 @@ case "$MODE" in
     while :; do
       RUNS_JSON="$("$GH" api "repos/$FORK/actions/workflows/$WF/runs?status=success&per_page=3" 2>/dev/null)" \
         || { shadow_log poll "-" "-" "api-fail"; die 2 "gh api runs query failed"; }
-      RUN_ID="$(printf '%s' "$RUNS_JSON" | jq -r '.workflow_runs[0].id // empty')"
+      # #63 fix (v0.4.79): iterate the latest runs and SKIP those whose job
+      # names carry no decodable 40-hex embed (stale ORDER-gates / pre-rename
+      # formats) instead of fatal-exiting on runs[0] — interleaved ships put a
+      # stale newest run in the list routinely. First decodable run wins;
+      # skips are diagnosed on stderr, never fatal.
+      RUN_ID=""; B_SHA=""
+      for RID in $(printf '%s' "$RUNS_JSON" | jq -r '.workflow_runs[].id // empty' 2>/dev/null); do
+        JN="$("$GH" api "repos/$FORK/actions/runs/$RID/jobs" 2>/dev/null \
+          | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')"
+        CAND="$(oc_decode_job_embed "$JN" 2>/dev/null | cut -d'|' -f1)"   # shared decoder (E2 v0.4.77)
+        if [ -n "$CAND" ]; then RUN_ID="$RID"; B_SHA="$CAND"; break; fi
+        echo "poll: skip run $RID — no decodable build job (stale/non-build name)" >&2
+      done
       if [ -z "$RUN_ID" ]; then
         [ "$(date +%s)" -lt "$POLL_DEADLINE" ] && { sleep "$POLL_INTERVAL"; continue; }
-        [ -n "$NOTIFY_SESSION" ] && notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: no successful carrier run found"
-        die 5 "poll: no successful carrier runs found within --wait ${WAIT_SECS}s"
+        if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: no decodable carrier run found" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — supervisor not woken)" >&2; fi
+        die 5 "poll: no decodable carrier runs within --wait ${WAIT_SECS}s"
       fi
-      # Built sha comes from the BUILD job name "Linux amd64 (<sha>, <features>)"
-      # — select the job whose name embeds a 40-hex sha (the ORDER gates job
-      # carries no embed; jobs[0] is NOT assumed — oc-artifact-verify regression
-      # lesson 2026-08-28).
-      JOB_NAME="$("$GH" api "repos/$FORK/actions/runs/$RUN_ID/jobs" 2>/dev/null \
-        | jq -r '[.jobs[] | select(.name | test("\\([0-9a-f]{40}"))][0].name // empty')"
-      B_SHA="$(oc_decode_job_embed "$JOB_NAME" | cut -d'|' -f1)"   # shared decoder (E2 v0.4.77)
-      [ -n "$B_SHA" ] || die 2 "cannot decode built sha from job name: $JOB_NAME"
       DEP="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
       plan "latest green run=$RUN_ID built sha=$B_SHA deployed=$DEP"
       [ "$B_SHA" != "$DEP" ] && break
@@ -1583,7 +1607,7 @@ case "$MODE" in
         exit 0
       fi
       if [ "$(date +%s)" -ge "$POLL_DEADLINE" ]; then
-        [ -n "$NOTIFY_SESSION" ] && notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: latest green $B_SHA already deployed — nothing new to swap"
+        if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: latest green $B_SHA already deployed — nothing new to swap" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — supervisor not woken)" >&2; fi
         die 5 "poll --wait ${WAIT_SECS}s timed out: $B_SHA already deployed (nothing new)"
       fi
       plan "poll --wait: $B_SHA already deployed — next attempt in ${POLL_INTERVAL}s"
@@ -1598,7 +1622,7 @@ case "$MODE" in
           || { shadow_log swap "$B_SHA" "$FEATURES" "launch-fail"; die 4 "systemd-run handoff failed — nothing touched"; }
         shadow_log swap "$B_SHA" "$FEATURES" "handed-off:$UNIT"
         echo "HANDOFF: Phase B transient unit $UNIT owns the swap (sha=$B_SHA run=$RUN_ID) — poll (Phase A) exits pre-bounce by design"
-        [ -n "$NOTIFY_SESSION" ] && notify_session "$NOTIFY_SESSION" "oc-deploy poll" "HANDOFF: swap unit $UNIT owns sha=$B_SHA run=$RUN_ID (features=$FEATURES) — Phase B owns the bounce"   # C-#2
+        if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "HANDOFF: swap unit $UNIT owns sha=$B_SHA run=$RUN_ID (features=$FEATURES) — Phase B owns the bounce" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (handoff wake FAILED)" >&2; fi   # C-#2 + lens C MED-1 rc capture (v0.4.79)
         exit 0
       fi
       plan "swap path armed at stage $STAGE — pass --execute when S2 pilot authorized"

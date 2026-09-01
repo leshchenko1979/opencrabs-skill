@@ -14,10 +14,13 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `SKILL.md` | Main entry: roles, hard rules, tool register, ship path, glossary |
 | `editor.md` | EDITOR role procedure — Phases 0–7b (issue claim → worktree → edit → gate → commit → ship → upstream PR) |
 | `supervisor.md` | SUPERVISOR role — worker roster, duty cadence, CI-wait & waiter discipline, review lenses |
+| `review-lenses.md` | Full Duty-6 lens briefs (A–G) — split from supervisor.md v0.4.78 |
+| `editor-phase7-rules.md` | Phase-7 reference rules disclosed from editor.md (v0.4.78) |
 | `s2-swap-journal-spec.md` | Journal vocabulary spec for the oc-deploy swap leg |
-| `CHANGELOG.md` | Version history, **newest entry LAST** (sorted v0.4.60 → v0.4.76) |
+| `CHANGELOG.md` | Version history, **newest entry LAST** |
 | `tools/` | The `oc-*` tool fleet (30 executables) + `lib/` + `tests/` |
 | `tools/lib/` | Shared shell libs: `oc-log.sh` (journal + rc register + flood guard), `oc-embed.sh` (job-embed decoder) |
+| `tools/RC-CONTRACT.md` | SOLE per-tool rc register: fleet conventions + verdict codes (v0.4.78) |
 | `tools/tests/run.sh` | Battery: full selftest suite + coverage sections. Receipt → `tools/tests/battery-last.json` |
 | `tools/archive/compiler.md` | ARCHIVED runbook for the retired COMPILER role (re-enable = load this file) |
 
@@ -31,10 +34,10 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 
 ## Tool fleet (quick index)
 
-Full register with rc codes lives in **SKILL.md** — that table is the source of truth.
+Full register with rc codes lives in **`tools/RC-CONTRACT.md`** — that file is the source of truth (v0.4.79; SKILL.md carries purpose rows only).
 Highlights:
 
-- `oc-deploy` — ship / poll / swap-execute / fanout (101 KB; selftest 148 checks)
+- `oc-deploy` — ship / poll / swap-execute / fanout (selftest 165 checks, v0.4.79)
 - `oc-ledger` — worker ledger: claims, sync, version stamps, cadence
 - `oc-prchecks` — CI-wait on `pr-checks.yml` (poll, resume-before-dispatch, lane gates)
 - `oc-commit` / `oc-issue-log` — signed commits + tracked-issue receipts
@@ -60,4 +63,4 @@ Highlights:
 ## Repo status
 
 Mirrored to `leshchenko1979/opencrabs-skill` (pushed on owner word; state repo `leshchenko1979/opencrabs-dev-state`).
-Tags `v0.1.0` … `v0.4.76` (150 tags). Current: **v0.4.76**.
+Current version: **`SKILL.md` frontmatter `version:`** — single source of truth, never stale (lens A M2, v0.4.79). Tag history: `git tag --list 'v0.4.*'`.

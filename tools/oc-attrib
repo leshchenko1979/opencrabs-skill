@@ -31,13 +31,13 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-attrib" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT   # early exits (usage/git-fail) — cleanup traps below supersede but also log
 
-usage() { echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--json] | --trailers-only --range <A..B> | --contributors | --selftest" >&2; exit 2; }
+usage() { [ -n "${1:-}" ] && echo "oc-attrib: $1" >&2; echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--json] | --trailers-only --range <A..B> | --contributors | --selftest" >&2; exit 2; }   # lens C MED-2/MED-4 (v0.4.79)
 help()   { echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--json] | --trailers-only --range <A..B> | --contributors | --selftest"; echo "Exit: 0 ok / 2 usage / 3 git failure / 4 empty range / 5 deployed-markers-missing"; }  # C-#3: help=0
 
 SELFTEST=0; JSON=0; REPO="."; RANGE=""; LEDGER=""; DEPLOYED=0; TRAILERS_ONLY=0; CONTRIB=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo) REPO="${2:-}"; shift ;;
+    --repo) [ -n "${2:-}" ] || usage "--repo needs a path"; REPO="${2:-}"; shift ;;
     --range) RANGE="${2:-}"; shift ;;
     --deployed) DEPLOYED=1 ;;
     --trailers-only) TRAILERS_ONLY=1 ;;
@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
     --json) JSON=1 ;;
     --selftest) SELFTEST=1 ;;
     -h|--help) help; exit 0 ;;  # C-#3
-    *) usage ;;
+    *) usage "unknown flag: $1" ;;
   esac
   shift
 done
@@ -121,7 +121,7 @@ fi
 
 N=$(git -C "$REPO" rev-list --count "$RANGE" 2>/dev/null)
 rc=$?
-[ $rc -eq 0 ] || { echo "bad range: $RANGE" >&2; exit 3; }
+[ $rc -eq 0 ] || { echo "bad range: $RANGE" >&2; exit 2; }   # lens C MED-4 (v0.4.79): header promises rc 2 for bad range syntax — code now honors it
 [ "$N" -gt 0 ] || { echo "empty range: $RANGE" >&2; exit 4; }
 
 TMP="$(mktemp)" || exit 3

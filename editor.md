@@ -180,6 +180,7 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
 - **The shared `~/opencrabs` checkout is NEVER evidence** (v0.4.5): it may sit on any
   session's leftover branch. Verify shipped behavior against `origin/main`
   explicitly (`git fetch origin && git show origin/main:<path>`) or in a fresh
+  worktree cut from `origin/main` (lens B F2, v0.4.79 — completed truncated rule).
 - Before building on an existing branch: diff it against its merge-base to confirm no
   foreign WIP rode along from parallel agents. Take a backup branch ref before any
   `rebase --onto`. *(SKILL.md §Shared war stories)*

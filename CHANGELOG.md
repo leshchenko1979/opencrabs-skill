@@ -232,3 +232,27 @@ Battery: 109 → 138/0 (C-#3 fleet help=0 section). oc-deploy selftest 155 → 1
 
 Issue-Ref: leshchenko1979/opencrabs#51
 Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b
+
+## v0.4.79 (2026-09-01)
+
+Duty 4+6 classes 1+2 (7-lens review of v0.4.78 + 8 evidence-backed worker proposals; #63 poll-crash incident class).
+
+Tools (battery-gated):
+- #63 fix: `oc-deploy poll` iterates the latest runs and SKIPS those with no decodable build-job embed (stale ORDER-gates / pre-rename formats) instead of fatal rc 2 on runs[0]; RED-scan iterates all failed runs; fanout decode-fail marks `decode-error` in fanout.state so a stale run can't block scans forever (selftest 10e/10f).
+- Fanout silent-loss paths (lens F HIGH-2): swap-tail fanout rc now journaled (`jline fanout`), green-leg oc-attrib rc captured (was `|| true` conflation).
+- `--notify-session` missing-value guarded (die 2) + notify rc captured and surfaced at all poll call sites (lens C MED-1/MED-3).
+- `oc-ping-proof` skips an unparseable worker stamp instead of exit 4.
+- Usage-reason quartet (lens C MED-2): oc-wt / oc-attrib / oc-tg-audit / oc-carrier-features usage() now takes a diagnostic; bare rc 2 sites print WHY.
+- `oc-attrib` bad-range exits 2 per its header promise (was 3); `--repo` missing-value guarded.
+- NEW `tools/oc-log-search`: telemetry-only daemon-log search, hard fence against `brain::provider` self-echo (owner-ordered via lane 1a63f103).
+
+Docs (A/B/G-lens):
+- `tools/RC-CONTRACT.md` is the SOLE rc register: SKILL.md inline 35-row Exit table collapsed to purpose rows; preamble corrected to EIGHT legacy registers (was "two"); 5 register rows fixed against tool headers (seal-state usage 2→1, artifact-verify/job-verify/pr-atomicity/ledger verdict completion).
+- README: source-of-truth → RC-CONTRACT.md; version → SKILL.md frontmatter pointer (never stale again); layout rows for review-lenses.md / editor-phase7-rules.md / RC-CONTRACT.md.
+- editor.md Phase-0 truncated rule completed ("...or in a fresh worktree cut from origin/main").
+- SKILL.md §Shared war stories table reunited (blank-line split); 4 stale enumeration sites + edit-guard set now list review-lenses.md; glossary Lens entry points at review-lenses.md; supervisor.md CI-wait partition line retired.
+
+Battery: 138 → 139/0 (oc-log-search joins the fleet help=0 loop). oc-deploy selftest 159 → 165/0.
+
+Issue-Ref: leshchenko1979/opencrabs#51
+Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b
