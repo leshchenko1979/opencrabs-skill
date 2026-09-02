@@ -82,7 +82,9 @@ usage() { # [reason] — C-#1: prints WHY before the usage block. A repeat of th
   printf '%s %s %s\n' "$_now" "$_h" "$_cnt" > "$_cf" 2>/dev/null || :
   [ "$_cnt" -gt 1 ] && sleep $(( _cnt * 2 < 10 ? _cnt * 2 : 10 ))
   cat >&2 <<EOS
-Usage: $PROG <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
+Usage: $PROG [<branch-or-sha> | resume <run-id>] [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
+  resume <run-id>  re-attach to a run this lane WITNESSED (rc-5 stdout / journal extra.run_id);
+                   skips shape gate / yml check / dispatch / lock / adoption, goes straight to watch+verdict
 Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable
 EOS
   exit 2
@@ -136,6 +138,7 @@ case "\$*" in
       cancelled)      printf '{"status":"completed","conclusion":"cancelled"}\n' ;;
       run_failed)     printf '{"status":"completed","conclusion":"failure"}\n' ;;
       nullconclusion) printf '{"status":"completed","conclusion":null}\n' ;;
+      run_view_fail)  exit 1 ;;
       *)              printf '{"status":"completed","conclusion":"success"}\n' ;;
     esac ;;
   *) printf '{}\n' ;;
@@ -227,12 +230,33 @@ do_selftest() {
   else t_bad "lock contention (rc=$T_RC out=$T_OUT)"; fi
   kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
 
+  # #74 H2: resume <run-id> — re-attach to a WITNESSED run, no dispatch/adoption
+  run_t none resume 222
+  if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"resumed run=222"*"VERDICT GREEN"*) true ;; *) false ;; esac; then
+    t_ok "resume: re-attach to witnessed run -> GREEN via watch+verdict path"
+  else t_bad "resume green (rc=$T_RC out=$T_OUT)"; fi
+  run_t dispatch_fail resume 222
+  [ "$T_RC" -eq 0 ] && t_ok "resume: dispatch/yml/lock skipped (dispatch_fail scenario still GREEN)" \
+    || t_bad "resume dispatch-skip (rc=$T_RC out=$T_OUT)"
+  run_t run_view_fail resume 999
+  [ "$T_RC" -eq 4 ] && t_ok "resume: unknown run -> 4 (not-found)" || t_bad "resume unknown (rc=$T_RC out=$T_OUT)"
+  run_t none resume abc123
+  [ "$T_RC" -eq 2 ] && t_ok "resume: non-numeric run id -> 2 (usage)" || t_bad "resume non-numeric (rc=$T_RC out=$T_OUT)"
+  mk_shim "$D/gh" none
+  OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+    OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+    OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" resume 222 >/dev/null 2>&1
+  if jq -e 'select(.tool=="oc-prchecks" and .exit==0 and .extra.verdict=="GREEN" and .extra.resume=="222" and .extra.run_id=="222" and (.extra.dispatch==null))' "$D/tools.log" >/dev/null 2>&1; then
+    t_ok "resume journal: extra.resume+run_id present, no dispatch key"
+  else t_bad "resume journal row missing/wrong"; fi
+
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   cat <<'EOH'
-Usage: oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
+Usage: oc-prchecks [<branch-or-sha> | resume <run-id>] [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
+  resume <run-id>  re-attach to a witnessed run (no dispatch, no adoption) — #74 H2
 Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable
 EOH
   exit 0
@@ -243,6 +267,7 @@ CALL_ARGS="$*"   # C-#1: backoff identity — same args dying rc=2 repeatedly
 # ---------- arg parse ---------------------------------------------------------
 REF=""
 FAULT_PR=""
+RESUME_MODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --wait)    shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage "--wait needs an integer (got '$WAIT_SECS')" ;; esac ;;
@@ -250,12 +275,16 @@ while [ $# -gt 0 ]; do
     --carrier) shift; CARRIER="${1:-}"; [ -n "$CARRIER" ] || usage "--carrier needs a value" ;;
     --fault-scope) shift; FAULT_PR="${1:-}"; [ -n "$FAULT_PR" ] || usage "--fault-scope needs a PR number" ;;   # E5 (v0.4.78)
     --no-log)  : ;;
+    resume)    [ "$RESUME_MODE" -eq 0 ] || usage "repeat 'resume'"; RESUME_MODE=1 ;;   # #74 H2: re-attach to a witnessed run
     -*)        usage "unknown flag '$1'" ;;
     *)         [ -z "$REF" ] || usage "only one <branch-or-sha> allowed ('$REF' and '$1')"; REF="$1" ;;
   esac
   shift
 done
 [ -n "$REF" ] || usage "missing <branch-or-sha> argument"
+if [ "$RESUME_MODE" -eq 1 ]; then   # #74 H2: positional is a NUMERIC run id, not a sha/branch
+  case "$REF" in ''|*[!0-9]*) usage "resume needs a numeric run id (got '$REF')" ;; esac
+fi
 
 # ---------- step 0: --repo SLUG-or-PATH (v0.4.48 Duty-7 fix) -----------------
 # A path (repo checkout or worktree) resolves via its origin remote; anything
@@ -279,6 +308,26 @@ case "$REPO" in
      oc_log_extra "fork_lane_gate" "refused:$REPO"
      exit 2 ;;
 esac
+# ---------- RESUME branch (#74 H2): re-attach to a witnessed run -------------
+# Skips shape gate / yml check / dispatch / dispatch-lock / adoption entirely —
+# the caller witnessed this run-id (rc-5 stdout "run=<id>" / journal
+# extra.run_id), so no time-window re-adoption exposure (n=1401 class).
+# headSha on a workflow_dispatch run is the CARRIER HEAD, never the -f ref
+# input (v0.4.48 lesson) — the dispatch input is NOT API-verifiable, so resume
+# prints headSha for the journal and refuses nothing else. Checkout-ref truth
+# remains the jobs' checkout log line (HQ standard 2026-08-31).
+if [ "$RESUME_MODE" -eq 1 ]; then
+  oc_log_extra "resume" "$REF"
+  RV="$("$GH_BIN" run view "$REF" --repo "$REPO" --json status,conclusion,createdAt,headSha,headBranch 2>/dev/null)" || {
+    echo "$PROG: run $REF not found on $REPO — resume only re-attaches to runs this lane witnessed (rc-5 stdout / journal extra.run_id)" >&2
+    oc_log_extra "resume" "not-found"
+    exit 4
+  }
+  RUN_ID="$REF"
+  echo "$PROG: resumed run=$RUN_ID head_branch=$(printf '%s' "$RV" | jq -r '.headBranch // empty') head_sha=$(printf '%s' "$RV" | jq -r '.headSha // empty') (headSha is the carrier head, not the dispatch input)" >&2
+  oc_log_extra "run_id" "$RUN_ID"
+  oc_log_extra "resumed_head" "$(printf '%s' "$RV" | jq -r '.headSha // empty')"
+else
 # ---------- step 1: SHAPE gate (carrier inputs are sha-bound, Gate 1 3349cf7e)
 case "$REF" in
   *[!0-9a-fA-F]*) : ;;  # not pure hex -> branch name, resolve below
@@ -397,6 +446,7 @@ flock -u 8
 echo "adopted run=$RUN_ID (time-window attribution under dispatch lock)" >&2
 oc_log_extra "run_id" "$RUN_ID"
 fi  # C-F2 resume-skipped dispatch+adoption
+fi  # RESUME branch vs normal dispatch path (#74 H2)
 RUN_URL="${RUN_URL:-}"; RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
 
 # ---------- step 4: watch ------------------------------------------------------
