@@ -209,7 +209,7 @@ moment it happens; no waiting for a poll.
    owns the tool/area (by TOPIC name, never uuid-from-memory; find it via
    session_search), briefed via `session_notify` with the quirk report +
    evidence attached. NO existing lane covers the area → HQ creates a NEW
-   editor per the standing authority (AGENTS.md §Creating new editors:
+   editor per the standing authority (fleet-directives.md §Creating new editors:
    messages.CreateForumTopic + "Load opencrabs-dev skill. You are an editor."
    + roster-enroll). Routing verdict stamps `idea-verdict` ROUTED (target
    topic named); the fix itself ships through the normal editor flow

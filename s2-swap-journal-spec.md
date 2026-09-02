@@ -1,7 +1,7 @@
 # S2 swap-leg journal spec (proposal) — for oc-deploy wiring
 
 Author: compiler lane e756b84b · 2026-08-28
-Answers: owner tool-logging law 2026-08-28 (AGENTS.md) + HQ ledger-1264 gap list
+Answers: owner tool-logging law 2026-08-28 (fleet-directives.md) + HQ ledger-1264 gap list
 (no Aug-28 backup entry; deployed.sha never written during the 03:11Z swap).
 
 > **AMENDED 2026-08-28 18:50Z (owner order — consent eliminated):** the
