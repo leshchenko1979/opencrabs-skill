@@ -30,7 +30,9 @@ load ONLY the one matching the session's role.
 **Binding owner directives** (sync policy, upstream PR law, carriers/builds, cargo
 prohibition, telegram surface law, tool logging, gates, editor creation, HQ triage,
 cadence) live in `fleet-directives.md` — re-homed from ops AGENTS.md/MEMORY.md per
-owner order 2026-09-02. Load it before ANY opencrabs-dev work.
+owner order 2026-09-02. Load it before ANY opencrabs-dev work. Executing procedure for the sync
+policy's merge leg: `upstream-merge-runbook.md` (freeze gate, roles, conflict
+classes, migration-union rule, semantic-triage defaults).
 
 ## Canonical tooling (v0.4.12, PROCESS-TOOL ownership)
 
