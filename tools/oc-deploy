@@ -354,6 +354,26 @@ Issue-Ref: #99"
   check_rc "poll-wait-timeout-rc" $rc 5
   check_has "poll-wait-timeout-msg" "$out" "timed out"
   grep -q "timed out" "$T/notify.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: poll --wait timeout did not notify session"; }
+  # 10b-bis (#74 FM-2): deferred wake refused (rc 2, mid-turn target) -> retry
+  # ONCE with --interrupt inside notify_session; wake must land, no "wake
+  # FAILED" stderr, exactly 2 verb calls with --interrupt on the second.
+  cat > "$SD/notify-flaky" <<'NSTUB2'
+#!/usr/bin/env bash
+echo "$*" >> "${FLAKY_LOG:?}"
+if [ -f "${FLAKY_LOG}.count" ]; then N="$(cat "${FLAKY_LOG}.count")"; else N=0; fi
+N=$((N+1)); printf '%s' "$N" > "${FLAKY_LOG}.count"
+[ "$N" -le 1 ] && exit 3
+exit 0
+NSTUB2
+  chmod +x "$SD/notify-flaky"
+  export FLAKY_LOG="$T/notify-flaky.log"; : > "$FLAKY_LOG"; rm -f "$FLAKY_LOG.count"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_NOFANOUT=1 OC_DEPLOY_POLL_INTERVAL=0 OC_DEPLOY_NOTIFY="$SD/notify-flaky" \
+    "$SELF_BIN" poll --wait 1 --notify-session aaaaaaaa-1111-2222-3333-444444444444 2>&1)"; rc=$?
+  check_rc "poll-flaky-wake-rc" $rc 5
+  case "$out" in *"wake FAILED"*) fail=$((fail+1)); echo "SELFTEST FAIL: refused wake not recovered by --interrupt retry";; *) pass=$((pass+1));; esac
+  [ "$(wc -l < "$FLAKY_LOG")" -eq 2 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: expected exactly 2 verb calls (refusal + interrupt retry), got $(wc -l < "$FLAKY_LOG")"; }
+  [ "$(sed -n 2p "$FLAKY_LOG" | grep -c -- '--interrupt')" -eq 1 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: second verb call lacks --interrupt"; }
   # 10c. C-#2: --wait 0 keeps the classic single-pass "nothing to do" rc 0
   out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
     OC_DEPLOY_NOFANOUT=1 "$SELF_BIN" poll --wait 0 2>&1)"; rc=$?
@@ -885,8 +905,21 @@ notify_session() { # $1=uuid $2=title $3=text -> verb rc (0 delivered)
   # --profile MANDATORY: without it the call hits the default-profile gateway
   # which predates the verb (Method not found, rc 4) — probed live 2026-08-28.
   # Dead uuid -> verb rc 2 (no_route), journaled as skip by the caller.
+  # #74 FM-2: exit-code contract (src/cli/session_notify.rs): 0 delivered /
+  # 2 no_route (dead uuid, permanent) / 3 refused_in_flight (target mid-turn,
+  # deferred wake refused — 11 lost wakes across /tmp journals) / 4 transport.
+  # Retry ONCE with --interrupt ONLY on 3 — a mid-turn target MUST be woken or
+  # the verdict is lost; dead uuids and transport faults are not retryable.
+  local nrc=0
   $NOTIFY_CMD session notify --profile "$NOTIFY_PROFILE" --sender "oc-deploy fan-out" \
-    --title "$2" --text "$3" "$1" >/dev/null 2>&1
+    --title "$2" --text "$3" "$1" >/dev/null 2>&1 || nrc=$?
+  if [ "$nrc" = 3 ]; then
+    local rrc=0
+    $NOTIFY_CMD session notify --profile "$NOTIFY_PROFILE" --sender "oc-deploy fan-out" \
+      --title "$2" --text "$3" --interrupt "$1" >/dev/null 2>&1 || rrc=$?
+    nrc=$rrc
+  fi
+  return "$nrc"
 }
 
 fanout_mark_done() { # $1=run $2=verdict $3=notified $4=skipped $5=unowned
