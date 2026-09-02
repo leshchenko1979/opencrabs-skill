@@ -33,9 +33,14 @@ commits, 133 fork-only, 68 overlapping files, merge-base `4776bee2`).
 1. Freeze check (ledger) → branch `merge/upstream-YYYYMMDD` off `origin/main`.
 2. `git merge adolfousier/main` — merge, never rebase/reset (deployed-sha
    containment survives).
-3. Textual conflicts: upstream wins on bug-fixes to shared code, fork wins on
-   fork-only features; shared TEST files union both sides' cases. Expect the
-   worst overlap in tests, not source.
+3. Textual conflicts: **upstream wins WHOLESALE (owner 2026-09-02 — merge-
+   resolution shape, canonical in fleet-directives.md)** — conflicted files
+   ship byte-exact as adolfo wrote them, never hand-blended; verify
+   `git diff adolfousier/main` over conflicted files is empty. Fork features
+   from those files re-land as named `port(fork→merge)` commits adapted onto
+   his shapes, each gated by the overlay-disposition analysis (drop/port/ask
+   vs upstream's revealed stance) + owner human gate. Shared TEST files union
+   both sides' cases. Expect the worst overlap in tests, not source.
 4. **Database migrations — dedicated pass, never drive-by.** Both sides may sit
    at the SAME `MIGRATION_COUNT` with DIFFERENT sets (2026-09-02: fork #37
    `20260828_pending_requests_origin` vs upstream #37
