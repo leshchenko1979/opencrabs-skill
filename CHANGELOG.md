@@ -295,3 +295,10 @@ Tool-problem reports rewire (owner order 2026-09-01 22:2xZ):
 
 Issue-Ref: leshchenko1979/opencrabs#51
 Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b
+
+## v0.4.83 (2026-09-01)
+
+- oc-deploy: fanout/poll wake retried once with --interrupt on refused_in_flight (rc-3-only; retry rc replaces first attempt's) — the lost-report class (da6a4ef7, #74).
+- oc-prchecks: `resume <run-id>` re-attaches to a witnessed run, skips dispatch/adoption — re-polls can no longer re-dispatch and auto-cancel the resumed run (n=1401 false-RED exposure closed) (434950d9, #74).
+- tools/oc-waiter: canonical detached wait+notify tool (arm/_run/list/sweep) — payload validated BEFORE notify, rc-3 --interrupt retry, NOTIFY-FAILED exit 4, reboot-durable STATE_DIR journals, sweep watchdog ORPHANED wakes owner+HQ, stall escalation, rc-6 bounded re-arm (20de961e, #74).
+- editor.md item 10 + supervisor.md W4: oc-waiter is THE standard detached wait+notify path; hand-rolled pollers forbidden; re-attach = oc-prchecks resume.

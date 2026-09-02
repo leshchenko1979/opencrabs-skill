@@ -308,9 +308,12 @@ avoid collision with the editor's local numbering.
   editor.md Phase 1 step 4), and a mid-chain rc≠0 session-notifies the
   owning session IMMEDIATELY, not only at chain end. Operational wakes carry
   `interrupt=true` (mid-turn failsafe delivery).
-- **W4. Notify wiring lives in the wrapper script, NEVER as oc-prchecks
-  flags** — the tool has no notify options. A detached waiter with NO notify
-  path gets a one-shot cron courier armed before end of turn.
+- **W4. Detached waits go through `oc-waiter arm` (v0.4.83), notify wiring
+  NEVER as raw oc-prchecks flags** — the tool has no notify options. A
+  detached waiter with NO notify path gets a one-shot cron courier armed
+  before end of turn. Hand-rolled poller scripts are forbidden when
+  `oc-waiter arm --ref <sha|branch> --notify <session-uuid>` covers the wait
+  (verified delivery, rc-3 --interrupt retry, ORPHANED sweep wake).
 - **W5. Log-window verification uses line-number cutoffs or full timestamps**
   — `grep -n marker` → `tail -n +N`, or full-timestamp compare; never
   prefix/field heuristics (log continuation lines carry no leading timestamp

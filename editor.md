@@ -125,14 +125,22 @@ supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
    waiting on it — a dispatch that fired on the wrong ref wastes the whole
    wait. oc-prchecks headSha adoption enforces this for its own runs; the
    check covers hand-dispatched `gh workflow run` uses.
-10. **Waiter notify payload-validation (Duty-4 P1, v0.4.80):** detached gate
-   waiters MUST be the standard oc-prchecks wait+notify path; hand-rolled
-   pollers whose notify text interpolates shell variables are FORBIDDEN unless
-   the verdict payload is validated BEFORE notify — an unfilled run-id
-   variable wakes the lane on garbage while the real verdict sits undiscovered
-   (2026-09-01: wake read "Gate on 76066bbd terminal: 404 Not Found, runs/" —
-   empty id — while the real run 33522305418 was RED). The journal-start check
-   proves the waiter LAUNCHED; it does not prove its payload — check both.
+10. **Detached waiters are `oc-waiter` — THE standard (H1+H3+H4, v0.4.83,
+   supersedes the P1 payload-validation wording):** detached gate waiters MUST
+   be `oc-waiter arm --ref <sha|branch> --notify <session-uuid>`; hand-rolled
+   pollers whose notify text interpolates shell variables are FORBIDDEN —
+   oc-waiter validates the verdict payload BEFORE notify, retries refused
+   wakes with `--interrupt` (rc-3-only), and exits 4 NOTIFY-FAILED when
+   delivery cannot be proven — a false receipt is structurally impossible.
+   Re-attach to a witnessed run with `oc-prchecks resume <run-id>` (never
+   re-invoke oc-prchecks on a timed-out wait — that re-dispatches and the
+   concurrency group cancels the run being resumed). Sweep/watchdog =
+   `oc-waiter sweep` (cron-callable; ORPHANED wakes owner + HQ). Env knobs:
+   OC_WAITER_STATE_DIR/_NOTIFY/_PRCHECKS/_POLL(60)/_WINDOW(90)/_TIMEOUT(3600)/
+   _STALL_K(8)/_HQ; rc contract row in tools/RC-CONTRACT.md. The
+   journal-start check proves the waiter LAUNCHED; it does not prove its
+   payload — with oc-waiter both are enforced in-tool; if you must hand-roll
+   anyway, check both.
 11. **oc-prchecks detaches or fails fast (Duty-4 P2, v0.4.80):** never run
    oc-prchecks INLINE inside a bounded bash tool call — an orphaned inline
    poll keeps polling after the caller moves on and can adopt a peer run by
