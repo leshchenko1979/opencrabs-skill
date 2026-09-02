@@ -51,4 +51,5 @@ Fleet conventions:
 | oc-tg-audit | 0 | 2 | 0 clean / 1 violation / 3 log-missing |
 | oc-toolaccum | 0 | 2 | 0 clean / 1 repeat-offense / 3 log-missing |
 | oc-upstream-delta | 0 | 2 | 0 clean / 1 delta (verdict) / 3 fetch-git-fail |
+| oc-waiter | 0 | 2 | arm: 0 armed / 3 notify-bin-unresolvable · _run: 0 delivered / 4 NOTIFY-FAILED · sweep: 0 clean / 1 orphans-reported / 3 notify-bin-unresolvable · list: 0 |
 | oc-wt | 0 | 2 | 0 ok / 3 path-exists-dirty / 4 index-failed / 5 repo-branch-missing / 6 behind-base |

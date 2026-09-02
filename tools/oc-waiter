@@ -1,0 +1,395 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-waiter — canonical detached wait+notify tool (#74 H1/H3/H4).
+#
+# The skill MANDATES a detached wait+notify pattern (editor.md item 10,
+# supervisor.md W4) but shipped no mechanism: ~200 divergent hand-rolled
+# copies in /tmp produced every waiter failure class on record (11x
+# refused_in_flight lost wakes, 5 false "notify sent" receipts, dead pid
+# files, rc=127 launch deaths, 45-min blind timeout burns). This tool IS the
+# standard path the skill text points at.
+#
+# Design: THIN wrapper — it calls oc-prchecks (reusing its dispatch lock,
+# adoption and verdict rule; never re-implements them) and adds only the
+# missing glue:
+#   - detach (arm -> setsid child, state in the tools STATE DIR, never /tmp)
+#   - journal-first logging: start line written BEFORE the first poll
+#   - VERIFIED notify: the session-notify exit-code contract
+#     (src/cli/session_notify.rs) is enforced — 0 delivered, 2 no_route dead,
+#     3 refused_in_flight (retry ONCE with --interrupt), 4 transport. Any
+#     non-delivery after retry -> NOTIFY-FAILED journal line + exit 4. A
+#     failed wake is a WAITER FAILURE, never a silent "done".
+#   - H4 stall escalation: STALL_K identical in-flight results -> ESCALATED
+#     verdict + wake ("dispatch may not have fired") instead of burning the
+#     budget (the leak-fix lane burned 40 identical rc=5 polls / 45 min).
+#   - H3 sweep: dead pid / stale heartbeat with no terminal verdict ->
+#     ORPHANED, owning session (+HQ) woken. Survives reboot.
+#
+# Usage:
+#   oc-waiter arm   --ref <sha-or-branch> --notify <session-uuid> [--label S]
+#                   [--timeout N] [--stall-k N] [--window N]   # detach, return
+#   oc-waiter list                                            # live records
+#   oc-waiter sweep                                           # watchdog pass
+#   oc-waiter _run <record.json>                              # internal child
+#   oc-waiter --selftest                                      # offline, shims
+#
+# Exit (arm): 0 armed (record path + pid on stdout — READ THE JOURNAL START
+#             LINE BACK before end of turn, the launch-death lesson) / 2 usage
+#             / 3 notify binary unresolvable (refused at ARM time — the
+#             tombstone5 false-receipt class cannot happen from here).
+# Exit (_run): 0 verdict reached + notify delivered / 4 NOTIFY-FAILED.
+# Exit (sweep): 0 clean / 1 orphans found-and-reported.
+#
+# Verdicts (record .verdict + journal terminal line):
+#   GREEN | RED | TIMEOUT | ESCALATED (stall) | ESCALATED-CHURN (superseded x3)
+#   | FAILED-TOOL (oc-prchecks usage/transport failure)
+#
+# Env: OC_WAITER_STATE_DIR (default $OC_DEPLOY_STATE_DIR or the profile state
+# dir), OC_WAITER_NOTIFY (notify shim; default /usr/local/bin/opencrabs, then
+# PATH), OC_WAITER_PRCHECKS (gate shim; default sibling oc-prchecks),
+# OC_WAITER_POLL (sleep between --wait windows, default 60),
+# OC_WAITER_WINDOW (per-call --wait, default 90 = W2 ceiling),
+# OC_WAITER_TIMEOUT (default 3600), OC_WAITER_STALL_K (default 8),
+# OC_WAITER_HQ (HQ session uuid for sweep countersigned wakes), OC_TOOLS_*.
+# =============================================================================
+set -u
+set -o pipefail
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-waiter" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="$(basename "$0")"
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+STATE_DIR="${OC_WAITER_STATE_DIR:-${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}}/waiters"
+NOTIFY_BIN="${OC_WAITER_NOTIFY:-}"
+PRCHECKS_BIN="${OC_WAITER_PRCHECKS:-$(cd "$(dirname "$0")" && pwd)/oc-prchecks}"
+POLL_SLEEP="${OC_WAITER_POLL:-60}"
+WINDOW="${OC_WAITER_WINDOW:-90}"
+TIMEOUT="${OC_WAITER_TIMEOUT:-3600}"
+STALL_K="${OC_WAITER_STALL_K:-8}"
+CHURN_CAP=3          # superseded cycles before ESCALATED-CHURN
+RC4_CAP=5            # consecutive gate-tool infra failures before FAILED-TOOL
+HQ_SESSION="${OC_WAITER_HQ:-}"
+
+usage() { [ $# -gt 0 ] && echo "$PROG: $1" >&2
+  cat >&2 <<EOS
+Usage: $PROG arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N] [--stall-k N] [--window N]
+       $PROG list | sweep | _run <record.json> | --selftest
+Exit: arm 0 armed / 2 usage / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
+EOS
+  exit 2; }
+
+# ---------- journal (JSONL, append-only, start line FIRST) --------------------
+jline() { # $1=journal $2=event $3=extra-json-object-or-empty
+  printf '{"ts":"%s","event":"%s"%s}\n' "$(date -u +%FT%TZ)" "$2" "${3:+,$3}" >> "$1"
+}
+
+resolve_notify_bin() { # -> echoes binary path, rc 1 if unresolvable
+  if [ -n "$NOTIFY_BIN" ]; then [ -x "$NOTIFY_BIN" ] && { echo "$NOTIFY_BIN"; return 0; }; return 1; fi
+  if [ -x /usr/local/bin/opencrabs ]; then echo /usr/local/bin/opencrabs; return 0; fi
+  command -v opencrabs 2>/dev/null
+}
+
+notify_lane() { # $1=bin $2=target $3=title $4=text -> 0 delivered / 1 failed
+  local nrc=0 rrc=0
+  "$1" session notify --profile ops --sender "oc-waiter" --title "$3" --text "$4" "$2" >/dev/null 2>&1 || nrc=$?
+  if [ "$nrc" = 3 ]; then   # refused_in_flight: mid-turn target — MUST be woken
+    "$1" session notify --profile ops --sender "oc-waiter" --title "$3" --text "$4" --interrupt "$2" >/dev/null 2>&1 || rrc=$?
+    nrc=$rrc
+  fi
+  [ "$nrc" = 0 ]
+}
+
+# ---------- arm ----------------------------------------------------------------
+cmd_arm() {
+  local REF="" TARGET="" LABEL="" TMO="$TIMEOUT" SK="$STALL_K" WIN="$WINDOW"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --ref)     shift; REF="${1:-}"; [ -n "$REF" ] || usage "--ref needs a value" ;;
+      --notify)  shift; TARGET="${1:-}"; [ -n "$TARGET" ] || usage "--notify needs a session uuid" ;;
+      --label)   shift; LABEL="${1:-}" ;;
+      --timeout) shift; TMO="${1:-}"; case "$TMO" in ''|*[!0-9]*) usage "--timeout needs an integer" ;; esac ;;
+      --stall-k) shift; SK="${1:-}"; case "$SK" in ''|*[!0-9]*) usage "--stall-k needs an integer" ;; esac ;;
+      --window)  shift; WIN="${1:-}"; case "$WIN" in ''|*[!0-9]*) usage "--window needs an integer" ;; esac ;;
+      *) usage "unknown arg '$1'" ;;
+    esac; shift
+  done
+  [ -n "$REF" ] || usage "arm needs --ref"
+  [ -n "$TARGET" ] || usage "arm needs --notify <session-uuid>"
+  case "$TARGET" in *[!0-9a-f-]*|"") usage "--notify must be a session uuid (got '$TARGET')" ;; esac
+  [ -x "$PRCHECKS_BIN" ] || { echo "$PROG: gate tool not executable: $PRCHECKS_BIN" >&2; exit 3; }
+  local NBIN
+  NBIN="$(resolve_notify_bin)" || {   # tombstone5 class: refuse at ARM time
+    echo "$PROG: notify binary unresolvable (set OC_WAITER_NOTIFY) — refusing to arm a waiter that cannot wake anyone" >&2
+    exit 3
+  }
+  mkdir -p "$STATE_DIR/journal" || { echo "$PROG: cannot create $STATE_DIR" >&2; exit 3; }
+  local ID REC
+  ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
+  REC="$STATE_DIR/$ID.json"
+  printf '{"id":"%s","pid":0,"ref":"%s","notify":"%s","label":"%s","timeout":%s,"stall_k":%s,"window":%s,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null}\n' \
+    "$ID" "$REF" "$TARGET" "$LABEL" "$TMO" "$SK" "$WIN" "$(date -u +%FT%TZ)" > "$REC"
+  ( setsid "$SELF" _run "$REC" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  echo "armed id=$ID"
+  echo "  record: $REC"
+  echo "  journal: $STATE_DIR/journal/$ID.jsonl"
+  echo "  READ BACK the journal start line before ending the turn (launch-death lesson)."
+  exit 0
+}
+
+# ---------- _run (detached child) ----------------------------------------------
+cmd_run() {
+  local REC="${1:-}"
+  [ -n "$REC" ] && [ -f "$REC" ] || usage "_run needs an existing record path"
+  local REF TARGET LABEL TMO SK WIN JOURNAL ID
+  REF="$(jq -r '.ref' "$REC")";        TARGET="$(jq -r '.notify' "$REC")"
+  LABEL="$(jq -r '.label' "$REC")";    TMO="$(jq -r '.timeout' "$REC")"
+  SK="$(jq -r '.stall_k' "$REC")";     WIN="$(jq -r '.window' "$REC")"
+  ID="$(jq -r '.id' "$REC")";          JOURNAL="$STATE_DIR/journal/$ID.jsonl"
+  : > "$JOURNAL"
+  jline "$JOURNAL" start "{\"pid\":$$,\"ref\":\"$REF\",\"notify\":\"$TARGET\",\"label\":\"$LABEL\",\"deadline_epoch\":$(($(date +%s) + TMO))}"
+  rec_upd "$REC" "\"status\":\"running\",\"pid\":$$"
+  local NBIN
+  NBIN="$(resolve_notify_bin)" || { jline "$JOURNAL" notify-failed '{"reason":"binary-unresolvable"}'
+    rec_upd "$REC" "\"status\":\"notify-failed\",\"verdict\":\"NOTIFY-FAILED\""; exit 4; }
+
+  local RUN_ID="" STALL=0 LAST_RC="" LAST5=0 CHURN=0 RC4=0 POLLS=0
+  local DEADLINE=$(( $(date +%s) + TMO ))
+  local VERDICT="" RC=0 OUT="" NS_RC
+  while :; do
+    if [ -n "$RUN_ID" ]; then
+      OUT="$("$PRCHECKS_BIN" resume "$RUN_ID" --wait "$WIN" 2>&1)"; RC=$?
+    else
+      OUT="$("$PRCHECKS_BIN" "$REF" --wait "$WIN" 2>&1)"; RC=$?
+    fi
+    POLLS=$((POLLS+1))
+    jline "$JOURNAL" poll "{\"poll\":$POLLS,\"rc\":$RC}"
+    case "$RC" in
+      0) VERDICT="GREEN" ;;
+      3) VERDICT="RED" ;;
+      6) CHURN=$((CHURN+1))
+         if [ "$CHURN" -ge "$CHURN_CAP" ]; then VERDICT="ESCALATED-CHURN"; else
+           RUN_ID=""; STALL=0; LAST_RC=""; continue   # P4: re-arm on the superseding run
+         fi ;;
+      5) # in-flight after the window — parse run=<id> for re-attach (witnessed here)
+         RUN_ID="${RUN_ID:-$(printf '%s' "$OUT" | grep -oE 'run=[0-9]+' | head -1 | cut -d= -f2)}"
+         if [ "$LAST_RC" = 5 ]; then LAST5=$((LAST5+1)); else LAST5=1; fi
+         if [ "$LAST5" -ge "$SK" ]; then VERDICT="ESCALATED"; RC=5; fi ;;
+      2|4|7) RC4=$((RC4+1))
+         [ "$RC" = 2 ] && VERDICT="FAILED-TOOL"        # usage = waiter bug, not transient
+         [ "$RC4" -ge "$RC4_CAP" ] && [ -z "$VERDICT" ] && VERDICT="FAILED-TOOL"
+         [ -n "$VERDICT" ] || { sleep "$POLL_SLEEP"; continue; } ;;
+      *) VERDICT="FAILED-TOOL" ;;
+    esac
+    [ -n "$VERDICT" ] && break
+    [ "$(date +%s)" -ge "$DEADLINE" ] && { VERDICT="TIMEOUT"; break; }
+    LAST_RC=$RC
+    sleep "$POLL_SLEEP"
+  done
+  jline "$JOURNAL" verdict "{\"verdict\":\"$VERDICT\",\"polls\":$POLLS,\"run_id\":\"${RUN_ID:-}\"}"
+  rec_upd "$REC" "\"status\":\"done\",\"verdict\":\"$VERDICT\",\"polls\":$POLLS,\"run_id\":\"${RUN_ID:-}\",\"ended_ts\":\"$(date -u +%FT%TZ)\""
+
+  # verdict payload validated BEFORE notify (the "404 Not Found" wake class)
+  local TEXT="oc-waiter: $VERDICT ref=${REF:0:8} label=${LABEL:-none} polls=$POLLS run=${RUN_ID:-none}"
+  case "$VERDICT" in
+    GREEN|RED)  [ -n "$RUN_ID" ] || { jline "$JOURNAL" notify-failed '{"reason":"payload-no-run-id"}'
+                  rec_upd "$REC" "\"status\":\"notify-failed\""; exit 4; } ;;
+    TIMEOUT|ESCALATED|ESCALATED-CHURN|FAILED-TOOL) : ;;
+    *) jline "$JOURNAL" notify-failed "{\"reason\":\"payload-bad-verdict:$VERDICT\"}"
+       rec_upd "$REC" "\"status\":\"notify-failed\""; exit 4 ;;
+  esac
+  if notify_lane "$NBIN" "$TARGET" "oc-waiter: $VERDICT" "$TEXT"; then
+    jline "$JOURNAL" notify-ok "{\"target\":\"$TARGET\"}"
+    exit 0
+  fi
+  jline "$JOURNAL" notify-failed "{\"target\":\"$TARGET\",\"reason\":\"undelivered-after-interrupt-retry\"}"
+  rec_upd "$REC" "\"status\":\"notify-failed\""
+  [ -n "$HQ_SESSION" ] && notify_lane "$NBIN" "$HQ_SESSION" "oc-waiter NOTIFY-FAILED" "$TEXT (wake to $TARGET FAILED after --interrupt retry — lane NOT woken)" || true
+  exit 4
+}
+
+rec_upd() { # $1=record $2..=raw json field fragments (comma-joined)
+  local frag="$2" tmp
+  tmp="$(mktemp)"
+  jq --arg f "$frag" '. + ( "{" + $f + "}" | fromjson? // {} )' "$1" > "$tmp" 2>/dev/null && mv "$tmp" "$1" || rm -f "$tmp"
+}
+
+# ---------- list ----------------------------------------------------------------
+cmd_list() {
+  local f n live=0 dead=0
+  printf '%-26s %-8s %-10s %-9s %s\n' "ID" "STATUS" "VERDICT" "PID" "REF/LABEL"
+  for f in "$STATE_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    n="$(basename "$f" .json)"
+    printf '%-26s %-8s %-10s %-9s %s\n' "$n" "$(jq -r '.status' "$f")" "$(jq -r '.verdict // "-"' "$f")" "$(jq -r '.pid' "$f")" "$(jq -r '.ref[0:8]' "$f")/$(jq -r '.label // "-"' "$f")"
+  done
+  exit 0
+}
+
+# ---------- sweep (H3, cron-callable) -------------------------------------------
+cmd_sweep() {
+  local f pid alive verdict status armed_ts now rc=0 ORPH=0
+  local NBIN; NBIN="$(resolve_notify_bin)" || { echo "$PROG: sweep: notify binary unresolvable" >&2; exit 3; }
+  for f in "$STATE_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    status="$(jq -r '.status' "$f")"
+    case "$status" in armed|running) ;; *) continue ;; esac
+    verdict="$(jq -r '.verdict // ""' "$f")"
+    [ -n "$verdict" ] && [ "$verdict" != "" ] && continue   # terminal already
+    armed_ts="$(date -u -d "$(jq -r '.armed_ts' "$f")" +%s 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    [ $(( now - armed_ts )) -lt 120 ] && continue            # arm grace: child may not have started
+    pid="$(jq -r '.pid // 0' "$f")"
+    alive=0
+    [ "$pid" -gt 0 ] && kill -0 "$pid" 2>/dev/null && alive=1
+    if [ "$alive" -eq 0 ]; then
+      ORPH=$((ORPH+1)); rc=1
+      local ID TGT LBL
+      ID="$(jq -r '.id' "$f")"; TGT="$(jq -r '.notify' "$f")"; LBL="$(jq -r '.label // "-"' "$f")"
+      rec_upd "$f" "\"status\":\"orphaned\",\"verdict\":\"ORPHANED\",\"ended_ts\":\"$(date -u +%FT%TZ)\""
+      jline "$STATE_DIR/journal/$ID.jsonl" orphaned "{\"pid\":$pid}"
+      notify_lane "$NBIN" "$TGT" "oc-waiter ORPHANED" "oc-waiter: waiter $ID (ref $(jq -r '.ref[0:8]' "$f") label=$LBL) died without a verdict — pid $pid gone. Re-arm with: oc-waiter arm ..." || true
+      [ -n "$HQ_SESSION" ] && notify_lane "$NBIN" "$HQ_SESSION" "oc-waiter ORPHANED" "waiter $ID orphaned (owner $TGT woken)" || true
+    fi
+  done
+  [ "$ORPH" -eq 0 ] && echo "sweep: clean" || echo "sweep: $ORPH orphaned waiter(s) reported"
+  exit "$rc"
+}
+
+# ---------- selftest (offline, shims for gate + notify) -------------------------
+do_selftest() {
+  local D pass=0 fail=0
+  D="$(mktemp -d)"
+  t_ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
+  t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
+  mkdir -p "$D/state"
+  export OC_WAITER_STATE_DIR="$D" OC_WAITER_POLL="${OC_TEST_POLL:-0.2}"
+  mkdir -p "$D/waiters/journal"
+
+  # gate shim: pops one rc per call from $SEQ; rc 5 carries a witnessed run-id
+  cat > "$D/gate" <<'GSTUB'
+#!/usr/bin/env bash
+SEQ_FILE="${SEQ_FILE:?}"
+N=0; [ -f "$SEQ_FILE.count" ] && N="$(cat "$SEQ_FILE.count")"
+RC="$(cut -d, -f$((N+1)) "$SEQ_FILE" 2>/dev/null)"; [ -z "$RC" ] && RC=0
+printf '%s' "$((N+1))" > "$SEQ_FILE.count"
+case "$RC" in
+  5) echo "IN-FLIGHT run=222 https://github.com/x/y/actions/runs/222 (still in_progress)"; exit 5 ;;
+  3) echo "VERDICT RED (reason: run-failure)"; exit 3 ;;
+  6) echo "VERDICT CANCELLED (superseded)"; exit 6 ;;
+  4) echo "gate: dispatch lock busy" >&2; exit 4 ;;
+  0) echo "VERDICT GREEN"; echo "RUN https://github.com/x/y/actions/runs/222"; exit 0 ;;
+  *) exit "$RC" ;;
+esac
+GSTUB
+  chmod +x "$D/gate"
+
+  mk_notify() { # $1=mode: deliver | flaky | refuse (mode read at RUNTIME via env)
+    printf '#!/usr/bin/env bash\necho "$*" >> "${NOTIFY_LOG:?}"\ncase "${NOTIFY_MODE:-}" in\n  flaky)   [ -f "${NOTIFY_LOG}.c2" ] && exit 0; printf x >> "${NOTIFY_LOG}.c2"; exit 3 ;;\n  refuse)  exit 3 ;;\n  *)       exit 0 ;;\nesac\n' > "$D/notify"
+    chmod +x "$D/notify"
+    export NOTIFY_MODE="$1"
+  }
+  run_case() { # $1=notify-mode $2=seq $3...=extra _run args
+    mk_notify "$1"
+    printf '%s' "$2" > "$D/seq"; rm -f "$D/seq.count"
+    export SEQ_FILE="$D/seq"
+    export NOTIFY_LOG="$D/notify.log"; : > "$NOTIFY_LOG"; rm -f "$NOTIFY_LOG.c2"
+    printf '{"id":"t0","pid":0,"ref":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","notify":"11111111-2222-3333-4444-555555555555","label":"t","timeout":3600,"stall_k":8,"window":1,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null}\n' "$(date -u +%FT%TZ)" > "$D/waiters/t0.json"
+    OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 \
+      "$SELF" _run "$D/waiters/t0.json" >/dev/null 2>&1
+    RUN_RC=$?
+  }
+
+  # 1. GREEN e2e: seq 5,5,0 -> delivered, record done/verdict GREEN, journal order
+  run_case deliver "5,5,0"
+  [ "$RUN_RC" -eq 0 ] && t_ok "green e2e: exit 0 (delivered)" || t_bad "green e2e rc=$RUN_RC"
+  V="$(jq -r '.verdict' "$D/waiters/t0.json")"; S="$(jq -r '.status' "$D/waiters/t0.json")"
+  { [ "$V" = GREEN ] && [ "$S" = done ]; } && t_ok "green e2e: record done/GREEN" || t_bad "record status=$S verdict=$V"
+  read -r JL1 _ < "$D/waiters/journal/t0.jsonl"
+  case "$JL1" in *'"event":"start"'*) t_ok "journal: start line FIRST" ;; *) t_bad "journal first line: $JL1" ;; esac
+  grep -q '"event":"verdict"' "$D/waiters/journal/t0.jsonl" && grep -q '"event":"notify-ok"' "$D/waiters/journal/t0.jsonl" \
+    && t_ok "journal: verdict + notify-ok lines" || t_bad "journal missing verdict/notify-ok"
+  grep -q -- '--interrupt' "$D/notify.log" && t_bad "green path used --interrupt" || t_ok "green: single notify call, no interrupt"
+  # 2. refused_in_flight -> one --interrupt retry -> delivered
+  run_case flaky "5,0" # 5 first: run-id must be witnessed BEFORE GREEN or payload check exits 4
+  { [ "$RUN_RC" -eq 0 ] && [ "$(wc -l < "$D/notify.log")" -eq 2 ] && [ "$(sed -n 2p "$D/notify.log" | grep -c -- '--interrupt')" -eq 1 ]; } \
+    && t_ok "flaky: refusal retried once with --interrupt, delivered" || t_bad "flaky rc=$RUN_RC lines=$(wc -l < "$D/notify.log")"
+  # 3. always refused -> NOTIFY-FAILED exit 4 (false receipt impossible)
+  run_case refuse "5,0"
+  { [ "$RUN_RC" -eq 4 ] && [ "$(jq -r '.status' "$D/waiters/t0.json")" = "notify-failed" ] && grep -q '"event":"notify-failed"' "$D/waiters/journal/t0.jsonl"; } \
+    && t_ok "refuse: NOTIFY-FAILED exit 4, record + journal agree" || t_bad "refuse rc=$RUN_RC status=$(jq -r .status "$D/waiters/t0.json")"
+  # 4. stall escalation: SK identical in-flight polls -> ESCALATED (not a budget burn)
+  run_case deliver "5,5,5,5,5,5" # (stall-k set below via record edit)
+  jq '.stall_k = 3' "$D/waiters/t0.json" > "$D/t.json" && mv "$D/t.json" "$D/waiters/t0.json"
+  printf '5,5,5,5,5,5' > "$D/seq"; rm -f "$D/seq.count"; : > "$D/notify.log"; rm -f "$D/notify.log.c2"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 \
+    "$SELF" _run "$D/waiters/t0.json" >/dev/null 2>&1; RC4=$?
+  { [ "$RC4" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t0.json")" = "ESCALATED" ]; } \
+    && t_ok "stall: 3 identical in-flight polls -> ESCALATED + delivered" || t_bad "stall rc=$RC4 verdict=$(jq -r .verdict "$D/waiters/t0.json")"
+  # 5. timeout: deadline honored, TIMEOUT verdict, delivered
+  run_case deliver "5,5,5,5,5,5,5,5,5,5" # (timeout patched below)
+  jq '.timeout = 1' "$D/waiters/t0.json" > "$D/t.json" && mv "$D/t.json" "$D/waiters/t0.json"
+  printf '5,5,5,5,5,5,5,5,5,5' > "$D/seq"; rm -f "$D/seq.count" # fresh seq: run_case's own _run consumed the old one
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 \
+    "$SELF" _run "$D/waiters/t0.json" >/dev/null 2>&1; RC5=$?
+  { [ "$RC5" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t0.json")" = "TIMEOUT" ]; } \
+    && t_ok "timeout: deadline -> TIMEOUT + delivered" || t_bad "timeout rc=$RC5 verdict=$(jq -r .verdict "$D/waiters/t0.json")"
+  # 6. sweep: dead pid + no verdict -> ORPHANED + owner woken; done records untouched
+  mk_notify deliver
+  DEAD_PID=$(( $$ + 100000 ))
+  printf '{"id":"old1","pid":%s,"ref":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","notify":"11111111-2222-3333-4444-555555555555","label":"dead","timeout":3600,"stall_k":8,"window":1,"armed_ts":"%s","status":"running","verdict":"","polls":3}\n' \
+    "$DEAD_PID" "$(date -u -d '-10 minutes' +%FT%TZ)" > "$D/waiters/old1.json"
+  printf '{"id":"fresh","pid":%s,"ref":"cccccccccccccccccccccccccccccccccccccccc","notify":"x","label":"grace","timeout":3600,"stall_k":8,"window":1,"armed_ts":"%s","status":"armed","verdict":"","polls":0}\n' \
+    "$DEAD_PID" "$(date -u +%FT%TZ)" > "$D/waiters/fresh.json"
+  printf '{"id":"done1","pid":%s,"ref":"dddddddddddddddddddddddddddddddddddddddd","notify":"x","label":"ok","timeout":3600,"stall_k":8,"window":1,"armed_ts":"%s","status":"done","verdict":"GREEN","polls":2}\n' \
+    "$DEAD_PID" "$(date -u -d '-30 minutes' +%FT%TZ)" > "$D/waiters/done1.json"
+  : > "$D/notify.log"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_HQ="99999999-8888-7777-6666-555555555555" OC_TOOLS_NOLOG=1 \
+    "$SELF" sweep >/dev/null 2>&1; RC6=$?
+  { [ "$RC6" -eq 1 ] && [ "$(jq -r '.status' "$D/waiters/old1.json")" = "orphaned" ] && [ "$(jq -r '.status' "$D/waiters/fresh.json")" = "armed" ] && [ "$(jq -r '.status' "$D/waiters/done1.json")" = "done" ]; } \
+    && t_ok "sweep: dead-pid old record ORPHANED; grace + done records untouched (rc 1)" || t_bad "sweep rc=$RC6 statuses=$(jq -r .status "$D/waiters"/*.json | tr '\n' ' ')"
+  grep -q 'ORPHANED' "$D/notify.log" && t_ok "sweep: owner woken with ORPHANED" || t_bad "sweep: no ORPHANED wake"
+  # 7. arm-time refusals: missing notify binary -> 3 (tombstone5 class killed at arm)
+  OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref abc --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
+  [ $? -eq 3 ] && t_ok "arm: unresolvable notify binary -> 3 (refused, nothing armed)" || t_bad "arm binary-refuse rc"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref abc >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "arm: missing --notify -> 2 (usage)" || t_bad "arm usage rc"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" frobnicate >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "unknown subcommand -> 2" || t_bad "unknown subcommand rc"
+  # 8. REAL detach smoke: arm -> child reaches a verdict on its own
+  mk_notify deliver
+  printf '0' > "$D/seq"; rm -f "$D/seq.count"; export SEQ_FILE="$D/seq"
+  ARM_OUT="$(OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm \
+    --ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbb --notify 11111111-2222-3333-4444-555555555555 --label smoke 2>&1)"; RC8=$?
+  ARM_ID="$(printf '%s' "$ARM_OUT" | grep -oE 'id=[^ ]+' | head -1 | cut -d= -f2)"
+  DET=0
+  if [ "$RC8" -eq 0 ] && [ -n "$ARM_ID" ]; then
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      [ "$(jq -r '.verdict // ""' "$D/waiters/$ARM_ID.json" 2>/dev/null)" = "GREEN" ] && DET=1 && break
+      sleep 0.5
+    done
+  fi
+  { [ "$DET" -eq 1 ] && grep -q '"event":"start"' "$D/waiters/journal/$ARM_ID.jsonl"; } \
+    && t_ok "detach smoke: setsid child reached GREEN; journal start line present" || t_bad "detach smoke rc=$RC8 id=$ARM_ID det=$DET"
+
+  echo "selftest: $pass/$((pass+fail)) passed"
+  rm -rf "$D"
+  [ "$fail" -eq 0 ]
+}
+
+# ---------- dispatch -------------------------------------------------------------
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOH'
+Usage: oc-waiter arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N] [--stall-k N] [--window N]
+       oc-waiter list | sweep | _run <record.json> | --selftest
+Exit: arm 0 armed / 2 usage / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
+EOH
+    exit 0 ;;
+  --selftest|selftest) do_selftest; exit $? ;;
+  arm)   shift; cmd_arm "$@" ;;
+  _run)  shift; cmd_run "$@" ;;
+  list)  cmd_list ;;
+  sweep) cmd_sweep ;;
+  *) usage "unknown subcommand '${1:-}'" ;;
+esac
