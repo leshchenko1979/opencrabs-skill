@@ -80,8 +80,14 @@ EOS
   exit 2; }
 
 # ---------- journal (JSONL, append-only, start line FIRST) --------------------
-jline() { # $1=journal $2=event $3=extra-json-object-or-empty
-  printf '{"ts":"%s","event":"%s"%s}\n' "$(date -u +%FT%TZ)" "$2" "${3:+,$3}" >> "$1"
+jline() { # $1=journal $2=event $3=extra-json-object-or-empty (merged at top level)
+  local base="{\"ts\":\"$(date -u +%FT%TZ)\",\"event\":\"$2\"}"
+  if [ -n "$3" ]; then
+    jq -nc --argjson b "$base" --argjson e "$3" '$b + $e' >> "$1" 2>/dev/null \
+      || printf '%s\n' "$base" >> "$1"   # never let a broken extra kill the journal write
+  else
+    printf '%s\n' "$base" >> "$1"
+  fi
 }
 
 resolve_notify_bin() { # -> echoes binary path, rc 1 if unresolvable
@@ -129,6 +135,12 @@ cmd_arm() {
   REC="$STATE_DIR/$ID.json"
   printf '{"id":"%s","pid":0,"ref":"%s","notify":"%s","label":"%s","timeout":%s,"stall_k":%s,"window":%s,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null}\n' \
     "$ID" "$REF" "$TARGET" "$LABEL" "$TMO" "$SK" "$WIN" "$(date -u +%FT%TZ)" > "$REC"
+  # journal-first (#74): arm writes the start line SYNCHRONOUSLY so a read-back
+  # right after `armed id=` can never see an empty/missing file (launch-death
+  # lesson); the child appends, never truncates.
+  : > "$STATE_DIR/journal/$ID.jsonl"
+  jline "$STATE_DIR/journal/$ID.jsonl" start \
+    "{\"pid\":0,\"ref\":\"$REF\",\"notify\":\"$TARGET\",\"label\":\"$LABEL\",\"deadline_epoch\":$(($(date +%s) + TMO))}"
   ( setsid "$SELF" _run "$REC" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
   echo "armed id=$ID"
   echo "  record: $REC"
@@ -146,8 +158,12 @@ cmd_run() {
   LABEL="$(jq -r '.label' "$REC")";    TMO="$(jq -r '.timeout' "$REC")"
   SK="$(jq -r '.stall_k' "$REC")";     WIN="$(jq -r '.window' "$REC")"
   ID="$(jq -r '.id' "$REC")";          JOURNAL="$STATE_DIR/journal/$ID.jsonl"
-  : > "$JOURNAL"
-  jline "$JOURNAL" start "{\"pid\":$$,\"ref\":\"$REF\",\"notify\":\"$TARGET\",\"label\":\"$LABEL\",\"deadline_epoch\":$(($(date +%s) + TMO))}"
+  # journal-first (#74): start line was written by arm; a direct _run (selftest,
+  # manual replay) writes it itself only when the journal is still empty.
+  if [ ! -s "$JOURNAL" ]; then
+    jline "$JOURNAL" start "{\"pid\":$$,\"ref\":\"$REF\",\"notify\":\"$TARGET\",\"label\":\"$LABEL\",\"deadline_epoch\":$(($(date +%s) + TMO))}"
+  fi
+  jline "$JOURNAL" running "{\"pid\":$$}"
   rec_upd "$REC" "\"status\":\"running\",\"pid\":$$"
   local NBIN
   NBIN="$(resolve_notify_bin)" || { jline "$JOURNAL" notify-failed '{"reason":"binary-unresolvable"}'
@@ -371,6 +387,13 @@ GSTUB
   fi
   { [ "$DET" -eq 1 ] && grep -q '"event":"start"' "$D/waiters/journal/$ARM_ID.jsonl"; } \
     && t_ok "detach smoke: setsid child reached GREEN; journal start line present" || t_bad "detach smoke rc=$RC8 id=$ARM_ID det=$DET"
+  # 16. journal-first (#74): arm writes start line synchronously; EVERY line is valid JSON
+  JL="$D/waiters/journal/$ARM_ID.jsonl"
+  EV1="$(head -1 "$JL" | jq -r '.event // ""' 2>/dev/null)"
+  BAD=0
+  while IFS= read -r line; do [ -n "$line" ] && { echo "$line" | jq -e . >/dev/null 2>&1 || BAD=1; }; done < "$JL"
+  { [ "$EV1" = "start" ] && [ "$BAD" -eq 0 ]; } \
+    && t_ok "journal-first: line 1 = start (arm-written), all lines valid JSON" || t_bad "journal-first ev1=$EV1 bad_json=$BAD"
 
   echo "selftest: $pass/$((pass+fail)) passed"
   rm -rf "$D"
