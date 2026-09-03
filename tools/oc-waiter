@@ -27,7 +27,7 @@
 #
 # Usage:
 #   oc-waiter arm   --ref <sha-or-branch> --notify <session-uuid> [--label S]
-#                   [--timeout N] [--stall-k N] [--window N]   # detach, return
+#                   [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N]   # detach, return
 #   oc-waiter list                                            # live records
 #   oc-waiter sweep                                           # watchdog pass
 #   oc-waiter _run <record.json>                              # internal child
@@ -66,14 +66,28 @@ PRCHECKS_BIN="${OC_WAITER_PRCHECKS:-$(cd "$(dirname "$0")" && pwd)/oc-prchecks}"
 POLL_SLEEP="${OC_WAITER_POLL:-60}"
 WINDOW="${OC_WAITER_WINDOW:-90}"
 TIMEOUT="${OC_WAITER_TIMEOUT:-3600}"
-STALL_K="${OC_WAITER_STALL_K:-8}"
+STALL_K="${OC_WAITER_STALL_K:-}"   # empty => derived at arm: TMO/WIN + 2 (#74 r8 lesson)
+
+# dur_secs: N | Ns | Nm | Nh -> seconds (bare N = seconds). echoes 0 on bad input.
+dur_secs() {
+  local v="$1" n u
+  n="${v%[smh]}"; u="${v#"${v%%[!0-9]*}"}"
+  case "$n" in ''|*[!0-9]*) echo 0; return ;; esac
+  case "$u" in
+    '')  echo "$n" ;;
+    s)   echo "$n" ;;
+    m)   echo $((n * 60)) ;;
+    h)   echo $((n * 3600)) ;;
+    *)   echo 0 ;;
+  esac
+}
 CHURN_CAP=3          # superseded cycles before ESCALATED-CHURN
 RC4_CAP=5            # consecutive gate-tool infra failures before FAILED-TOOL
 HQ_SESSION="${OC_WAITER_HQ:-}"
 
 usage() { [ $# -gt 0 ] && echo "$PROG: $1" >&2
   cat >&2 <<EOS
-Usage: $PROG arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N] [--stall-k N] [--window N]
+Usage: $PROG arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N]
        $PROG list | sweep | _run <record.json> | --selftest
 Exit: arm 0 armed / 2 usage / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
 EOS
@@ -114,12 +128,16 @@ cmd_arm() {
       --ref)     shift; REF="${1:-}"; [ -n "$REF" ] || usage "--ref needs a value" ;;
       --notify)  shift; TARGET="${1:-}"; [ -n "$TARGET" ] || usage "--notify needs a session uuid" ;;
       --label)   shift; LABEL="${1:-}" ;;
-      --timeout) shift; TMO="${1:-}"; case "$TMO" in ''|*[!0-9]*) usage "--timeout needs an integer" ;; esac ;;
-      --stall-k) shift; SK="${1:-}"; case "$SK" in ''|*[!0-9]*) usage "--stall-k needs an integer" ;; esac ;;
-      --window)  shift; WIN="${1:-}"; case "$WIN" in ''|*[!0-9]*) usage "--window needs an integer" ;; esac ;;
+      --timeout) shift; TMO="$(dur_secs "${1:-}")"; [ "$TMO" -gt 0 ] || usage "--timeout needs N|Ns|Nm|Nh (e.g. 90m, 2h)" ;;
+      --stall-k) shift; SK="${1:-}"; case "$SK" in ''|*[!0-9]*) usage "--stall-k needs an integer (poll count)" ;; esac ;;
+      --window)  shift; WIN="$(dur_secs "${1:-}")"; [ "$WIN" -gt 0 ] || usage "--window needs N|Ns|Nm|Nh" ;;
       *) usage "unknown arg '$1'" ;;
     esac; shift
   done
+  # dynamic stall default (#74 r8 lesson): stall_k must outlast a healthy run of
+  # the whole timeout budget — TMO/WIN windows + 2 — else a long CI build
+  # false-escalates mid-flight (r8: stall_k=8 tripped at 12 min on a 35-min build).
+  [ -n "$SK" ] || SK=$(( TMO / WIN + 2 ))
   [ -n "$REF" ] || usage "arm needs --ref"
   [ -n "$TARGET" ] || usage "arm needs --notify <session-uuid>"
   case "$TARGET" in *[!0-9a-f-]*|"") usage "--notify must be a session uuid (got '$TARGET')" ;; esac
@@ -372,6 +390,13 @@ GSTUB
   [ $? -eq 2 ] && t_ok "arm: missing --notify -> 2 (usage)" || t_bad "arm usage rc"
   OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" frobnicate >/dev/null 2>&1
   [ $? -eq 2 ] && t_ok "unknown subcommand -> 2" || t_bad "unknown subcommand rc"
+  # 7b. duration suffixes (#74): parsed args reach the notify-binary check (3), bad suffix is usage (2)
+  OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 --timeout 90m >/dev/null 2>&1
+  [ $? -eq 3 ] && t_ok "arm: --timeout 90m accepted" || t_bad "arm --timeout 90m rc=$?"
+  OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 --timeout 2h --window 30s >/dev/null 2>&1
+  [ $? -eq 3 ] && t_ok "arm: --timeout 2h --window 30s accepted" || t_bad "arm 2h/30s rc=$?"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 --timeout 90x >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "arm: bad suffix 90x -> 2 (usage)" || t_bad "arm 90x rc=$?"
   # 8. REAL detach smoke: arm -> child reaches a verdict on its own
   mk_notify deliver
   printf '0' > "$D/seq"; rm -f "$D/seq.count"; export SEQ_FILE="$D/seq"
@@ -394,6 +419,9 @@ GSTUB
   while IFS= read -r line; do [ -n "$line" ] && { echo "$line" | jq -e . >/dev/null 2>&1 || BAD=1; }; done < "$JL"
   { [ "$EV1" = "start" ] && [ "$BAD" -eq 0 ]; } \
     && t_ok "journal-first: line 1 = start (arm-written), all lines valid JSON" || t_bad "journal-first ev1=$EV1 bad_json=$BAD"
+  # 17. dynamic stall-k default (#74 r8 lesson): unset stall-k derives TMO/WIN + 2
+  SKV="$(jq -r '.stall_k' "$D/waiters/$ARM_ID.json")"
+  [ "$SKV" -eq $(( 3600 / 90 + 2 )) ] && t_ok "dynamic stall-k: default derived 42" || t_bad "dynamic stall-k got '$SKV'"
 
   echo "selftest: $pass/$((pass+fail)) passed"
   rm -rf "$D"
@@ -404,7 +432,7 @@ GSTUB
 case "${1:-}" in
   -h|--help)
     cat <<'EOH'
-Usage: oc-waiter arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N] [--stall-k N] [--window N]
+Usage: oc-waiter arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N]
        oc-waiter list | sweep | _run <record.json> | --selftest
 Exit: arm 0 armed / 2 usage / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
 EOH
