@@ -80,7 +80,9 @@ Trigger: a NEW area is discussed and a research/code task needs doing, and NO ex
 3. Brief the lane ONLY via `session_notify` to its session id (owner order 2026-09-03 19:28Z — supersedes the former tg_send_message-into-topic briefing). The spawn prompt carries only the task seed; the full brief, corrections, and un-park orders go through `session_notify`. A topic post is allowed for OWNER VISIBILITY only — labeled as such, never the briefing channel.
 4. Enroll the new editor in the roster: `oc-ledger roster-enroll` with its session id + `--topic <topic id>` (lesson 2026-09-01: an unrostered actor fails ship with "Session-Id not in workers ledger").
 
-## Tool-problem reports: HQ triage & routing (owner order 2026-09-01 22:2xZ)
+## Tool-problem reports: HQ triage & routing (owner order 2026-09-01 22:2xZ; supervisor identity 2026-09-03 20:31Z)
+
+**The supervisor lane for tool anomalies is OC DEV HQ.** Owner order 2026-09-03 20:31Z: "we do have a supervisor lane — it's OC DEV HQ." Workers/editors route tool-use anomaly reports (failed invocations, wrong args, false journal rows, misreads that survive into claims, unbacked persistence claims) to the OC DEV HQ session via `session_notify` — never lane-status-only, and never to an ad-hoc "carrier tools" chat as supervisor (superseded interim routing, 2026-09-03 19:16–20:13Z; carrier-tool channel remains a valid NOTIFICATION target, not the supervisor of record). Journal/worker vocabulary fixes authored by HQ still flow through the carrier-tool channel to workers.
 
 Workers/editors report tool failures, inconsistencies, and quirks to **HQ** (this lane) — `QUIRK: <tool> <observed> BECAUSE <expected>` + evidence, same turn (skill: supervisor.md §Duty 7 items 5–6, editor.md lane duty). HQ's duty on receipt:
 
