@@ -217,6 +217,22 @@ do_selftest() {
     OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
     OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" "$SHA" --no-log >/dev/null 2>&1
   [ ! -s "$D/tools.log" ] && t_ok "--no-log suppresses journal" || t_bad "--no-log leaked a journal line"
+  # killed watch (#74, A3 report): SIGTERM mid-watch must journal exit 143 +
+  # extra.signal=TERM — never a success-looking exit 0 for an interrupted run.
+  rm -f "$D/tools.log"
+  mk_shim "$D/gh" inflight   # run stays in_progress -> watch loop keeps polling
+  OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+    OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=2 \
+    OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" OC_NO_FLOODGUARD=1 \
+    "$SELF" "$SHA" --wait 120 >/dev/null 2>&1 &
+  KW=$!
+  sleep 3
+  kill -TERM "$KW" 2>/dev/null
+  wait "$KW"; KW_RC=$?
+  if [ "$(jq -s 'map(select(.exit==143 and .extra.signal=="TERM")) | length' "$D/tools.log" 2>/dev/null)" = "1" ] \
+     && [ "$(jq -s 'map(select(.exit==0)) | length' "$D/tools.log" 2>/dev/null)" = "0" ]; then
+    t_ok "killed watch: SIGTERM journaled exit 143 + signal, no false success"
+  else t_bad "killed watch rows: $(cat "$D/tools.log" 2>/dev/null) rc=$KW_RC"; fi
   # dispatch lock contention -> 4 (background holder keeps the lock 6s; wait=1)
   ( exec 8>"$D/state/.oc-prchecks-dispatch.lock"; flock 8; sleep 6 ) &
   HOLDER=$!

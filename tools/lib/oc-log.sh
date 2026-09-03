@@ -47,6 +47,14 @@ oc_log_init() {
   OC_LOG_ENABLED=1
   OC_LOG_START="$(date +%s.%N)"
   oc_log_flood_guard
+  # Signal honesty (#74, A3-lane report 2026-09-03): an async kill left $? at
+  # the last COMPLETED command (usually 0), so the EXIT trap journaled an
+  # exit-0 success row for an interrupted invocation. Trap TERM/INT/HUP and
+  # exit 128+N: the EXIT trap then logs the true kill status, and extra.signal
+  # names the signal — "interrupted" can never read as "success".
+  trap 'oc_log_extra "signal" "TERM"; exit 143' TERM
+  trap 'oc_log_extra "signal" "INT";  exit 130' INT
+  trap 'oc_log_extra "signal" "HUP";  exit 129' HUP
   return 0
 }
 
