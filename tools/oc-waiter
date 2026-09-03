@@ -139,6 +139,14 @@ cmd_arm() {
   # false-escalates mid-flight (r8: stall_k=8 tripped at 12 min on a 35-min build).
   [ -n "$SK" ] || SK=$(( TMO / WIN + 2 ))
   [ -n "$REF" ] || usage "arm needs --ref"
+  # full-sha law (#74, r7 lesson): a hex ref shorter than 40 chars arms fine but
+  # the child burns a poll and dies FAILED-TOOL at oc-prchecks. Branch names are
+  # fine; hex must be the full 40.
+  case "$REF" in
+    *[!0-9a-fA-F]*) : ;;                       # non-hex => branch name, allowed
+    ????????????????????????????????????????) : ;;  # exactly 40 hex, allowed
+    *) usage "--ref hex must be the full 40-char sha (got ${#REF}); short shas die at pr-checks" ;;
+  esac
   [ -n "$TARGET" ] || usage "arm needs --notify <session-uuid>"
   case "$TARGET" in *[!0-9a-f-]*|"") usage "--notify must be a session uuid (got '$TARGET')" ;; esac
   [ -x "$PRCHECKS_BIN" ] || { echo "$PROG: gate tool not executable: $PRCHECKS_BIN" >&2; exit 3; }
@@ -384,7 +392,7 @@ GSTUB
     && t_ok "sweep: dead-pid old record ORPHANED; grace + done records untouched (rc 1)" || t_bad "sweep rc=$RC6 statuses=$(jq -r .status "$D/waiters"/*.json | tr '\n' ' ')"
   grep -q 'ORPHANED' "$D/notify.log" && t_ok "sweep: owner woken with ORPHANED" || t_bad "sweep: no ORPHANED wake"
   # 7. arm-time refusals: missing notify binary -> 3 (tombstone5 class killed at arm)
-  OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref abc --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
+  OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
   [ $? -eq 3 ] && t_ok "arm: unresolvable notify binary -> 3 (refused, nothing armed)" || t_bad "arm binary-refuse rc"
   OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref abc >/dev/null 2>&1
   [ $? -eq 2 ] && t_ok "arm: missing --notify -> 2 (usage)" || t_bad "arm usage rc"
@@ -397,11 +405,18 @@ GSTUB
   [ $? -eq 3 ] && t_ok "arm: --timeout 2h --window 30s accepted" || t_bad "arm 2h/30s rc=$?"
   OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 --timeout 90x >/dev/null 2>&1
   [ $? -eq 2 ] && t_ok "arm: bad suffix 90x -> 2 (usage)" || t_bad "arm 90x rc=$?"
+  # 7c. full-sha law (#74 r7 lesson): short hex refused at arm, branch names allowed
+  OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref 6b0f095e --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "arm: short hex 6b0f095e -> 2 (full-sha law)" || t_bad "arm short-hex rc=$?"
+  OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
+  [ $? -eq 3 ] && t_ok "arm: full 40-hex passes sha law (reaches notify check -> 3)" || t_bad "arm full-sha rc=$?"
+  OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref some/branch-name --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
+  [ $? -eq 3 ] && t_ok "arm: branch name passes sha law" || t_bad "arm branch rc=$?"
   # 8. REAL detach smoke: arm -> child reaches a verdict on its own
   mk_notify deliver
   printf '0' > "$D/seq"; rm -f "$D/seq.count"; export SEQ_FILE="$D/seq"
   ARM_OUT="$(OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm \
-    --ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbb --notify 11111111-2222-3333-4444-555555555555 --label smoke 2>&1)"; RC8=$?
+    --ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --notify 11111111-2222-3333-4444-555555555555 --label smoke 2>&1)"; RC8=$?
   ARM_ID="$(printf '%s' "$ARM_OUT" | grep -oE 'id=[^ ]+' | head -1 | cut -d= -f2)"
   DET=0
   if [ "$RC8" -eq 0 ] && [ -n "$ARM_ID" ]; then
