@@ -56,7 +56,18 @@ commits, 133 fork-only, 68 overlapping files, merge-base `4776bee2`).
    lane builds, battery runs — no local cargo per build-lane directive).
 7. Fork CI (`pr-checks`) GREEN → FF-push `origin/main`, consolidated report
    with the decisions table.
-8. Ledger stamps; prod swap stays owner-explicit.
+8. **Swap stamp — merge-derived heads.** A merge commit cannot carry the
+   `Session-Id` trailer, so the build leg's ORDER gate 4 refuses it
+   (2026-09-03 finding: bare merge `d02f4e08` passed this lane GREEN, swap
+   blocked exit 2 pre-install). Before dispatching the build leg, HQ lands
+   an **empty trailer-signed marker commit** on the merge head
+   (`git commit --allow-empty` with a `Session-Id: <uuid>` trailer) —
+   tree-identical to the merge (verify `git diff <merge> <marker>` is
+   empty), forward-only, never force-push. The owner's swap ruling carries
+   over unchanged: the marker changes no bytes. Pre-verified in the PR lane
+   by `pr-checks.yml` swap mode (`swap=true`, gate-4 mirror — same
+   commit as this rule).
+9. Ledger stamps; prod swap stays owner-explicit.
 
 ## Risk register
 

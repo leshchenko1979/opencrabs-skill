@@ -99,3 +99,12 @@ Workers/editors report tool failures, inconsistencies, and quirks to **HQ** (thi
 Fork issues [leshchenko1979/opencrabs#20](https://github.com/leshchenko1979/opencrabs/issues/20) (plan auto-approve under `approval_policy=auto-always` — 638µs `created_at`→`approved_at`, design-track promise broken, restart resumes unapproved plans as Active) and [leshchenko1979/opencrabs#16](https://github.com/leshchenko1979/opencrabs/issues/16) (plan-card footer lost in 429 flood) are **PARKED**: owner stood the editor lane down ("It's not your concern anymore — stand down", relayed via ops 329bf3a3). No implementation approval will arrive via ops. Gate stays: no code, no branch, no claim-comment on either issue unless Alexey himself explicitly re-opens and approves the solution+diagram. Do NOT re-ignite these on seeing them open in the fork issue list — filed state IS the deliverable; fixing upstream-reported defects is adolfo's lane.
 
 
+
+<!-- source: MEMORY swap-head-signature -->
+## Swap-head signature for merge-derived binaries (owner 2026-09-03 "Land 1+2 only, keep version as-is")
+
+Gate 4 (Session-Id trailer, `quick-build-linux.yml` ORDER gates) applies to every swap head. Merge commits cannot carry trailers, so a bare merge must never be dispatched to the build leg (2026-09-03: bare merge `d02f4e08` passed pr-checks GREEN, swap blocked exit 2 pre-install; fixed forward-only with empty marker `1d0dd4cc`). Standing law:
+
+1. **Marker, not waiver** — HQ lands an empty trailer-signed marker commit on the merge head before the build dispatch (tree-identical — `git diff <merge> <marker>` empty —, forward-only, never force-push, never loosen gate 4). Owner's swap ruling carries over; the marker changes no bytes. Runbook step 8.
+2. **pr-checks mirrors gate 4 in swap mode** — `pr-checks.yml` (carrier branch `ci/quick-build-linux`, landed `464f77c4`) takes `swap=true`: runs the exact gate-4 regex on the gated ref before fmt/clippy/tests. Swap-mode GREEN ⇒ swappable — the build leg has no remaining semantic failure mode (clippy+tests subsume build success; the binary build itself stays quick-build's job, no duplicate artifact per the 2026-08-31 de-dup ruling). Input-gated: ordinary PR-lane runs unchanged.
+3. **Version stays put on merges/swaps** — merge-derived binaries ship with the tree's standing version; `deployed.meta.json` (sha + artifact sha256) is the identity record, not the version string. Owner 2026-09-03: a version bump is a release-flow event, not a merge or swap event.
