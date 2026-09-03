@@ -789,6 +789,22 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: sandbox sidecar guard did not skip"; }
   [ "$(wc -l < "$SD4/sc-restarts.log")" = "1" ] \
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: guard run performed sidecar restarts"; }
+  # 17o-bis. ruling-1273 default: PROD target + SIDECARS unset => sidecars
+  #      SKIPPED too (the f3c03269 auto-swap restarted family here — defect).
+  printf 'cccccccccccccccccccccccccccccccccccccccc\n' > "$SD4/deployed.sha"  # reset same-sha guard
+  OC_SWAP_TARGET="$T/bin/oc-fake2" \
+    OC_DEPLOY_STATE_DIR="$SD4" OC_SWAP_BACKUP_DIR="$SD4/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+    OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_REPO="$T/crepo" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_SEAL="$SD4/tools/oc-seal-state" OC_DEPLOY_ARTVERIFY="$SD4/tools/oc-artifact-verify" \
+    "$SELF_BIN" swap-execute --sha dddddddddddddddddddddddddddddddddddddddd \
+    --run 780 --features telegram --artifact-dir "$T/art" >/dev/null 2>&1
+  N_SC2="$(grep -h '"step":"sidecar-sync"' "$SD4"/oc-deploy/journal/*.jsonl 2>/dev/null | grep -c 'drill-or-sandbox-or-disabled')"
+  [ "$N_SC2" -ge 2 ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: prod default restarted sidecars (ruling 1273)"; }
+  [ "$(wc -l < "$SD4/sc-restarts.log")" = "1" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: 1273-default run restarted a sidecar"; }
   # 17m. poll RED scan (issue #24 wiring): latest failed carrier run fans out
   #      (blame path via 9001 annotations); second poll is idempotent no-op.
   rm -f "$SD/oc-deploy/journal/"fanout-888-*.jsonl   # clear piggyback noise from earlier poll cases
@@ -1283,15 +1299,24 @@ swap_execute() {
   #     and re-verified. NON-FATAL by design: a sidecar that refuses to bounce
   #     is journaled (sidecar-unit exit=1), never fails the swap.
   #     Gates: DRILL -> off; sandbox (non-default SWAP_TARGET) -> off unless
-  #     OC_SWAP_SIDECARS=2 (selftest force); OC_SWAP_SIDECARS=0 -> always off.
+  #     OC_SWAP_SIDECARS=2 (selftest force); unset/0 -> always off (ruling
+  #     1273 default; =1 opts a PROD target back in).
   #     Selftest shims: OC_SWAP_SIDECAR_LISTER/SHOW/ACTIVE/RESTART (command per
   #     unit) + OC_SWAP_PROC_PREFIX (fake /proc) + OC_SWAP_PRIMARY_UNIT.
   sidecar_sync() { # $1 = deployed binary sha ; GREEN path only
-    local EXP="$1" EN=1 U PID PSHA ACT RRC NPID NSHA
+    local EXP="$1" EN=0 U PID PSHA ACT RRC NPID NSHA
     local RESTARTED=0 INSYNC=0 FAILED=0 DETAIL="[]"
+    # Ruling 1273 (supervisor, 2026-09-03, canonical): an ops-profile swap
+    # restarts opencrabs-ops.service ONLY — sibling daemons legitimately keep
+    # the old binary + (deleted) exe. Sidecar sync is therefore OPT-IN
+    # (supersedes the 2026-08-31 auto-sync, whose default restart of family
+    # violated 1273 during the f3c03269 auto-swap): OC_SWAP_SIDECARS=1 opts in
+    # for a PROD target, =2 force-enables (selftest/sandbox), unset/0 = off.
     [ "$DRILL" = "1" ] && EN=0
-    [ "${OC_SWAP_SIDECARS:-1}" = "0" ] && EN=0
-    if [ "$SWAP_TARGET" != "/usr/local/bin/opencrabs" ] && [ "${OC_SWAP_SIDECARS:-1}" != "2" ]; then EN=0; fi
+    case "${OC_SWAP_SIDECARS:-0}" in
+      2) EN=1 ;;
+      1) [ "$SWAP_TARGET" = "/usr/local/bin/opencrabs" ] && EN=1 ;;
+    esac
     if [ "$EN" != "1" ]; then
       jline sidecar-sync 0 '{"skipped":"drill-or-sandbox-or-disabled"}'
       return 0
