@@ -77,7 +77,7 @@ Trigger: a NEW area is discussed and a research/code task needs doing, and NO ex
 2. Create the topic (MTProto, methods verified live 2026-09-01): forum methods live under `messages.*`, NOT `channels.*`; pass `resolve: true`; peer = forum chat id.
    - `tg_mtproto` method_full_name=`messages.CreateForumTopic` params_json=`{"peer": -1003936827469, "title": "<Area>", "random_id": <random long>}` → parse envelope (`content[0].text` is escaped JSON, needs second `json.loads`), read the new topic's root message id from the Updates.
    - Read-only probe that works: `messages.GetForumTopicsRequest` {peer, offset_date:0, offset_id:0, offset_topic:0, limit}.
-3. `tg_send_message` (dynamic tool) chat `-1003936827469`, `reply_to_id` = the new topic's root message id, message starts EXACTLY with `Load opencrabs-dev skill. You are an editor.` then the task brief.
+3. Brief the lane ONLY via `session_notify` to its session id (owner order 2026-09-03 19:28Z — supersedes the former tg_send_message-into-topic briefing). The spawn prompt carries only the task seed; the full brief, corrections, and un-park orders go through `session_notify`. A topic post is allowed for OWNER VISIBILITY only — labeled as such, never the briefing channel.
 4. Enroll the new editor in the roster: `oc-ledger roster-enroll` with its session id + `--topic <topic id>` (lesson 2026-09-01: an unrostered actor fails ship with "Session-Id not in workers ledger").
 
 ## Tool-problem reports: HQ triage & routing (owner order 2026-09-01 22:2xZ)
