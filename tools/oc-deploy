@@ -731,6 +731,57 @@ Session-Id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: NOFANOUT still ran fanout"; }
   [ ! -f "$SD3/fanout.state" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: NOFANOUT marked state"; }
   [ ! -s "$NOTIFY_LOG" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: NOFANOUT notified"; }
+  # 17p. features-compat gate (HQ law 2026-09-04): swap whose features DROP a
+  #      deployed feature is refused rc 4 with markers untouched; the same call
+  #      with --allow-features-drop proceeds to SWAP COMPLETE.
+  local SD5="$T/state5"
+  mkdir -p "$SD5/tools" "$SD5/backups"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD5/tools/oc-artifact-verify"; chmod +x "$SD5/tools/oc-artifact-verify"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD5/tools/oc-seal-state";     chmod +x "$SD5/tools/oc-seal-state"
+  printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD5/workers-ledger.json"
+  echo prev > "$SD5/deployed.sha"
+  printf '{"sha":"prevprevprevprevprevprevprevprevprevprevprevprevprevprev","run_id":42,"artifact_sha256":"aa","features":"telegram,code-graph","swapped_at":"2026-09-04T06:36:06Z","auth":"auto-swap","prev_sha":"old"}' > "$SD5/deployed.meta.json"
+  printf 'v1-artifact' > "$T/art/opencrabs"; chmod +x "$T/art/opencrabs"
+  printf 'v0-current' > "$T/bin/oc-fake5"; chmod +x "$T/bin/oc-fake5"
+  : > "$NOTIFY_LOG"
+  out="$(OC_DEPLOY_STATE_DIR="$SD5" OC_SWAP_TARGET="$T/bin/oc-fake5" \
+    OC_SWAP_BACKUP_DIR="$SD5/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+    OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_NOFANOUT=1 \
+    OC_DEPLOY_SEAL="$SD5/tools/oc-seal-state" OC_DEPLOY_ARTVERIFY="$SD5/tools/oc-artifact-verify" \
+    "$SELF_BIN" swap-execute --sha cccccccccccccccccccccccccccccccccccccccc \
+    --run 881 --features telegram --artifact-dir "$T/art" 2>&1)"; rc=$?
+  check_rc "featdrop-refused-rc" $rc 4
+  check_has "featdrop-refused-msg" "$out" "features-compat gate"
+  check_has "featdrop-names-lost" "$out" "code-graph"
+  grep -q 'code-graph' "$SD5/deployed.meta.json" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: featdrop refusal mutated meta"; }
+  [ ! -f "$SD5/oc-deploy/journal/swap-cccccccc-*.jsonl" ] && [ -z "$(ls "$SD5/oc-deploy/journal/" 2>/dev/null)" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: featdrop refusal wrote a swap journal"; }
+  out="$(OC_DEPLOY_STATE_DIR="$SD5" OC_SWAP_TARGET="$T/bin/oc-fake5" \
+    OC_SWAP_BACKUP_DIR="$SD5/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+    OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_NOFANOUT=1 \
+    OC_DEPLOY_SEAL="$SD5/tools/oc-seal-state" OC_DEPLOY_ARTVERIFY="$SD5/tools/oc-artifact-verify" \
+    "$SELF_BIN" swap-execute --sha cccccccccccccccccccccccccccccccccccccccc \
+    --run 882 --features telegram --allow-features-drop --artifact-dir "$T/art" 2>&1)"; rc=$?
+  check_rc "featdrop-allowed-rc" $rc 0
+  check_has "featdrop-allowed-complete" "$out" "SWAP COMPLETE"
+  grep -q '"features":"telegram"' "$SD5/deployed.meta.json" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: featdrop allowed did not write meta"; }
+  # 17q. additions are NOT drops: same deployed set, wider request passes the gate.
+  printf '{"sha":"prevprevprevprevprevprevprevprevprevprevprevprevprevprev","run_id":42,"artifact_sha256":"aa","features":"telegram,code-graph","swapped_at":"2026-09-04T06:36:06Z","auth":"auto-swap","prev_sha":"old"}' > "$SD5/deployed.meta.json"
+  out="$(OC_DEPLOY_STATE_DIR="$SD5" OC_SWAP_TARGET="$T/bin/oc-fake5" \
+    OC_SWAP_BACKUP_DIR="$SD5/backups" OC_SWAP_RESTART_CMD=true \
+    OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+    OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_NOFANOUT=1 \
+    OC_DEPLOY_SEAL="$SD5/tools/oc-seal-state" OC_DEPLOY_ARTVERIFY="$SD5/tools/oc-artifact-verify" \
+    "$SELF_BIN" swap-execute --sha dddddddddddddddddddddddddddddddddddddddd \
+    --run 883 --features telegram,code-graph,voice --artifact-dir "$T/art" 2>&1)"; rc=$?
+  check_rc "featadd-passes-rc" $rc 0
   # 17n. sidecar sync (#47): GREEN swap restarts STALE non-ops units, leaves
   #      in-sync units untouched; sandbox systemctl shims + OC_SWAP_SIDECARS=2.
   local SD4="$T/state4" SCJ
@@ -1186,10 +1237,32 @@ fanout_run() { # $1=run id $2=dry-run(0/1)
 # Phase B body (spec: s2-swap-journal-spec.md). Runs under a systemd transient
 # in prod; env overrides sandbox every side effect for selftest.
 swap_execute() {
-  local SHA="$1" RUN_ID="$2" FEATURES="$3" DRILL="$4" ARTDIR="$5"
+  local SHA="$1" RUN_ID="$2" FEATURES="$3" DRILL="$4" ARTDIR="$5" ALLOW_DROP="${6:-0}"
   local SHORT="${SHA:0:8}"
   local STAGE; STAGE="$(stage)"
   [ "$STAGE" = "S2" ] || [ "$STAGE" = "S3" ] || { shadow_log swap "$SHA" "$FEATURES" "stage-gate"; die 4 "swap requires stage >= S2 (current: $STAGE)"; }
+
+  # --- 0. features-compat gate (HQ LAW 2026-09-04, ruling on the 06:36Z rogue
+  #     swap: run 33844429519 shipped features="telegram" over a live
+  #     "telegram,code-graph" binary and the auto-swap consumed it — structural
+  #     memory died silently for 12h. MANDATORY: refuse any artifact whose
+  #     feature set DROPS a feature present in deployed.meta.json, unless the
+  #     operator passes --allow-features-drop explicitly. Additions are fine;
+  #     drops are the failure class. Catches BOTH rogue swaps of 2026-09-03/04.) ---
+  if [ "$DRILL" != "1" ] && [ -f "$DEPLOYED_META" ]; then
+    local DEP_FEATS MISSING
+    DEP_FEATS="$(jq -r '.features // ""' "$DEPLOYED_META" 2>/dev/null || true)"
+    if [ -n "$DEP_FEATS" ] && [ "$DEP_FEATS" != "null" ]; then
+      MISSING="$(comm -23 \
+        <(echo "$DEP_FEATS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | sort -u) \
+        <(echo "$FEATURES" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | sort -u))"
+      if [ -n "$MISSING" ] && [ "$ALLOW_DROP" != "1" ]; then
+        shadow_log swap "$SHA" "$FEATURES" "features-drop-gate"
+        die 4 "features-compat gate (HQ law 2026-09-04): requested features '$FEATURES' DROP deployed feature(s): $(echo "$MISSING" | tr '\n' ' ')— live binary has '$DEP_FEATS'. Refusing swap. Pass --allow-features-drop to override deliberately."
+      fi
+    fi
+  fi
+
   journal_init "$SHORT"
   local BASE_DIR; BASE_DIR="$(dirname "$(readlink -f "$LEDGER")")"
   local BASELINE="$BASE_DIR/baseline.json" ORDERS="$BASE_DIR/orders.json"
@@ -1556,7 +1629,7 @@ case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] 
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. Kill-file check already ran above.
 if [ "$MODE" = contributors ]; then contributors_run "$@"; exit $?; fi
-SHA=""; FEATURES=""; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
+SHA=""; FEATURES=""; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0; ALLOW_DROP=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
 WAIT_SECS=0; NOTIFY_SESSION=""   # C-#2: poll --wait / --notify-session
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -1565,6 +1638,7 @@ while [ $# -gt 0 ]; do
     --execute)  EXECUTE=1 ;;
     --run)      RUN_ID="${2:-}"; shift ;;
     --drill)    DRILL=1 ;;
+    --allow-features-drop) ALLOW_DROP=1 ;;  # HQ law 2026-09-04: explicit escape hatch for the features-compat gate
     --dry-run)  DRYRUN=1 ;;   # issue #24: fanout rehearsal — never marks done
     --with-delta) WITH_DELTA=1 ;;   # merge B (v0.4.48): watch rides oc-upstream-delta too
     --wait)     WAIT_SECS="${2:-}"; shift ;;   # C-#2: poll blocks until a NEW green run (or timeout, rc 5)
@@ -1717,7 +1791,7 @@ case "$MODE" in
   swap-execute)
     [ -n "$SHA" ] && [ -n "$RUN_ID" ] || die 1 "swap-execute needs --sha <40-hex> and --run <id>"
     echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
-    swap_execute "$SHA" "$RUN_ID" "$FEATURES" "$DRILL" "$ARTDIR"
+    swap_execute "$SHA" "$RUN_ID" "$FEATURES" "$DRILL" "$ARTDIR" "$ALLOW_DROP"
     ;;
   # ---------------------------------------------------------------- fanout --
   fanout)
