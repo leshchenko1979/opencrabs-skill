@@ -1328,8 +1328,27 @@ swap_execute() {
   # stall-hit session relaunched the leg after run 1 had already written markers;
   # run 2 then recorded prev_sha == deployed sha, corrupting attribution range).
   if [ "$PREV_SHA" = "$SHA" ]; then
-    jline guard 2 "$(jq -cn --arg s "$SHA" '{reason:"already-deployed", deployed_sha:$s}')"
-    die 2 "swap-execute: $SHA is ALREADY the deployed sha — refusing double execution (if intentional, correct markers manually)"
+    # v0.4.85 (HQ 2026-09-04): dedup guard is features-aware. Same sha +
+    # same features = true double execution, refused. Same sha + DIFFERENT
+    # features = legitimate redeploy (incident: rogue telegram-only swap
+    # marked sha deployed; codegraph artifact of the SAME commit was then
+    # unswappable). Feature-DROP still hard-refused per features-compat law.
+    DEP_FEAT="$(jq -r '.features // ""' "$STATE_DIR/deployed.meta.json" 2>/dev/null || true)"
+    FEAT_DROP=0
+    if [ -n "$DEP_FEAT" ]; then
+      IFS=',' read -ra OLD_F <<< "$DEP_FEAT"
+      for f in "${OLD_F[@]}"; do
+        [ -z "$f" ] && continue
+        case ",$FEATURES," in *",$f,"*) ;; *) FEAT_DROP=1 ;; esac
+      done
+    fi
+    if [ "$FEAT_DROP" = 0 ] && [ -n "$DEP_FEAT" ] && [ "$DEP_FEAT" != "$FEATURES" ]; then
+      jline guard 0 "$(jq -cn --arg s "$SHA" --arg d "$DEP_FEAT" --arg f "$FEATURES" '{reason:"same-sha-redeploy-feature-change", deployed_features:$d, new_features:$f}')"
+      echo "oc-deploy: same-sha redeploy with feature change ($DEP_FEAT -> $FEATURES) — proceeding"
+    else
+      jline guard 2 "$(jq -cn --arg s "$SHA" --arg d "$DEP_FEAT" --arg f "$FEATURES" '{reason:"already-deployed", deployed_sha:$s, deployed_features:$d, requested_features:$f}')"
+      die 2 "swap-execute: $SHA is ALREADY the deployed sha — refusing double execution (if intentional, correct markers manually)"
+    fi
   fi
 
   # --- 5. install (cp to .new, then atomic rename over target) ---
