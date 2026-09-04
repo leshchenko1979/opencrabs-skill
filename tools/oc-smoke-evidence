@@ -37,6 +37,12 @@ while [ $# -gt 0 ]; do
       printf 'x%.0s' {1..100} > "$d/a"; cp "$d/a" "$d/b"; printf 'x%.0s' {1..100} > "$d/c"; printf 'y' >> "$d/c"
       h1="$(sha256sum "$d/a" | cut -d' ' -f1)"; h2="$(sha256sum "$d/b" | cut -d' ' -f1)"; h3="$(sha256sum "$d/c" | cut -d' ' -f1)"
       [ "$h1" = "$h2" ] && [ "$h1" != "$h3" ] || { echo "selftest: hash discrimination broken" >&2; exit 1; }
+      # marker leg (v0.4.85): early marker inside a >1MB strings stream — the
+      # exact shape that false-MISSING under the old strings|grep -q pipeline
+      # (grep exits on match, strings eats SIGPIPE, pipefail poisons the branch)
+      { printf 'OC_MARKER_PAST_PIPEBUF\n'; head -c 1048576 /dev/zero | tr '\0' 'x'; } > "$d/m"
+      SB="$(strings "$d/m" 2>/dev/null)"
+      grep -qF -- 'OC_MARKER_PAST_PIPEBUF' <<< "$SB" || { echo "selftest: buffered marker check failed (drain regression?)" >&2; exit 1; }
       echo "selftest OK"; exit 0 ;;
     -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) usage ;;
@@ -81,8 +87,14 @@ fi
 # feature-presence markers (strings on the live binary)
 if [ -n "$MARKERS" ]; then
   IFS=',' read -ra MS <<< "$MARKERS"
+  # Drain strings output ONCE into a buffer. grep -q in a pipeline exits on
+  # first match; strings then dies on SIGPIPE (141) under pipefail and a
+  # FOUND marker flips to a false MISSING. Buffering removes the pipe and
+  # avoids re-running strings (837k lines) per marker.
+  # Found live 2026-09-04: markers at line ~1635/837007 → RC=141 repro.
+  STRINGS_BUF="$(strings "$EXE" 2>/dev/null)"
   for m in "${MS[@]}"; do
-    if strings "$EXE" 2>/dev/null | grep -qF -- "$m"; then
+    if grep -qF -- "$m" <<< "$STRINGS_BUF"; then
       echo -e "marker:$m\tFOUND"
     else
       echo -e "marker:$m\tMISSING"; rc=1
