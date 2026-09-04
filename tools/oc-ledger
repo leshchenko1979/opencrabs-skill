@@ -344,6 +344,12 @@ cmd_enroll() {
     esac
   done
   [ -n "$uuid" ] && [ -n "$role" ] || die 2 "usage: oc-ledger enroll <uuid> <role> [--topic N] [--feature X]"
+  # arg-shape guard (fork quirk 2026-09-04, #95 lane): a missing role positional
+  # let "--topic" land in $role and pass the non-empty check. Roles are prose
+  # words — a leading dash is always a parsing error, never a role.
+  case "$role" in
+    -*) die 2 "enroll: role looks like a flag: '$role' (role positional missing?)" ;;
+  esac
   echo "$uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
     || die 2 "enroll: uuid shape invalid: '$uuid'"
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
