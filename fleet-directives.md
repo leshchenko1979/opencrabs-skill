@@ -115,6 +115,10 @@ Gate 4 (Session-Id trailer, `quick-build-linux.yml` ORDER gates) applies to ever
 
 A swap may only consume an artifact whose exact tree is covered by a GREEN full-gate run (fmt + clippy + lib tests) on that same sha. Build legs may run `--no-tests` **only** with that coverage already on record; otherwise the build leg runs the tests itself. In practice: **swap-mode pr-checks before every swap.** Rationale: run `33792926801` ("success", no-tests) shipped test-RED `f3c03269` into prod, and the same artifact was later auto-consumed by an unordered swap. Note: an earlier HQ message claimed this law was landed as commit `b8145f1` — that commit never existed (unverified claim); the law is landed HERE, verified, first time.
 
+## Features-compat gate — no silent feature-loss swaps (HQ ruling 2026-09-04, MANDATORY)
+
+`oc-deploy swap-execute` **refuses** any artifact whose feature set drops a feature present in `deployed.meta.json` (exit 4, journal `features-drop-gate`, markers untouched) unless the operator passes `--allow-features-drop` explicitly. Feature *additions* pass freely; *drops* are the failure class. Enforced in-code (selftest 17p/17q). Rationale: the 06:36:06Z rogue swap (run `33844429519`, `features="telegram"` over a live `telegram,code-graph` binary) killed structural memory for 12h — and the 18:57Z f3c03269 swap was the same class (no-tests artifact, auto-consumed). The gate would have refused both.
+
 ## Carrier hotfix gates are build-no-tests — expect BASE-FAULT REDs (harvest, A3 lane 2026-09-03)
 
 A green main gate does **not** prove a test-GREEN base: carrier hotfix gates run build-no-tests, so a lane whose branch base is hotfix-fresh may hit its first full-gate RED from base faults it doesn't own. Mitigation that works: triage with `--fault-scope BASE-FAULT`, park, rebase after the main-side repair. (Supersedes nothing; complements the coverage law above — that fixes the process, this prepares the lanes for the window where it isn't applied yet.)
