@@ -55,6 +55,10 @@ Post-swap smoke FAIL → rollback is the OWNER's call, never mechanical. The swa
 
 Mechanics canonical: `oc-deploy fanout` (GREEN leg at the swap_execute tail, RED leg via poll failed-run scan; idempotent `fanout.state`; drills off via `OC_DEPLOY_NOFANOUT=1`) + s2-swap-journal-spec §Fan-out legs. No manual notify steps anywhere. Ledger path is canonical `opencrabs-dev/workers-ledger.json` — the skill-dir duplicate was deleted 2026-08-29 (v0.4.38); fix shipped FIRST, deletion second.
 
+## Post-compaction skill reload (owner 2026-09-04)
+
+After ANY context compaction, the first action before any opencrabs-dev work is reloading this skill (`/opencrabs-dev`, or SKILL.md + fleet-directives.md). Editor spawn briefs must carry this rule; the ops AGENTS.md § "OpenCrabs dev" carries the always-loaded anchor. Rationale: compaction clears the skill from context but not the obligation to follow it; mechanical laws are tool-enforced (order-validate, features-compat, pr-checks) but process law (scope-confirmation-first, approval gates, PR body rules) exists only here.
+
 ## Attribution guard (post-compaction wakes)
 
 Before disputing the attribution of any shipped artifact (build, deploy, ledger event, commit) — on a `session_notify` wake, after a compaction, or whenever memory and records disagree — re-derive OWN shipped work from durable state FIRST: `opencrabs-dev/workers-ledger.json` claim/fanout events, oc-deploy journal lines + deployed.sha markers. Ledger beats memory; a mismatch is reported, never accused. Origin: post-compaction amnesia made this lane falsely blame oc-attrib/fanout for its own shipped work (retraction logged 2026-08-30, HQ d72bd52d); guard forwarded to owner via HQ topic report — remove on owner order only.
