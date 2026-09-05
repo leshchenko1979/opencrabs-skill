@@ -51,6 +51,8 @@ When the owner says to go to a stage ("let's go to S3", "go to Sx"), that word I
 
 Post-swap smoke FAIL → rollback is the OWNER's call, never mechanical. The swap-chain auto-rollback on post-bounce verify fail (crash-integrity: disk==proc mismatch → restore backup) is UNCHANGED — that one stays automatic. With deploy consent eliminated the same day, this is the only human gate left near the deploy pipeline.
 
+**Smoke-verdict ledger append discipline (owner 2026-09-05, ops relay):** the DRIVING lane appends its verdict to the smoke ledger file in the SAME turn as the verdict — posting to topics is visibility, not persistence. Relay/supervisor sessions never backfill on the lane's behalf; a late entry is only legal explicitly marked `LATE ENTRY` with the on-record source receipts. Rationale: the theme-3 verdict lived in topics only until a morning audit caught it; the file mtime proved the claimed append never ran.
+
 ## Post-swap notify (LIVE — mechanical fan-out since 2026-08-29)
 
 Mechanics canonical: `oc-deploy fanout` (GREEN leg at the swap_execute tail, RED leg via poll failed-run scan; idempotent `fanout.state`; drills off via `OC_DEPLOY_NOFANOUT=1`) + s2-swap-journal-spec §Fan-out legs. No manual notify steps anywhere. Ledger path is canonical `opencrabs-dev/workers-ledger.json` — the skill-dir duplicate was deleted 2026-08-29 (v0.4.38); fix shipped FIRST, deletion second.
