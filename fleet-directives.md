@@ -77,7 +77,7 @@ Canonical: editor.md §CI-wait discipline & actor attribution (items 1–9: gh-w
 
 ## Creating new editors (owner order 2026-09-01 21:56Z)
 
-Trigger: a NEW area is discussed and a research/code task needs doing, and NO existing editor lane has done anything in that area. Then HQ creates a fresh editor:
+Trigger: a NEW area is discussed and a research/code task needs doing, and NO existing editor lane has done anything in that area. Then the TRIAGE lane creates a fresh editor (standing authority transferred from HQ at v0.4.86, owner "Go with Option A" 2026-09-06; HQ retains roster/registry ownership — supervisor.md Duty 2):
 
 1. `tool_search("tg_mtproto")` (dynamic tool; schema dies at compaction — re-search first).
 2. Create the topic (MTProto, methods verified live 2026-09-01): forum methods live under `messages.*`, NOT `channels.*`; pass `resolve: true`; peer = forum chat id.
@@ -86,16 +86,17 @@ Trigger: a NEW area is discussed and a research/code task needs doing, and NO ex
 3. Brief the lane ONLY via `session_notify` to its session id (owner order 2026-09-03 19:28Z — supersedes the former tg_send_message-into-topic briefing). The spawn prompt carries only the task seed; the full brief, corrections, and un-park orders go through `session_notify`. A topic post is allowed for OWNER VISIBILITY only — labeled as such, never the briefing channel.
 4. Enroll the new editor in the roster: `oc-ledger roster-enroll` with its session id + `--topic <topic id>` (lesson 2026-09-01: an unrostered actor fails ship with "Session-Id not in workers ledger").
 
-## Tool-problem reports: HQ triage & routing (owner order 2026-09-01 22:2xZ; supervisor identity 2026-09-03 20:31Z)
+## Tool-problem reports: TRIAGE-lane intake, HQ supervisor-of-record (owner order 2026-09-01 22:2xZ; supervisor identity 2026-09-03 20:31Z; intake carve-out v0.4.86)
 
-**The supervisor lane for tool anomalies is OC DEV HQ.** Owner order 2026-09-03 20:31Z: "we do have a supervisor lane — it's OC DEV HQ." Workers/editors route tool-use anomaly reports (failed invocations, wrong args, false journal rows, misreads that survive into claims, unbacked persistence claims) to the OC DEV HQ session via `session_notify` — never lane-status-only, and never to an ad-hoc "carrier tools" chat as supervisor (superseded interim routing, 2026-09-03 19:16–20:13Z; carrier-tool channel remains a valid NOTIFICATION target, not the supervisor of record). Journal/worker vocabulary fixes authored by HQ still flow through the carrier-tool channel to workers.
+**The intake lane for tool anomalies is OC DEV TRIAGE (v0.4.86 carve-out, owner "Go with Option A" 2026-09-06); the supervisor of record remains OC DEV HQ.** Owner order 2026-09-03 20:31Z: "we do have a supervisor lane — it's OC DEV HQ" — that identity is unchanged for ESCALATION (semantic/KERNEL verdicts, rulings); the interrupt-shaped intake moved to the Triage lane so HQ keeps deep-work windows. Workers/editors route tool-use anomaly reports (failed invocations, wrong args, false journal rows, misreads that survive into claims, unbacked persistence claims) to the OC DEV TRIAGE session via `session_notify` (discover the session via session_search — never uuid-from-memory) — never lane-status-only, and never to an ad-hoc "carrier tools" chat as supervisor (superseded interim routing, 2026-09-03 19:16–20:13Z; carrier-tool channel remains a valid NOTIFICATION target, not the supervisor of record). Journal/worker vocabulary fixes authored by HQ still flow through the carrier-tool channel to workers.
 
-Workers/editors report tool failures, inconsistencies, and quirks to **HQ** (this lane) — `QUIRK: <tool> <observed> BECAUSE <expected>` + evidence, same turn (skill: supervisor.md §Duty 7 items 5–6, editor.md lane duty). HQ's duty on receipt:
+Workers/editors report tool failures, inconsistencies, and quirks to the **TRIAGE lane (OC DEV TRIAGE)** — `QUIRK: <tool> <observed> BECAUSE <expected>` + evidence, same turn (skill: triage.md §Duty T2, ex supervisor.md §Duty 7 items 5–6, editor.md lane duty). The Triage lane's duty on receipt:
 
 1. ACK same turn; stamp ledger `idea` event.
 2. Verify evidence against disk/logs before routing (reports can be wrong — see fanout refutation, 2026-09-01).
 3. Route the FIX: owning editor lane by TOPIC name (session_search, never remembered uuid), briefed via session_notify with the quirk + evidence. No lane covers the area → create a NEW editor (§Creating new editors above).
 4. Stamp `idea-verdict` ROUTED (target topic named) or REJECT (reason journaled). The fix ships through the normal editor flow — Duty 7 documents the report, it never bypasses Phase-7.
+5. Semantic/KERNEL escalations, sanctioned-sender judgments, and skill-edit requests go to the SUPERVISOR (OC DEV HQ), batched per the cadence law (triage.md §Escalation).
 
 ## Cadence boundary is stamped at review consolidation
 

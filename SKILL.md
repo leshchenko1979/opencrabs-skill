@@ -3,11 +3,11 @@ name: opencrabs-dev
 description: >
   OpenCrabs source ops (~/opencrabs): roles EDITOR (fork issues, per-task
   worktrees, CI gate (pr-checks), signed commits, push + sha hand-off, oc-deploy ship,
-  smoke-test-on-notify, upstream PR), SUPERVISOR (skill set + worker ledger;
-  the Compiler role is retired — re-enable trigger in STEP ZERO).
+  smoke-test-on-notify, upstream PR), SUPERVISOR (skill set + worker ledger),
+  TRIAGE (interrupt lane: idea/QUIRK intake, fix routing, enforcement — carved out of SUPERVISOR at v0.4.86); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.85
+version: 0.4.86
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -22,13 +22,13 @@ metadata:
 
 **Owns:** everything touching `~/opencrabs` source, its GitHub Actions runs, or the
 installed `opencrabs` binary. This file = shared facts + role router only. Actual
-procedures live in TWO role files (`editor.md` / `supervisor.md`) + one
+procedures live in THREE role files (`editor.md` / `supervisor.md` / `triage.md`) + one
 ARCHIVED runbook (`tools/archive/compiler.md` — retired at S3 cutover 2026-08-28, re-enable
 = one notify);
 load ONLY the one matching the session's role.
 
 **Binding owner directives** (sync policy, upstream PR law, carriers/builds, cargo
-prohibition, telegram surface law, tool logging, gates, editor creation, HQ triage,
+prohibition, telegram surface law, tool logging, gates, editor creation, tool-problem triage (Triage lane),
 cadence) live in `fleet-directives.md` — re-homed from ops AGENTS.md/MEMORY.md per
 owner order 2026-09-02. Load it before ANY opencrabs-dev work. Executing procedure for the sync
 policy's merge leg: `upstream-merge-runbook.md` (freeze gate, roles, conflict
@@ -113,13 +113,14 @@ tail -1 tools.log | jq -c .
 
 Ask the operator which role this session employs before doing anything:
 
-> **Editor or Supervisor?** (Compiler: archived — say "re-enable compiler" to load `tools/archive/compiler.md`.)
+> **Editor, Supervisor, or Triage?** (Compiler: archived — say "re-enable compiler" to load `tools/archive/compiler.md`.)
 
 | Role | Owns | Procedure file |
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
 | **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + supervisor watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
-| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), triage the idea box (Duty 7 — workers push `IDEA:` notifies; **plus `QUIRK:` tool-quirk/failure reports**; ledger kinds `idea` / `idea-verdict`), eight-lens skill review (Duty 6, Reviewers A–G + standing brain-scrub, grouped by target — DOCS A/B/G · TOOLS E/F · EVIDENCE+LIFECYCLE C/D; incl. Reviewer D deletion safety, Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `supervisor.md` |
+| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), eight-lens skill review (Duty 6, Reviewers A–G + standing brain-scrub, grouped by target — DOCS A/B/G · TOOLS E/F · EVIDENCE+LIFECYCLE C/D; incl. Reviewer D deletion safety, Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `supervisor.md` |
+| **TRIAGE** | Interrupt lane (carved out of SUPERVISOR at v0.4.86, owner "Go with Option A"): idea-box + `QUIRK:` tool-problem intake (same-turn ACK, ledger stamps), evidence verification, fix routing to owning editor, new-editor creation, TOOL_ACCUM / cadence enforcement; escalates semantic/KERNEL to the Supervisor — NEVER edits skill files | `triage.md` |
 
 Roles **DO NOT intersect**:
 
@@ -131,8 +132,11 @@ Roles **DO NOT intersect**:
   `main` + reported shas); `oc-deploy ship` takes it from there (dispatch → poll
   → swap-execute, consent eliminated 2026-08-28). If the run is RED, `oc-deploy`
   reports evidence and stops — fixing code is always Editor work.
+- The TRIAGE lane NEVER edits skill files (single-writer law unchanged — the
+  Supervisor is the sole author), NEVER settles protocol disputes (rulings =
+  Supervisor Duty 5), NEVER executes builds/swaps (strict routing, triage.md).
 
-If the request mixes both (e.g. "fix X and deploy it"), split into two sessions/two
+If the request mixes roles (e.g. "fix X and deploy it"), split into separate
 role loads — do not fuse the roles in one pass without Alexey saying so explicitly.
 
 ## Session-notify loop (since v0.3.3)
@@ -170,7 +174,7 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
 - DELIVERY ≠ QUEUE ACCEPTANCE: a ping counts as delivered
   ONLY with post-ping proof — same-turn live roster check (`session_search`),
   target PINGED-WOKEN (`last_active` > ping time) or PINGED-SILENT. Ledger
-  entries saying "pinged" without wake evidence are forbidden (both roles).
+  entries saying "pinged" without wake evidence are forbidden (all roles).
 - Sender identity is mechanical — deliveries arrive prefixed
   `[session-notify from=<uuid>]`; replies route back with `target_session = from`.
   Neither role can forge or strip identity.
@@ -274,6 +278,10 @@ nothing about behavior.
   GREEN; S3 = live cutover 2026-08-28 (swap chain mechanical, consent
   eliminated). Rules saying "below S2"/"S3" mean the stage gate.
 - **Lane** — one editor session (worker) owning one fork issue + its topic.
+- **Triage lane** — the interrupt lane carved out of the Supervisor at v0.4.86
+  (idea/QUIRK intake, fix routing, enforcement patrols — `triage.md`); never
+  edits skill files. Discover its session via `session_search`, never
+  uuid-from-memory.
 - **Roster** — the worker registry in `workers-ledger.json` (enroll / claim /
   ack rows); `oc-attrib` joins Session-Id trailers against it.
 - **Lens (Reviewer A–G)** — one Duty-6 read-only review perspective
@@ -285,7 +293,7 @@ nothing about behavior.
   (`gh run view --json conclusion`), never exit-code inference.
 - **TOOL_ACCUM** — the per-session tool-usage rows accumulated in the unified
   tools log; the evidence base for `oc-toolaccum` repeat-offense scans and
-  Telegram surface-law audits (supervisor.md Duty 7).
+  Telegram surface-law audits (triage.md Duty T4 — ex supervisor.md Duty 7).
 
 ## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
 
@@ -306,10 +314,10 @@ uses them as a licence to fix outside its scope.
   stale. v0.4.6 predicates govern claims WE pass on; nothing sanitizes claims
   that ARRIVE — the receiver checks.
 
-## Shared environment facts (both roles)
+## Shared environment facts (all roles)
 
 - `OC_ACTOR=<session-uuid>` MUST be exported on EVERY `oc-*` tool invocation
-  (both roles) — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
+  (all roles) — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
   and the stamp feeds the ledger-beats-memory guard and TOOL_ACCUM analysis.
   (Canonical home here; editor.md §CI-wait item 2 carries the working detail.)
 - Checkout `~/opencrabs`: remote **`origin`** = fork `leshchenko1979/opencrabs`
@@ -434,7 +442,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    never deletable.
 
 
-## Hard rules (both roles)
+## Hard rules (all roles)
 
 - Reports to Alexey: every issue/PR reference
   carries the LINK behind the number (issues: `https://github.com/leshchenko1979/opencrabs/issues/N`
@@ -453,10 +461,10 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
   synonyms for existing concepts; a NEW concept gets proposed via the poll
   format and named on owner word — never improvised mid-report. Reviewer A
   (REDUNDANCY + ONTOLOGY) enforces this lens-side.
-- ONLY the Supervisor edits skill files — census (G7, v0.4.84): `SKILL.md` /
-  `editor.md` / `supervisor.md` / `review-lenses.md` / `fleet-directives.md` /
+- ONLY the Supervisor edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86): `SKILL.md` /
+  `editor.md` / `supervisor.md` / `triage.md` / `review-lenses.md` / `fleet-directives.md` /
   `upstream-merge-runbook.md` / `editor-phase7-rules.md` / `war-stories.md` /
-  `s2-swap-journal-spec.md` + `tools/**` — including all worker lanes (decision 7,
+  `s2-swap-journal-spec.md` + `tools/**` — including all worker lanes AND the TRIAGE lane (decision 7,
   2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
   write.
 - Relay only PREDICATED claims (v0.4.6, from fabrication deviation #3): any

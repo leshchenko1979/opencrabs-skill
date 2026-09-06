@@ -317,3 +317,14 @@ Session-Id: a48aa573-91b8-4028-8341-2ba708e66a5b
 - Review persists (phantom #6 recovery, n=1592): lens E + deletion-safety(D) + G re-persisted with real sha256 index receipts; B/C/F re-runs landing.
 - Known debt queued (explicitly NOT in this bump): oc-waiter JSON-orphan loud failure (lens F), shadow-rotate/seal-state flock (D-1/D-2), oc-deploy ledger_stamp atomic pattern (D-7), harvest-sweep patch-id per-commit fix + lib/oc-patchid.sh (E-1 HIGH), OC_GIT collision rename (E-2 HIGH), fork-slug consolidation (E-3/E-4), --help stdout (E-5), #74 canonicalization after F lands.
 - Housekeeping: war-stories.md gains the #96/#98/#102/#108 Mermaid×buttons resolution entry (authored by the shipping lane 1a63f103, committed here with provenance); battery-last.json refreshed by this batch's battery run.
+
+## v0.4.86 (2026-09-06, owner "Go with Option A" ~06:3xZ — split Triage lane from HQ; owner-direct execution via the ops droid)
+
+Supervisor-lane split: interrupt-shaped duties carved out into a new TRIAGE lane so HQ keeps uninterrupted deep-work windows (skill authoring, procedure rulings, review batteries, upstream sync). Docs-only batch; single-writer law UNCHANGED (only the Supervisor edits skill files); ledger two-writer safety = `oc-ledger` flock.
+
+- NEW `triage.md`: TRIAGE role file — T1 idea-box intake (ex supervisor.md Duty 7 items 1–4), T2 QUIRK intake + fix routing (ex items 5–6), T3 new-editor creation (standing authority transferred from HQ), T4 enforcement patrols (oc-tg-audit TOOL_ACCUM + delivery-cadence), escalation law to the Supervisor (quiet/turn-end per cadence law). NEVER list: no skill-file edits, no builds/swaps, no rulings, no owner verdict tables.
+- SKILL.md: frontmatter description names TRIAGE; Owns paragraph THREE role files; STEP ZERO prompt + role-table TRIAGE row + SUPERVISOR row re-scoped (intake delegated); Roles-DO-NOT-intersect bullet; glossary entry; Hard-rules census gains triage.md; TOOL_ACCUM pointer → triage.md T4; "(all roles)" plurals.
+- supervisor.md: header carve-out note (authorship stays SOLELY Supervisor); Duty 7 retitled pointer section (channel policy unchanged; batch/verdict ownership stays at HQ); TOOL_ACCUM block → pointer to triage.md T4.
+- fleet-directives.md: §Creating new editors — TRIAGE lane creates (HQ keeps roster/registry ownership, supervisor.md Duty 2); §Tool-problem reports — retitled TRIAGE-lane intake / HQ supervisor-of-record, intake → OC DEV TRIAGE (session_search discovery, never uuid-from-memory), escalation item added; owner-order provenance (2026-09-01 22:2xZ, 2026-09-03 20:31Z) preserved.
+- editor.md: lane-duty mirror retargeted — IDEA/QUIRK reports → Triage lane (OC DEV TRIAGE), fallback target = supervisor lane (OC DEV HQ); oc-waiter ORPHANED owner+HQ lines untouched (HQ stays escalation target).
+- Pre-bump gate: oc-deploy --selftest 184 pass / 0 fail; battery tools/tests/run.sh 144 PASS / 0 FAIL (receipt refreshed).

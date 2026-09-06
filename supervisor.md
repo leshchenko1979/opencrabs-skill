@@ -1,7 +1,11 @@
 # SUPERVISOR — skill maintenance & worker coordination
 
 **Load only after SKILL.md confirmed the role is SUPERVISOR.** This is the HQ
-session's standing role.
+session's standing role. Interrupt-shaped duties (idea-box / QUIRK intake,
+fix routing, enforcement patrols) operate in the TRIAGE lane since v0.4.86
+(owner "Go with Option A" 2026-09-06) — procedure: `triage.md`; batched
+escalations from that lane land here. Skill-file authorship stays SOLELY
+with the Supervisor (single-writer law unchanged).
 
 Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `fleet-directives.md`,
 `upstream-merge-runbook.md`, `editor-phase7-rules.md`, `war-stories.md`, `s2-swap-journal-spec.md`;
@@ -172,60 +176,43 @@ Method:
 Rationale: the Supervisor authors most rules — author-blindness is structural.
 Independent subagent eyes + the owner gate keep the set honest.
 
-## Duty 7 — Idea box: workers push process/tooling fixes
+## Duty 7 — Idea box: OPERATES in the TRIAGE lane (carve-out v0.4.86)
 
 Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
 a wrong tool or a wrong process MAY report it to the supervisor lane the
 moment it happens; no waiting for a poll.
 
-1. Format = Duty 4's strict format with an `IDEA:` prefix, sent to the
-   supervisor lane via `session_notify`:
-   `IDEA: ADD|CHANGE <rule/tool> in <file+section> BECAUSE <gap actually hit>`
-   + date + evidence. Ideas NEVER edit skill files — the Supervisor authors,
-   the owner approves (Duty 4 discipline applies unchanged).
-2. INBOX = the ledger: on receipt the Supervisor stamps an `idea` event into
-   `workers-ledger.json` (sender session, ts, text) — durable, jq-filterable,
-   cannot die in a session log.
-3. Same-turn ACK to the sender, then triage; the verdict is stamped as an
-   `idea-verdict` ledger event:
-   - ACCEPT-MECHANICAL → queued into the next skill version batch.
-   - KERNEL-SEMANTIC → batched to the owner with a verdict table; ships ONLY
-     on his word.
-   - REJECT → reason journaled, never silently dropped.
-4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
-   (convergence beats volume); duplicate ideas stamp ONE event, not N.
-5. **Tool quirks & failures → HQ (owner order 2026-09-01 22:2xZ):** any worker
-   that hits a tool FAILURE, INCONSISTENCY, or QUIRK — non-zero rc out of
-   documented register (see tools/RC-CONTRACT.md), hang/timeout, corrupt
-   /empty output, flag that silently no-ops, log/journal gap, doc that
-   contradicts tool behavior — MUST report it to the HQ lane the same turn
-   (`session_notify` to the HQ session; format
-   `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>`
-   + evidence: rc, log rows, journal lines). Do NOT silently retry around a
-   broken tool and move on; do NOT self-patch skill tools — not even your own
-   area's tool (cross-lane blast radius beats local convenience). HQ ACKs,
-   stamps the ledger (`idea` event, prefix distinguishes idea/quirk/fail),
-   and TRIAGES per item 6.
-6. **HQ triage & routing (owner order 2026-09-01 22:2xZ):** HQ verifies the
-   evidence, then routes the FIX to the right executor — the editor lane that
-   owns the tool/area (by TOPIC name, never uuid-from-memory; find it via
-   session_search), briefed via `session_notify` with the quirk report +
-   evidence attached. NO existing lane covers the area → HQ creates a NEW
-   editor per the standing authority (fleet-directives.md §Creating new editors:
-   messages.CreateForumTopic + "Load opencrabs-dev skill. You are an editor."
-   + roster-enroll). Routing verdict stamps `idea-verdict` ROUTED (target
-   topic named); the fix itself ships through the normal editor flow
-   (worktree, CI gate, ledger discipline) — Duty-7 documents the report,
-   it does not bypass Phase-7. REJECT stays possible: reason journaled.
+Operations (same-turn ACKs, ledger stamps, evidence verification, fix
+routing to the owning editor, new-editor creation) live in `triage.md`
+§Duty T1/T2/T3 — the channel's policy is unchanged:
 
-**Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: the violation pattern
-is caught from evidence, not intuition. On suspicion run
-`./tools/oc-tg-audit <session-uuid> [--days N]` (v0.4.71 — replaces the
-hand grep; raw fallback: `grep -a "TOOL_ACCUM"
-~/.opencrabs/profiles/ops/logs/opencrabs.<date>` filtered by the accused
-session id + telegram tool name — telegram_send / tg_send_message /
-tg_edit_message / telegram_edit). A matching row → notify the rule (SKILL.md
-§Telegram surface law); repeat → review toggle.
+- Format = Duty-4 strict format with an `IDEA:` prefix (T1); tool problems
+  use the `QUIRK:` format (T2, owner order 2026-09-01 22:2xZ).
+- INBOX = the ledger (`workers-ledger.json`, flock-serialized via
+  `oc-ledger` — Triage and Supervisor both write it, safely). Kinds:
+  `idea` / `idea-verdict`.
+- Verdicts: ACCEPT-MECHANICAL / KERNEL-SEMANTIC / REJECT / ROUTED — never
+  silently dropped.
+
+What stays HERE (Supervisor side):
+
+- ACCEPT-MECHANICAL items arrive batched from the Triage lane (quiet,
+  turn-end delivery) and queue into the next skill version batch (Duty 1).
+- KERNEL-SEMANTIC escalations get batched to the owner with a verdict table;
+  ships ONLY on his word.
+- Overlap: an idea matching an open Duty-4 proposal MERGES into it
+  (convergence beats volume); duplicate ideas stamp ONE event, not N.
+
+Cross-references saying "supervisor.md Duty 7" resolve to `triage.md` T1/T2
+for operations and HERE for batch/verdict ownership.
+
+**Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: OPERATES in the
+TRIAGE lane since v0.4.86 (triage.md §Duty T4) — evidence-first audit via
+`./tools/oc-tg-audit <session-uuid> [--days N]` (v0.4.71; raw fallback: grep
+the daily log for TOOL_ACCUM filtered by session + telegram tool name). A
+matching row → the Triage lane notifies the rule (SKILL.md §Telegram surface
+law); repeat offenders escalate HERE for the review-toggle decision
+(sanctioned-sender judgment stays Supervisor-owned).
 
 **Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) and
 fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
