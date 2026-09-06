@@ -104,3 +104,9 @@ Lesson from the #17 gate RED (run 33322902399, sha af299821) — corrected by th
 
 - **Log writers don't escape newlines (2026-08-30, #36 lane, post-swap smoke of `16568074`):** a `{}` display-formatted string field carrying embedded `\n` SPLITS the log line at that byte — every `[STREAM_RECONCILE]`/`[TEXT_ACCUM]` line whose `text_tail` held a paragraph break orphaned its discriminating fields (usage_*, saw_finish_reason, stop_source) onto the next line. Mid-turn text always ends `\n\n` before tool calls, so this hit constantly, silently. Fix `13e4e1da`: sanitize tails (`replace('\n', "\\n")`) + tail-last field ordering. Rule: NEVER log a raw text tail via `{}` — sanitize first, or use `{:?}` (Debug escapes control chars natively), and put volatile string fields LAST in the format so numerics survive any future split. Evidence pattern: field counts disagree (`grep -c 'saw_finish_reason='` < `grep -c 'STREAM_RECONCILE'`).
 
+
+## Mermaid × buttons full chain — RESOLVED 2026-09-05 (`ed5a42f7`, eye-witnessed)
+
+- #96 soup (html body into md pick), #98 fencesafe media edits, #102 multipart `message_id` dropped (every media edit 400'd), #108 indent fusion — all four fixed, shipped, eye+telemetry witnessed on msg 42160 (send 715B → merge 1991B → tap 2095B, image survived). Issues closed with receipts.
+- **One-message law**: keyboard merges onto the LAST message of the arming turn; fence must be in that turn's final message or diagram/buttons split across bubbles.
+- **Smoke hygiene**: three smokes failed on sequencing (fenceless, unarmed, split-turn) before r4 — arm panel + fence in the SAME turn, verify arm receipt before ending it.

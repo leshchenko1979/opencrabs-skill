@@ -755,7 +755,7 @@ harvested commits. When a PR is not mergeable, route by BLOCKER CLASS:
 | Blocker | Who acts | Action |
 |---|---|---|
 | fmt/clippy/test failure in THIS feature's files | Owning editor (notified with log evidence via the mechanical post-swap fan-out — `oc-deploy fanout`) | fresh worktree off the PR head → fix → Phase 5 gate (pr-checks) + conflict-quality gate → signed push to the head |
-| Merge conflicts with new upstream `main` | Owning editor | rebase / re-cherry-pick onto fresh `adolfousier/main`, force-push head |
+| Merge conflicts with new upstream `main` | Owning editor | rebase / re-cherry-pick onto fresh `adolfousier/main`, force-push head with `--force-with-lease` (never bare -f) |
 | PRE-EXISTING upstream red (base fails in files we never touched) | ❌ NO editor pings — our code is innocent | housekeeping-PR candidate: issue filed + ledger-registered first (v0.3.8), Alexey decides |
 | Maintainer rejects/closes the PR | Owning editor | REOPEN the linked issues with a pointer comment; record the outcome |
 

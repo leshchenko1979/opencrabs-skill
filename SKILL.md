@@ -7,7 +7,7 @@ description: >
   the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.84
+version: 0.4.85
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -63,7 +63,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-pr-atomicity <pr-number>` | atomicity gate (editor Phase 7 / issue triage) |
 | `./tools/oc-ledger <verb>` | atomic ledger writes under flock: `stamp <kind> --what ...` (ruling/idea/idea-verdict/design-feedback/design-locked/review-battery/incident/note/ack/roster-enroll/**claim** — v1.1 vocabulary since v0.4.48: `claim` is the fork-issue claiming row, Duty-7 IDEA fix), `sync --version v --why ...` (version-bump sync, battery-gated, commits both repos + tag; **chains `oc-shadow-rotate` as its tail step** — merge A, v0.4.48; **mirror push tail step since v0.4.50** — pushes branch + `v0.4.*` tags to `origin` when one is configured, WARN-only never gates; off-box durability: `leshchenko1979/opencrabs-skill` wired as live mirror of the skill repo per owner Attach 2026-08-30; STATE repo mirrored to `leshchenko1979/opencrabs-dev-state` (private, owner Go 2026-08-30) — both pushed mechanically by this tail step), `check-version`, `cadence`, `ack` (ack rows double as skill-drift adoption records, v0.4.52 — editor.md §Mid-cycle skill drift), `enroll`, `commit-pending [--bundle]` (pending-stamp commit sweep — item-2(b), Duty-3/4 cadence; `--bundle` also sweeps STATE receipts `tools.log`/`baseline.json`/`orders.json`/`journal/` — v0.4.49/51: seal-state and the swap chain write them per swap, never self-commit), `claim-ref <uuid>` (E2 #4, v0.4.72 — prints the `#N` of the actor's latest unconfirmed claim, rc 3 if none; consumption backend for oc-commit Issue-Ref derivation) |
 | `./tools/oc-shadow-rotate [--dry-run]` | INTERNAL tail step of `oc-ledger sync` since v0.4.48 (merge A) — appends the live (gitignored) `oc-deploy-shadow.log` to the git-tracked `oc-deploy-shadow.archive.log`, then truncates the live file; bump cadence IS the rotation cadence now. Standalone invocation = manual fallback |
-| `./tools/oc-review-persist <lens> <text\|@file\|
+| `./tools/oc-review-persist <lens> <text\|@file\|-> [--dir DIR]` | persist a Duty-6 review report: re-read sha256-verified write + ONE index line in `skill-review-index.log` — that line IS the "persisted" receipt (no receipt, no "persisted" claim); lens whitelist includes the standing `brain-scrub` (fleet-directives §Review lens brain-scrub) |
 | `./tools/oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2] [--negative-control <bin>]` | mechanical identity + presence evidence for a Phase 6b smoke verdict: MainPID + exe path + sha256 of the RUNNING daemon vs deployed.meta.json artifact sha + deployed.sha marker; optional strings markers; negative control must hash differently (lens C1, v0.4.64 — replaces hand-assembled smoke-verdicts.log boilerplate). Behavioral judgment stays human |
 | `./tools/oc-issue-log <issue-n> <sha> [--state <text>] [--repo <slug>] [--dry-run]` | per-commit implementation comment (owner 2026-08-28 22:54Z) composed from git metadata and posted via gh `--body-file` ONLY — the inline-heredoc substitution class is impossible through this tool (lens C3, v0.4.64) |
 | `./tools/oc-commit -m <msg> [--issue N] [--no-comment] [--state <dir>] [--repo <path>]` | gated commit wrapper (lens C5, v0.4.65): refuses detached HEAD, refuses unset `OC_ACTOR`, refuses empty index (NEVER stages anything), derives `Issue-Ref` from the actor's latest ledger claim via `oc-ledger claim-ref` (override `--issue`); adds `Session-Id` + `Issue-Ref` trailers; post-commit implementation comment folded in (E2 #2, v0.4.72) via `oc-issue-log` — `--no-comment`/`OC_COMMIT_COMMENT=0` skips, comment-fail-after-commit = loud rc 5 |
@@ -73,7 +73,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-harvest-sweep <pr-branch> [--base adolfousier/main] [--repo P] [--port-of sha1,sha2]` | pre-gate harvest verification (editor Phase 7 sweep, mechanical legs): Session-Id trailer sweep over base..branch, empty-diff probe, patch-id match per ported sha (lens C4, v0.4.64 — replaces the 3-gate-rounds-burned hand sweep). Leg (c) behavioral judgment stays human |
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5): FULL-sha shape gate → LOUD yml-on-carrier check → dispatch under a state-dir dispatch LOCK → **time-window run adoption** (v0.4.48 Duty-7 fix: workflow_dispatch headSha is the carrier ref, never the `-f ref` input, so adoption filters `headSha==carrier head + createdAt>=dispatch_ts−5s`, LATEST-wins (`.[-1]` — v0.4.53; under the lock the newest carrier dispatch IS this lane's own run; selftest fixture 111 proves the old earliest-wins rule decoy-adopts), under the lock — concurrent-lane safe) → watch → per-job/per-step report with the **fmt soft-fail exposed**; wraps the raw `gh` row below; `--repo` accepts a slug or a repo/worktree PATH (resolved via its origin remote); `--fault-scope PR` (E5, v0.4.78) auto-runs `oc-pr-fault-scope` on a RED verdict — IN-SCOPE/BASE-FAULT triage line, RED stays rc 3; identical-arg rc=2 repeats back off 2s..10s within 120s (C-#1, v0.4.78) |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic for §Upstream relations item 1: fetch + merge-base + `AHEAD`/`BEHIND` TSV + patch-id `ABSORBED-CANDIDATE` rows; READ-ONLY (never merges/pushes/rebases) — PROPOSE/WAIT judgment stays human |
-| `./tools/oc-wt add\|remove\|
+| `./tools/oc-wt add\|remove\|--force` | editor worktree manager: `add` chains prune → fetch → worktree add → oc-index-worktree (index step UN-SKIPPABLE), refuses `--create` on an existing branch; `remove` gated on clean tree — `--force` journals the destroyed listing BEFORE removal (lens-D posture) |
 | `./tools/oc-drift-check <uuid> <claimed-ver> [--ack]` | editor §Mid-cycle skill drift step 1-2, mechanical: claimed vs live SKILL.md version; `--ack` delegates oc-ledger ack on drift |
 | `./tools/oc-toolaccum <uuid> [--days N]` | TOOL_ACCUM scan + repeat-offense arithmetic (per-tool failure counts in window, threshold 3) from tools.log |
 | `./tools/oc-branch-sweep --repo <p> [--dry-run]` | branch-death proof (MERGED/ABSORBED/STALE/ACTIVE) + archive-then-delete for MERGED only; protected: base/HEAD/--keep regex |
@@ -176,18 +176,23 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   Neither role can forge or strip identity.
 - Delivery drains at the target's next tool-loop boundary and wakes idle
   sessions — no polling anywhere.
-- DELIVERY MODES (v0.4.69, binary behavior review 2026-08-31 — owner order):
+- DELIVERY MODES (v0.4.69; defaults re-ruled 2026-09-04 22:31Z — fleet-directives
+  §Cross-lane message delivery discipline is CANONICAL: deferred is the default,
+  immediate the exception, "Do not start at `now`"):
 
   | Mode | When | Mechanics | Use for |
   |---|---|---|---|
-  | immediate (default) | target idle | plain send wakes it now | FYI / courtesy |
-  | failsafe | target mid-turn — `interrupt: true` (CLI `--interrupt`, "#13 failsafe") | message QUEUES, drains at that turn's next tool-loop boundary ("arrived-during-work") | the ONLY reliable operational wake (gate GREEN, build done, action needed) to a working lane: a default send REFUSES mid-turn and the wake is LOST unless retried (2026-08-31: 24 refusals in one day, 19 bounced off a single HQ mid-turn stretch — lanes went comatose) |
-  | redirect | target no longer owns its channel | delivery steered AUTOMATICALLY to the occupying session with provenance framing (fork #19); the reply names where it went | follow the redirect — continue with the occupier, never re-send to the dead uuid |
-  | no-route | dead/cross-instance target | error → `a2a_send` fallback, else UNREACHABLE in the report | — |
+  | quiet (DEFAULT) | receipts / ACKs / pings / non-urgent | deferred until target idle (quiet window) | everything non-urgent — lanes are mid-turn most of the day |
+  | turn-end | boundary-bound signals | queues at the target's next tool-loop boundary; works mid-turn | rulings a lane waits on, un-parks, review feedback |
+  | now (EXCEPTION) | urgent only | wakes the target immediately | build/swap orders, blocking verdicts, red gates — never ACKs |
+  | failsafe | target mid-turn — `interrupt: true` ("#13 failsafe") | message QUEUES, drains at next boundary | escalation of a stuck quiet/turn-end delivery (~30 min, time-critical) |
+  | redirect | target no longer owns its channel | auto-steered to the occupying session with provenance | follow the redirect, never re-send to the dead uuid |
+  | no-route | dead/cross-instance target | error → `a2a_send` fallback, else UNREACHABLE | — |
 
-  NOT "deferred mode" (owner correction 2026-08-31): deferred/queued delivery
-  is the pattern for ACKs and LOW-URGENCY messages — never spend the failsafe
-  on courtesy pings; that is the derail the gate exists to prevent.
+  Escalation: quiet → re-send turn-end if unclaimed ~30 min AND time-critical →
+  `interrupt: true` only as the last resort (2026-08-31: 24 mid-turn refusals in
+  one day when immediate was the default — the flip side: 2026-09-04 cadence audit
+  showed 1,267 `now` vs 7 `turn-end` vs 0 `quiet`, which is why the default flipped).
 - Refusal handling: a mid-turn refusal is NOT delivery. Operational content →
   resend with `interrupt: true` in the same turn; deferrable content → ledger
   skip note + retry at your next boundary.
@@ -303,6 +308,10 @@ uses them as a licence to fix outside its scope.
 
 ## Shared environment facts (both roles)
 
+- `OC_ACTOR=<session-uuid>` MUST be exported on EVERY `oc-*` tool invocation
+  (both roles) — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
+  and the stamp feeds the ledger-beats-memory guard and TOOL_ACCUM analysis.
+  (Canonical home here; editor.md §CI-wait item 2 carries the working detail.)
 - Checkout `~/opencrabs`: remote **`origin`** = fork `leshchenko1979/opencrabs`
   (push target) · remote **`adolfousier`** = sync source (upstream).
 - BUILD SOURCE = fork `main`. Editors fast-forward their signed commits into
@@ -375,12 +384,13 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    1 delta = verdict consumed here). Small clean delta → propose the sync
    (owner word gates it); mass absorption or non-trivial conflicts → notify
    Alexey with the delta and WAIT. Procedure: `supervisor.md` §Upstream sync.
-2. **Sync model = REBASE-PORT** (merge-sync retired 2026-08-26): backup ref →
-   classify fork-only commits (absorbed / superseded / survivor) → port
-   survivors chronologically onto `adolfousier/main` → pr-checks green in
-   ported lines → force-push-with-lease. Full procedure: `supervisor.md`
-   §Upstream sync (re-homed v0.4.80, lens B F3); the archive keeps a pointer
-   only.
+2. **Sync model = MERGE-ON-ARRIVAL** (owner 2026-09-02 "Land it"; supersedes the
+   2026-08-26 REBASE-PORT, which is RETIRED — historical, PR chains only):
+   fork main **merges** `adolfousier/main` when upstream shifts — merge, never
+   rebase/reset, on fork main (preserves history + deployed-sha containment for
+   oc-deploy rollback). Sync LAW: `fleet-directives.md` §remotes; executing
+   procedure: `upstream-merge-runbook.md` (freeze gate, roles, conflict
+   classes, migration-union rule, semantic-triage defaults).
 3. **Absorption rule**: when upstream merges or reimplements one of OUR
    features, matching fork-only commits auto-classify DROPPABLE at the next
    sync (patch-id match or title-twin against his rework). The owning editor
@@ -443,8 +453,10 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
   synonyms for existing concepts; a NEW concept gets proposed via the poll
   format and named on owner word — never improvised mid-report. Reviewer A
   (REDUNDANCY + ONTOLOGY) enforces this lens-side.
-- ONLY the Supervisor edits skill files (`SKILL.md` / `editor.md` /
-  `tools/archive/compiler.md` / `supervisor.md` / `review-lenses.md`) — including all worker lanes (decision 7,
+- ONLY the Supervisor edits skill files — census (G7, v0.4.84): `SKILL.md` /
+  `editor.md` / `supervisor.md` / `review-lenses.md` / `fleet-directives.md` /
+  `upstream-merge-runbook.md` / `editor-phase7-rules.md` / `war-stories.md` /
+  `s2-swap-journal-spec.md` + `tools/**` — including all worker lanes (decision 7,
   2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
   write.
 - Relay only PREDICATED claims (v0.4.6, from fabrication deviation #3): any

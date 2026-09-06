@@ -151,3 +151,48 @@ Standing lens in the Duty 4+6 skill-review rotation (registered in `oc-review-pe
 3. **Every finding lands as a move-with-verification:** the canonical copy is verified present in the skill BEFORE anything is removed from the brain file. Brain files are append-only — shrink/cleanup requires explicit owner approval and `dedup_intent`/`cleanup_intent`.
 
 Reports persist via `oc-review-persist brain-scrub <text|@file>`. Same mechanics as every other lens: verdict consolidated → stamped (`review-battery` boundary law above applies unchanged).
+
+## Upstream PR filing — base Lint pre-claim (Duty-4 proposal, theme-1 lane, owner-approved 2026-09-06)
+
+Before filing an upstream PR, poll base-main Lint state and pre-claim any
+OWNERLESS red files by carrying a sweep commit in the PR itself
+(Session-Id-only trailer, no Issue-Ref). Do NOT rely on sequencing comments
+or separate base-repair PRs landing first — the 2026-09-05 #1394/#1393/#1395
+out-of-order merge (fork #103 incident) proved sequencing comments don't
+protect merge order.
+
+## Cross-fork PR inspection — fetch head from the fork remote (Duty-4 proposal, owner-approved 2026-09-06)
+
+Inspecting a cross-fork PR (`gh pr view N -R upstream`): fetch the head branch
+from the FORK remote (`git fetch origin <head>`), never from upstream — a
+fork-namespaced head does not exist there (2026-09-05 #1392 404 incident).
+Same root fact as ledger n=1537's `gh pr create` namespaced-head lesson.
+
+## Verification during a truncated-output window is not verification (Duty-4 proposal, owner-approved 2026-09-06; sharpens AGENTS.md truncated-output law)
+
+When the earlier run's output was truncated, VERIFICATION ITSELF must be
+re-run fresh OUTSIDE that window — a compat check performed during the
+truncated window counts as unverified, not as evidence (2026-09-05 #1398:
+compat check in a truncated window missed the subject function was deleted
+upstream; restoration shipped E0432, retracted same day).
+
+## Rule-text provenance — CHANGELOG at ship time (F13 resolution, owner "Approve all" 2026-09-06)
+
+Rule text carries NO biography — provenance (date, origin quote, war story)
+lives in CHANGELOG.md, written at ship time of the version carrying the
+rule. This resolves the Duty-1 "every rule carries its war story" clause in
+favor of lens A: rules stay lean, history stays in CHANGELOG.
+
+## Daemon no-reap — ruling 1273 (landed in skill 2026-09-06, brain-scrub F5; law previously only in MEMORY.md)
+
+Ops-unit (`opencrabs-ops`) restarts/reaps ONLY that unit — family and default
+daemons are never touched by ops/dev work. Default-profile `opencrabs.service`
+running an old binary is EXPECTED, not an incident (ruling 1273, owner).
+
+## Inherited-claim three-pillar verification (landed in skill 2026-09-06, brain-scrub F6; previously only in MEMORY.md)
+
+When adopting another session's claim (branch, gate, fix): (1) the artifact
+exists on disk/remote as claimed, (2) the evidence trail (gate run, job-name
+sha pin) is live-verified by the adopting session itself, (3) no newer state
+invalidates it (main moved, superseded fix). All three or the claim is
+treated as unverified input, not as a receipt.

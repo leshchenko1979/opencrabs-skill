@@ -3,8 +3,9 @@
 **Load only after SKILL.md confirmed the role is SUPERVISOR.** This is the HQ
 session's standing role.
 
-Scope: own the skill set (`SKILL.md` / `editor.md` / `supervisor.md` /
-`review-lenses.md`; `tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
+Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `fleet-directives.md`,
+`upstream-merge-runbook.md`, `editor-phase7-rules.md`, `war-stories.md`, `s2-swap-journal-spec.md`;
+`tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
 turn field evidence into rules. The Supervisor NEVER dispatches builds, NEVER swaps
 binaries, NEVER touches the binary, NEVER writes feature code.
 
@@ -75,7 +76,7 @@ event notes (deviations, incidents, rulings applied).
 |---|---|
 | ANY version bump (default) | **DISK ABSORPTION** — workers re-read SKILL.md + role file at turn start; propagation is zero-ping. Notify NO ONE. |
 | Supervisor notify work on a bump | stamp ONE ledger event (version published, no per-worker rows) AND commit BOTH git repos (skill-dir: one commit per bump; state-dir: one commit per ledger stamp, inside the same flock as the write, git-history regime). TOOL-written stamps (`oc-deploy` swap-execute etc.) are committed by the HOSTING session — the turn that observes the stamp — bundling its adjacent stamp if both pending. Pending-stamp sweep = `oc-ledger commit-pending [--bundle]`, on Duty-3/4 cadence (design: `oc-work/oc-ledger-design-20260829.md`) |
-| Lane MID-CYCLE at publish, change touches its duties, gap hits THIS cycle | targeted notify — operational wakes carry `interrupt=true` (mid-turn failsafe; default sends refuse and the ping is lost). Roster/cadence pings and any operational directive to a MID-TURN lane also require it |
+| Lane MID-CYCLE at publish, change touches its duties, gap hits THIS cycle | targeted notify — delivery per fleet-directives cadence (quiet default; turn-end for boundary-bound; `interrupt=true` failsafe ONLY for urgent wakes a lane is blocked on — 2026-09-04 law supersedes the interrupt-first posture) |
 | Worker >3 versions behind, acting substantively | targeted notify (mechanical drift and ack-row reads don't count) |
 | Breaking security/deploy-gate change | `[ALL]` broadcast — rules whose absence produces wrong rulings the same day. Everything else waits for each lane's next boundary |
 | Roster `idle` but mid build-cycle | NO reload notify unless the version fixes a blocker it will hit this cycle |
@@ -230,23 +231,31 @@ fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
 canonical text stays in SKILL.md §Upstream relations; this line is the
 supervisor-side ownership pointer.
 
-## Upstream sync — watch, REBASE-PORT, parity (re-homed v0.4.80, lens B F3/F15; ex-compiler.md Step 7)
+## Upstream sync — watch, MERGE-ON-ARRIVAL, parity (re-homed v0.4.80; sync model re-ruled 2026-09-02, lens G1/A-F1 v0.4.84)
 
 Sync is SUPERVISOR-owned (SKILL.md §Upstream relations items 1/2/6 carry the
 one-line summaries; this section is the procedure — re-homed from the archived
 compiler runbook, where it had been stranded since the 2026-08-28 S3 cutover).
+
+**SYNC LAW (owner 2026-09-02 "Land it"): fork main MERGES `adolfousier/main`
+when upstream shifts — merge, never rebase/reset, on fork main.** Executing
+procedure: `upstream-merge-runbook.md` (freeze gate, roles, conflict classes,
+migration-union rule, semantic-triage defaults). The REBASE-PORT procedure
+below is RETIRED — kept for PR-chain ports only (harvest branches onto
+upstream PR heads, where force-push-with-lease applies to the PR BRANCH, never
+to fork main).
 
 ### Watch — every build cycle
 
     git -C ~/opencrabs fetch adolfousier
     ./tools/oc-upstream-delta    # base/ahead/behind TSV + ABSORBED-CANDIDATE rows
 
-- Delta small and clean → run the PORT below without asking.
-- Mass absorption (our features merged/reimplemented upstream) or conflicts
-  beyond trivial → notify Alexey with the delta summary and WAIT for the word.
-  Never improvise a history rewrite.
+- Upstream shifted → run the MERGE per `upstream-merge-runbook.md` (HQ-led;
+  small clean deltas still get a gate on the merged tip before ship).
+- Conflicts beyond the runbook's trivial classes → notify Alexey with the
+  delta summary and WAIT for the word. Never improvise a history rewrite.
 
-### Port — REBASE-PORT model (merge-sync retired 2026-08-26)
+### Port — REBASE-PORT model (RETIRED for fork main 2026-09-02; PR-branch chains only)
 
 1. BACKUP REF FIRST, always: `git -C ~/opencrabs branch backup/pre-port-<date> origin/main`
 2. Classify EVERY fork-only commit over `adolfousier/main..origin/main`:
@@ -281,11 +290,10 @@ Anything beyond a port seam → editor work.
 ### Parity — after every upstream merge/port
 
 `./tools/oc-ci-parity` (exit 0 identical / 4 DRIFT listing / 6 api-fail) +
-carrier proof-dispatch (`--ref ci/quick-build-linux`). **DRIFT PERMANENT
-(owner ruling):** fork `ci.yml` stays REMOVED (zombie-run risk, order
-cc100dc6); the carrier branch is the sole build lane; an oc-ci-parity `exit 4`
-naming `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired
-by restoring the file.
+carrier proof-dispatch (`--ref ci/quick-build-linux`). **DRIFT PERMANENT:**
+canonical text lives in SKILL.md §Upstream relations (fork `ci.yml` stays
+REMOVED, order cc100dc6; carrier branch is the sole build lane; oc-ci-parity
+`exit 4` naming ci.yml is ACCEPTED output forever).
 
 ## CI-wait & waiter discipline (supervisor-scoped items; local numbering W1-W6)
 
