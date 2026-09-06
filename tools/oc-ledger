@@ -94,7 +94,10 @@ git_state_commit() { # $1=message — inside lock; never fatal
   [ -d "$sd/.git" ] || return 0
   if git -C "$sd" add "$(basename "$LEDGER")" 2>/dev/null \
      && git -C "$sd" commit -q -m "$1" 2>/dev/null; then
-    echo "git: state commit ok ($1)"
+    # n=1744 hygiene: echo the auto-commit sha — a caller claiming "state commit
+    # ok" without a sha in hand has nothing to verify against (phantom class).
+    local sha; sha="$(git -C "$sd" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "git: state commit ok ($1) sha=$sha"
   else
     echo "commit-lag: state commit deferred — $1" >&2
   fi

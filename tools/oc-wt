@@ -17,13 +17,15 @@
 #
 # Usage:
 #   oc-wt add <task> <branch> [--base origin/main] [--create [--from REF]] [--force] [--repo P] [--no-log]
+#   gate base: --create --from REF (no explicit --base) compares against REF — the
+#              branch's actual lineage (n=1747); explicit --base always wins.
 #   oc-wt remove <task> [--force] [--repo P] [--no-log]
 #   oc-wt list [--repo P] [--no-log]     (lens C10, v0.4.65: task/branch/dirty TSV)
 #   oc-wt --selftest          offline fixture repo (no network)
 #
 # Exit: 0 ok / 2 usage (slug, verb, args) / 3 add:path-exists · remove:dirty
 #       4 index failed (tree KEPT, warning verbatim) / 5 repo/branch not found
-#       6 branch behind --base (no --force)
+#       6 branch behind gate base (--base, or --from when --create lineage differs — n=1747)
 # =============================================================================
 set -u
 set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
@@ -35,10 +37,10 @@ PROG="$(basename "$0")"
 GIT_BIN="${OC_GIT:-git}"
 INDEX_TOOL="${OC_INDEX_WORKTREE:-$(cd "$(dirname "$0")" && pwd)/oc-index-worktree}"
 REPO="${HOME}/opencrabs"
-BASE="origin/main"
+BASE="origin/main"; BASE_EXPLICIT=0
 FORCE=0
 CREATE=0
-FROM=""
+FROM=""; FROM_EXPLICIT=0
 
 help() {
   cat <<EOS
@@ -153,6 +155,31 @@ do_selftest() {
   env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t10 up/nope2 --create --from no-such-ref --repo "$D/repo" >/dev/null 2>&1; RC=$?
   [ "$RC" -eq 5 ] && t_ok "--create unknown --from -> 5" || t_bad "--create bad from (rc=$RC)"
 
+  # 14. n=1747: gate base derives from --from lineage — cross-lineage branch
+  #     born from an OLDER base must not false-stop against origin/main.
+  # fixture: second lineage 'alt' branched from main~1 (behind origin/main),
+  # pushed to origin so it exists as a fetchable ref.
+  git -C "$D/repo" branch alt 'HEAD~1'
+  git -C "$D/repo" push -q origin alt
+  # 14a. --create --from alt (no explicit --base): gate compares vs alt -> 0
+  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t11 up/x1 --create --from alt --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && t_ok "n=1747: --from lineage gate passes (rc=0, no false-stop vs origin/main)" || t_bad "n=1747 lineage gate (rc=$RC)"
+  # 14b. gate announces the derived base on stderr
+  OUT="$(env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t12 up/x2 --create --from alt --repo "$D/repo" 2>&1)"; RC=$?
+  if [ "$RC" -eq 0 ] && case "$OUT" in *"gate base = --from 'alt'"*) true ;; *) false ;; esac; then
+    t_ok "n=1747: derived gate base announced on stderr"
+  else t_bad "n=1747 announce (rc=$RC out=$OUT)"; fi
+  # 14c. explicit --base still wins: same branch shape, --base origin/main -> 6
+  git -C "$D/repo" branch alt2 'HEAD~1'
+  OUT="$(env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t13 up/x3 --create --from alt2 --base origin/main --repo "$D/repo" 2>&1)"; RC=$?
+  if [ "$RC" -eq 6 ] && case "$OUT" in *behind*) true ;; *) false ;; esac; then
+    t_ok "n=1747: explicit --base overrides --from lineage -> 6 behind"
+  else t_bad "n=1747 explicit base (rc=$RC out=$OUT)"; fi
+  # 14d. no --create: --from flag without --create leaves default gate (regression guard)
+  git -C "$D/repo" branch feat-behind2 'HEAD~1'
+  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t14 feat-behind2 --from alt --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 6 ] && t_ok "n=1747: --from without --create does NOT alter gate (still 6 behind origin/main)" || t_bad "n=1747 no-create guard (rc=$RC)"
+
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
@@ -171,9 +198,9 @@ fi
 BRANCH=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base)  shift; BASE="${1:-}"; [ -n "$BASE" ] || usage ;;
+    --base)  shift; BASE="${1:-}"; [ -n "$BASE" ] || usage; BASE_EXPLICIT=1 ;;
     --create) CREATE=1 ;;   # E8 (v0.4.78): explicit escape hatch — create the branch first (never default)
-    --from)  shift; FROM="${1:-}"; [ -n "$FROM" ] || usage ;;   # E8: branch point for --create (default --base)
+    --from)  shift; FROM="${1:-}"; [ -n "$FROM" ] || usage; FROM_EXPLICIT=1 ;;   # E8: branch point for --create (default --base)
     --force) FORCE=1 ;;
     --repo)  shift; REPO="${1:-}"; [ -n "$REPO" ] || usage ;;
     --no-log) : ;;
@@ -223,13 +250,23 @@ if [ "$VERB" = "add" ]; then
     echo "$PROG: no local branch '$BRANCH' (oc-wt never creates branches — lane owns naming)" >&2; exit 5; }
   "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || {
     echo "$PROG: base ref '$BASE' not found" >&2; exit 5; }
-  BEHIND_N="$("$GIT_BIN" -C "$REPO" rev-list --count "$BRANCH..$BASE" 2>/dev/null)" || BEHIND_N=0
-  AHEAD_N="$("$GIT_BIN" -C "$REPO" rev-list --count "$BASE..$BRANCH" 2>/dev/null)" || AHEAD_N=0
+  # n=1747: --create --from REF with no explicit --base — the branch's lineage IS
+  # the --from ref; comparing against origin/main false-stops cross-lineage
+  # branches (e.g. seeded from adolfousier/main). Derive gate base from --from;
+  # explicit --base always wins. Self-explaining stop either way.
+  if [ "$CREATE" -eq 1 ] && [ "$FROM_EXPLICIT" -eq 1 ] && [ "$BASE_EXPLICIT" -eq 0 ] && [ "$FROM" != "$BASE" ]; then
+    GATE_BASE="$FROM"
+    echo "$PROG: gate base = --from '$FROM' (branch lineage; --base defaults to origin/main but branch was not born from it)" >&2
+  else
+    GATE_BASE="$BASE"
+  fi
+  BEHIND_N="$("$GIT_BIN" -C "$REPO" rev-list --count "$BRANCH..$GATE_BASE" 2>/dev/null)" || BEHIND_N=0
+  AHEAD_N="$("$GIT_BIN" -C "$REPO" rev-list --count "$GATE_BASE..$BRANCH" 2>/dev/null)" || AHEAD_N=0
   if [ "$BEHIND_N" -gt 0 ]; then
     if [ "$FORCE" -eq 1 ]; then
-      echo "$PROG: WARNING — $BRANCH is $BEHIND_N commit(s) behind $BASE (--force continues)" >&2
+      echo "$PROG: WARNING — $BRANCH is $BEHIND_N commit(s) behind $GATE_BASE (--force continues)" >&2
     else
-      echo "$PROG: $BRANCH is $BEHIND_N commit(s) behind $BASE (ahead $AHEAD_N) — rebase or --force" >&2
+      echo "$PROG: $BRANCH is $BEHIND_N commit(s) behind $GATE_BASE (ahead $AHEAD_N) — rebase or --force (or pass --base explicitly)" >&2
       exit 6
     fi
   fi
