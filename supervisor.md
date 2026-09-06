@@ -38,8 +38,8 @@ stay here. Expected reply shape: "routed to <worker>", not done-work.
 - One coherent revision per owner-verdict batch (one `v0.4.x`), never scattered
   patches. Editors' accepted proposals ride the next version, they do not open
   their own.
-- Every change carries provenance: date + the incident/run-id that motivated it.
-  A rule without a war story rots into folklore.
+- Provenance = the `## v<v>` CHANGELOG entry, written at ship time (fleet-
+  directives §Rule-text provenance, F13 — rule text carries NO biography).
 
 ## Duty 2 — Worker registry: identity + versions, NEVER live status
 
@@ -84,8 +84,9 @@ event notes (deviations, incidents, rulings applied).
 > Delivery discipline per SKILL.md §session_notify mechanics (DELIVERY ≠
 > QUEUE ACCEPTANCE canonical there): live roster check SAME turn; silent
 > target → one retry → ledger event note; `target_session` = FULL UUID only.
-> Delivery mode is `interrupt=true` for operational wakes (mid-turn failsafe),
-> default for everything else (deferred/queued for acks and low urgency).
+> Delivery cadence per fleet-directives (2026-09-04 law): quiet DEFAULT,
+> turn-end for boundary-bound signals, `interrupt=true` failsafe ONLY for
+> urgent wakes a lane is blocked on (SKILL.md §DELIVERY MODES).
 
 Inbox discipline for any (re-enabled) build lane: ORDERs / red-run handoffs /
 owner directives only; ACK bookkeeping stays ledger-internal. *(Historical:
@@ -127,7 +128,7 @@ incident suggests drift.
 
 Method:
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
-   one per lens (A/B/C/D/E/F/G); they NEVER edit skill files. Duty-6 reviews
+   one per lens (A/B/C/D/E/F/G + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
    are ALWAYS sub-agent work, never Supervisor-only inline reading. Findings
    must carry verbatim quotes; Supervisor verifies every accepted quote against
    disk before acting. Hollow report → ONE retry with the prompt narrowed to

@@ -1,6 +1,6 @@
 # review-lenses.md — Duty-6 reviewer lens catalog (B4+G-F4 split, v0.4.78)
 
-Full briefs for the seven Duty-6 review lenses. supervisor.md §Duty 6 owns the
+Full briefs for the eight Duty-6 review lenses (A–G + standing brain-scrub). supervisor.md §Duty 6 owns the
 method (read-only sub-agents, verbatim-quote verification, oc-review-persist
 persistence, poll triple-check, verdict table) and keeps only the family map
 there; this file owns the per-lens scope briefs. Letters keep chronological

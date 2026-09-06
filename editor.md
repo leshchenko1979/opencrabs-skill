@@ -111,7 +111,8 @@ supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
    (oc-prchecks writes `run=<id>`, not `run <id>`) by reading one real log
    line back.
 7. **oc-prchecks is invoke-once** (v0.4.71, Duty-4 P11): never re-invoke oc-prchecks in a loop. Exit 5 = in-flight; resume
-   via `gh run view <id>` / a read-only poller, `gh run rerun <id>` for a
+   per item 10 (`oc-prchecks resume <run-id>` — not a re-invoke; skips dispatch/adoption), `gh run view <id>` as the
+   read-only check only, `gh run rerun <id>` for a
    dead run. A looping re-invoke is a self-inflicted dispatch storm.
 8. **Checkout-ref is terminal truth (Duty-4 P2, v0.4.77):** the job NAME only
    identifies the DISPATCH; the run's checkout log line identifies the TESTED
