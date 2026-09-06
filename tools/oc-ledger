@@ -39,7 +39,7 @@
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
-#   --selftest                             fixture suite (55 cases)
+#   --selftest                             fixture suite (90 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -401,6 +401,67 @@ cmd_enroll() {
   with_lock _enroll_locked
 }
 
+# ---- promote (T2 verdict n=1695, HQ confirmed NON-KERNEL 2026-09-06) --------
+cmd_promote() { # promote <uuid> <new-role> [--topic N] [--feature X] — update
+  # an enrolled roster row IN PLACE. Until this verb existed the only path was
+  # a disclosed atomic-jq hand-edit (n=1691, state commit 301e926). ONE worker
+  # = ONE row: promote only mutates, never creates — last_acked / confirmed /
+  # notes carry across the role change (HQ implementation guard). Audit trail:
+  # one global note event (frozen v1.1 kind enum respected) + a worker note.
+  local uuid="${1:-}" role="${2:-}" topic="" feature=""; shift 2 2>/dev/null || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --topic) topic="${2:-}"; shift 2 ;;
+      --feature) feature="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$uuid" ] && [ -n "$role" ] || die 2 "usage: oc-ledger promote <uuid> <new-role> [--topic N] [--feature X]"
+  case "$role" in
+    -*) die 2 "promote: role looks like a flag: '$role' (role positional missing?)" ;;
+  esac
+  echo "$uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+    || die 2 "promote: uuid shape invalid: '$uuid'"
+  ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+  jq -e --arg u "$uuid" '.workers[]? | select(.uuid == $u)' "$LEDGER" >/dev/null 2>&1 \
+    || die 2 "promote: uuid not enrolled — use enroll to create the row: $uuid"
+  # current values (null renders as "-" — the enroll convention)
+  local cur_role cur_topic cur_feature
+  cur_role="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].role // "-"' "$LEDGER")"
+  cur_topic="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].topic_id // "-" | tostring' "$LEDGER")"
+  cur_feature="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].feature // "-"' "$LEDGER")"
+  local changes=""
+  [ "$role" != "$cur_role" ] && changes="role: $cur_role -> $role"
+  if [ -n "$topic" ] && [ "$topic" != "$cur_topic" ]; then
+    case "$topic" in ''|-*|[!0-9]*) [ "$topic" = "-" ] || die 2 "promote: --topic must be a number or '-'" ;; esac
+    changes="${changes:+$changes; }topic: $cur_topic -> $topic"
+  fi
+  if [ -n "$feature" ] && [ "$feature" != "$cur_feature" ]; then
+    changes="${changes:+$changes; }feature: $cur_feature -> $feature"
+  fi
+  [ -n "$changes" ] || die 2 "promote: nothing to change (role/topic/feature all unchanged)"
+  _promote_locked() {
+    local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
+    local tid="null"
+    [ -n "$topic" ] && [ "$topic" != "-" ] && tid="$topic"
+    atomic_jq --arg u "$uuid" --arg r "$role" --arg f "$feature" --arg n "$n" --arg t "$t" \
+      --arg changes "$changes" --argjson tid "$tid" \
+      --argjson has_topic "$([ -n "$topic" ] && echo true || echo false)" \
+      --argjson has_feature "$([ -n "$feature" ] && echo true || echo false)" \
+      '(.workers[] | select(.uuid == $u)) |= (
+         .role = $r
+         | (if $has_topic then .topic_id = $tid else . end)
+         | (if $has_feature then .feature = $f else . end)
+         | .notes += [("promoted at " + $t + ": " + $changes)])
+       | .events += [{n: ($n|tonumber), t: $t, by: "oc-ledger promote", kind: "note",
+                      what: ("promoted " + $u + ": " + $changes)}]
+       | .updated_at = $t' || return $?
+    echo "promoted $uuid ($changes) — event n=$n"
+    git_state_commit "ledger n=$n: promote $uuid (oc-ledger)"
+  }
+  with_lock _promote_locked
+}
+
 # ---- commit-pending (item-2(b) sweep) ----------------------------------------
 # v0.4.60 migration: deploy artifacts moved to the STATE dir (owner order
 # 2026-08-31 06:03Z) — skill repo keeps only the battery receipt; the moved
@@ -458,7 +519,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (48 cases) ------------------------------------------------------
+# ---- selftest (90 cases) ------------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -571,6 +632,18 @@ EOF
   bash "$ME" enroll 22222222-2222-2222-2222-222222222222 editor --topic 42 >/dev/null 2>&1; chk "enroll-happy" 0 $?
   bash "$ME" enroll 22222222-2222-2222-2222-222222222222 editor >/dev/null 2>&1; chk "enroll-dup" 2 $?
   chk "enroll-row" "42" "$(jq '.workers[1].topic_id' "$OC_LEDGER")"
+  # 29b: promote (T2 verdict n=1695, HQ confirmed NON-KERNEL): audited in-place
+  # roster-row update — ONE worker ONE row (no create path), ack state carries
+  bash "$ME" promote 33333333-3333-3333-3333-333333333333 editor >/dev/null 2>&1; chk "promote-not-enrolled" 2 $?
+  bash "$ME" promote 22222222-2222-2222-2222-222222222222 editor >/dev/null 2>&1; chk "promote-nothing-to-change" 2 $?
+  bash "$ME" promote 22222222-2222-2222-2222-222222222222 --topic 99 >/dev/null 2>&1; chk "promote-role-flag-guard" 2 $?
+  bash "$ME" promote 22222222-2222-2222-2222-222222222222 toolsmith --topic 39171 --feature tools >/dev/null 2>&1; chk "promote-happy" 0 $?
+  chk "promote-role-updated" "toolsmith" "$(jq -r '.workers[1].role' "$OC_LEDGER")"
+  chk "promote-topic-updated" "39171" "$(jq -r '.workers[1].topic_id | tostring' "$OC_LEDGER")"
+  chk "promote-one-row" "1" "$(jq '[.workers[] | select(.uuid == "22222222-2222-2222-2222-222222222222")] | length' "$OC_LEDGER")"
+  chk "promote-event" "true" "$(jq -r '[.events[] | select(.by == "oc-ledger promote")] | last | .what | startswith("promoted 22222222")' "$OC_LEDGER")"
+  bash "$ME" promote aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee tester2 >/dev/null 2>&1; chk "promote-ack-carries-rc" 0 $?
+  chk "promote-ack-carries" "0.4.3" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
   # 30-32: commit-pending
   bash "$ME" commit-pending | grep -q "clean" && ok || bad "commit-pending-clean"
   jq '.events += [{"n": 900, "t": "x", "by": "tool", "kind": "note", "what": "stray"}]' "$OC_LEDGER" > "$T/d.json" && mv "$T/d.json" "$OC_LEDGER"
@@ -714,7 +787,7 @@ oc_ship_audit_chain() {
 
 # ---- dispatch -----------------------------------------------------------------
 parse_global "$@"
-case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm|claim-ref> | [selftest|--selftest]"; exit 0 ;; esac
+case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref> | [selftest|--selftest]"; exit 0 ;; esac
 if [ "$SELFTEST" -eq 1 ]; then cmd_selftest; exit $?; fi
 sub="${ARGS[0]:-}"; rest=("${ARGS[@]:1}")
 case "$sub" in
@@ -724,9 +797,10 @@ case "$sub" in
   cadence) cmd_cadence ;;
   ack) cmd_ack "${rest[@]+"${rest[@]}"}" ;;
   enroll) cmd_enroll "${rest[@]+"${rest[@]}"}" ;;
+  promote) cmd_promote "${rest[@]+"${rest[@]}"}" ;;
   commit-pending) cmd_commit_pending "${rest[@]+"${rest[@]}"}"; oc_ship_audit_chain ;;
   confirm) cmd_confirm "${rest[@]+"${rest[@]}"}" ;;
   claim-ref) cmd_claim_ref "${rest[@]+"${rest[@]}"}" ;;
   selftest) cmd_selftest; exit $? ;;
-  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|commit-pending|confirm|claim-ref> | --selftest" ;;
+  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref> | --selftest" ;;
 esac
