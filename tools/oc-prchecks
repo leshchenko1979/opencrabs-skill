@@ -52,7 +52,30 @@ set -u
 set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-prchecks" "$@"; else oc_log_finish() { :; }; fi
-trap 'oc_log_finish $?' EXIT
+# Exit-honesty guard (n=1725 A, Triage verdict n=1721; field tools.log:3190,
+# 2026-09-06T18:22:17Z): a harness budget-kill of an in-flight watch journaled
+# exit 0 with NO verdict and NO signal extras — a success-shaped row for an
+# interrupted run, despite the lib TERM/INT/HUP traps (26da3914). The kill
+# mechanism was not fully reconstructed; the CLASS is killed here instead:
+# once a run is ADOPTED (extra run_id/resume present), an exit 0 without
+# extra.verdict is never legitimate in this tool's state machine — re-journal
+# as 5 (in-flight-timeout, nearest RC-CONTRACT code) + anomaly marker.
+# Pre-adoption exits (--help, usage, shape/fork gates) pass through untouched.
+_pr_exit_guard() {
+  local _rc=$?
+  trap - EXIT
+  if [ "$_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
+    local _e="${OC_LOG_EXTRA:-{\}}"
+    if printf '%s' "$_e" | jq -e '(has("run_id") or has("resume")) and (has("verdict") | not)' >/dev/null 2>&1; then
+      oc_log_extra "anomaly" "exit0-without-verdict"
+      oc_log_extra "watch" "interrupted"
+      _rc=5
+    fi
+  fi
+  oc_log_finish "$_rc"
+  exit "$_rc"
+}
+trap '_pr_exit_guard' EXIT
 
 PROG="$(basename "$0")"
 GH_BIN="${OC_GH:-gh}"
