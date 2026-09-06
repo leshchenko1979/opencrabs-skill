@@ -97,7 +97,11 @@ BAD_CMTS=""
 while read -r sha; do
   [ -n "$sha" ] || continue
   CMT="$(gh api "repos/$REPO/commits/$sha" --jq .commit.message 2>/dev/null)" || continue
-  REF="$(printf '%s\n' "$CMT" | sed -n 's/^\(Issue-Ref\|Closes\|Refs\|Fixes\):[[:space:]]*#\?\([0-9]\+\).*/\2/p' | head -1)"
+  # check-5 trailer extraction: accepts bare (#99), digits-only (99), AND the
+  # qualified cross-repo form mandated by fork #54 (leshchenko1979/opencrabs#102).
+  # Qualified refs were previously invisible here (regex extracted bare digits
+  # only) — patched 2026-09-06 per HQ ruling (wave #1414-#1418, ledger n=162x).
+  REF="$(printf '%s\n' "$CMT" | sed -n 's/^\(Issue-Ref\|Closes\|Refs\|Fixes\):[[:space:]]*//p' | head -1 | sed 's|^[A-Za-z0-9._/-]*#||; s|^#||' | sed -n 's/^\([0-9]\+\).*/\1/p')"
   if [ -z "$REF" ]; then
     N_BAD=$((N_BAD+1)); BAD_CMTS="${BAD_CMTS}  ${sha}  (no Issue-Ref trailer)\n"
   elif [ "$REF" != "$CLAIMS" ]; then
