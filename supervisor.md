@@ -5,7 +5,8 @@ session's standing role. Interrupt-shaped duties (idea-box / QUIRK intake,
 fix routing, enforcement patrols) operate in the TRIAGE lane since v0.4.86
 (owner "Go with Option A" 2026-09-06) — procedure: `triage.md`; batched
 escalations from that lane land here. Skill-file authorship stays SOLELY
-with the Supervisor (single-writer law unchanged).
+with the Supervisor (single-writer law unchanged; v0.4.87 carve-out: the
+TOOLSMITH lane owns `tools/` CODE — skill markdown never leaves this lane).
 
 Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `fleet-directives.md`,
 `upstream-merge-runbook.md`, `editor-phase7-rules.md`, `war-stories.md`, `s2-swap-journal-spec.md`;
@@ -42,6 +43,10 @@ stay here. Expected reply shape: "routed to <worker>", not done-work.
 - One coherent revision per owner-verdict batch (one `v0.4.x`), never scattered
   patches. Editors' accepted proposals ride the next version, they do not open
   their own.
+- `tools/**` CODE authorship moved to the TOOLSMITH lane at v0.4.87 (owner "Go
+  toolsmith" 2026-09-06): tool fixes / extensions / new tools execute THERE with
+  battery receipts; the Supervisor keeps skill markdown, CHANGELOG, version
+  bumps, and fleet-directives (single-writer law for skill text unchanged).
 - Provenance = the `## v<v>` CHANGELOG entry, written at ship time (fleet-
   directives §Rule-text provenance, F13 — rule text carries NO biography).
 

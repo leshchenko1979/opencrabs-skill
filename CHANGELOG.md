@@ -328,3 +328,14 @@ Supervisor-lane split: interrupt-shaped duties carved out into a new TRIAGE lane
 - fleet-directives.md: §Creating new editors — TRIAGE lane creates (HQ keeps roster/registry ownership, supervisor.md Duty 2); §Tool-problem reports — retitled TRIAGE-lane intake / HQ supervisor-of-record, intake → OC DEV TRIAGE (session_search discovery, never uuid-from-memory), escalation item added; owner-order provenance (2026-09-01 22:2xZ, 2026-09-03 20:31Z) preserved.
 - editor.md: lane-duty mirror retargeted — IDEA/QUIRK reports → Triage lane (OC DEV TRIAGE), fallback target = supervisor lane (OC DEV HQ); oc-waiter ORPHANED owner+HQ lines untouched (HQ stays escalation target).
 - Pre-bump gate: oc-deploy --selftest 184 pass / 0 fail; battery tools/tests/run.sh 144 PASS / 0 FAIL (receipt refreshed).
+
+## v0.4.87
+
+- TOOLSMITH lane carved out — the CLI tool lane that makes and fixes the CLI tools every other role uses (owner word "Go toolsmith" 2026-09-06). PROMOTED from the carrier-tools editor row (topic 39171, rostered since 2026-09-01) — same session, no new topic/spawn.
+- toolsmith.md (NEW): NEVER list (no skill markdown, no daemon/carrier source, no builds/swaps, no rulings, no owner verdict tables); Duty S1 owns `tools/` code — author + fixer, transferred from the Supervisor at v0.4.87 (battery receipts mandatory, RC-CONTRACT register discipline, HQ vocabulary fixes execute here); Duty S2 battery stewardship; escalation to the Supervisor per cadence law.
+- SKILL.md: version 0.4.87; frontmatter names TOOLSMITH; FOUR role files; STEP ZERO prompt + table row; roles-do-not-intersect bullet; glossary entry; census — `toolsmith.md` added, `tools/**` becomes the ONE exception owned by the TOOLSMITH lane (skill markdown stays Supervisor-only).
+- supervisor.md: header carve-out note + Duty 1 bullet — `tools/**` code authorship moved to the TOOLSMITH lane; Supervisor keeps skill markdown, CHANGELOG, version bumps, fleet-directives.
+- fleet-directives.md: §Tool-problem reports — item 3 routes `tools/` CLI fixes to the TOOLSMITH lane; carrier-tool channel promoted to the TOOLSMITH lane (vocabulary fixes execute there; HQ skill text still lands via TRIAGE intake).
+- triage.md: Duty T2 item 3 — `tools/` CLI code routes to the TOOLSMITH lane, every other area to the owning editor.
+- editor.md: QUIRK mirror bullet — `tools/` CLI code to the TOOLSMITH lane, everything else to the owning editor.
+- Pre-bump gate: oc-deploy --selftest 184 pass / 0 fail; battery tools/tests/run.sh 144 PASS / 0 FAIL (receipt refreshed).

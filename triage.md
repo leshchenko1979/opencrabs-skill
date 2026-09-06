@@ -68,10 +68,11 @@ On receipt:
 2. VERIFY the evidence (poll triple-check: disk truth / live-log evidence /
    coherence with the register). A claim resting on truncated output gets a
    fresh targeted check BEFORE any routing decision.
-3. ROUTE the fix to the right executor — the editor lane that owns the
-   tool/area (by TOPIC name, never uuid-from-memory; find it via
-   `session_search`), briefed via `session_notify` with the quirk report +
-   evidence attached.
+3. ROUTE the fix to the right executor — skill `tools/` CLI code goes to the
+   TOOLSMITH lane (OC DEV TOOLSMITH, v0.4.87 carve-out); every other area to
+   the editor lane that owns it (by TOPIC name, never uuid-from-memory; find
+   either via `session_search`), briefed via `session_notify` with the quirk
+   report + evidence attached.
 4. NO existing lane covers the area → create a NEW editor (Duty T3).
 5. Routing verdict stamps `idea-verdict` ROUTED (target topic named); the fix
    itself ships through the normal editor flow (worktree, CI gate, ledger

@@ -68,7 +68,9 @@ editor-facing duties:
   `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>` + evidence
   (triage.md §Duty T2, ex supervisor.md §Duty 7 items 5–6). Report the SAME TURN it bites you; do
   not retry-around silently, do not self-patch — the Triage lane verifies,
-  ACKs, and routes the fix to the owning editor (or creates one, triage.md
+  ACKs, and routes the fix to the owning executor — skill `tools/` CLI code
+  to the TOOLSMITH lane (OC DEV TOOLSMITH, v0.4.87), everything else to the
+  owning editor (or creates one, triage.md
   §Duty T3). If the Triage lane is unreachable, the fallback target is the
   supervisor lane (OC DEV HQ); never sit on a broken tool.
 - Reads: `tg_get_messages` in your own topic only; no `tg_search_global`, no
