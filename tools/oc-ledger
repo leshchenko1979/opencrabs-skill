@@ -9,11 +9,19 @@
 # Subcommands:
 #   stamp <kind> "<what>" [--by <label>]   append event under lock (flock +
 #                                          tmp -> jq-validate -> mv) + git leg
-#   sync --version <v> [--why <text>]      ONE atomic write: 3 version fields
+#   sync --version <v> [--why <text>] [--catch-up]
+#                                          ONE atomic write: 3 version fields
 #                                          + skill-bump event; battery-receipt
 #                                          gate; skill-repo commit + tag; tail
 #                                          steps: oc-shadow-rotate (merge A) +
-#                                          mirror push to origin (v0.4.50)
+#                                          mirror push to origin (v0.4.50);
+#                                          --catch-up (T2 verdict n=1695,
+#                                          HQ-approved 2026-09-06): multi-step
+#                                          FORWARD jump when the skill shipped
+#                                          ahead of ledger meta — the dead zone
+#                                          (doc-first gate + +1-only step check
+#                                          admit no legal sequence otherwise);
+#                                          --why mandatory; downgrades refused
 #   check-version                          SKILL.md vs 3 ledger fields (RO)
 #   cadence                                skill-bumps since last review (RO)
 #   ack <uuid> <0.N.N version> [--at <ts>]  worker last_acked + ack event
@@ -183,15 +191,16 @@ cmd_stamp() {
 # ---- sync -------------------------------------------------------------------
 battery_receipt() { echo "$SKILL_DIR/tools/tests/battery-last.json"; }
 cmd_sync() {
-  local v="" why=""
+  local v="" why="" catchup=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --version) v="${2:-}"; shift 2 ;;
       --why) why="${2:-}"; shift 2 ;;
+      --catch-up) catchup=1; shift ;;
       *) shift ;;
     esac
   done
-  [ -n "$v" ] || die 2 "usage: oc-ledger sync --version <v> [--why <text>]"
+  [ -n "$v" ] || die 2 "usage: oc-ledger sync --version <v> [--why <text>] [--catch-up]"
   echo "$v" | grep -Eq '^0\.[0-9]+\.[0-9]+$' || die 6 "sync: version shape must be 0.N.N, got '$v'"
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   # battery gate: receipt must exist, be PASS, fail==0, fresh (<6h)
@@ -211,14 +220,33 @@ cmd_sync() {
   # at line start followed by space/paren/dash/end — not a bare-line equality.
   grep -Eq "^## v$v([ —(:]|$)" "$SKILL_DIR/CHANGELOG.md" \
     || die 6 "sync: CHANGELOG.md has no '## v$v' entry — write the receipt first"
-  # step check: equal (re-sync) or third-component +1 only
-  local cur; cur="$(jq -r '.meta.skill_version // ""' "$LEDGER")"
+  # step check: equal (re-sync) or third-component +1 only; --catch-up (T2
+  # verdict n=1695, HQ-approved 2026-09-06) relaxes ONLY the step size for the
+  # shipped-ahead dead zone — the doc-first gate above still pins v to the
+  # shipped version, so only multi-step FORWARD jumps gain a legal path.
+  local cur skipped=""; cur="$(jq -r '.meta.skill_version // ""' "$LEDGER")"
   if [ "$cur" != "$v" ]; then
     local c2 c3 v2 v3
     c2="$(echo "$cur" | cut -d. -f2)"; c3="$(echo "$cur" | cut -d. -f3)"
     v2="$(echo "$v" | cut -d. -f2)"; v3="$(echo "$v" | cut -d. -f3)"
-    { [ "$c2" = "$v2" ] && [ "$v3" -eq $(( c3 + 1 )) ]; } \
-      || die 6 "sync: version step refused — current $cur, requested $v (only +1 patch or re-sync equal)"
+    if [ "$c2" = "$v2" ] && [ "$v3" -eq $(( c3 + 1 )) ]; then
+      : # normal +1 patch step — unchanged
+    elif [ "$catchup" -eq 1 ]; then
+      [ -n "$why" ] || die 2 "sync: --catch-up requires --why \"<reason>\" (audit line on the catch-up event)"
+      if [ "$v2" -gt "$c2" ] || { [ "$v2" -eq "$c2" ] && [ "$v3" -gt "$c3" ]; }; then
+        # skipped-range note for the audit event (HQ ruling: from→to + range)
+        if [ "$c2" != "$v2" ]; then
+          skipped="cross-minor jump"
+        elif [ "$v3" -gt $(( c3 + 1 )) ]; then
+          local s=$(( c3 + 1 )); skipped="skipped 0.$c2.$s"
+          while [ "$s" -lt $(( v3 - 1 )) ]; do s=$(( s + 1 )); skipped="$skipped, 0.$c2.$s"; done
+        fi
+      else
+        die 6 "sync: catch-up refused — requested $v is behind current $cur (no downgrades)"
+      fi
+    else
+      die 6 "sync: version step refused — current $cur, requested $v (only +1 patch or re-sync equal; multi-version catch-up: --catch-up --why \"<reason>\")"
+    fi
   fi
   _sync_locked() {
     local n t dup; n=$(( $(max_n) + 1 )); t="$(now_iso)"
@@ -234,12 +262,17 @@ cmd_sync() {
       return 0
     fi
     atomic_jq --arg v "$v" --arg n "$n" --arg t "$t" --arg why "$why" --arg rts "$rts" \
+      --arg cur "$cur" --arg skipped "$skipped" --argjson catchup "$catchup" \
       '.current_skill_version = $v
        | .meta.current_skill_version = $v
        | .meta.skill_version = $v
        | .updated_at = $t
        | .events += [{n: ($n|tonumber), t: $t, by: "oc-ledger sync", kind: "skill-bump",
-                      what: ("v" + $v + " — " + $why + "; battery receipt ts " + $rts)}]' || return $?
+                      what: ((if $catchup == 1
+                              then ("v" + $v + " — catch-up from " + $cur
+                                    + (if $skipped != "" then " (" + $skipped + ")" else "" end) + ": ")
+                              else ("v" + $v + " — ") end)
+                             + $why + "; battery receipt ts " + $rts)}]' || return $?
     echo "synced version=$v (event n=$n)"
     git_state_commit "ledger n=$n: skill-bump v$v via oc-ledger sync"
     return 0
@@ -510,6 +543,19 @@ EOF
   bash "$ME" cadence >/dev/null 2>&1; chk "cadence-fire-rc" 1 $?
   bash "$ME" stamp review-battery "boundary" >/dev/null 2>&1
   bash "$ME" cadence | grep -q "0/5 WAIT" && ok || bad "cadence-reset-on-review"
+  # 22b: sync --catch-up (T2 verdict n=1695, HQ-approved 2026-09-06): the
+  # shipped-ahead dead zone gains a legal path — multi-step FORWARD jump with
+  # mandatory --why; without the flag the old rc6 stands; downgrades refused.
+  sed -i 's/^version: .*/version: 0.4.9/' "$T/skill/SKILL.md"
+  printf '\n## v0.4.9\ncatch-up receipt\n' >> "$T/skill/CHANGELOG.md"
+  bash "$ME" sync --version 0.4.9 >/dev/null 2>&1; chk "sync-catchup-needs-flag" 6 $?
+  bash "$ME" sync --version 0.4.9 --catch-up >/dev/null 2>&1; chk "sync-catchup-needs-why" 2 $?
+  sed -i 's/^version: .*/version: 0.4.4/' "$T/skill/SKILL.md"
+  bash "$ME" sync --version 0.4.4 --catch-up --why downgrade-probe >/dev/null 2>&1; chk "sync-catchup-downgrade-rc6" 6 $?
+  sed -i 's/^version: .*/version: 0.4.9/' "$T/skill/SKILL.md"
+  bash "$ME" sync --version 0.4.9 --catch-up --why selftest-catchup >/dev/null 2>&1; chk "sync-catchup-happy" 0 $?
+  chk "sync-catchup-event" "true" "$(jq -r '[.events[] | select(.kind == "skill-bump")] | last | .what | contains("catch-up from 0.4.6 (skipped 0.4.7, 0.4.8)")' "$OC_LEDGER")"
+  chk "sync-catchup-heal" "true" "$(jq '(.current_skill_version == "0.4.9") and (.meta.current_skill_version == "0.4.9") and (.meta.skill_version == "0.4.9")' "$OC_LEDGER")"
   # 23-26: ack (v0.4.55: full 0.N.N shape — the old N.N regex could never
   # record a real skill version, which broke the reload convention's ack step)
   bash "$ME" ack short-uuid 0.4.2 >/dev/null 2>&1; chk "ack-bad-uuid" 2 $?
