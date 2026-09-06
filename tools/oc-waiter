@@ -27,14 +27,18 @@
 #
 # Usage:
 #   oc-waiter arm   --ref <sha-or-branch> --notify <session-uuid> [--label S]
-#                   [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N]   # detach, return
+#                   [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N]
+#                   [--run <id>]    # seed a WITNESSED run id (#115 A): first
+#                                   # poll resumes it instead of dispatching.
+#                                   # Requires OC_ACTOR=<session-uuid> (#115 C).
 #   oc-waiter list                                            # live records
 #   oc-waiter sweep                                           # watchdog pass
 #   oc-waiter _run <record.json>                              # internal child
 #   oc-waiter --selftest                                      # offline, shims
 #
 # Exit (arm): 0 armed (record path + pid on stdout — READ THE JOURNAL START
-#             LINE BACK before end of turn, the launch-death lesson) / 2 usage
+#             LINE BACK before end of turn, the launch-death lesson)
+#             / 2 usage OR actor-refused (OC_ACTOR unset/'unknown', #115 C)
 #             / 3 notify binary unresolvable (refused at ARM time — the
 #             tombstone5 false-receipt class cannot happen from here).
 # Exit (_run): 0 verdict reached + notify delivered / 4 NOTIFY-FAILED.
@@ -43,6 +47,7 @@
 # Verdicts (record .verdict + journal terminal line):
 #   GREEN | RED | TIMEOUT | ESCALATED (stall) | ESCALATED-CHURN (superseded x3)
 #   | FAILED-TOOL (oc-prchecks usage/transport failure)
+#   | AMBIGUOUS (gate rc 8, #115 B — dispatch refused fail-closed; NON-retryable)
 #
 # Env: OC_WAITER_STATE_DIR (default $OC_DEPLOY_STATE_DIR or the profile state
 # dir), OC_WAITER_NOTIFY (notify shim; default /usr/local/bin/opencrabs, then
@@ -87,9 +92,10 @@ HQ_SESSION="${OC_WAITER_HQ:-}"
 
 usage() { [ $# -gt 0 ] && echo "$PROG: $1" >&2
   cat >&2 <<EOS
-Usage: $PROG arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N]
+Usage: $PROG arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N] [--run <id>]
        $PROG list | sweep | _run <record.json> | --selftest
-Exit: arm 0 armed / 2 usage / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
+Exit: arm 0 armed / 2 usage-or-actor-refused / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
+Env: OC_ACTOR=<session-uuid> REQUIRED for arm (attribution, #115 C) · --run seeds a witnessed run id (#115 A)
 EOS
   exit 2; }
 
@@ -122,7 +128,12 @@ notify_lane() { # $1=bin $2=target $3=title $4=text -> 0 delivered / 1 failed
 
 # ---------- arm ----------------------------------------------------------------
 cmd_arm() {
-  local REF="" TARGET="" LABEL="" TMO="$TIMEOUT" SK="$STALL_K" WIN="$WINDOW"
+  # Actor guard (#115 C): an unattributed arm is unauditable — the 07:49Z
+  # actor=unknown arm cost 4+ forensic hours (dossier n=1624). Refuse at arm.
+  case "${OC_ACTOR:-}" in
+    ""|unknown) echo "$PROG: arm refused: OC_ACTOR unset or 'unknown' — export OC_ACTOR=<your session uuid> before arming (SKILL.md CI-wait item 2)" >&2; exit 2 ;;
+  esac
+  local REF="" TARGET="" LABEL="" SEED_RUN="" TMO="$TIMEOUT" SK="$STALL_K" WIN="$WINDOW"
   while [ $# -gt 0 ]; do
     case "$1" in
       --ref)     shift; REF="${1:-}"; [ -n "$REF" ] || usage "--ref needs a value" ;;
@@ -131,6 +142,7 @@ cmd_arm() {
       --timeout) shift; TMO="$(dur_secs "${1:-}")"; [ "$TMO" -gt 0 ] || usage "--timeout needs N|Ns|Nm|Nh (e.g. 90m, 2h)" ;;
       --stall-k) shift; SK="${1:-}"; case "$SK" in ''|*[!0-9]*) usage "--stall-k needs an integer (poll count)" ;; esac ;;
       --window)  shift; WIN="$(dur_secs "${1:-}")"; [ "$WIN" -gt 0 ] || usage "--window needs N|Ns|Nm|Nh" ;;
+      --run)     shift; SEED_RUN="${1:-}"; case "$SEED_RUN" in ''|*[!0-9]*) usage "--run needs a numeric run id (witnessed: rc-5 stdout 'run=<id>' / journal extra.run_id)" ;; esac ;;   # #115 A: seed a witnessed run
       *) usage "unknown arg '$1'" ;;
     esac; shift
   done
@@ -159,14 +171,14 @@ cmd_arm() {
   local ID REC
   ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
   REC="$STATE_DIR/$ID.json"
-  printf '{"id":"%s","pid":0,"ref":"%s","notify":"%s","label":"%s","timeout":%s,"stall_k":%s,"window":%s,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null}\n' \
-    "$ID" "$REF" "$TARGET" "$LABEL" "$TMO" "$SK" "$WIN" "$(date -u +%FT%TZ)" > "$REC"
+  printf '{"id":"%s","pid":0,"ref":"%s","notify":"%s","label":"%s","timeout":%s,"stall_k":%s,"window":%s,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null,"actor":"%s","run_id":"%s"}\n' \
+    "$ID" "$REF" "$TARGET" "$LABEL" "$TMO" "$SK" "$WIN" "$(date -u +%FT%TZ)" "${OC_ACTOR:-}" "$SEED_RUN" > "$REC"
   # journal-first (#74): arm writes the start line SYNCHRONOUSLY so a read-back
   # right after `armed id=` can never see an empty/missing file (launch-death
   # lesson); the child appends, never truncates.
   : > "$STATE_DIR/journal/$ID.jsonl"
   jline "$STATE_DIR/journal/$ID.jsonl" start \
-    "{\"pid\":0,\"ref\":\"$REF\",\"notify\":\"$TARGET\",\"label\":\"$LABEL\",\"deadline_epoch\":$(($(date +%s) + TMO))}"
+    "{\"pid\":0,\"ref\":\"$REF\",\"notify\":\"$TARGET\",\"label\":\"$LABEL\",\"deadline_epoch\":$(($(date +%s) + TMO)),\"actor\":\"${OC_ACTOR:-}\",\"seed_run\":\"$SEED_RUN\"}"
   ( setsid "$SELF" _run "$REC" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
   echo "armed id=$ID"
   echo "  record: $REC"
@@ -195,7 +207,8 @@ cmd_run() {
   NBIN="$(resolve_notify_bin)" || { jline "$JOURNAL" notify-failed '{"reason":"binary-unresolvable"}'
     rec_upd "$REC" "\"status\":\"notify-failed\",\"verdict\":\"NOTIFY-FAILED\""; exit 4; }
 
-  local RUN_ID="" STALL=0 LAST_RC="" LAST5=0 CHURN=0 RC4=0 POLLS=0
+  local RUN_ID STALL=0 LAST_RC="" LAST5=0 CHURN=0 RC4=0 POLLS=0
+  RUN_ID="$(jq -r '.run_id // ""' "$REC")"   # #115 A: --run seed — first poll takes the resume path; legacy records without the field -> ""
   local DEADLINE=$(( $(date +%s) + TMO ))
   local VERDICT="" RC=0 OUT="" NS_RC
   while :; do
@@ -217,6 +230,7 @@ cmd_run() {
          RUN_ID="${RUN_ID:-$(printf '%s' "$OUT" | grep -oE 'run=[0-9]+' | head -1 | cut -d= -f2)}"
          if [ "$LAST_RC" = 5 ]; then LAST5=$((LAST5+1)); else LAST5=1; fi
          if [ "$LAST5" -ge "$SK" ]; then VERDICT="ESCALATED"; RC=5; fi ;;
+      8) VERDICT="AMBIGUOUS" ;;   # #115 B: gate refused dispatch (same-ref candidate run unverifiable) — NON-RETRYABLE (n=1674): resolve by hand
       2|4|7) RC4=$((RC4+1))
          [ "$RC" = 2 ] && VERDICT="FAILED-TOOL"        # usage = waiter bug, not transient
          [ "$RC4" -ge "$RC4_CAP" ] && [ -z "$VERDICT" ] && VERDICT="FAILED-TOOL"
@@ -233,10 +247,11 @@ cmd_run() {
 
   # verdict payload validated BEFORE notify (the "404 Not Found" wake class)
   local TEXT="oc-waiter: $VERDICT ref=${REF:0:8} label=${LABEL:-none} polls=$POLLS run=${RUN_ID:-none}"
+  [ "$VERDICT" = "AMBIGUOUS" ] && TEXT="$TEXT — gate refused dispatch (same-ref run may be live); resolve: oc-prchecks resume <id> --wait N or gh run view <id>"
   case "$VERDICT" in
     GREEN|RED)  [ -n "$RUN_ID" ] || { jline "$JOURNAL" notify-failed '{"reason":"payload-no-run-id"}'
                   rec_upd "$REC" "\"status\":\"notify-failed\""; exit 4; } ;;
-    TIMEOUT|ESCALATED|ESCALATED-CHURN|FAILED-TOOL) : ;;
+    TIMEOUT|ESCALATED|ESCALATED-CHURN|FAILED-TOOL|AMBIGUOUS) : ;;
     *) jline "$JOURNAL" notify-failed "{\"reason\":\"payload-bad-verdict:$VERDICT\"}"
        rec_upd "$REC" "\"status\":\"notify-failed\""; exit 4 ;;
   esac
@@ -302,6 +317,7 @@ cmd_sweep() {
 do_selftest() {
   local D pass=0 fail=0
   D="$(mktemp -d)"
+  export OC_ACTOR="${OC_ACTOR:-11111111-2222-3333-4444-555555555555}"   # #115 C: arm fixture actor (negative cases override inline)
   t_ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
   t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
   mkdir -p "$D/state"
@@ -315,7 +331,9 @@ SEQ_FILE="${SEQ_FILE:?}"
 N=0; [ -f "$SEQ_FILE.count" ] && N="$(cat "$SEQ_FILE.count")"
 RC="$(cut -d, -f$((N+1)) "$SEQ_FILE" 2>/dev/null)"; [ -z "$RC" ] && RC=0
 printf '%s' "$((N+1))" > "$SEQ_FILE.count"
+printf '%s\n' "$*" >> "$SEQ_FILE.args"
 case "$RC" in
+  8) echo "oc-prchecks: AMBIGUOUS: journal shows same-ref run but gh run view cannot determine its status — dispatch REFUSED (fail-closed)" >&2; exit 8 ;;
   5) echo "IN-FLIGHT run=222 https://github.com/x/y/actions/runs/222 (still in_progress)"; exit 5 ;;
   3) echo "VERDICT RED (reason: run-failure)"; exit 3 ;;
   6) echo "VERDICT CANCELLED (superseded)"; exit 6 ;;
@@ -333,7 +351,7 @@ GSTUB
   }
   run_case() { # $1=notify-mode $2=seq $3...=extra _run args
     mk_notify "$1"
-    printf '%s' "$2" > "$D/seq"; rm -f "$D/seq.count"
+    printf '%s' "$2" > "$D/seq"; rm -f "$D/seq.count" "$D/seq.args"
     export SEQ_FILE="$D/seq"
     export NOTIFY_LOG="$D/notify.log"; : > "$NOTIFY_LOG"; rm -f "$NOTIFY_LOG.c2"
     printf '{"id":"t0","pid":0,"ref":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","notify":"11111111-2222-3333-4444-555555555555","label":"t","timeout":3600,"stall_k":8,"window":1,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null}\n' "$(date -u +%FT%TZ)" > "$D/waiters/t0.json"
@@ -412,6 +430,13 @@ GSTUB
   [ $? -eq 3 ] && t_ok "arm: full 40-hex passes sha law (reaches notify check -> 3)" || t_bad "arm full-sha rc=$?"
   OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref some/branch-name --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
   [ $? -eq 3 ] && t_ok "arm: branch name passes sha law" || t_bad "arm branch rc=$?"
+  # 7d. actor guard + --run validation (#115 C/A)
+  OC_ACTOR= OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "arm: OC_ACTOR unset -> 2 (actor guard #115C)" || t_bad "arm actor-unset rc=$?"
+  OC_ACTOR=unknown OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "arm: OC_ACTOR=unknown -> 2 (actor guard #115C)" || t_bad "arm actor-unknown rc=$?"
+  OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 --run abc >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "arm: --run non-numeric -> 2 (usage, #115A)" || t_bad "arm --run non-numeric rc=$?"
   # 8. REAL detach smoke: arm -> child reaches a verdict on its own
   mk_notify deliver
   printf '0' > "$D/seq"; rm -f "$D/seq.count"; export SEQ_FILE="$D/seq"
@@ -437,6 +462,24 @@ GSTUB
   # 17. dynamic stall-k default (#74 r8 lesson): unset stall-k derives TMO/WIN + 2
   SKV="$(jq -r '.stall_k' "$D/waiters/$ARM_ID.json")"
   [ "$SKV" -eq $(( 3600 / 90 + 2 )) ] && t_ok "dynamic stall-k: default derived 42" || t_bad "dynamic stall-k got '$SKV'"
+  # 18. --run seeding (#115 A): record run_id -> first poll takes the RESUME path, no dispatch
+  mk_notify deliver
+  printf '{"id":"t1","pid":0,"ref":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","notify":"11111111-2222-3333-4444-555555555555","label":"seed","timeout":60,"stall_k":8,"window":1,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null,"actor":"11111111-2222-3333-4444-555555555555","run_id":"222"}\n' "$(date -u +%FT%TZ)" > "$D/waiters/t1.json"
+  printf '0' > "$D/seq"; rm -f "$D/seq.count" "$D/seq.args"; : > "$D/notify.log"; rm -f "$D/notify.log.c2"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" _run "$D/waiters/t1.json" >/dev/null 2>&1; RC18=$?
+  { [ "$RC18" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t1.json")" = "GREEN" ] && head -1 "$D/seq.args" 2>/dev/null | grep -q '^resume 222 '; } \
+    && t_ok "--run seed: first poll = 'resume 222', GREEN delivered (#115A)" || t_bad "--run seed rc=$RC18 verdict=$(jq -r .verdict "$D/waiters/t1.json" 2>/dev/null) args1=$(head -1 "$D/seq.args" 2>/dev/null)"
+  # 18b. arm --run: record carries run_id + actor (#115 A/C); detached child settles GREEN on the seed
+  ARM_OUT2="$(OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm \
+    --ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --notify 11111111-2222-3333-4444-555555555555 --label seedarm --run 222 2>&1)"; RC18B=$?
+  ARM_ID2="$(printf '%s' "$ARM_OUT2" | grep -oE 'id=[^ ]+' | head -1 | cut -d= -f2)"
+  { [ "$RC18B" -eq 0 ] && [ -n "$ARM_ID2" ] && [ "$(jq -r '.run_id' "$D/waiters/$ARM_ID2.json")" = "222" ] && [ "$(jq -r '.actor' "$D/waiters/$ARM_ID2.json")" = "$OC_ACTOR" ]; } \
+    && t_ok "arm --run 222: record carries run_id + actor (#115A/C)" || t_bad "arm --run record rc=$RC18B id=$ARM_ID2"
+  sleep 1   # let 18b's detached child settle before 19 resets the notify log
+  # 19. gate rc 8 -> AMBIGUOUS: ONE poll, non-retryable, lane notified (#115 B, n=1674)
+  run_case deliver "8"
+  { [ "$RUN_RC" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t0.json")" = "AMBIGUOUS" ] && [ "$(jq -r '.polls' "$D/waiters/t0.json")" = "1" ] && grep -q 'AMBIGUOUS' "$D/notify.log"; } \
+    && t_ok "gate rc 8: AMBIGUOUS after ONE poll (non-retryable), lane notified" || t_bad "rc8 rc=$RUN_RC verdict=$(jq -r .verdict "$D/waiters/t0.json") polls=$(jq -r .polls "$D/waiters/t0.json")"
 
   echo "selftest: $pass/$((pass+fail)) passed"
   rm -rf "$D"
@@ -447,9 +490,10 @@ GSTUB
 case "${1:-}" in
   -h|--help)
     cat <<'EOH'
-Usage: oc-waiter arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N]
+Usage: oc-waiter arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N] [--run <id>]
        oc-waiter list | sweep | _run <record.json> | --selftest
-Exit: arm 0 armed / 2 usage / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
+Exit: arm 0 armed / 2 usage-or-actor-refused / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
+Env: OC_ACTOR=<session-uuid> REQUIRED for arm (attribution, #115 C) · --run seeds a witnessed run id (#115 A)
 EOH
     exit 0 ;;
   --selftest|selftest) do_selftest; exit $? ;;

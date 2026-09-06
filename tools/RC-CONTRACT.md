@@ -40,7 +40,7 @@ Fleet conventions:
 | oc-ping-proof | 0 | 2 | 0 WOKEN / 1 SILENT / 3 UNREACHABLE / 4 parse-fail |
 | oc-pr-atomicity | 0 | 1 | 0 ATOMIC / 2 NON-ATOMIC / 4 PR-not-found |
 | oc-pr-fault-scope | 0 | 2 | 0 IN-SCOPE / 1 BASE-FAULT / 3 gh-fail |
-| oc-prchecks | 0 | 2 | 0 GREEN / 3 RED / 4 dispatch-api-lock / 5 in-flight-timeout / 6 CANCELLED-superseded / 7 carrier-head-unresolvable |
+| oc-prchecks | 0 | 2 | 0 GREEN / 3 RED / 4 dispatch-api-lock / 5 in-flight-timeout / 6 CANCELLED-superseded / 7 carrier-head-unresolvable / 8 AMBIGUOUS-same-ref-witness-unverifiable (fail-closed, dispatch refused, #115B) |
 | oc-review-persist | 0 | 2 | 0 persisted |
 | oc-seal-state | 0 | 1 | 0 OK / 2 CONTRIBUTOR-SCAN-FAIL / 3 WRITE-FAIL-INVALID |
 | oc-shadow-rotate | 0 | 2 | 0 ok-noop / 2 io-fail (usage merged into 2, C-#3) |
@@ -51,5 +51,5 @@ Fleet conventions:
 | oc-tg-audit | 0 | 2 | 0 clean / 1 violation / 3 log-missing |
 | oc-toolaccum | 0 | 2 | 0 clean / 1 repeat-offense / 3 log-missing |
 | oc-upstream-delta | 0 | 2 | 0 clean / 1 delta (verdict) / 3 fetch-git-fail |
-| oc-waiter | 0 | 2 | arm: 0 armed / 3 notify-bin-unresolvable · _run: 0 delivered / 4 NOTIFY-FAILED · sweep: 0 clean / 1 orphans-reported / 3 notify-bin-unresolvable · list: 0 |
+| oc-waiter | 0 | 2 (arm: usage-OR-actor-refused, OC_ACTOR unset/'unknown', #115C) | arm: 0 armed / 3 notify-bin-unresolvable · _run: 0 delivered / 4 NOTIFY-FAILED (verdicts GREEN/RED/TIMEOUT/ESCALATED/ESCALATED-CHURN/FAILED-TOOL/AMBIGUOUS — AMBIGUOUS = gate rc 8, NON-retryable single poll, #115B) · sweep: 0 clean / 1 orphans-reported / 3 notify-bin-unresolvable · list: 0 |
 | oc-wt | 0 | 2 | 0 ok / 3 path-exists-dirty / 4 index-failed / 5 repo-branch-missing / 6 behind-base |
