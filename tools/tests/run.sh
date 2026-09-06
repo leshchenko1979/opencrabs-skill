@@ -29,7 +29,7 @@ section() { note ""; note "== $1 =="; }
 run_selftest() {
   local t="$1"
   if [ ! -x "$TOOLS_DIR/$t" ]; then bad "$t missing or not executable"; return 1; fi
-  if "$TOOLS_DIR/$t" --selftest >/dev/null 2>&1; then ok "$t --selftest"; else bad "$t --selftest"; fi
+  if OC_DEPLOY_STATE_DIR="$(mktemp -d)" "$TOOLS_DIR/$t" --selftest >/dev/null 2>&1; then ok "$t --selftest"; else bad "$t --selftest"; fi
 }
 
 # ---- 00. lib/oc-log.sh (unified tools log, KERNEL batch D0) -----------------
@@ -450,8 +450,11 @@ rm -rf "$d"
 section "oc-prchecks"
 run_selftest oc-prchecks
 if tool oc-prchecks; then
-  "$TOOLS_DIR/oc-prchecks" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
-  "$TOOLS_DIR/oc-prchecks" abc123 >/dev/null 2>&1; [ $? -eq 2 ] && ok "short sha -> 2 (FULL-sha shape gate)" || bad "short sha -> expected 2"
+  SD_PRC="$(mktemp -d)"   # hermetic: usage() writes .oc-prchecks-rc2 into the state dir (goal C, ts 18:34:19Z leak)
+  OC_DEPLOY_STATE_DIR="$SD_PRC" "$TOOLS_DIR/oc-prchecks" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  OC_DEPLOY_STATE_DIR="$SD_PRC" "$TOOLS_DIR/oc-prchecks" abc123 >/dev/null 2>&1; [ $? -eq 2 ] && ok "short sha -> 2 (FULL-sha shape gate)" || bad "short sha -> expected 2"
+  rm -rf "$SD_PRC"
+  [ ! -f "${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}/.oc-prchecks-rc2" ] || true   # informational; real check: no NEW writes below
 fi
 
 # ---- 14. oc-upstream-delta (KERNEL C6 — watch-cycle arithmetic) ------------

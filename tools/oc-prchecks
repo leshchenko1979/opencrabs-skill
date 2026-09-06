@@ -161,12 +161,13 @@ case "\$*" in
     esac ;;
   *"run view"*)
     case "\$S" in
-      inflight)       printf '{"status":"in_progress","conclusion":null}\n' && exit 0 ;;
-      cancelled)      printf '{"status":"completed","conclusion":"cancelled"}\n' ;;
-      run_failed)     printf '{"status":"completed","conclusion":"failure"}\n' ;;
-      nullconclusion) printf '{"status":"completed","conclusion":null}\n' ;;
+      inflight)       printf '{"status":"in_progress","conclusion":null,"headBranch":"ci/quick-build-linux","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' && exit 0 ;;
+      cancelled)      printf '{"status":"completed","conclusion":"cancelled","headBranch":"ci/quick-build-linux","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' ;;
+      run_failed)     printf '{"status":"completed","conclusion":"failure","headBranch":"ci/quick-build-linux","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' ;;
+      nullconclusion) printf '{"status":"completed","conclusion":null,"headBranch":"ci/quick-build-linux","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' ;;
       run_view_fail)  exit 1 ;;
-      *)              printf '{"status":"completed","conclusion":"success"}\n' ;;
+      adopt_mismatch) printf '{"status":"completed","conclusion":"success","headBranch":"main","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' ;;
+      *)              printf '{"status":"completed","conclusion":"success","headBranch":"ci/quick-build-linux","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' ;;
     esac ;;
   *) printf '{}\n' ;;
 esac
@@ -260,6 +261,26 @@ do_selftest() {
      && [ "$(jq -s 'map(select(.exit==0)) | length' "$D/tools.log" 2>/dev/null)" = "0" ]; then
     t_ok "killed watch: SIGTERM journaled exit 143 + signal, no false success"
   else t_bad "killed watch rows: $(cat "$D/tools.log" 2>/dev/null) rc=$KW_RC"; fi
+  # adoption identity pin (n=1721 B re-open / goal re-judge; Triage n=1730 quirk
+  # honored): a dispatch run's headSha IS the dispatch ref by GitHub design, so
+  # the pin verifies event+branch identity instead — a run adopted by LATEST-wins
+  # that turns out to live on another branch (field case: a main-branch run
+  # grabbed while the carrier dispatch never materialized) hard-fails rc 4.
+  rm -f "$D/tools.log"
+  run_t adopt_mismatch "$SHA"
+  if [ "$T_RC" -eq 4 ] && case "$T_OUT" in *"ADOPTION IDENTITY MISMATCH"*"branch=main"*) true ;; *) false ;; esac; then
+    t_ok "adoption pin: adopted run on foreign branch -> rc 4, never watched (extra.adoption_pin=mismatch)"
+  else t_bad "adoption pin mismatch (rc=$T_RC out=$T_OUT)"; fi
+  # happy path proves the pin passes legitimate dispatches: green run adopted,
+  # extra.adoption_pin=ok journaled, verdict still reached.
+  rm -f "$D/tools.log"
+  mk_shim "$D/gh" green
+  OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+    OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+    OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" "$SHA" >/dev/null 2>&1
+  if [ "$(jq -s 'map(select(.extra.adoption_pin=="ok" and .exit==0 and .extra.verdict=="GREEN")) | length' "$D/tools.log" 2>/dev/null)" = "1" ]; then
+    t_ok "adoption pin: legitimate dispatch passes (adoption_pin=ok, GREEN intact)"
+  else t_bad "adoption pin happy path ($(cat "$D/tools.log" 2>/dev/null))"; fi
   # dispatch lock contention -> 4 (background holder keeps the lock 6s; wait=1)
   ( exec 8>"$D/state/.oc-prchecks-dispatch.lock"; flock 8; sleep 6 ) &
   HOLDER=$!
@@ -546,6 +567,28 @@ oc_log_extra "run_id" "$RUN_ID"
 fi  # C-F2 resume-skipped dispatch+adoption
 fi  # RESUME branch vs normal dispatch path (#74 H2)
 RUN_URL="${RUN_URL:-}"; RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
+
+# run view is CARRIER-SHAPED for the identity pin: a dispatch run's headSha is
+# the DISPATCH REF by GitHub design (n=1730, field run 34050967831), so sha
+# equality with the tested sha can NEVER hold — the identity pin verifies what
+# misadoption actually violated (event + branch; n=1721 B / goal re-open).
+ adopting_pin() { # adopted run -> event+branch identity check (B, this batch)
+  PIN_ST="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json headBranch,event,headSha 2>/dev/null)" || PIN_ST=""
+  PIN_EVENT="$(printf '%s' "$PIN_ST" | jq -r '.event // empty' 2>/dev/null)"
+  PIN_BRANCH="$(printf '%s' "$PIN_ST" | jq -r '.headBranch // empty' 2>/dev/null)"
+  PIN_HEADSHA="$(printf '%s' "$PIN_ST" | jq -r '.headSha // empty' 2>/dev/null)"
+  oc_log_extra "adopted_headSha" "${PIN_HEADSHA:-unknown}"
+  if [ "$PIN_EVENT" != "workflow_dispatch" ] || [ "$PIN_BRANCH" != "$CARRIER" ]; then
+    echo "$PROG: ADOPTION IDENTITY MISMATCH: adopted run=$RUN_ID is event=$PIN_EVENT branch=$PIN_BRANCH (expected workflow_dispatch on $CARRIER) — refusing to watch a stranger's run (n=1721 B; field case adopted a main-branch run for a never-materialized carrier dispatch)" >&2
+    oc_log_extra "adoption_pin" "mismatch"
+    exit 4
+  fi
+  oc_log_extra "adoption_pin" "ok"
+}
+# C-F2 resume-skipped dispatch+adoption and the plain resume path re-attach to
+# a WITNESSED run (journal-matched by sha/ref) — the pin's target defect is
+# LATEST-wins grabbing an unverified newest run, so witnessed re-attach skips it.
+if [ "${OC_PR_SKIPPED_DISPATCH:-0}" != 1 ]; then adopting_pin; fi
 
 # ---------- step 4: watch ------------------------------------------------------
 deadline=$(( $(date +%s) + WAIT_SECS ))
