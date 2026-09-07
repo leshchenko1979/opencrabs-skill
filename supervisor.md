@@ -75,9 +75,8 @@ event notes (deviations, incidents, rulings applied).
   turn: `session_search` roster for sessions, `gh run list` for CI,
   `git ls-remote` for refs. The registry answers "who exists and which version
   are they on"; discovery answers "who is alive right now".
-- Seed/update ONLY from proven facts: a worker message naming the version, or
-  the delivery receipt/error of your own notify. Never assume — same
-  discipline as the wake-proof ping rule (SKILL.md).
+- Seed/update ONLY from proven facts (full schema + write rules now live in
+  triage.md §Duty T6 — lens B-F10 v0.4.96 cross-role move).
 - **REGISTRY WRITES BELONG TO TRIAGE (owner law 2026-09-07, v0.4.91):** claims,
   ack rows, event notes, roster enrollment, `confirmed` flags — Triage writes
   them all (it already did the operational writes; this closes the split).
@@ -99,10 +98,25 @@ event notes (deviations, incidents, rulings applied).
 
 | Situation | Action |
 |---|---|
-| ANY version bump (default) | **DISK ABSORPTION** — workers re-read SKILL.md + role file at turn start; propagation is zero-ping for content. IN ADDITION (owner law 2026-09-07, v0.4.91): notify ALL non-dormant workers, `delivery=quiet` — no judgment call about "touches its duties", quiet costs a mid-cycle lane nothing. Stamp ONE ledger event (version published, no per-worker rows) AND commit BOTH git repos (skill-dir: one commit per bump; state-dir: one commit per ledger stamp, inside the same flock as the write, git-history regime). TOOL-written stamps (`oc-deploy` swap-execute etc.) are committed by the HOSTING session — the turn that observes the stamp — bundling its adjacent stamp if both pending. Pending-stamp sweep = `oc-ledger commit-pending [--bundle]`, on Duty-3/4 cadence (design: `oc-work/oc-ledger-design-20260829.md`) |
+| ANY version bump (default) | **PUSH-ALL-QUIET** (owner law 2026-09-07, v0.4.91): notify ALL non-dormant workers `delivery=quiet` — no "touches its duties" judgment; content propagation itself is DISK ABSORPTION (RELOAD LAW, zero-ping). Mechanics = the 5 steps below the table |
 | Confirm law (probe-verified 2026-09-07) | `delivery=quiet` + `confirm=true` is a NO-OP watch — quiet always returns instantly with a deferred verdict + notify_id; confirm only watches synchronous states. Routine pushes: quiet, NO confirm, fire-and-forget (drift-check is the comprehension guard). CRITICAL notifies (owner-gated orders, breaking `[ALL]`): `delivery=now` + `confirm=true` — that pair gives the blocking watch and a `woke`/`delivered` verdict; `now` refuses while target mid-turn → retry on refusal |
 | Worker >3 versions behind, acting substantively | targeted notify (mechanical drift and ack-row reads don't count) |
 | Breaking security/deploy-gate change | `[ALL]` broadcast (`now` + `confirm=true`) — rules whose absence produces wrong rulings the same day. Everything else waits for each lane's next boundary |
+
+
+Bump propagation mechanics (B-F4 v0.4.96 — moved out of the table cell):
+1. Stamp ONE ledger event (version published; no per-worker rows).
+2. Commit BOTH git repos — skill-dir: one commit per bump; state-dir: one
+   commit per ledger stamp, inside the same flock as the write (git-history regime).
+3. TOOL-written stamps (`oc-deploy` swap-execute etc.) are committed by the
+   HOSTING session — the turn that observes the stamp — bundling its adjacent
+   stamp if both are pending.
+4. Pending-stamp sweep = `oc-ledger commit-pending [--bundle]`, on the
+   Duty-3/4 cadence (design: `oc-work/oc-ledger-design-20260829.md`).
+5. Quiet fan-out to all non-dormant workers (receipt ids logged; no confirm).
+6. On Duty-3/4 cadence: `oc-ledger confirm` sweep — flip `confirmed` for
+   workers whose first signed commit is verified (standing practice, fleet B5
+   + Duty-4 proposal, v0.4.96; the flag gap was 4 workers `confirmed:false`).
 
 > Delivery discipline per SKILL.md §session_notify mechanics (DELIVERY ≠
 > QUEUE ACCEPTANCE canonical there): live roster check SAME turn; silent
@@ -211,8 +225,8 @@ NO PROCEDURE COPY (lens A2/G-F4, v0.4.89 — one concept, one home):
 
 - Format = Duty-4 strict format with an `IDEA:` prefix (T1); tool problems
   use the `QUIRK:` format (T2, owner order 2026-09-01 22:2xZ); verdict
-  taxonomy + INBOX mechanics live in triage.md (ledger kinds `idea` /
-  `idea-verdict` — never silently dropped).
+  taxonomy + INBOX mechanics live in triage.md §Duty T1/T2 (one concept, one
+  home — no restatement here, lens B-F14 v0.4.96).
 
 What stays HERE (Supervisor side):
 
@@ -230,12 +244,10 @@ fork issues against ledger claim-refs; unclaimed → route (T2) or surface
 here for dispatch.
 
 **Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: OPERATES in the
-TRIAGE lane since v0.4.86 (triage.md §Duty T4) — evidence-first audit via
-`./tools/oc-tg-audit <session-uuid> [--days N]` (v0.4.71; raw fallback: grep
-the daily log for TOOL_ACCUM filtered by session + telegram tool name). A
-matching row → the Triage lane notifies the rule (SKILL.md §Telegram surface
-law); repeat offenders escalate HERE for the review-toggle decision
-(sanctioned-sender judgment stays Supervisor-owned).
+TRIAGE lane since v0.4.86 — full procedure = `triage.md` §Duty T4 (NO
+procedure copy here, lens B-F11 v0.4.96). Repeat offenders escalate HERE for
+the review-toggle decision (sanctioned-sender judgment stays
+Supervisor-owned).
 
 **Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) and
 fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
@@ -244,19 +256,16 @@ supervisor-side ownership pointer.
 
 ## Upstream sync — watch, MERGE-ON-ARRIVAL, parity (re-homed v0.4.80; sync model re-ruled 2026-09-02, lens G1/A-F1 v0.4.84)
 
-Sync is SUPERVISOR-owned (SKILL.md §Upstream relations items 1/2/6 carry the
-one-line summaries; this section is the procedure — re-homed from the archived
-compiler runbook, where it had been stranded since the 2026-08-28 S3 cutover).
-
-**SYNC LAW (owner 2026-09-02 "Land it"): fork main MERGES `adolfousier/main`
-when upstream shifts — merge, never rebase/reset, on fork main.** CANONICAL
-STATEMENT — SKILL.md §Upstream relations and supervisor.md §Upstream sync
-carry pointers only (lens A3 v0.4.89: one concept, one home). Executing
-procedure: `upstream-merge-runbook.md` (freeze gate, roles, conflict classes,
-migration-union rule, semantic-triage defaults). The REBASE-PORT procedure
-below is RETIRED — kept for PR-chain ports only (harvest branches onto
-upstream PR heads, where force-push-with-lease applies to the PR BRANCH, never
-to fork main).
+Sync is SUPERVISOR-owned. **SYNC LAW (owner 2026-09-02 "Land it"): fork main
+MERGES `adolfousier/main` when upstream shifts — merge, never rebase/reset, on
+fork main.** Executing procedure: `upstream-merge-runbook.md` (freeze gate,
+roles, conflict classes, migration-union rule, semantic-triage defaults) —
+re-homed from the archived compiler runbook, where it had been stranded since
+the 2026-08-28 S3 cutover. SKILL.md §Upstream relations items 1/2/6 carry the
+one-line summaries only (lens A3 v0.4.89: one concept, one home). The
+REBASE-PORT procedure below is RETIRED — kept for PR-chain ports only (harvest
+branches onto upstream PR heads, where force-push-with-lease applies to the PR
+BRANCH, never to fork main).
 
 ### Watch — every build cycle
 
@@ -270,35 +279,11 @@ to fork main).
 
 ### Port — REBASE-PORT model (RETIRED for fork main 2026-09-02; PR-branch chains only)
 
-1. BACKUP REF FIRST, always: `git -C ~/opencrabs branch backup/pre-port-<date> origin/main`
-2. Classify EVERY fork-only commit over `adolfousier/main..origin/main`:
-
-   | Verdict | Test | Action |
-   |---|---|---|
-   | absorbed | patch-id match OR title-twin inside upstream's new commits | DROP |
-   | superseded | upstream reimplemented it better (read his commits) | DROP |
-   | survivor | neither test hits | PORT |
-
-3. Temp worktree off `adolfousier/main` → cherry-pick survivors in CHRONOLOGICAL
-   order. Conflict on a pick → triage: collides with maintainer's redesign =
-   DROP permanently and log why; genuinely additive = resolve keep-both, then
-   VERIFY THE SEAM COMPILES (brace-level check — the 2026-08-26 TaskScope seam
-   bug shipped a broken concat) before continuing.
-4. Port-seam evidence = pr-checks GREEN with zero errors in ported lines
-   (modum RETIRED 2026-08-28). Warnings in files no ported commit touches =
-   upstream noise; note them, don't chase. Fixup commits carry the EXECUTING
-   lane's Session-Id trailer.
-5. Force-push WITH LEASE:
-   `git push --force-with-lease=main:<old-tip> origin main`
-6. Verify carrier dispatch still works and proof-dispatch the ported tip
-   before reporting done.
-7. Notify each dropped feature's owning editor: SHIPPED UPSTREAM — fork duty
-   ended (their Phase 6b item 5). Record verdicts next to `baseline.json`.
-
-Boundary: port-seam conflict fixups only — keep-both resolutions on
-genuinely-additive picks + the SEAM-COMPILES brace-level verification; never
-feature logic, never new behavior (ex-ROLE_EXCEPTION, bounded the same way).
-Anything beyond a port seam → editor work.
+Full 7-step procedure (backup ref, absorbed/superseded/survivor classification,
+chronological cherry-pick + SEAM-COMPILES verification, force-with-lease,
+editor notification) lives in `upstream-merge-runbook.md` §Port — moved there
+v0.4.96 (lens B-F16, one concept one home). This lane owns the DECISION to
+port, not the mechanics.
 
 ### Parity — after every upstream merge/port
 
@@ -312,7 +297,7 @@ REMOVED, order cc100dc6; carrier branch is the sole build lane; oc-ci-parity
 
 Moved from editor.md §CI-wait — these bind SUPERVISOR waiters and any detached
 lane polling. The editor carries its OWN full set in editor.md §CI-wait
-(items 1–16 since v0.4.90 — 14th = dispatch-receipt gate, 15th = solo-surface
+(items 1–16 since v0.4.91 — 10th = dispatch-receipt gate, 15th = solo-surface
 rule, 16th = PR-state receipt law; lens B F10, v0.4.79: the "editor keeps items 1–3"
 partition is retired; count re-verified lens A18 v0.4.89). Cross-references to these items use the W-prefix to
 avoid collision with the editor's local numbering.

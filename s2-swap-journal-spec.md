@@ -39,7 +39,7 @@ last present line = last completed step.
 | # | step | fields | when |
 |---|------|--------|------|
 | 1 | `dispatch` | (existing) order sha, run_id | dispatch lands |
-| 2 | `consent` | sha, kind=deploy, msgid, topic, quote | swap start — copied verbatim from the ledger row that authorizes this attempt |
+| 2 | `consent` | sha, kind=deploy, msgid, topic, quote | **RETIRED 2026-08-28 18:50Z** (superseded by `auto-swap` — see amendment above; kept for historical journal parsing) |
 | 3 | `backup` | backup_path, backup_sha256, bytes | immediately after backup created. Skip → exit≠0 + skipped_reason; prod swap MUST NOT proceed |
 | 4 | `verify` | run_id, source_ref, artifact_sha256, features, verify_exit, provenance | after oc-artifact-verify; verify_exit≠0 HALTS |
 | 5 | `install` | old_sha256, new_sha256, bytes, method=install+mv | after atomic mv |
@@ -73,7 +73,7 @@ as an incident. No receipt post before the stamp lands.
 
 `kill -9` a staging swap mid-flight. From journal + deployed.* markers ALONE an
 operator must answer: which binary is on disk, which step crashed, and whether
-consent covered the attempt. Any answer requiring chat history = spec not met.
+auth (auto-swap) covered the attempt. Any answer requiring chat history = spec not met.
 
 ## Fan-out legs (re-homed from SKILL.md §Session-notify loop, v0.4.80 — lens B F4)
 

@@ -91,3 +91,35 @@ refuse-delivery-to-new-owner, #19 redirect-on-claim, #23 `session notify`
 CLI, #31 trailer reclaim — plus both sides' independent #1226
 compaction/followup patches. Auto-keep: adolfo's merges of harvest PRs
 #1258/#1266/#1268/#1269/#1274/#1275.
+
+## Port — REBASE-PORT model (RETIRED for fork main 2026-09-02; PR-branch chains only)
+
+1. BACKUP REF FIRST, always: `git -C ~/opencrabs branch backup/pre-port-<date> origin/main`
+2. Classify EVERY fork-only commit over `adolfousier/main..origin/main`:
+
+   | Verdict | Test | Action |
+   |---|---|---|
+   | absorbed | patch-id match OR title-twin inside upstream's new commits | DROP |
+   | superseded | upstream reimplemented it better (read his commits) | DROP |
+   | survivor | neither test hits | PORT |
+
+3. Temp worktree off `adolfousier/main` → cherry-pick survivors in CHRONOLOGICAL
+   order. Conflict on a pick → triage: collides with maintainer's redesign =
+   DROP permanently and log why; genuinely additive = resolve keep-both, then
+   VERIFY THE SEAM COMPILES (brace-level check — the 2026-08-26 TaskScope seam
+   bug shipped a broken concat) before continuing.
+4. Port-seam evidence = pr-checks GREEN with zero errors in ported lines
+   (modum RETIRED 2026-08-28). Warnings in files no ported commit touches =
+   upstream noise; note them, don't chase. Fixup commits carry the EXECUTING
+   lane's Session-Id trailer.
+5. Force-push WITH LEASE:
+   `git push --force-with-lease=main:<old-tip> origin main`
+6. Verify carrier dispatch still works and proof-dispatch the ported tip
+   before reporting done.
+7. Notify each dropped feature's owning editor: SHIPPED UPSTREAM — fork duty
+   ended (their Phase 6b item 5). Record verdicts next to `baseline.json`.
+
+Boundary: port-seam conflict fixups only — keep-both resolutions on
+genuinely-additive picks + the SEAM-COMPILES brace-level verification; never
+feature logic, never new behavior (ex-ROLE_EXCEPTION, bounded the same way).
+Anything beyond a port seam → editor work.

@@ -2,7 +2,7 @@
 
 **Owns:** binding owner directives for opencrabs-dev work (sync policy, upstream PR law, builds/carriers, cargo prohibition, telegram surface law, tool logging, gates, editors, triage, cadence). Re-homed here from ops AGENTS.md/MEMORY.md per owner order 2026-09-02. Where a ruling's full text already lives canonically in another skill file, this file carries only a pointer — one concept, one home.
 
-**Thematic index** (lens B-17/G-F9 v0.4.90 — file is flat; jump via section name). **[LANE] tag (v0.4.95):** sections every worker MUST read in full at spawn/compaction reload (editor.md/triage.md/toolsmith.md/supervisor.md RELOAD LAW v0.4.95):
+**Thematic index** (lens B-17/G-F9 v0.4.90 — file is flat; jump via section name). **[LANE] tag (v0.4.95):** sections every worker MUST read in full at spawn/compaction reload (editor.md/triage.md/toolsmith.md/supervisor.md RELOAD LAW v0.4.95). EXCEPTION (v0.4.96, lens B-F1): the SUPERVISOR re-reads THIS ENTIRE FILE IN FULL (~36 kB — it owns and rules on the directives; the other three roles may use the thematic-index minimum for non-[LANE] sections):
 **Remotes & sync** (remotes, merge-resolution) · **Upstream** (issue filings, PR base-Lint, cross-fork PR, PR naming) · **Builds & ships** (S3/oc-deploy, swap-head signature, swap-sha coverage, features-compat gate, hotfix REDs, no auto-rollback) · **Process & verification** (stage-entry consent, attribution guard, inherited-claim pillars, truncated-output rule, post-compaction reload, what-now/next) · **Channels** (telegram surface law, telegram_send addressing/TO-BE, post-swap notify, cross-lane delivery cadence, tool logging) · **Lanes** (creating new editors, tool-problem reports/Triage, cadence boundary, parked issues, brain-scrub, discussion links, every-turn verdicts, rule-text provenance, daemon no-reap).
 
 <!-- source: AGENTS block1 (remotes/upstream/source-work/impl-comment) -->
@@ -76,7 +76,7 @@ Every PR this fleet opens carries a type prefix in the title so upstream release
 Applies to upstream (adolfousier/opencrabs) AND fork PRs. New branches mirror the type in the slug: `leshchenko1979/fix/<slug>` / `feat/<slug>` / `chore/<slug>` (existing branches untouched). Retro-check 2026-08-30: upstream PR #1265 already conforms (`fix(plan): …`). Procedure detail: `/opencrabs-dev` skill, editor.md Phase 7.
 ## CI-wait discipline + actor attribution (owner 2026-08-30 — fix batch)
 
-Canonical: editor.md §CI-wait discipline & actor attribution (items 1–9: gh-watch ban → oc-prchecks, `OC_ACTOR` export on every oc-* call, pr-checks concurrency group, terminal-state gating, rc-at-top-level, waiter self-checks, checkout-ref-is-terminal-truth) + supervisor.md §CI-wait & waiter discipline (W1–W6, oc-waiter arm standard) + SKILL.md §session_notify DELIVERY MODES (notify form, `--interrupt` for mid-turn operational wakes). Fleet-directives carries no extra text.
+Canonical: editor.md §CI-wait discipline & actor attribution (items 1–16: gh-watch ban → oc-prchecks, `OC_ACTOR` export on every oc-* call, pr-checks concurrency group, terminal-state gating, rc-at-top-level, waiter self-checks, checkout-ref-is-terminal-truth … 10th = dispatch-receipt gate, 15th = solo-surface rule, 16th = PR-state receipt law) + supervisor.md §CI-wait & waiter discipline (W1–W6, oc-waiter arm standard) + SKILL.md §session_notify DELIVERY MODES (notify form, `--interrupt` for mid-turn operational wakes). Fleet-directives carries no extra text.
 
 ## Creating new editors (owner order 2026-09-01 21:56Z)
 
@@ -96,7 +96,7 @@ Trigger: a NEW area is discussed and a research/code task needs doing, and NO ex
 
 **The intake lane for tool anomalies is OC DEV TRIAGE (v0.4.86 carve-out, owner "Go with Option A" 2026-09-06); the supervisor of record remains OC DEV HQ.** Owner order 2026-09-03 20:31Z: "we do have a supervisor lane — it's OC DEV HQ" — that identity is unchanged for ESCALATION (semantic/KERNEL verdicts, rulings); the interrupt-shaped intake moved to the Triage lane so HQ keeps deep-work windows. Workers/editors route tool-use anomaly reports (failed invocations, wrong args, false journal rows, misreads that survive into claims, unbacked persistence claims) to the OC DEV TRIAGE session via `session_notify` (discover the session via session_search — never uuid-from-memory) — never lane-status-only, and never to an ad-hoc "carrier tools" chat as supervisor (superseded interim routing, 2026-09-03 19:16–20:13Z; carrier-tool channel remains a valid NOTIFICATION target, not the supervisor of record). Journal/worker vocabulary fixes authored by HQ flow to the TOOLSMITH lane for execution (tool code); the carrier-tool channel was promoted to the TOOLSMITH lane at v0.4.87 (owner "Go toolsmith" 2026-09-06); HQ-authored skill text still lands via the TRIAGE lane's intake, never as a direct edit.
 
-Workers/editors report tool failures, inconsistencies, and quirks to the **TRIAGE lane (OC DEV TRIAGE)** — `QUIRK: <tool> <observed> BECAUSE <expected>` + evidence, same turn (skill: triage.md §Duty T2, ex supervisor.md §Duty 7 items 5–6, editor.md lane duty). The Triage lane's duty on receipt — ACK, verify evidence against disk/logs, route the FIX (skill `tools/` CLI code → the TOOLSMITH lane; every other area → owning editor lane by TOPIC name), stamp `idea-verdict` ROUTED or REJECT — lives verbatim in `triage.md` §Duty T2; THIS FILE CARRIES NO PROCEDURE COPY.
+Workers/editors report tool failures, inconsistencies, and quirks to the **TRIAGE lane (OC DEV TRIAGE)** — `QUIRK: <tool> <observed> BECAUSE <expected>` + evidence, same turn (skill: triage.md §Duty T2, editor.md lane duty). The Triage lane's duty on receipt — ACK, verify evidence against disk/logs, route the FIX (skill `tools/` CLI code → the TOOLSMITH lane; every other area → owning editor lane by TOPIC name), stamp `idea-verdict` ROUTED or REJECT — lives verbatim in `triage.md` §Duty T2; THIS FILE CARRIES NO PROCEDURE COPY.
 
 ## Cadence boundary is stamped at review consolidation
 
@@ -212,6 +212,7 @@ AND explicit `thread_id` (for forum-enabled chats). Never omit either.
 - `thread_id: null` (explicit General) is the only sanctioned way to target
   General; blind omission is not.
 
+## telegram_send origin-default + landing echo — TO-BE target states (owner rulings 2026-09-07; tool changes, NOT lane law — the [LANE] AS-IS rules above govern until these ship)
 
 Target state for opencrabs-dev (tool change, NOT process law — the AS-IS rule
 above governs until this ships): omitted `chat_id` + `thread_id` = send goes
@@ -235,3 +236,4 @@ calling model, enabling self-correction without a human complaint.
 
 Complements the omission-semantics target above: omission semantics make the
 route deterministic; landing echo makes the outcome observable.
+

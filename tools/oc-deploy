@@ -295,6 +295,11 @@ STUB
     "$SELF_BIN" ship --sha "$PHANTOM" 2>&1)"; check_rc "ship-phantom-sha" $? 1
   check_has "ship-phantom-msg" "$out" "sha not found in this repo"
   grep -q "PLAN: ship" <<<"$out" && { fail=$((fail+1)); echo "SELFTEST FAIL: phantom sha produced plan lines"; } || pass=$((pass+1))
+  # E-F1 (v0.4.96): ship with poll-only flags must die 2 (no silent ignore)
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git"     OC_DEPLOY_CARRIER="$SD/tools/carrier"     "$SELF_BIN" ship --sha "$SHA2" --wait 30 2>&1)"; check_rc "ship-wait-refused" $? 2
+  check_has "ship-wait-msg" "$out" "--wait is poll-mode only"
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git"     OC_DEPLOY_CARRIER="$SD/tools/carrier"     "$SELF_BIN" ship --sha "$SHA2" --notify-session aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa 2>&1)"; check_rc "ship-notify-refused" $? 2
+  check_has "ship-notify-msg" "$out" "--notify-session is poll-mode only"
   # 4b. carrier read FAIL -> ship aborts (KERNEL D2: no silent fallback set)
   (cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
     OC_DEPLOY_CARRIER="$SD/tools/carrier-fail" \
@@ -1063,8 +1068,10 @@ green_leg() { # $1=run id $2=built sha — one notify per contributing session
   feat="$(jq -r '.features // "-"' "$DEPLOYED_META" 2>/dev/null)"
   range="${prev:-?}..${bsha}"
   local ATTRIB_RC=0 ATTRIB_OUT=""
-  ATTRIB_OUT="$("$ATTRIB" --repo "$REPO_DIR" --deployed --ledger "$LEDGER" 2>/dev/null)" || ATTRIB_RC=$?
-  rows="$(printf '%s\n' "$ATTRIB_OUT" | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}')"
+  # E-F3 (v0.4.96, lens E): single projection shape — call oc-attrib --contributors directly,
+  # no private awk copy of the TSV projection (column drift in oc-attrib used to re-break fanout)
+  ATTRIB_OUT="$("$ATTRIB" --repo "$REPO_DIR" --deployed --ledger "$LEDGER" --contributors 2>/dev/null)" || ATTRIB_RC=$?
+  rows="$ATTRIB_OUT"
   [ -n "$rows" ] || { jline contributors 3 "{\"range\":\"$range\",\"error\":\"attrib-fail-or-empty\"}"; die 3 "fanout: oc-attrib returned nothing for deployed range $range"; }
   sessions="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$/ {print $1}' | LC_ALL=C sort -u)"
   jline contributors 0 "{\"range\":\"$range\",\"sessions\":[$(printf '%s\n' "$sessions" | sed '/^$/d' | sed 's/.*/"&"/' | paste -sd, -)]}"
@@ -1107,7 +1114,7 @@ red_leg() { # $1=run id $2=run json — RED blame attribution + suspect cc (issu
     while IFS= read -r uuid; do
       [ -n "$uuid" ] || continue
       notify_one "$uuid" contributor "$title" "$text" "$run"
-    done <<< "$(git -C "$REPO_DIR" log --format='%b' "$range" 2>/dev/null | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | LC_ALL=C sort -u)"
+    done <<< "$(git -C "$REPO_DIR" log --format='%H' "$range" 2>/dev/null | while IFS= read -r cs; do oc_session_trailer "$(git -C "$REPO_DIR" log -1 --format='%B' "$cs" 2>/dev/null)"; done | sed '/^$/d' | LC_ALL=C sort -u)"
     return 0
   fi
   # blame each site at head_sha -> culprit sha -> Session-Id trailer
@@ -1120,8 +1127,7 @@ red_leg() { # $1=run id $2=run json — RED blame attribution + suspect cc (issu
       jline unowned 0 "{\"site\":\"$site\",\"run\":\"$run\"}"
       UNOWNED=$((UNOWNED+1)); continue
     fi
-    cu="$(git -C "$REPO_DIR" log -1 --format='%b' "$culprit" 2>/dev/null \
-      | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)"
+    cu="$(oc_session_trailer "$(git -C "$REPO_DIR" log -1 --format='%B' "$culprit" 2>/dev/null)")"
     if [ -z "$cu" ]; then
       jline unowned 0 "{\"site\":\"$site\",\"run\":\"$run\",\"commit\":\"$culprit\"}"
       UNOWNED=$((UNOWNED+1)); continue
@@ -1134,8 +1140,7 @@ red_leg() { # $1=run id $2=run json — RED blame attribution + suspect cc (issu
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     suspects="$(git -C "$REPO_DIR" log --format='%H' "$range" -- "$f" 2>/dev/null | while IFS= read -r cs; do
-      git -C "$REPO_DIR" log -1 --format='%b' "$cs" 2>/dev/null \
-        | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1
+      oc_session_trailer "$(git -C "$REPO_DIR" log -1 --format='%B' "$cs" 2>/dev/null)"
     done | sed '/^$/d' | LC_ALL=C sort -u)"
     while IFS= read -r s; do
       [ -n "$s" ] || continue
@@ -1649,7 +1654,7 @@ watch_run() { # explicit `oc-deploy watch [--with-delta]` ; exit 0 clean | 2 str
 
 MODE="${1:-}"; [ $# -gt 0 ] && shift
 # C-F5 (v0.4.71): --help / -h exits 0 on stdout, before any validation
-case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
+case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
 # issue #24 D1: contributors takes its own arg shape (positional range /
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. Kill-file check already ran above.
@@ -1669,7 +1674,7 @@ while [ $# -gt 0 ]; do
     --wait)     WAIT_SECS="${2:-}"; shift ;;   # C-#2: poll blocks until a NEW green run (or timeout, rc 5)
     --notify-session) [ -n "${2:-}" ] || die 2 "--notify-session needs a session uuid"; NOTIFY_SESSION="${2:-}"; shift ;;   # C-#2: session uuid woken on handoff/timeout; guard lens C MED-3 (v0.4.79)
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
-    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
     *)          die 1 "unknown arg: $1" ;;
   esac
   shift || true
@@ -1707,7 +1712,7 @@ if [ "$MODE" = ship ] && [ -n "$FEATURES" ] && [ -f "$DEPLOYED_META" ]; then
     if [ "$(printf '%s' "$DEP_FEATS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | sort -u)" \
       != "$(printf '%s' "$FEATURES" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | sort -u)" ]; then
       if [ "$FEATURES_EXPLICIT" = 1 ]; then
-        shadow_log ship "$FEATURES" "$FEATURES" "features-mismatch-refused"
+        shadow_log ship "-" "$FEATURES" "features-mismatch-refused"
         die 2 "explicit --features '$FEATURES' != deployed '$DEP_FEATS' (deployed.meta.json) — refusing pre-dispatch: artifact name embeds features verbatim, this build could never be swapped. Deploy a matching set first or pass the deployed set."
       else
         shadow_log ship "-" "$FEATURES" "features-default-corrected:$DEP_FEATS"
@@ -1721,6 +1726,12 @@ fi
 case "$MODE" in
   # ------------------------------------------------------------------ ship --
   ship)
+    # E-F1 (v0.4.96): --wait / --notify-session are POLL-mode flags; ship mode
+    # parses them mode-agnostically and used to SILENTLY IGNORE them — an
+    # operator passing `ship --wait N` believed a poll chain would follow.
+    # Fail fast instead of ignoring (die 2 = usage).
+    [ "$WAIT_SECS" = 0 ] || die 2 "--wait is poll-mode only; ship does not poll (chain the poll leg explicitly)"
+    [ -z "$NOTIFY_SESSION" ] || die 2 "--notify-session is poll-mode only; ship does not poll (chain the poll leg explicitly)"
     # Duty-6 lens F task 3: ship must NEVER silently adopt CWD HEAD — an
     # operator shipping from the wrong directory pushes an unintended sha.
     # --sha is mandatory; the sha must also be contained in the fork main
@@ -1868,5 +1879,5 @@ case "$MODE" in
     watch_run "${WITH_DELTA:-0}"
     ;;
   --selftest|selftest) selftest "$@" ;;
-  *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)" ;;
+  *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)" ;;
 esac

@@ -2,6 +2,13 @@
 
 **Load only after SKILL.md confirmed the role is EDITOR.**
 
+> **RELOAD LAW (v0.4.96, lens B-F2/G-5):** after ANY context compaction or
+> session spawn — not only at claim time (Phase 1 step 0) — re-read from disk,
+> IN FULL: `SKILL.md` + this file + `fleet-directives.md` (thematic index
+> minimum; every `[LANE]`-tagged section in FULL). Same law as the other three
+> roles; this header is the in-file trigger a compacted mid-task editor hits
+> even when it never re-claims.
+
 Scope: work from an issue filed on the FORK (`leshchenko1979/opencrabs` — the issues home;
 upstream receives PRs only), fix the code in a
 worktree, gate it via the CI gate (pr-checks),
@@ -66,7 +73,7 @@ editor-facing duties:
   (OC DEV TRIAGE)**, not the idea box: `session_notify` to the Triage session
   (discover via `session_search` — never uuid-from-memory), format
   `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>` + evidence
-  (triage.md §Duty T2, ex supervisor.md §Duty 7 items 5–6). Report the SAME TURN it bites you; do
+  (triage.md §Duty T2). Report the SAME TURN it bites you; do
   not retry-around silently, do not self-patch — the Triage lane verifies,
   ACKs, and routes the fix to the owning executor — skill `tools/` CLI code
   to the TOOLSMITH lane (OC DEV TOOLSMITH, v0.4.87), everything else to the
@@ -138,7 +145,7 @@ supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
    run id is witnessed (API run-search/job-name decode for a recovered
    mid-flight invocation). Arming a waiter or wiring notify on an
    un-receipted dispatch creates an orphan-class wait: the waiter rules
-   (item 10/W-rules) validate the WAITER, this gate validates the DISPATCH
+   (items 4/11 + supervisor W-rules) validate the WAITER, this gate validates the DISPATCH
    first. Evidence: the 2026-09-07 `--notify-session` invented-flag
    near-miss — the flag sailed through waiter arming because nothing
    asserted the dispatch itself had landed.
@@ -592,8 +599,8 @@ since v0.4.37; `[session-notify from=<uuid>]` header) means your
 commits are in it — prove the FEATURE works. This phase produces SMOKE TEST
 evidence (SKILL.md Test ontology): behavioral, against the RUNNING binary,
 zero cargo. CODE TESTS (fmt/clippy/cargo test) are a different kind, CI-only —
-Phase 5 (Phase 7 step 2c reuses it on upstream PR heads). The binary is live right here (`opencrabs-ops` user unit) —
-no cargo needed.
+Phase 5 (Phase 7 step 2c reuses it on upstream PR heads). The binary is live
+right here (`opencrabs-ops` user unit).
 
 1. Read run id + built sha from the notification body. **If the daemon bounced**
    (any restart since your last turn), RE-SURFACE lazy tool schemas via
@@ -807,12 +814,13 @@ Rules:
   FORWARD on the same PR or the PR is closed — no draft limbo. A MERGED PR is
   closed forever: follow-up work = new branch + new PR, NEVER extend a merged
   branch.
-- **BUILD TRIGGERS = exactly TWO, no exceptions (A3 owner ruling 2026-08-29):**
-  no direct quick-build PR-head dispatch; ORDER gate 3 (CONTAINMENT,
-  oc-order-validate) rejects any PR-head sha — PR-head compile+lint evidence
-  = step 2c's pr-checks dispatch (runs on ANY branch ref). The workflow yml
-  lives ONLY on the carrier branch `ci/quick-build-linux` — never fork main,
-  never the PR-head branch: zero infra commits in Adolfo's diff.
+- **BUILD TRIGGERS = exactly TWO, no exceptions (A3 owner ruling 2026-08-29;**
+  full rule + rationale = SKILL.md §Hard rules BUILD TRIGGERS): no direct
+  quick-build PR-head dispatch; ORDER gate 3 (CONTAINMENT, oc-order-validate)
+  rejects any PR-head sha — PR-head compile+lint evidence = step 2c's
+  pr-checks dispatch (runs on ANY branch ref). The workflow yml lives ONLY on
+  the carrier branch `ci/quick-build-linux` — never fork main, never the
+  PR-head branch: zero infra commits in Adolfo's diff.
 - **PR-BASE-PRE-OPEN (v0.4.71, Duty-4 P6):** an upstream PR head is a harvest
   branch off `adolfousier/main` — NEVER a fork-main-based branch; base +
   atomicity check runs BEFORE the PR opens (a post-open atomicity FALSE

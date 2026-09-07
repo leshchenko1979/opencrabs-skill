@@ -30,7 +30,7 @@ deputization. Expected reply shape: "routed to <lane>", not done-work.
 - NEVER issues binding rulings (supervisor.md Duty 5 stays at HQ); protocol
   disputes escalate, they don't settle here.
 - NEVER messages the owner directly with verdict tables — the Supervisor owns
-  owner-facing verdict batches (Duty 4 item 4 / Duty 7 item 3 discipline).
+  owner-facing verdict batches (Duty 4 / supervisor.md §Duty 7 discipline).
 
 ## Duty T1 — Idea box intake (ex supervisor.md Duty 7 items 1-4)
 
@@ -93,6 +93,28 @@ prompt ("Load opencrabs-dev skill. You are an editor." + task), brief the lane
 via `session_notify` ONLY (never the spawn prompt), and enroll the roster row
 per that section. Owner veto overrides retroactively, as with rulings.
 
+## Duty T6 — Registry writes: schema + seed rules (moved from supervisor.md Duty 2, lens B-F10 v0.4.96)
+
+Triage owns ALL `workers-ledger.json` writes (owner law v0.4.91): claims, ack
+rows, event notes, roster enrollment (T3), `confirmed` flags.
+
+- Canonical path `/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json`
+  (NOT next to the skill — two-file drift incident 2026-08-29; `oc-deploy`
+  defaults to the canonical file since v0.4.38). Flock-serialize via `oc-ledger`.
+- Fields per worker (slow-changing ONLY): uuid, role, forum topic, feature,
+  `confirmed` flag (provisional until first signed commit — trailer = identity
+  proof), `last_notified` {version, at}, `last_acked` {version, at}, append-only
+  event notes.
+- **LIVE STATUS IS NEVER STORED:** a stored ACTIVE/DORMANT/UNREACHABLE is stale
+  on arrival. Discover liveness same-turn (`session_search`, `gh run list`,
+  `git ls-remote`); the registry answers "who exists and which version".
+- Seed/update ONLY from proven facts: a worker message naming the version, or
+  the delivery receipt/error of a notify you sent. Never assume.
+- Ack contract (v0.4.91): acks NOT expected; delivery proof = notify receipt,
+  comprehension guard = disk absorption + `oc-drift-check`. New ack rows opt-in.
+- Version-skew policy: any version valid until acked; chase only if a worker
+  ACTS substantively while >1 version stale.
+
 ## Duty T4 — Enforcement patrols
 
 - **Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12):** the violation
@@ -113,7 +135,7 @@ per that section. Owner veto overrides retroactively, as with rulings.
 
 **Trigger:** every time the Triage lane itself resumes from a context
 compaction (post-compaction turns are otherwise skill-blind — the same gap
-editor items 14/15 and the #125 skill-stamp fix address for editors), FIRST
+editor.md §Mid-cycle skill drift + Phase 1 step 0 and the #125 skill-stamp fix address for editors), FIRST
 action after reloading the skill: sweep the backlog for unclaimed work.
 
 **Procedure:**

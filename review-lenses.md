@@ -112,6 +112,16 @@ on census evidence + owner word (supervisor.md step 7).
      divergence between SKILL.md tool-table rows and actual behavior (flags,
      rc, paths). Findings cite file:line.
 
+#### FAMILY: EFFICIENCY — SKILL.md size budget (lens B F3/F18, v0.4.96)
+
+   - **SKILL.md BUDGET RULE:** SKILL.md is the always-loaded router — every
+     line costs 4x (all four roles re-read it IN FULL under the RELOAD LAW).
+     It carries: hard rules, ontology/glossary, tool-table PURPOSE-only rows,
+     role routing, load paths. Executable procedure, verb vocabularies, and
+     step-by-step mechanics belong in the owning role file or reference page
+     (RC-CONTRACT.md = SOLE tool register). Every Duty-6 pass re-weighs
+     SKILL.md against this rule; growth beyond router scope = findings.
+
 #### FAMILY: ARTIFACTS — files, state, ledgers, flags (deletion verdicts — the family IS the owner gate; C usage-log YAGNI evidence feeds it from TOOLS)
 
    - **Reviewer D — DELETION SAFETY:** enumerate retired / stale /

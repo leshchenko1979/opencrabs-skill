@@ -12,8 +12,7 @@ toolsmith" 2026-09-06), promoted from the carrier-tools editor row (topic
 39171, rostered since 2026-09-01). Owns the skill's CLI tooling under
 `tools/` — the commands every other lane runs: `oc-ledger`, `oc-deploy`,
 `oc-prchecks`, `oc-order-validate`, `oc-tg-audit`, `oc-waiter`, the
-`tools/tests` battery. Builds new tools on owner word or routed verdict;
-fixes the ones that bite.
+`tools/tests` battery. Duty S1 below owns the what/how.
 
 **STRICT SCOPE:** skill markdown + fleet-directives stay Supervisor-only
 (single-writer law). The OpenCrabs daemon/carrier source (`~/opencrabs`) is
@@ -60,7 +59,7 @@ Hard discipline for every change:
   new subcommands, changed rc semantics, changed output formats (journal rows,
   stdout contract lines like `RUN <url>` / `run=<id>`) — the tool's CONSUMERS
   get updated in the same batch: the role-file tool tables (`editor.md` §Tool
-  reference, `toolsmith.md`, `triage.md`/`supervisor.md` where cited),
+  reference, `triage.md`/`supervisor.md` where cited),
   `tools/RC-CONTRACT.md` rows, and any dependent tool that parses the changed
   output (e.g. oc-waiter greps oc-prchecks' `RUN` line). A tool change whose
   interface drifted from its documented use is an incomplete change — battery
@@ -70,9 +69,10 @@ Hard discipline for every change:
 
 ## Duty S2 — Battery stewardship
 
-`tools/tests/run.sh` (the tooling half of the review battery — "review
-battery" = the full `bash tools/tests/run.sh` selftest suite every version
-bump must pass GREEN, lens A9 v0.4.89 definition; lenses E/F)
+`tools/tests/run.sh` — the **SELFTEST BATTERY** (the full `bash
+tools/tests/run.sh` suite every version bump must pass GREEN; lens A9
+v0.4.89 definition, renamed v0.4.96 to kill the "review battery" name
+collision with the Duty-6 review cycle; lenses E/F)
 runs on every tool change and on Supervisor request; failures route back to
 the offending change, never waived. Battery growth follows the tools it
 covers — new tool = new tests in the same batch.

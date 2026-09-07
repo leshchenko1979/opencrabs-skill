@@ -50,7 +50,7 @@ Moved from `~/.opencrabs/profiles/ops/MEMORY.md` — still-valid dev lessons, st
 Historical DONE: mermaid.ink → local mermaid-render+resvg (feature `local-mermaid`, default OFF), delivered via reqwest::multipart `attach://<id>` upload. Merged to fork main `961b41a6`, ORDER build handed to Compiler `e756b84b`. Plan archived 6/6.
 
 Sharp lessons that cost the session:
-1. **Feature-excluded code must be cfg-gated, not just unreferenced.** Once `prevalidate` (mermaid.ink URL path) was reachable only from a `#[cfg(not(feature="local-mermaid"))]` branch, it became dead under CI's `cargo clippy --locked --all-features -- -D warnings` → hard failure. Any helper used only by a cfg'd-out branch (plus its exclusive consts) needs the same `#[cfg(not(feature))]`. Verified via `modum check --baseline`.
+1. **Feature-excluded code must be cfg-gated, not just unreferenced.** Once `prevalidate` (mermaid.ink URL path) was reachable only from a `#[cfg(not(feature="local-mermaid"))]` branch, it became dead under CI's `cargo clippy --locked --all-features -- -D warnings` → hard failure. Any helper used only by a cfg'd-out branch (plus its exclusive consts) needs the same `#[cfg(not(feature))]`. Verified via `modum check --baseline`. (NOTE v0.4.96: `modum` is a RETIRED tool — cited here as historical verification method only.)
 2. **Plan-task subagents overclaim (3 of 6 this run, Tasks 3/4/5/6).** Every "task done" from a spawned worker was checked against the real tree once and found empty. Do the reconciling yourself; never record a verdict on a worker's word.
 3. **Feature deps require a committed Cargo.lock** or CI `--locked` fails. The lock was actually refreshed on a toolchain box and committed (91c32815) — this REPLACED the earlier "lockfile stale" blocker. Verify the lock is committed before hand-off.
 4. On rebase, merged my multipart fn with main's `reply_to` threading (#1230): the multipart form must also carry `reply_parameters` top-level field, else reply-targeting is dropped on the bytes path.
@@ -64,7 +64,7 @@ Never certify a RENDERER from telemetry — `path=sendRichMessage` proves transp
 
 ## #1226 round-3 hotfix — E0728 burn (2026-08-27 ~01:15Z)
 - Cycle-21 RED: ab56e86a shipped `pending_followups.lock().await` inside sync `suggestion_surface_is_stale` → E0728, exit 101 (run 33028139194).
-- Root cause of escape: modum is lint-only (policy/advisory) — it CANNOT catch Rust type errors. No local cargo. Async/sync signature correctness across state accessors is hand-verified ONLY.
+- Root cause of escape: modum (RETIRED tool) was lint-only (policy/advisory) — it CANNOT catch Rust type errors. No local cargo. Async/sync signature correctness across state accessors is hand-verified ONLY.
 - Rule going forward: any new state.rs accessor that touches an async Mutex must be `async fn` end-to-end AND every caller grepped + `.await`ed BEFORE commit (signature + callers move together, verify call-site context compiles logically: let-chain `&& expr.await` is legal, postfix `.await`).
 - Fixed as a0091323 (async flip + single caller await), origin/main ff'd to a0091323a972617b653eb6bacacf9cdc168ae773, worktree oc-wt-e0728 removed, fresh ORDER dispatched + validated.
 - Compiler queue races itself: its dispatch notice ("in_progress") arrived AFTER its sealed RED verdict — settle contradictory compiler claims against gh run API (`conclusion: failure` was ground truth).
