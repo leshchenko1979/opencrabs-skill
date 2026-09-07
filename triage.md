@@ -103,6 +103,30 @@ per that section. Owner veto overrides retroactively, as with rulings.
   route the correction to the offending lane, escalate repeat offenders to the
   Supervisor.
 
+## Duty T5 — Post-compaction issue sweep (owner order 2026-09-07 17:23Z, v0.4.92)
+
+**Trigger:** every time the Triage lane itself resumes from a context
+compaction (post-compaction turns are otherwise skill-blind — the same gap
+editor items 14/15 and the #125 skill-stamp fix address for editors), FIRST
+action after reloading the skill: sweep the backlog for unclaimed work.
+
+**Procedure:**
+1. Load this skill (post-compaction law) — then, in the same turn:
+2. `gh issue list -R leshchenko1979/opencrabs --state open` — fresh receipt,
+   never from memory.
+3. Diff the OPEN set against the workers-ledger claim-refs
+   (`grep -c '"issue'` or the claim rows) — an OPEN fork issue with NO
+   open claim-ref is unclaimed backlog.
+4. For each unclaimed issue: route to the owning editor (Duty T2), or if
+   none is obvious, surface the unclaimed set to the Supervisor for
+   dispatch — do NOT let it sit silent (the v0.4.91 gap: "claimed when
+   someone claims it" is not assignment).
+5. Already-claimed issues: no action; the owning editor's chain owns them.
+
+**Never:** close or park an issue on your own authority — closure follows
+the harvest law (fork issue closes only after its upstream PR is filed).
+This sweep SURFACES; it does not dispose.
+
 ## Escalation to the Supervisor (Author lane)
 
 WHAT escalates: ACCEPT-MECHANICAL batch items, KERNEL-SEMANTIC verdicts,

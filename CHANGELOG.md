@@ -1,6 +1,7 @@
 # opencrabs-dev — release history (provenance)
 
-- v0.4.91 (2026-09-07, owner "let's finalise skill changes" 15:07Z): supervisor.md Duty 2 = registry writes → Triage ENTIRELY (owner law; closes the v0.4.86 creation-transfer's registry half; HQ residual deleted), ack contract REVISED (acks no longer expected — notify receipt = delivery proof, drift-check = comprehension guard); Duty 3 = PUSH-ALL-QUIET (every bump → all non-dormant workers quiet, no "touches duties" judgment) + Confirm law (probe-verified: quiet+confirm = no-op watch; confirm reserved for now-mode critical, blocking verdict there); Duty 4 step 2 = reply surface named (session_notify target=HQ full UUID, never own chat). editor.md item 16: PR-state claims need same-turn gh pr view receipt (headRefOid+headRefName+state) — #1431 "auto-updated" phantom, force-push ≠ PR-head move; event+branch+sha ALL match before waiter arm. Battery clean-HEAD 144/0 PASS (1-fail run = TOOLSMITH oc-prchecks WIP, isolated via stash, unrelated).
+## v0.4.91 (2026-09-07, owner "let's finalise skill changes" 15:07Z)
+- supervisor.md Duty 2 = registry writes → Triage ENTIRELY (owner law; closes the v0.4.86 creation-transfer's registry half; HQ residual deleted), ack contract REVISED (acks no longer expected — notify receipt = delivery proof, drift-check = comprehension guard); Duty 3 = PUSH-ALL-QUIET (every bump → all non-dormant workers quiet, no "touches duties" judgment) + Confirm law (probe-verified: quiet+confirm = no-op watch; confirm reserved for now-mode critical, blocking verdict there); Duty 4 step 2 = reply surface named (session_notify target=HQ full UUID, never own chat). editor.md item 16: PR-state claims need same-turn gh pr view receipt (headRefOid+headRefName+state) — #1431 "auto-updated" phantom, force-push ≠ PR-head move; event+branch+sha ALL match before waiter arm. Battery clean-HEAD 144/0 PASS (1-fail run = TOOLSMITH oc-prchecks WIP, isolated via stash, unrelated).
 
 Moved out of SKILL.md frontmatter at v0.4.43 (Duty-6 run-2 finding B6 —
 ~3k tokens of changelog loaded on every role-file claim; history is reference
@@ -364,3 +365,8 @@ Supervisor-lane split: interrupt-shaped duties carved out into a new TRIAGE lane
 - fleet-directives.md: thematic index added (B-17/G-F9 — flat file kept, 6-theme jump list).
 - supervisor.md: CI-wait cross-ref count 1–15 (14th dispatch-receipt gate, 15th solo-surface rule).
 - Doc-only bump: no tools/ changes this version (oc-waiter first-poll-GREEN hole, Session-Id unification, poll --wait check order etc. = TOOLSMITH dispatch, separate version); battery 144/0.
+
+## v0.4.92 (2026-09-07, owner "A. Triage should check new issues after each compaction" 17:23Z — backlog-assignment gap closed)
+- triage.md Duty T5 NEW — **Post-compaction issue sweep** (owner order 2026-09-07 17:23Z): after every compaction, Triage reloads the skill then sweeps OPEN fork issues (`gh issue list`, fresh receipt) against workers-ledger claim-refs; unclaimed set → route to owning editor (T2) or surface to Supervisor. Sweep SURFACES, never disposes — closure stays harvest-law-gated. Closes the v0.4.91 finding: "claimed when someone claims it" is not assignment; an issue could sit silent forever with no sweep duty.
+- supervisor.md Duty-7 pointer updated: idea box AND backlog sweep both live at Triage (T1 + T5).
+- Doc-only bump: no tools/ changes. Battery on clean HEAD: see receipt below.

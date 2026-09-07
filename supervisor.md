@@ -217,7 +217,10 @@ What stays HERE (Supervisor side):
   (convergence beats volume); duplicate ideas stamp ONE event, not N.
 
 Cross-references saying "supervisor.md Duty 7" resolve to `triage.md` T1/T2
-for operations and HERE for batch/verdict ownership.
+for operations and HERE for batch/verdict ownership. Backlog assignment is
+also a Triage duty: **Duty T5 (v0.4.92)** — post-compaction sweep of OPEN
+fork issues against ledger claim-refs; unclaimed → route (T2) or surface
+here for dispatch.
 
 **Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: OPERATES in the
 TRIAGE lane since v0.4.86 (triage.md §Duty T4) — evidence-first audit via
