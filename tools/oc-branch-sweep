@@ -38,6 +38,11 @@ cmd_sweep() {
     *) die 2 "unexpected arg '$1'" ;;
   esac; done
   [ -n "$repo" ] || die 2 "usage: oc-branch-sweep --repo <path> [--base b] [--dry-run] [--keep RE]"
+  # Duty-6 lens F task 8: fail-open fix — an invalid --keep regex used to fall
+  # through to `branch -D` (grep -E dying mid-loop left NOTHING protected).
+  # Validate up front; every protect check below then runs on a known-good RE.
+  printf '%s' "$keep" | grep -Eq "$keep" 2>/dev/null
+  case $? in 0|1) : ;; *) die 2 "invalid --keep regex: '$keep'" ;; esac
 git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die 2 "not a git repo: $repo"
   [ -n "$base" ] || base="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" || base="main"
   git -C "$repo" rev-parse --verify "$base" >/dev/null 2>&1 || die 3 "base branch '$base' not resolvable in $repo"
@@ -102,6 +107,10 @@ cmd_selftest() {
   [ -n "$(git -C "$T/r" branch --list main master)" ]; chk "base-protected" 0 $?
   # clean sweep (nothing left to delete) -> rc 0
   bash "$ME" --repo "$T/r" >/dev/null 2>&1; chk "clean-rc0" 0 $?
+  # Duty-6 lens F task 8: invalid --keep regex -> rc 2 up front, NOTHING deleted
+  git -C "$T/r" checkout -qb doomed
+  bash "$ME" --repo "$T/r" --keep '[' >/dev/null 2>&1; chk "bad-keep-rc2" 2 $?
+  [ -n "$(git -C "$T/r" branch --list doomed)" ]; chk "bad-keep-no-delete" 0 $?
   rm -rf "$T"
   echo "oc-branch-sweep selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
