@@ -29,7 +29,8 @@
 #            prints removed rows on --verbose; refuses unknown sha, exit 1)
 #
 # --dry-run prints the resulting JSON without writing.
-# Exit codes: 0 OK | 1 invocation | 2 CONTRIBUTOR-SCAN-FAIL | 3 WRITE-FAIL/INVALID
+# Exit codes: 0 OK | 1 invocation-noop (bare call, nothing to do) | 2 usage
+# (unknown flag, F-L1 v0.4.77) or CONTRIBUTOR-SCAN-FAIL | 3 WRITE-FAIL/INVALID
 #
 # Deps: jq, git (only for contributor scan).
 # =============================================================================
