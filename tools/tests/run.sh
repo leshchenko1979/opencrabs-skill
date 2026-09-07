@@ -292,12 +292,14 @@ if tool oc-deploy; then
 Session-Id: 99999999-8888-7777-6666-555555555555
 Issue-Ref: #77"
   CTIP="$(git -C "$d/crepo" rev-parse HEAD)"
+  # contributors verb RETIRED (v0.4.91, lens E-2): loud deprecation rc 1, points at oc-attrib.
+  # The working TSV projection is covered by oc-attrib --contributors (single shape now).
   OUTK="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_ATTRIB="$TOOLS_DIR/oc-attrib" \
     "$TOOLS_DIR/oc-deploy" contributors "$CBASE..$CTIP" --repo "$d/crepo" 2>&1)"; rck=$?
-  if [ "$rck" -eq 0 ] && case "$OUTK" in *"99999999-8888-7777-6666-555555555555"*#77*) true ;; *) false ;; esac; then
-    ok "contributors: uuid+issue-ref in TSV (real oc-attrib)"
+  if [ "$rck" -eq 1 ] && case "$OUTK" in *"RETIRED"*"oc-attrib"*) true ;; *) false ;; esac; then
+    ok "contributors: retired verb -> rc1 + loud oc-attrib pointer"
   else
-    bad "contributors chain (rc=$rck, want 0 + uuid + #77)"
+    bad "contributors retired (rc=$rck, want 1 + RETIRED + oc-attrib pointer)"
   fi
   # gh stub: run 222 GREEN (built sha cccc...) + run 666 RED (head from red-head)
   cat > "$SD/gh" <<'GHSTUB'
@@ -390,6 +392,14 @@ if tool oc-deploy; then
   d="$(mktemp -d)"; printf x > "$d/oc-deploy.kill"
   OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-deploy" poll >/dev/null 2>&1
   [ $? -eq 9 ] && ok "kill file -> 9 (first-line brake)" || bad "kill file -> expected 9"
+  # Duty-6 lens F task 5: --wait validated BEFORE any RED-scan side effects —
+  # bad --wait dies rc1 with no fanout/state writes (kill-file brake still
+  # applies first, so poll with kill file + bad --wait -> 9, not 1).
+  d2="$(mktemp -d)"
+  OC_DEPLOY_STATE_DIR="$d2" OC_DEPLOY_GH=/bin/false "$TOOLS_DIR/oc-deploy" poll --wait abc >/dev/null 2>&1
+  [ $? -eq 1 ] && ok "poll bad --wait -> 1 before side effects" || bad "poll bad --wait -> expected 1"
+  [ "$(ls -A "$d2" 2>/dev/null)" = "oc-deploy-shadow.log" ] && ok "poll bad --wait: no state writes beyond shadow log" || bad "poll bad --wait wrote state: $(ls "$d2")"
+  rm -rf "$d2"
   rm -rf "$d"
   # stale pinned ref: diverge remote -> ship --execute (pins div tip) -> restore
   # remote -> plan MUST report FF ok (old code: rc 2 via resurrected stale ref)
