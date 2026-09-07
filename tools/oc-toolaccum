@@ -17,7 +17,7 @@ set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
 _OC_DIR="$(cd "$(dirname "$0")" && pwd)"
 _OC_LIB="$_OC_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-toolaccum" "$@"; else oc_log_finish() { :; }; fi
-trap 'oc_log_finish $?' EXIT
+trap 'rc=$?; [ -n "${_json_tmp:-}" ] && rm -f "$_json_tmp"; oc_log_finish $rc' EXIT
 
 LOG_DEFAULT="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
 
@@ -34,7 +34,23 @@ cmd_accum() {
     *) if [ -z "$uuid" ]; then uuid="$1"; fi; shift ;;
   esac; done
   [ -n "$uuid" ] || die 2 "usage: oc-toolaccum <uuid> [--days N] [--log <path>] [--threshold N]"
+  local _json_tmp=""
   [ -f "$log" ] || die 3 "tools.log not found: $log"
+  # Duty-6 lens F task 9: rogue non-JSON lines (the 08-29 stamp-writer wrote raw
+  # TSV text into the canonical log) made jq -s abort on the WHOLE file -> rc 3
+  # "unparseable", blinding the accumulation scan. Pre-pass like oc-ship-audit:
+  # isolate JSON lines, count + name the skipped ones loudly, THEN scan.
+  local json_log bad=0 line
+  json_log="$(mktemp "${TMPDIR:-/tmp}/oc-toolaccum.XXXXXX")" || die 3 "cannot create temp json log"
+  _json_tmp="$json_log"
+  while IFS= read -r line; do
+    case "$line" in
+      "{"*) printf '%s\n' "$line" >> "$json_log" ;;
+      *) [ -n "$line" ] && { bad=$((bad + 1)); echo "oc-toolaccum: SKIPPED non-JSON line: ${line:0:80}" >&2; } ;;
+    esac
+  done < "$log"
+  [ "$bad" -gt 0 ] && echo "oc-toolaccum: $bad non-JSON lines skipped — log format contract violated, scan covers JSON rows only" >&2
+  log="$json_log"
   local cutoff; cutoff="$(date -u -d "-$days days" +%Y-%m-%dT%H:%M 2>/dev/null || date -u +%Y-%m-%d)"
   local tsv flag
   tsv="$(jq -rs --arg u "$uuid" --arg c "$cutoff" '
@@ -77,6 +93,12 @@ cmd_selftest() {
   bash "$ME" nobody --log "$T/tools.log" >/dev/null 2>&1; chk "no-rows-rc0" 0 $?
   bash "$ME" --log "$T/tools.log" >/dev/null 2>&1; chk "usage-rc2" 2 $?
   bash "$ME" u --log "$T/missing" >/dev/null 2>&1; chk "missing-log-rc3" 3 $?
+  # Duty-6 lens F task 9: rogue non-JSON lines are skipped loudly, scan still runs
+  cp "$T/tools.log" "$T/rogue.log"; printf '2026-08-29T16:44:18Z stamp rogue-writer action=ledger-append outcome=ok n=1325\n' >> "$T/rogue.log"
+  bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --log "$T/rogue.log" --threshold 1 > "$T/rogue.out" 2>/dev/null; chk "rogue-still-scans-rc1" 1 $?
+  grep -q 'oc-prchecks (2 failures)' "$T/rogue.out"; chk "rogue-scan-finds-failures" 0 $?
+  bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee --log "$T/rogue.log" > "$T/rogue.all" 2>&1; chk "rogue-clean-rc0" 0 $?
+  grep -q "non-JSON lines skipped" "$T/rogue.all"; chk "rogue-skipped-loudly" 0 $?
   # window filter: old row (2026-08-01, exit 3) must not count — proven by clean-window above at threshold 3
   rm -rf "$T"
   echo "oc-toolaccum selftest: PASS=$P FAIL=$F"
