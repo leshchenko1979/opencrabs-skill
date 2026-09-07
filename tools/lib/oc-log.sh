@@ -126,3 +126,17 @@ oc_log_finish() {
   fi
   return 0
 }
+
+# oc_session_trailer <commit-message-text> — Duty-6 lens F task 2 (v0.4.91 batch)
+# ONE Session-Id convention for ALL tools: git interpret-trailers semantics —
+# the LAST Session-Id trailer wins (trailers are an ordered stack; the last one
+# is the most recent attribution). Replaces the head -1 (oc-order-validate) vs
+# tail -1 (oc-attrib) split that let one quoted-trailer message validate as
+# signed but attribute as unsigned. Falls back to grep semantics when git
+# interpret-trailers is unavailable (non-git context).
+oc_session_trailer() { # stdin/arg: commit message text; stdout: uuid or empty
+  local msg="${1:-}"
+  [ -n "$msg" ] || msg="$(cat)"
+  printf '%s\n' "$msg" | git interpret-trailers --parse 2>/dev/null \
+    | sed -n 's/^[Ss]ession-[Ii][Dd]:[[:space:]]*//p' | tail -1
+}

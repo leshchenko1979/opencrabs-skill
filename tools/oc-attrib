@@ -112,7 +112,7 @@ git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repo: $R
 if [ "$TRAILERS_ONLY" -eq 1 ]; then
   for sha in $(git -C "$REPO" rev-list --reverse "$RANGE"); do
     body="$(git -C "$REPO" show -s --format=%B "$sha")" || exit 3
-    sess="$(printf '%s\n' "$body" | sed -n 's/^Session-Id:[[:space:]]*//p' | tail -1)"
+    sess="$(oc_session_trailer "$body" | tr -d '[:space:]')"   # one-convention helper (Duty-6 lens F task 2)
     [ -n "$sess" ] || sess="(unsigned)"
     printf '%s\t%s\n' "$sha" "$sess"
   done
@@ -128,7 +128,7 @@ TMP="$(mktemp)" || exit 3
 trap '_rc=$?; rm -f "$TMP"; oc_log_finish "$_rc"' EXIT
 for sha in $(git -C "$REPO" rev-list --reverse "$RANGE"); do
   body="$(git -C "$REPO" show -s --format=%B "$sha")" || exit 3
-  sess="$(printf '%s\n' "$body" | sed -n 's/^Session-Id:[[:space:]]*//p' | tail -1)"
+  sess="$(oc_session_trailer "$body" | tr -d '[:space:]')"   # one-convention helper (Duty-6 lens F task 2)
   [ -n "$sess" ] || sess="(unsigned)"
   iss="$(printf '%s\n' "$body" | sed -n 's/^Issue-Ref:[[:space:]]*//p' | tail -1 | tr -d ' ')"
   short="$(printf '%s' "$sha" | cut -c1-7)"
