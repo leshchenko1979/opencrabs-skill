@@ -1,5 +1,11 @@
 # TOOLSMITH — CLI tool lane: makes and fixes the tools every other role uses
 
+**RELOAD LAW (v0.4.95, owner order 2026-09-07 19:47Z):** after compaction or
+spawn, re-read from disk: `SKILL.md` + `toolsmith.md` + `fleet-directives.md`
+(thematic index minimum; every `[LANE]`-tagged section in FULL). This file
+CITES directive law (cadence, scope) — citations are pointers, not
+substitutes; briefs die at compaction, disk doesn't.
+
 **Load only after SKILL.md confirmed the role is TOOLSMITH.** This is the OC DEV
 TOOLSMITH session's standing role — carved out at v0.4.87 (owner word "Go
 toolsmith" 2026-09-06), promoted from the carrier-tools editor row (topic

@@ -272,10 +272,14 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
 ## Phase 1 — Claim on the fork BEFORE editing
 
 0. **Claim-time fresh re-read (v0.4.14, proposal P2)**: FIRST action after
-   claiming — re-read `SKILL.md` + `editor.md` in FULL from disk (never from
-   recalled memory). A claim opens a fresh working window; pre-read memory from
-   earlier turns carries stale mechanics. DONE = both files re-read in full
-   THIS turn.
+   claiming — re-read `SKILL.md` + `editor.md` + `fleet-directives.md` from disk
+   (never from recalled memory) — SKILL.md and editor.md in FULL, fleet-directives
+   at thematic-index minimum with every `[LANE]`-tagged section in FULL. A claim
+   opens a fresh working window; pre-read memory from earlier turns carries stale
+   mechanics. DONE = all three files re-read THIS turn. **RELOAD LAW (v0.4.95,
+   owner order 2026-09-07 19:47Z):** briefing dies at compaction — the binding
+   owner law (cadence, PR naming, telegram surface, upstream etiquette) lives in
+   fleet-directives.md on disk, not in session memory.
 
 1. Search existing issues first — MECHANIZED: `tools/oc-issue-sweep '<query>'`
    (closed-issue hygiene sweep: fork open + fork closed + upstream closed,

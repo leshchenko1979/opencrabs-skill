@@ -2,7 +2,7 @@
 
 **Owns:** binding owner directives for opencrabs-dev work (sync policy, upstream PR law, builds/carriers, cargo prohibition, telegram surface law, tool logging, gates, editors, triage, cadence). Re-homed here from ops AGENTS.md/MEMORY.md per owner order 2026-09-02. Where a ruling's full text already lives canonically in another skill file, this file carries only a pointer — one concept, one home.
 
-**Thematic index** (lens B-17/G-F9 v0.4.90 — file is flat; jump via section name):
+**Thematic index** (lens B-17/G-F9 v0.4.90 — file is flat; jump via section name). **[LANE] tag (v0.4.95):** sections every worker MUST read in full at spawn/compaction reload (editor.md/triage.md/toolsmith.md/supervisor.md RELOAD LAW v0.4.95):
 **Remotes & sync** (remotes, merge-resolution) · **Upstream** (issue filings, PR base-Lint, cross-fork PR, PR naming) · **Builds & ships** (S3/oc-deploy, swap-head signature, swap-sha coverage, features-compat gate, hotfix REDs, no auto-rollback) · **Process & verification** (stage-entry consent, attribution guard, inherited-claim pillars, truncated-output rule, post-compaction reload, what-now/next) · **Channels** (telegram surface law, telegram_send addressing/TO-BE, post-swap notify, cross-lane delivery cadence, tool logging) · **Lanes** (creating new editors, tool-problem reports/Triage, cadence boundary, parked issues, brain-scrub, discussion links, every-turn verdicts, rule-text provenance, daemon no-reap).
 
 <!-- source: AGENTS block1 (remotes/upstream/source-work/impl-comment) -->
@@ -25,7 +25,7 @@
 
 **Cargo prohibition (owner, 2026-08-28)** — canonical full law: editor.md §Box law — no local cargo, ever (PATH / login-shell / PATH-prepend / explicit-path bypasses, disabled rustup tree, rustfmt wrapper only, lint evidence = GREEN pr-checks run). Fleet-directives carries no extra text.
 
-## Telegram surface law (owner 2026-08-28, skill v0.4.31)
+## Telegram surface law (owner 2026-08-28, skill v0.4.31) [LANE]
 
 Canonical full law: SKILL.md §Telegram surface law (v0.4.31). Editor-facing duties: editor.md §Telegram surface law. session_notify is the ONLY inter-role channel; no editor invokes telegram send/edit tools. Fleet-directives carries no extra text — do not restate the law here.
 
@@ -60,7 +60,7 @@ Post-swap smoke FAIL → rollback is the OWNER's call, never mechanical. The swa
 
 Mechanics canonical: `oc-deploy fanout` (GREEN leg at the swap_execute tail, RED leg via poll failed-run scan; idempotent `fanout.state`; drills off via `OC_DEPLOY_NOFANOUT=1`) + s2-swap-journal-spec §Fan-out legs. No manual notify steps anywhere. Ledger path is canonical `opencrabs-dev/workers-ledger.json` — the skill-dir duplicate was deleted 2026-08-29 (v0.4.38); fix shipped FIRST, deletion second.
 
-## Post-compaction skill reload (owner 2026-09-04)
+## Post-compaction skill reload (owner 2026-09-04) [LANE]
 
 After ANY context compaction, the first action before any opencrabs-dev work is reloading this skill (`/opencrabs-dev`, or SKILL.md + fleet-directives.md). Editor spawn briefs must carry this rule; the ops AGENTS.md § "OpenCrabs dev" carries the always-loaded anchor. Rationale: compaction clears the skill from context but not the obligation to follow it; mechanical laws are tool-enforced (order-validate, features-compat, pr-checks) but process law (scope-confirmation-first, approval gates, PR body rules) exists only here.
 
@@ -68,7 +68,7 @@ After ANY context compaction, the first action before any opencrabs-dev work is 
 
 Before disputing the attribution of any shipped artifact (build, deploy, ledger event, commit) — on a `session_notify` wake, after a compaction, or whenever memory and records disagree — re-derive OWN shipped work from durable state FIRST: `opencrabs-dev/workers-ledger.json` claim/fanout events, oc-deploy journal lines + deployed.sha markers. Ledger beats memory; a mismatch is reported, never accused. Origin: post-compaction amnesia made this lane falsely blame oc-attrib/fanout for its own shipped work (retraction logged 2026-08-30, HQ d72bd52d); guard forwarded to owner via HQ topic report — remove on owner order only.
 
-## PR naming convention (owner 2026-08-30)
+## PR naming convention (owner 2026-08-30) [LANE]
 Every PR this fleet opens carries a type prefix in the title so upstream release triage can split bugfixes from features at a glance:
 - `fix:` (or `fix(scope):`) — bug fix; corrects broken behavior
 - `feat:` (or `feat(scope):`) — new capability or behavior change
@@ -122,7 +122,7 @@ Gate 4 (Session-Id trailer, `quick-build-linux.yml` ORDER gates) applies to ever
 
 A swap may only consume an artifact whose exact tree is covered by a GREEN full-gate run (fmt + clippy + lib tests) on that same sha. Build legs may run `--no-tests` **only** with that coverage already on record; otherwise the build leg runs the tests itself. In practice: **swap-mode pr-checks before every swap.** Rationale: run `33792926801` ("success", no-tests) shipped test-RED `f3c03269` into prod, and the same artifact was later auto-consumed by an unordered swap. Note: an earlier HQ message claimed this law was landed as commit `b8145f1` — that commit never existed (unverified claim); the law is landed HERE, verified, first time.
 
-## Features-compat gate — no silent feature-loss swaps (HQ ruling 2026-09-04, MANDATORY)
+## Features-compat gate — no silent feature-loss swaps (HQ ruling 2026-09-04, MANDATORY) [LANE]
 
 `oc-deploy swap-execute` **refuses** any artifact whose feature set drops a feature present in `deployed.meta.json` (exit 4, journal `features-drop-gate`, markers untouched) unless the operator passes `--allow-features-drop` explicitly. Feature *additions* pass freely; *drops* are the failure class. Enforced in-code (selftest 17p/17q). Rationale: the 06:36:06Z rogue swap (run `33844429519`, `features="telegram"` over a live `telegram,code-graph` binary) killed structural memory for 12h — and the 18:57Z f3c03269 swap was the same class (no-tests artifact, auto-consumed). The gate would have refused both.
 
@@ -130,7 +130,7 @@ A swap may only consume an artifact whose exact tree is covered by a GREEN full-
 
 A green main gate does **not** prove a test-GREEN base: carrier hotfix gates run build-no-tests, so a lane whose branch base is hotfix-fresh may hit its first full-gate RED from base faults it doesn't own. Mitigation that works: triage with `--fault-scope BASE-FAULT`, park, rebase after the main-side repair. (Supersedes nothing; complements the coverage law above — that fixes the process, this prepares the lanes for the window where it isn't applied yet.)
 
-## Cross-lane message delivery discipline (owner order 2026-09-04 22:31Z)
+## Cross-lane message delivery discipline (owner order 2026-09-04 22:31Z) [LANE]
 
 Lane-to-lane and lane-to-HQ `session_notify` traffic MUST default to deferred delivery; immediate delivery is the exception, not the default. Evidence: 2026-09-04 logs show 1267 `now`-mode deliveries vs 7 deferred — most were status receipts that interrupted working lanes mid-task.
 
@@ -153,7 +153,7 @@ Standing lens in the Duty 4+6 skill-review rotation (registered in `oc-review-pe
 
 Reports persist via `oc-review-persist brain-scrub <text|@file>`. Same mechanics as every other lens: verdict consolidated → stamped (`review-battery` boundary law above applies unchanged).
 
-## Upstream PR filing — base Lint pre-claim (Duty-4 proposal, theme-1 lane, owner-approved 2026-09-06)
+## Upstream PR filing — base Lint pre-claim (Duty-4 proposal, theme-1 lane, owner-approved 2026-09-06) [LANE]
 
 Before filing an upstream PR, poll base-main Lint state and pre-claim any
 OWNERLESS red files by carrying a sweep commit in the PR itself
@@ -198,7 +198,7 @@ sha pin) is live-verified by the adopting session itself, (3) no newer state
 invalidates it (main moved, superseded fix). All three or the claim is
 treated as unverified input, not as a receipt.
 
-## telegram_send addressing rule (owner ruling 2026-09-07, telegram_send error audit) — AS-IS law
+## telegram_send addressing rule (owner ruling 2026-09-07, telegram_send error audit) — AS-IS law [LANE]
 
 `telegram_send` calls must ALWAYS carry the full id set: explicit `chat_id`
 AND explicit `thread_id` (for forum-enabled chats). Never omit either.

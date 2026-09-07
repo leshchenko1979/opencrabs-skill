@@ -1,5 +1,12 @@
 # SUPERVISOR — skill maintenance & worker coordination
 
+**RELOAD LAW (v0.4.95, owner order 2026-09-07 19:47Z):** after compaction or
+spawn, re-read from disk: `SKILL.md` + `supervisor.md` + `fleet-directives.md`
+IN FULL (the supervisor OWNS the directives file and RULES on disputes citing
+it — a compacted HQ enforcing half-remembered directives is worse than a lane
+missing the cadence law). Post-compaction anchor lives in ops AGENTS.md; this
+line is the in-skill backstop.
+
 **Load only after SKILL.md confirmed the role is SUPERVISOR.** This is the HQ
 session's standing role. Interrupt-shaped duties (idea-box / QUIRK intake,
 fix routing, enforcement patrols) operate in the TRIAGE lane since v0.4.86

@@ -1,5 +1,11 @@
 # TRIAGE — interrupt lane: idea/quirk intake, fix routing, enforcement
 
+**RELOAD LAW (v0.4.95, owner order 2026-09-07 19:47Z):** after compaction or
+spawn, re-read from disk: `SKILL.md` + `triage.md` + `fleet-directives.md`
+(thematic index minimum; every `[LANE]`-tagged section in FULL). This file
+CITES directive law (delivery cadence, editor creation) — citations are
+pointers, not substitutes; briefs die at compaction, disk doesn't.
+
 **Load only after SKILL.md confirmed the role is TRIAGE.** This is the OC DEV
 TRIAGE session's standing role — carved out of the Supervisor lane at v0.4.86
 (owner word "Go with Option A" 2026-09-06). Interrupt-shaped duties moved HERE
