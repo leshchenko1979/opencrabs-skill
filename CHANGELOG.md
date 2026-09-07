@@ -1,5 +1,7 @@
 # opencrabs-dev — release history (provenance)
 
+- v0.4.91 (2026-09-07, owner "let's finalise skill changes" 15:07Z): supervisor.md Duty 2 = registry writes → Triage ENTIRELY (owner law; closes the v0.4.86 creation-transfer's registry half; HQ residual deleted), ack contract REVISED (acks no longer expected — notify receipt = delivery proof, drift-check = comprehension guard); Duty 3 = PUSH-ALL-QUIET (every bump → all non-dormant workers quiet, no "touches duties" judgment) + Confirm law (probe-verified: quiet+confirm = no-op watch; confirm reserved for now-mode critical, blocking verdict there); Duty 4 step 2 = reply surface named (session_notify target=HQ full UUID, never own chat). editor.md item 16: PR-state claims need same-turn gh pr view receipt (headRefOid+headRefName+state) — #1431 "auto-updated" phantom, force-push ≠ PR-head move; event+branch+sha ALL match before waiter arm. Battery clean-HEAD 144/0 PASS (1-fail run = TOOLSMITH oc-prchecks WIP, isolated via stash, unrelated).
+
 Moved out of SKILL.md frontmatter at v0.4.43 (Duty-6 run-2 finding B6 —
 ~3k tokens of changelog loaded on every role-file claim; history is reference
 material, not procedure). Git-tracked in the skill repo; append one entry per

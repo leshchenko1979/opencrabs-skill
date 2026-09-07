@@ -71,11 +71,19 @@ event notes (deviations, incidents, rulings applied).
 - Seed/update ONLY from proven facts: a worker message naming the version, or
   the delivery receipt/error of your own notify. Never assume — same
   discipline as the wake-proof ping rule (SKILL.md).
+- **REGISTRY WRITES BELONG TO TRIAGE (owner law 2026-09-07, v0.4.91):** claims,
+  ack rows, event notes, roster enrollment, `confirmed` flags — Triage writes
+  them all (it already did the operational writes; this closes the split).
+  HQ's only remaining touchpoint: version-published rows during Duty 1 (sync
+  evidence, not registry management). (v0.4.86 transferred editor CREATION to
+  Triage; this completes the registry half.)
 - **Version-skew policy (decision 2a, grace):** any version stays valid until
   the worker acks; skew is monitored, not enforced. Chase only if a worker
   ACTS substantively while >1 version stale.
-- **Ack contract (decision 3):** a worker acks with a one-line `ACK <version>`
-  at its next turn boundary after notification.
+- **Ack contract (decision 3, REVISED v0.4.91):** acks are NO LONGER EXPECTED.
+  Delivery proof = the notify receipt (`session_notify` verdict); comprehension
+  guard = disk absorption + `oc-drift-check`. Existing ack rows stay as
+  historical evidence; new ones are opt-in, not contract.
 - Auto-discovery (decision 5): on every roster sweep, an unknown active
   session becomes a provisional registry row, confirmed by its first signed
   commit (Session-Id trailer = identity proof).
@@ -84,12 +92,10 @@ event notes (deviations, incidents, rulings applied).
 
 | Situation | Action |
 |---|---|
-| ANY version bump (default) | **DISK ABSORPTION** — workers re-read SKILL.md + role file at turn start; propagation is zero-ping. Notify NO ONE. |
-| Supervisor notify work on a bump | stamp ONE ledger event (version published, no per-worker rows) AND commit BOTH git repos (skill-dir: one commit per bump; state-dir: one commit per ledger stamp, inside the same flock as the write, git-history regime). TOOL-written stamps (`oc-deploy` swap-execute etc.) are committed by the HOSTING session — the turn that observes the stamp — bundling its adjacent stamp if both pending. Pending-stamp sweep = `oc-ledger commit-pending [--bundle]`, on Duty-3/4 cadence (design: `oc-work/oc-ledger-design-20260829.md`) |
-| Lane MID-CYCLE at publish, change touches its duties, gap hits THIS cycle | targeted notify — delivery per fleet-directives cadence (quiet default; turn-end for boundary-bound; `interrupt=true` failsafe ONLY for urgent wakes a lane is blocked on — 2026-09-04 law supersedes the interrupt-first posture) |
+| ANY version bump (default) | **DISK ABSORPTION** — workers re-read SKILL.md + role file at turn start; propagation is zero-ping for content. IN ADDITION (owner law 2026-09-07, v0.4.91): notify ALL non-dormant workers, `delivery=quiet` — no judgment call about "touches its duties", quiet costs a mid-cycle lane nothing. Stamp ONE ledger event (version published, no per-worker rows) AND commit BOTH git repos (skill-dir: one commit per bump; state-dir: one commit per ledger stamp, inside the same flock as the write, git-history regime). TOOL-written stamps (`oc-deploy` swap-execute etc.) are committed by the HOSTING session — the turn that observes the stamp — bundling its adjacent stamp if both pending. Pending-stamp sweep = `oc-ledger commit-pending [--bundle]`, on Duty-3/4 cadence (design: `oc-work/oc-ledger-design-20260829.md`) |
+| Confirm law (probe-verified 2026-09-07) | `delivery=quiet` + `confirm=true` is a NO-OP watch — quiet always returns instantly with a deferred verdict + notify_id; confirm only watches synchronous states. Routine pushes: quiet, NO confirm, fire-and-forget (drift-check is the comprehension guard). CRITICAL notifies (owner-gated orders, breaking `[ALL]`): `delivery=now` + `confirm=true` — that pair gives the blocking watch and a `woke`/`delivered` verdict; `now` refuses while target mid-turn → retry on refusal |
 | Worker >3 versions behind, acting substantively | targeted notify (mechanical drift and ack-row reads don't count) |
-| Breaking security/deploy-gate change | `[ALL]` broadcast — rules whose absence produces wrong rulings the same day. Everything else waits for each lane's next boundary |
-| Roster `idle` but mid build-cycle | NO reload notify unless the version fixes a blocker it will hit this cycle |
+| Breaking security/deploy-gate change | `[ALL]` broadcast (`now` + `confirm=true`) — rules whose absence produces wrong rulings the same day. Everything else waits for each lane's next boundary |
 
 > Delivery discipline per SKILL.md §session_notify mechanics (DELIVERY ≠
 > QUEUE ACCEPTANCE canonical there): live roster check SAME turn; silent
@@ -112,6 +118,9 @@ with Duty 6), on owner request, or when incidents cluster without a rule.
 2. Notify every non-dormant editor: proposals in strict format —
    `ADD|CHANGE <rule> in <file+section> BECAUSE <gap actually hit>` with dates
    and evidence. No niceties. Workers NEVER edit skill files themselves.
+   **Reply surface (v0.4.91):** replies go via `session_notify` with
+   `target_session` = HQ's FULL session UUID — never posted in the worker's
+   own chat (the polling channel; an unwitnessed reply is an unfound reply).
 3. Validate every proposal three ways BEFORE reporting: disk truth (rule may
    already exist), live/log evidence (gap must have really happened), coherence
    with existing gates.
@@ -293,7 +302,8 @@ REMOVED, order cc100dc6; carrier branch is the sole build lane; oc-ci-parity
 
 Moved from editor.md §CI-wait — these bind SUPERVISOR waiters and any detached
 lane polling. The editor carries its OWN full set in editor.md §CI-wait
-(items 1–15 since v0.4.90 — 14th = dispatch-receipt gate, 15th = solo-surface rule; lens B F10, v0.4.79: the "editor keeps items 1–3"
+(items 1–16 since v0.4.90 — 14th = dispatch-receipt gate, 15th = solo-surface
+rule, 16th = PR-state receipt law; lens B F10, v0.4.79: the "editor keeps items 1–3"
 partition is retired; count re-verified lens A18 v0.4.89). Cross-references to these items use the W-prefix to
 avoid collision with the editor's local numbering.
 

@@ -185,6 +185,14 @@ supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
    of the #1272 phantom-PR report (2026-09-07) — a `gh pr create` whose
    output the lane never saw got reported as filed; third phantom-family
    instance for that lane.
+16. **PR-state claims need a same-turn `gh pr view` receipt (Duty-6/#1431
+   lesson, v0.4.91):** any claim that a PR was created, updated, re-pointed,
+   or "auto-updated" by a push is UNVERIFIED until `gh pr view <n> --json
+   headRefOid,headRefName,state` names the EXPECTED head sha and repo — a
+   force-push to a fork branch does NOT move a PR whose head branch lives on
+   another repo (#1431, 2026-09-07: "PR head auto-updated" claim dissolved on
+   first-hand check; headRefOid was still the old rider sha). Check event +
+   branch + head sha ALL match before arming a waiter on a run.
 ## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52)
 
 Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep
