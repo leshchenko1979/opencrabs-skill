@@ -16,7 +16,7 @@
 #                          [--artifact-dir D] [--drill]        # Phase B
 #   oc-deploy watch [--with-delta]       # stray-commit tripwire (report-only)
 #                                        # + optional upstream arithmetic leg
-#   oc-deploy contributors <old>..<new> | --deployed [--repo R]   # issue #24 D1
+#   (contributors RETIRED v0.4.91 — use oc-attrib --contributors)
 #   oc-deploy fanout --run <id> [--dry-run]   # issue #24: mechanical notify fan-out
 #   oc-deploy --selftest
 #
@@ -25,7 +25,7 @@
 #     unit (spawned by init, not the opencrabs daemon) so the bounce it
 #     triggers cannot kill its own verifier. poll --execute at S2 hands off
 #     to that unit and exits BEFORE any bounce (Phase A/B split).
-#   - JOURNAL: $STATE_DIR/oc-deploy/journal/swap-<short>-<epoch>.jsonl —
+#   - JOURNAL: $STATE_DIR/oc-deploy/journal/swap-<short>-<epoch>-<pid>.jsonl —
 #     append-only, one fsync'd JSON line per state-changing step BEFORE the
 #     next step starts (auto-swap/backup/verify/install/seal/marker-write/
 #     restart/post-verify/receipt/rollback). Last present line = last
@@ -129,7 +129,7 @@ shadow_log() { # <op> <sha> <features> <result>
 JF=""; SEQ=0
 journal_init() { # $1 = short label
   mkdir -p "$JOURNAL_DIR"
-  JF="$JOURNAL_DIR/swap-$1-$(date +%s).jsonl"
+  JF="$JOURNAL_DIR/swap-$1-$(date +%s)-$$.jsonl"   # Duty-6 lens F task 4: $$ suffix — same-second collision truncated the first run's crash journal (fanout already had $$)
   : > "$JF"; SEQ=0
 }
 jline() { # $1=step  $2=exit(int|null)  $3=extra-json-object (optional)
@@ -265,28 +265,20 @@ STUB
   # 3. kill file -> exit 9 even for valid mode
   mkdir -p "$T/kills"; printf x > "$T/kills/oc-deploy.kill"
   OC_DEPLOY_STATE_DIR="$T/kills" "$SELF_BIN" poll >/dev/null 2>&1; check_rc "kill-file" $? 9
-  # 3b. contributors (issue #24 D1): isolated fixture repo — never touches the
-  #     ship sandbox below (its HEAD~ refs would shift if we committed here)
-  git init -q -b main "$T/crepo"
-  git -C "$T/crepo" config user.email t@t; git -C "$T/crepo" config user.name t
-  git -C "$T/crepo" commit -q --allow-empty -m base
-  local C_BASE; C_BASE="$(git -C "$T/crepo" rev-parse HEAD)"
-  git -C "$T/crepo" commit -q --allow-empty -m "feat: trailer commit
-
-Session-Id: 11111111-2222-3333-4444-555555555555
-Issue-Ref: #99"
-  local C_TIP; C_TIP="$(git -C "$T/crepo" rev-parse HEAD)"
+  # 3b. contributors RETIRED (v0.4.91, lens E-2): loud deprecation rc 1, points at oc-attrib
   out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_ATTRIB="$SELF_DIR/oc-attrib" \
-    "$SELF_BIN" contributors "$C_BASE..$C_TIP" --repo "$T/crepo" 2>&1)"; rc=$?
-  check_rc "contributors-rc" $rc 0
-  check_has "contributors-uuid" "$out" "11111111-2222-3333-4444-555555555555"
-  check_has "contributors-issue" "$out" "#99"
-  check_has "contributors-sha7" "$out" "$(printf '%.7s' "$C_TIP")"
-  [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: contributors row count != 1"; }
+    "$SELF_BIN" contributors main 2>&1)"; rc=$?
+  check_rc "contributors-retired-rc" $rc 1
+  check_has "contributors-retired-notice" "$out" "RETIRED"
+  check_has "contributors-retired-pointer" "$out" "oc-attrib"
   "$SELF_BIN" contributors >/dev/null 2>&1; check_rc "contributors-usage" $? 1
-  OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_ATTRIB="$SELF_DIR/oc-attrib" \
-    "$SELF_BIN" contributors --deployed --repo "$T/crepo" >/dev/null 2>&1; check_rc "contributors-deployed-nomarker" $? 5
   # 4. ship PLAN mode: no mutation, PLAN lines, shadow entry, carrier-default features
+  # 4-no-sha (Duty-6 lens F task 3): ship WITHOUT --sha must refuse rc2 —
+  # no implicit CWD-HEAD adoption (wrong-directory ship pushes unintended sha).
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship 2>&1)"; check_rc "ship-no-sha-refused" $? 2
+  check_has "ship-no-sha-msg" "$out" "ship requires --sha"
   out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
     OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
     "$SELF_BIN" ship --sha "$SHA2" 2>&1)"; rc=$?
@@ -928,30 +920,14 @@ NSTUB
   [ "$fail" = 0 ]
 }
 
-# ----------------------------------------------------- contributors (#24) --
-# issue #24 D1: DISTINCT Session-Id set over a commit range, machine-parseable
-# TSV: uuid <TAB> issue_refs <TAB> sha7s. Thin wrapper over oc-attrib (the
-# range->lane joiner); rc INHERITED from oc-attrib: 0 ok | 2 usage | 3 git-fail
-# | 4 empty-range | 5 markers-missing (--deployed). The GREEN fan-out leg
-# consumes this set. (unsigned) rows pass through — never dropped.
-contributors_run() { # <old>..<new> | --deployed  [--repo <path>]
-  local repo="${OC_DEPLOY_REPO:-$HOME/opencrabs}" range=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --deployed) range="--deployed" ;;
-      --repo) repo="${2:-}"; shift ;;
-      *) [ -z "$range" ] || die 1 "contributors: one range argument only"; range="$1" ;;
-    esac
-    shift || true
-  done
-  [ -n "$range" ] || die 1 "contributors: needs <old>..<new> or --deployed"
-  if [ "$range" = "--deployed" ]; then
-    "$ATTRIB" --repo "$repo" --contributors --deployed --ledger "$LEDGER"   # E6 (v0.4.78): projection owned by oc-attrib
-  else
-    echo "$range" | grep -Eq '^[0-9a-fA-F]{4,40}\.\.[0-9a-fA-F]{4,40}$' \
-      || die 1 "contributors: range not <old>..<new>: $range"
-    "$ATTRIB" --repo "$repo" --contributors --range "$range" --ledger "$LEDGER"
-  fi
+# ----------------------------------------- contributors RETIRED (v0.4.91) --
+# Lens E-2 (v0.4.90 retired the VERB in docs; v0.4.91 retires it in code):
+# single shape is `oc-attrib --contributors`. Loud deprecation — not silent
+# removal — so lanes keyed on the old verb are pointed at the replacement.
+contributors_run() { # RETIRED: use oc-attrib --contributors
+  echo "oc-deploy contributors: RETIRED (v0.4.91, lens E-2) — verb-duplicate of oc-attrib" >&2
+  echo "  use: $ATTRIB --repo <path> --contributors (--range <old>..<new> | --deployed) [--ledger <f>]" >&2
+  die 1 "contributors: retired verb — see the oc-attrib command above"
 }
 
 # ------------------------------------------------------------- fan-out (#24) --
@@ -1652,7 +1628,7 @@ watch_run() { # explicit `oc-deploy watch [--with-delta]` ; exit 0 clean | 2 str
 
 MODE="${1:-}"; [ $# -gt 0 ] && shift
 # C-F5 (v0.4.71): --help / -h exits 0 on stdout, before any validation
-case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 0 ;; esac
+case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
 # issue #24 D1: contributors takes its own arg shape (positional range /
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. Kill-file check already ran above.
@@ -1672,7 +1648,7 @@ while [ $# -gt 0 ]; do
     --wait)     WAIT_SECS="${2:-}"; shift ;;   # C-#2: poll blocks until a NEW green run (or timeout, rc 5)
     --notify-session) [ -n "${2:-}" ] || die 2 "--notify-session needs a session uuid"; NOTIFY_SESSION="${2:-}"; shift ;;   # C-#2: session uuid woken on handoff/timeout; guard lens C MED-3 (v0.4.79)
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
-    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest"; exit 0 ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
     *)          die 1 "unknown arg: $1" ;;
   esac
   shift || true
@@ -1696,10 +1672,11 @@ fi
 case "$MODE" in
   # ------------------------------------------------------------------ ship --
   ship)
-    if [ -z "$SHA" ]; then
-      SHA="$(git rev-parse HEAD 2>/dev/null)" \
-        || die 1 "no --sha given and CWD is not a git repo"
-    fi
+    # Duty-6 lens F task 3: ship must NEVER silently adopt CWD HEAD — an
+    # operator shipping from the wrong directory pushes an unintended sha.
+    # --sha is mandatory; the sha must also be contained in the fork main
+    # lineage (the push target), not just present as an unrelated object.
+    [ -n "$SHA" ] || die 2 "ship requires --sha <40-hex> (no implicit CWD-HEAD adoption)"
     echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
     # n=1878 hard guard: format-valid does not mean real — refuse phantom
     # shas BEFORE any plan/rebase logic (fabricated sha incident: lane-planned
@@ -1745,6 +1722,10 @@ case "$MODE" in
     ;;
   # ------------------------------------------------------------------ poll --
   poll)
+    # Duty-6 lens F task 5: --wait validated FIRST — before the RED-scan
+    # fanout side effects below (a bad --wait used to burn real fanout
+    # API calls + fanout.state writes before dying on validation).
+    case "$WAIT_SECS" in ''|*[!0-9]*) die 1 "--wait needs an integer (seconds)" ;; esac
     STAGE="$(stage)"
     plan "poll stage=$STAGE execute=$EXECUTE"
     W_TIP="$(git ls-remote "$REMOTE" refs/heads/main 2>/dev/null | awk '{print $1}')"
@@ -1764,7 +1745,7 @@ case "$MODE" in
     # C-#2 (v0.4.78): --wait N blocks until a NEW green run (built sha !=
     # deployed) appears or N seconds elapse (rc 5, optional --notify-session
     # wake) — absorbs the hand-rolled fetch+poll loops (lens C, 2026-08-31).
-    case "$WAIT_SECS" in ''|*[!0-9]*) die 1 "--wait needs an integer (seconds)" ;; esac
+    # (validation moved to poll top — Duty-6 lens F task 5)
     POLL_DEADLINE=$(( $(date +%s) + WAIT_SECS ))
     POLL_INTERVAL="${OC_DEPLOY_POLL_INTERVAL:-30}"
     while :; do
@@ -1838,5 +1819,5 @@ case "$MODE" in
     watch_run "${WITH_DELTA:-0}"
     ;;
   --selftest|selftest) selftest "$@" ;;
-  *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | contributors <old>..<new>|--deployed [--repo R] | fanout --run R [--dry-run] | --selftest" ;;
+  *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)" ;;
 esac
