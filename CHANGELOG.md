@@ -1,5 +1,10 @@
 # opencrabs-dev — release history (provenance)
 
+## v0.4.94 (2026-09-07, owner "go" 19:02Z — tool-discovery gap: 13 of 31 tools invisible to editors)
+- editor.md reload section item 5 NEW — **Tool discovery clause** (owner order 2026-09-07): the editor tool table is the role-DAILY subset, not the inventory; full 31-tool inventory lives in `tools/RC-CONTRACT.md`; editors grep RC-CONTRACT.md for a purpose-built tool BEFORE hand-rolling any check (item 11). Closes the v0.4.94 finding: 13 of 31 tools (oc-artifact-verify, oc-carrier-features, oc-ci-parity, oc-harvest-sweep, oc-job-verify, oc-log-search, oc-ping-proof, oc-review-persist, oc-shadow-rotate, oc-ship-audit, oc-skew-scan, oc-tg-audit, oc-toolaccum) were never named in any editor-readable file.
+- editor.md tool-table intro now cites RC-CONTRACT.md as the canonical inventory alongside SKILL.md.
+- Doc-only bump: no tools/ changes. Battery on clean HEAD: see receipt below.
+
 ## v0.4.93 (2026-09-07, owner "go all" 18:11Z — Adolfo-protocol amendment, all 6 items)
 - editor.md Phase 7 **PR-FREEZE LAW**: an upstream PR is FROZEN at filing (CI green at push) — no re-port, no force-push, no head/body changes, even if upstream main moves. Rationale from Adolfo's own words ("Once you push it, you already did your job") + today's live incident: #1426/#1427 rebased 15:56 → maintainer merged old heads locally 17:22 → sha mismatch → auto-close defeated, manual close. The ONLY valid re-engagement: maintainer explicitly asks.
 - editor.md 2-fresh **scope narrowed to pre-filing** — base-freshness/re-port governs fork-internal work only; after filing, conflicts are maintainer-side (MAINTAINER-SIDE MERGES rule: "merge locally, fix conflicts on top, push, comment what you did").

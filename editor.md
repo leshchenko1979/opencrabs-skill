@@ -215,13 +215,20 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
 4. `tools/*` need NO reload: every invocation is a fresh process off disk,
    always the newest version — that is also why tool-level fixes (vocabulary,
    sweep lists) never strand a running lane.
+5. **Tool discovery (owner order 2026-09-07, v0.4.94):** the table below is
+   the role-DAILY subset, not the inventory — the full tool list (31 tools)
+   lives in `tools/RC-CONTRACT.md` (every tool: invocation, rc register,
+   selftest owner). Before hand-rolling any check (item 11), grep
+   RC-CONTRACT.md for a purpose-built tool — verification, audit, smoke,
+   artifact and log work especially: a tool likely already exists.
 
 No reload volley is owed to you (v0.4.19 disk absorption stands) — the
 pull-check is YOUR duty; supervisor notifies stay targeted per Duty 3.
 
 ## Tool reference — editor's quick table
 
-Canonical descriptions + selftest contracts: SKILL.md tool table. The
+Canonical descriptions + selftest contracts: `tools/RC-CONTRACT.md` (full
+inventory, all 31 tools) + SKILL.md tool table. The
 editor-relevant subset, invocation forms only (all paths relative to the skill
 dir; `OC_ACTOR=<your full uuid>` on every call):
 
