@@ -49,6 +49,18 @@ Hard discipline for every change:
   through the carrier-tool channel since 2026-09-03) execute HERE; HQ-authored
   skill text still arrives via the TRIAGE lane's intake, never as a direct
   edit in this lane.
+- **Tool-surface sync (owner law 2026-09-07, v0.4.91):** after ANY tool change
+  that alters how a tool is invoked or what it outputs — new/renamed flags,
+  new subcommands, changed rc semantics, changed output formats (journal rows,
+  stdout contract lines like `RUN <url>` / `run=<id>`) — the tool's CONSUMERS
+  get updated in the same batch: the role-file tool tables (`editor.md` §Tool
+  reference, `toolsmith.md`, `triage.md`/`supervisor.md` where cited),
+  `tools/RC-CONTRACT.md` rows, and any dependent tool that parses the changed
+  output (e.g. oc-waiter greps oc-prchecks' `RUN` line). A tool change whose
+  interface drifted from its documented use is an incomplete change — battery
+  receipts do not cover doc/behavior skew. Skill markdown (SKILL.md,
+  CHANGELOG.md) stays Supervisor-only; role files flow through the routing
+  lanes when not owned here.
 
 ## Duty S2 — Battery stewardship
 
