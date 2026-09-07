@@ -22,19 +22,19 @@ Fleet conventions:
 
 | Tool | help | usage | Verdict codes |
 |------|------|-------|---------------|
-| oc-artifact-verify | 0 | 1 | 0 PASS / 1 invocation / 2 NOT-ELF-MISSING / 3 MARKER-MISSING / 4 SHA-PROVENANCE-MISMATCH / 5 VERSION-MISMATCH |
+| oc-artifact-verify | 0 | 1 | 0 PASS / 1 invocation / 2 NOT-ELF-MISSING / 3 MARKER-MISSING / 4 SHA-PROVENANCE-MISMATCH / 5 VERSION-MISMATCH · embed-source sha compares exact OR first-12-hex prefix (old-embed truncation tolerance) |
 | oc-attrib | 0 | 2 | 0 ok / 3 git-fail / 4 empty-range / 5 markers-missing |
 | oc-branch-sweep | 0 | 2 | 0 nothing-deleted / 1 deletions / 3 git-fail |
 | oc-carrier-features | 0 | 2 | 0 set / 3 yml-unfetchable / 4 no-features-input |
 | oc-ci-parity | 0 | 5 | 0 identical / 4 DRIFT / 6 api-fail |
 | oc-commit | 0 | 2 | 0 committed / 3 gate-fail / 4 git-fail / 5 comment-fail |
-| oc-deploy | 0 | 1 | 0 ok-noop / 2 rebase-gate-push-verify-rollback / 3 retired / 4 stage-gate-launch / 5 poll-wait-timeout / 9 kill-file |
+| oc-deploy | 0 | 1 | 0 ok-noop / 2 rebase-gate-push-verify-rollback AND usage/validation diags (flag-validation `die 2`, e.g. poll `--wait` non-integer, `--notify-session` empty — arg diags share the 2 register with gate-fail; message text disambiguates) / 3 retired / 4 stage-gate-launch / 5 poll-wait-timeout / 9 kill-file · `contributors` verb RETIRED v0.4.91 (lens E-2, rc 1 + loud pointer to `oc-attrib --contributors`) |
 | oc-drift-check | 0 | 2 | 0 no-drift / 1 DRIFT / 3 ledger-skilldir-fail |
 | oc-harvest-sweep | 0 | 2 | 0 clean / 1 findings / 3 git-fail |
 | oc-index-worktree | 0 | 5 | 0 OK / 4 index-failed |
 | oc-issue-log | 0 | 2 | 0 posted / 3 gh-fail |
 | oc-issue-sweep | 0 | 2 | 0 no-candidates / 1 candidates / 3 api-fail |
-| oc-job-verify | 0 | 1 | 0 VERIFIED / 2 IN-FLIGHT / 3 FAILED / 4 REF-MISMATCH / 5 NOT-FOUND |
+| oc-job-verify | 0 | 1 | 0 VERIFIED / 2 IN-FLIGHT / 3 FAILED / 4 REF-MISMATCH / 5 NOT-FOUND · embed-sha compares exact OR first-12-hex prefix (old-embed truncation tolerance) |
 | oc-ledger | 0 | 2 | 0 ok / 1 verdict (cadence FIRE / version mismatch) / 3 ledger / 4 write / 5 battery-gate / 6 version-sync-gate |
 | oc-order-validate | 0 | 1 | 0 VALID / 2 UNMERGED / 3 UNSIGNED-unknown |
 | oc-ping-proof | 0 | 2 | 0 WOKEN / 1 SILENT / 3 UNREACHABLE / 4 parse-fail |
@@ -42,7 +42,7 @@ Fleet conventions:
 | oc-pr-fault-scope | 0 | 2 | 0 IN-SCOPE / 1 BASE-FAULT / 3 gh-fail |
 | oc-prchecks | 0 | 2 | 0 GREEN / 3 RED / 4 dispatch-api-lock / 5 in-flight-timeout / 6 CANCELLED-superseded / 7 carrier-head-unresolvable / 8 AMBIGUOUS-same-ref-witness-unverifiable (fail-closed, dispatch refused, #115B) / 4 also = ADOPTION IDENTITY MISMATCH (adopted run is not workflow_dispatch on carrier — n=1721 B; headSha pin impossible by design, n=1730) |
 | oc-review-persist | 0 | 2 | 0 persisted |
-| oc-seal-state | 0 | 1 | 0 OK / 2 CONTRIBUTOR-SCAN-FAIL / 3 WRITE-FAIL-INVALID |
+| oc-seal-state | 0 | 1 (noop) / 2 (unknown flag, F-L1) | 0 OK / 1 bare-invocation-noop / 2 unknown-flag-usage OR CONTRIBUTOR-SCAN-FAIL / 3 WRITE-FAIL-INVALID |
 | oc-shadow-rotate | 0 | 2 | 0 ok-noop / 2 io-fail (usage merged into 2, C-#3) |
 | oc-ship-audit | 0 | 2 | 0 all-SWAPPED / 1 ORPHANED |
 | oc-log-search | 0 | 2 | 0 matches-found / 1 zero-hits |
