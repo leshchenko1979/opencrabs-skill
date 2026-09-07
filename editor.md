@@ -681,11 +681,19 @@ git -C ~/opencrabs log --format='%H%x09%s%x09%(trailers:key=Session-Id,valueonly
 #     unavailable.)
 tools/oc-wt add up-<feature> leshchenko1979/<feature> --create --from adolfousier/main --repo ~/opencrabs
 git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
-# 2-fresh. BASE FRESHNESS before the gate dispatch (Duty-4 P4, v0.4.80):
+# 2-fresh. BASE FRESHNESS before the gate dispatch (Duty-4 P4, v0.4.80;
+#         AMENDED v0.4.93 — scope NARROWED to pre-filing only, owner "go all"
+#         2026-09-07 on the Adolfo-protocol amendment):
 git -C ~/opencrabs fetch adolfousier
 git -C ~/opencrabs rev-parse adolfousier/main   # must equal the sha the port was cut from
-#    upstream moved since the port? RE-PORT onto the new base — a late gate on
-#    a stale base tests the wrong tree and invites surprise conflicts.
+#    upstream moved since the port? RE-PORT onto the new base — BEFORE filing.
+#    SCOPE (v0.4.93): applies ONLY while the work is fork-internal (branch,
+#    gate, pre-filing). Once the upstream PR is FILED, the PR-freeze law
+#    (below) takes over: NO re-port, NO force-push, NO head/body changes —
+#    a filed PR is frozen regardless of upstream main movement. Conflict
+#    resolution after filing is the MAINTAINER's side of the wall (merge
+#    locally, fix on top, push, comment). Post-merge, upstream main carries
+#    the fix; fork-side sync stays owner-gated (upstream-merge-runbook.md).
 
 # Phase 5 gate: pr-checks GREEN on the PR branch — zero errors in ported lines
 
@@ -734,6 +742,27 @@ tools/oc-wt remove up-<feature>
 ```
 
 Rules:
+- **PR-FREEZE LAW (v0.4.93, owner "go all" on the Adolfo-protocol amendment
+  2026-09-07):** an upstream PR is FROZEN the moment it is filed with CI green
+  at push. NO re-port, NO force-push, NO head changes, NO body updates — even
+  if upstream main moves or conflicts appear. *"Once you push it, you already
+  did your job"* (Adolfo, 2026-09-07). Rationale: force-pushing a filed PR
+  changes the head under the maintainer — if he already merged locally, the
+  merge sha no longer matches and auto-close breaks (2026-09-07:
+  #1426/#1427 rebased at 15:56, merged locally by maintainer at 17:22, heads
+  mismatched, manual close required). Base-freshness (2-fresh) applies
+  PRE-filing only. The ONLY valid re-engagement: maintainer explicitly asks
+  for a change.
+- **MAINTAINER-SIDE MERGES (v0.4.93):** conflict resolution, rebase, and
+  fixes-on-top AFTER filing are the MAINTAINER's responsibility, done at
+  merge time on his side. Contributor = push final work once.
+  *"Whenever you're the maintainer approving changes: merge locally, fix
+  conflicts on top, push, comment what you did."*
+- **FINAL-PR STANDARD (v0.4.93):** file a PR only when it is genuinely final —
+  tests green at push, no known gaps, no planned follow-ups. Force-pushes on
+  filed PRs are the rare exception (~1-in-10), never procedure. All iteration
+  happens fork-side BEFORE filing (fork = workspace, upstream PR = one-way
+  handoff).
 - Fork-only commits means EXACTLY that: no adolfousier sync merges, no other
   feature's commits, no bare CI-config churn unless it IS the feature.
 - Cherry-pick conflicts → resolve, re-run the Phase 5 gate (pr-checks), continue. NEVER merge fork
@@ -804,8 +833,8 @@ harvested commits. When a PR is not mergeable, route by BLOCKER CLASS:
 
 | Blocker | Who acts | Action |
 |---|---|---|
-| fmt/clippy/test failure in THIS feature's files | Owning editor (notified with log evidence via the mechanical post-swap fan-out — `oc-deploy fanout`) | fresh worktree off the PR head → fix → Phase 5 gate (pr-checks) + conflict-quality gate → signed push to the head |
-| Merge conflicts with new upstream `main` | Owning editor | rebase / re-cherry-pick onto fresh `adolfousier/main`, force-push head with `--force-with-lease` (never bare -f) |
+| fmt/clippy/test failure in THIS feature's files | Owning editor (notified with log evidence via the mechanical post-swap fan-out — `oc-deploy fanout`) | **PR-freeze check first (v0.4.93):** fixes on a FILED PR only when CI failure exists at push time or maintainer asks. Otherwise frozen. If valid: fresh worktree off the PR head → fix → Phase 5 gate (pr-checks) + conflict-quality gate → signed push to the head |
+| Merge conflicts with new upstream `main` | **Maintainer (v0.4.93)** | **DO NOT rebase/force-push the filed PR** — PR-freeze law. Conflict resolution on a filed PR is the maintainer's side (he merges locally, fixes on top, pushes, comments). Editor action: NONE beyond a factual comment ONLY if the maintainer asks; pre-filing, 2-fresh governs |
 | PRE-EXISTING upstream red (base fails in files we never touched) | ❌ NO editor pings — our code is innocent | housekeeping-PR candidate: issue filed + ledger-registered first (v0.3.8), Alexey decides |
 | Maintainer rejects/closes the PR | Owning editor | REOPEN the linked issues with a pointer comment; record the outcome |
 

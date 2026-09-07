@@ -1,5 +1,14 @@
 # opencrabs-dev — release history (provenance)
 
+## v0.4.93 (2026-09-07, owner "go all" 18:11Z — Adolfo-protocol amendment, all 6 items)
+- editor.md Phase 7 **PR-FREEZE LAW**: an upstream PR is FROZEN at filing (CI green at push) — no re-port, no force-push, no head/body changes, even if upstream main moves. Rationale from Adolfo's own words ("Once you push it, you already did your job") + today's live incident: #1426/#1427 rebased 15:56 → maintainer merged old heads locally 17:22 → sha mismatch → auto-close defeated, manual close. The ONLY valid re-engagement: maintainer explicitly asks.
+- editor.md 2-fresh **scope narrowed to pre-filing** — base-freshness/re-port governs fork-internal work only; after filing, conflicts are maintainer-side (MAINTAINER-SIDE MERGES rule: "merge locally, fix conflicts on top, push, comment what you did").
+- editor.md Phase 7 **FINAL-PR STANDARD**: file only genuinely final work (green at push, no known gaps); force-pushes on filed PRs = rare exception, never procedure. Fork = workspace, upstream PR = one-way handoff.
+- editor.md Phase 7b blocker table rows 1–2 amended: CI-fix row gated by freeze check; conflicts-with-main row reassigned to MAINTAINER (was: editor rebase + force-push — the exact anti-pattern that broke #1426/#1427).
+- upstream-merge-runbook.md harvest-lane row: merge window does NOT unfreeze filed PRs; no re-ports triggered by fork-side sync.
+- Post-merge scope unchanged: fork-side sync to new upstream main stays owner-gated [GATE] (runbook). CI-receipt rule unchanged (item-16 + job-name sha pin already encode "green at push").
+- Origin: owner order 2026-09-07 18:00Z "Read my today's dialogue with Adolfo and agree rule changes with me" → 6-item proposal → "go all". En-route cancellation: the 17:44Z #1438 re-port order (old 2-fresh law) was WITHDRAWN before this bump; #1438 stays frozen at 6cfae040/base 221d7423.
+
 ## v0.4.91 (2026-09-07, owner "let's finalise skill changes" 15:07Z)
 - supervisor.md Duty 2 = registry writes → Triage ENTIRELY (owner law; closes the v0.4.86 creation-transfer's registry half; HQ residual deleted), ack contract REVISED (acks no longer expected — notify receipt = delivery proof, drift-check = comprehension guard); Duty 3 = PUSH-ALL-QUIET (every bump → all non-dormant workers quiet, no "touches duties" judgment) + Confirm law (probe-verified: quiet+confirm = no-op watch; confirm reserved for now-mode critical, blocking verdict there); Duty 4 step 2 = reply surface named (session_notify target=HQ full UUID, never own chat). editor.md item 16: PR-state claims need same-turn gh pr view receipt (headRefOid+headRefName+state) — #1431 "auto-updated" phantom, force-push ≠ PR-head move; event+branch+sha ALL match before waiter arm. Battery clean-HEAD 144/0 PASS (1-fail run = TOOLSMITH oc-prchecks WIP, isolated via stash, unrelated).
 
