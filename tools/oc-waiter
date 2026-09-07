@@ -92,10 +92,10 @@ HQ_SESSION="${OC_WAITER_HQ:-}"
 
 usage() { [ $# -gt 0 ] && echo "$PROG: $1" >&2
   cat >&2 <<EOS
-Usage: $PROG arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N] [--run <id>]
+Usage: $PROG arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N] [--run <id>] [--repo SLUG]
        $PROG list | sweep | _run <record.json> | --selftest
 Exit: arm 0 armed / 2 usage-or-actor-refused / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
-Env: OC_ACTOR=<session-uuid> REQUIRED for arm (attribution, #115 C) · --run seeds a witnessed run id (#115 A)
+Env: OC_ACTOR=<session-uuid> REQUIRED for arm (attribution, #115 C) · --run seeds a witnessed run id (#115 A) · --repo / OC_WAITER_REPO for cross-repo watch (n=1800: upstream CI runs live on the upstream repo, not the fork default)
 EOS
   exit 2; }
 
@@ -134,6 +134,7 @@ cmd_arm() {
     ""|unknown) echo "$PROG: arm refused: OC_ACTOR unset or 'unknown' — export OC_ACTOR=<your session uuid> before arming (SKILL.md CI-wait item 2)" >&2; exit 2 ;;
   esac
   local REF="" TARGET="" LABEL="" SEED_RUN="" TMO="$TIMEOUT" SK="$STALL_K" WIN="$WINDOW"
+  local REPO="${OC_WAITER_REPO:-}"   # n=1800: empty = oc-prchecks' own default (fork)
   while [ $# -gt 0 ]; do
     case "$1" in
       --ref)     shift; REF="${1:-}"; [ -n "$REF" ] || usage "--ref needs a value" ;;
@@ -143,6 +144,7 @@ cmd_arm() {
       --stall-k) shift; SK="${1:-}"; case "$SK" in ''|*[!0-9]*) usage "--stall-k needs an integer (poll count)" ;; esac ;;
       --window)  shift; WIN="$(dur_secs "${1:-}")"; [ "$WIN" -gt 0 ] || usage "--window needs N|Ns|Nm|Nh" ;;
       --run)     shift; SEED_RUN="${1:-}"; case "$SEED_RUN" in ''|*[!0-9]*) usage "--run needs a numeric run id (witnessed: rc-5 stdout 'run=<id>' / journal extra.run_id)" ;; esac ;;   # #115 A: seed a witnessed run
+      --repo)    shift; REPO="${1:-}"; case "$REPO" in ''|*.*) usage "--repo needs a slug (OWNER/REPO) or checkout path — passed through to oc-prchecks" ;; esac ;;   # n=1800: cross-repo watch (upstream CI)
       *) usage "unknown arg '$1'" ;;
     esac; shift
   done
@@ -173,6 +175,7 @@ cmd_arm() {
   REC="$STATE_DIR/$ID.json"
   printf '{"id":"%s","pid":0,"ref":"%s","notify":"%s","label":"%s","timeout":%s,"stall_k":%s,"window":%s,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null,"actor":"%s","run_id":"%s"}\n' \
     "$ID" "$REF" "$TARGET" "$LABEL" "$TMO" "$SK" "$WIN" "$(date -u +%FT%TZ)" "${OC_ACTOR:-}" "$SEED_RUN" > "$REC"
+  [ -n "$REPO" ] && jq -c --arg r "$REPO" '. + {repo: $r}' "$REC" > "$REC.tmp" && mv "$REC.tmp" "$REC"   # n=1800: cross-repo watch
   # journal-first (#74): arm writes the start line SYNCHRONOUSLY so a read-back
   # right after `armed id=` can never see an empty/missing file (launch-death
   # lesson); the child appends, never truncates.
@@ -208,14 +211,15 @@ cmd_run() {
     rec_upd "$REC" "\"status\":\"notify-failed\",\"verdict\":\"NOTIFY-FAILED\""; exit 4; }
 
   local RUN_ID STALL=0 LAST_RC="" LAST5=0 CHURN=0 RC4=0 POLLS=0
+  local REPO; REPO="$(jq -r '.repo // ""' "$REC")"   # n=1800: cross-repo watch (arm-recorded; empty = oc-prchecks fork default)
   RUN_ID="$(jq -r '.run_id // ""' "$REC")"   # #115 A: --run seed — first poll takes the resume path; legacy records without the field -> ""
   local DEADLINE=$(( $(date +%s) + TMO ))
   local VERDICT="" RC=0 OUT="" NS_RC
   while :; do
     if [ -n "$RUN_ID" ]; then
-      OUT="$("$PRCHECKS_BIN" resume "$RUN_ID" --wait "$WIN" 2>&1)"; RC=$?
+      OUT="$("$PRCHECKS_BIN" resume "$RUN_ID" ${REPO:+--repo "$REPO"} --wait "$WIN" 2>&1)"; RC=$?
     else
-      OUT="$("$PRCHECKS_BIN" "$REF" --wait "$WIN" 2>&1)"; RC=$?
+      OUT="$("$PRCHECKS_BIN" "$REF" ${REPO:+--repo "$REPO"} --wait "$WIN" 2>&1)"; RC=$?
     fi
     POLLS=$((POLLS+1))
     jline "$JOURNAL" poll "{\"poll\":$POLLS,\"rc\":$RC}"
@@ -481,6 +485,36 @@ GSTUB
   { [ "$RUN_RC" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t0.json")" = "AMBIGUOUS" ] && [ "$(jq -r '.polls' "$D/waiters/t0.json")" = "1" ] && grep -q 'AMBIGUOUS' "$D/notify.log"; } \
     && t_ok "gate rc 8: AMBIGUOUS after ONE poll (non-retryable), lane notified" || t_bad "rc8 rc=$RUN_RC verdict=$(jq -r .verdict "$D/waiters/t0.json") polls=$(jq -r .polls "$D/waiters/t0.json")"
 
+  # 20. --repo pass-through (n=1800): record repo field reaches the gate on BOTH paths;
+  #     absent = no --repo arg (fork default, byte-identical to pre-n=1800 behavior)
+  mk_notify deliver
+  printf '{"id":"t2","pid":0,"ref":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","notify":"11111111-2222-3333-4444-555555555555","label":"repoarm","timeout":60,"stall_k":8,"window":1,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null,"actor":"11111111-2222-3333-4444-555555555555","run_id":"222","repo":"adolfousier/opencrabs"}\n' "$(date -u +%FT%TZ)" > "$D/waiters/t2.json"
+  printf '0' > "$D/seq"; rm -f "$D/seq.count" "$D/seq.args"; : > "$D/notify.log"; rm -f "$D/notify.log.c2"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 \
+    "$SELF" _run "$D/waiters/t2.json" >/dev/null 2>&1; RC20=$?
+  { [ "$RC20" -eq 0 ] && head -1 "$D/seq.args" 2>/dev/null | grep -q '^resume 222 --repo adolfousier/opencrabs '; } \
+    && t_ok "--repo passthru: resume path carries --repo (n=1800)" || t_bad "--repo resume rc=$RC20 args1=$(head -1 "$D/seq.args" 2>/dev/null)"
+  printf '0' > "$D/seq"; rm -f "$D/seq.count" "$D/seq.args"; : > "$D/notify.log"; rm -f "$D/notify.log.c2"
+  printf '{"id":"t3","pid":0,"ref":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","notify":"11111111-2222-3333-4444-555555555555","label":"reporef","timeout":60,"stall_k":8,"window":1,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null,"actor":"11111111-2222-3333-4444-555555555555","run_id":"333","repo":"adolfousier/opencrabs"}\n' "$(date -u +%FT%TZ)" > "$D/waiters/t3.json"
+  NOTIFY_LOG="$D/notify.log" OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 \
+    "$SELF" _run "$D/waiters/t3.json" >/dev/null 2>&1; RC20B=$?
+  { [ "$RC20B" -eq 0 ] && head -1 "$D/seq.args" 2>/dev/null | grep -q -- '--repo adolfousier/opencrabs'; } \
+    && t_ok "--repo passthru: ref path carries --repo (n=1800)" || t_bad "--repo ref rc=$RC20B args1=$(head -1 "$D/seq.args" 2>/dev/null)"
+  printf '0' > "$D/seq"; rm -f "$D/seq.count" "$D/seq.args"; : > "$D/notify.log"; rm -f "$D/notify.log.c2"
+  printf '{"id":"t4","pid":0,"ref":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","notify":"11111111-2222-3333-4444-555555555555","label":"norepo","timeout":60,"stall_k":8,"window":1,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null,"actor":"11111111-2222-3333-4444-555555555555","run_id":"333"}\n' "$(date -u +%FT%TZ)" > "$D/waiters/t4.json"
+  NOTIFY_LOG="$D/notify.log" OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 \
+    "$SELF" _run "$D/waiters/t4.json" >/dev/null 2>&1; RC20C=$?
+  { [ "$RC20C" -eq 0 ] && ! head -1 "$D/seq.args" 2>/dev/null | grep -q -- '--repo'; } \
+    && t_ok "--repo unset: no --repo arg, fork default intact (backward-compat)" || t_bad "--repo unset rc=$RC20C args1=$(head -1 "$D/seq.args" 2>/dev/null)"
+  # 20d. arm --repo + unknown-arg refusal
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm \
+    --ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --notify 11111111-2222-3333-4444-555555555555 --repo adolfousier/opencrabs >/dev/null 2>&1; RC20D=$?
+  { [ "$RC20D" -eq 0 ] && [ -n "$(OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --notify 11111111-2222-3333-4444-555555555555 --repo adolfousier/opencrabs 2>/dev/null | grep -oE 'id=[^ ]+' | head -1 | cut -d= -f2)" ]; } \
+    && t_ok "arm --repo accepted (n=1800)" || t_bad "arm --repo rc=$RC20D"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm \
+    --ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --notify 11111111-2222-3333-4444-555555555555 --bogus x >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "unknown arm arg still refused rc 2" || t_bad "unknown-arg guard broken"
+
   echo "selftest: $pass/$((pass+fail)) passed"
   rm -rf "$D"
   [ "$fail" -eq 0 ]
@@ -493,7 +527,7 @@ case "${1:-}" in
 Usage: oc-waiter arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N] [--run <id>]
        oc-waiter list | sweep | _run <record.json> | --selftest
 Exit: arm 0 armed / 2 usage-or-actor-refused / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
-Env: OC_ACTOR=<session-uuid> REQUIRED for arm (attribution, #115 C) · --run seeds a witnessed run id (#115 A)
+Env: OC_ACTOR=<session-uuid> REQUIRED for arm (attribution, #115 C) · --run seeds a witnessed run id (#115 A) · --repo / OC_WAITER_REPO for cross-repo watch (n=1800)
 EOH
     exit 0 ;;
   --selftest|selftest) do_selftest; exit $? ;;
