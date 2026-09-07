@@ -92,7 +92,8 @@ esac
 
 # ---- 4. SIGNATURE ----------------------------------------------------------
 MSG="$(gh api "repos/$REPO/commits/$SHA" --jq .commit.message)" || fail 4 "cannot read commit message"
-SID="$(printf '%s\n' "$MSG" | sed -n 's/^Session-Id:[[:space:]]*\([0-9a-fA-F-]\{36\}\).*/\1/p' | head -1)"
+SID="$(oc_session_trailer "$MSG")"; SID="$(printf '%s' "$SID" | tr -d '[:space:]')"   # one-convention helper (Duty-6 lens F task 2): LAST trailer wins
+case "$SID" in ????????-????-????-????-????????????) : ;; *) SID="" ;; esac  # HOTFIX 20260907 HQ: WIP 4-char-class pattern demanded dash at pos 5, rejected ALL valid UUIDs (d5863180 anomaly, fleet-blocking); TOOLSMITH to own in lens-F batch
 [ -n "$SID" ] || fail 3 "UNSIGNED: no Session-Id trailer on $SHA — attribution mandatory (SKILL.md session-notify loop)"
 ROLE="$(jq -r --arg u "$SID" '.workers[] | select(.uuid==$u) | .role // empty' "$LEDGER" 2>/dev/null)"
 [ -n "$ROLE" ] || fail 3 "UNSIGNED: Session-Id $SID is not in the workers ledger"

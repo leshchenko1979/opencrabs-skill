@@ -66,6 +66,15 @@ on census evidence + owner word (supervisor.md step 7).
      for CO-LOCATION (a concept's definition, rules, and caveats under one
      heading). Findings must weigh the cost of a split (cross-refs, worker
      reading load) against the cost of growth.
+     LOAD-PATH MANDATE (owner order 2026-09-07): any split or regroup verdict
+     MUST also trace the skill's LOADING — which parts are always-injected
+     (AGENTS.md anchors) vs on-demand (`load_brain_file` / SKILL.md section
+     loads) — and verify every moved section remains reachable on the paths
+     its readers actually use: the anchor line still points at the new home,
+     the post-compaction re-load hint still names a file that holds the rule,
+     and nothing a role loads by habit (supervisor duties, editor phases)
+     lands only in a file that role never opens. A split that breaks the
+     load path is a REGRESSION finding against itself, not a cleanup.
 
 #### FAMILY: TOOLS — the tools/ surface (gaps / shape / implementation)
 
