@@ -293,7 +293,7 @@ REMOVED, order cc100dc6; carrier branch is the sole build lane; oc-ci-parity
 
 Moved from editor.md §CI-wait — these bind SUPERVISOR waiters and any detached
 lane polling. The editor carries its OWN full set in editor.md §CI-wait
-(items 1–13 since v0.4.71 — lens B F10, v0.4.79: the "editor keeps items 1–3"
+(items 1–15 since v0.4.90 — 14th = dispatch-receipt gate, 15th = solo-surface rule; lens B F10, v0.4.79: the "editor keeps items 1–3"
 partition is retired; count re-verified lens A18 v0.4.89). Cross-references to these items use the W-prefix to
 avoid collision with the editor's local numbering.
 

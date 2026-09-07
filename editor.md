@@ -132,7 +132,17 @@ supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
    waiting on it — a dispatch that fired on the wrong ref wastes the whole
    wait. oc-prchecks headSha adoption enforces this for its own runs; the
    check covers hand-dispatched `gh workflow run` uses.
-10. **Detached waiters are `oc-waiter` — THE standard (H1+H3+H4, v0.4.83,
+10. **Dispatch-receipt gate (Duty-4 proposal d5863180, owner "All 4 go"
+   2026-09-07, semantic):** a dispatch is NOT dispatchable-upon until its
+   receipt is IN HAND — the dispatch command returned rc==0 AND an adopted
+   run id is witnessed (API run-search/job-name decode for a recovered
+   mid-flight invocation). Arming a waiter or wiring notify on an
+   un-receipted dispatch creates an orphan-class wait: the waiter rules
+   (item 10/W-rules) validate the WAITER, this gate validates the DISPATCH
+   first. Evidence: the 2026-09-07 `--notify-session` invented-flag
+   near-miss — the flag sailed through waiter arming because nothing
+   asserted the dispatch itself had landed.
+11. **Detached waiters are `oc-waiter` — THE standard (H1+H3+H4, v0.4.83,
    supersedes the P1 payload-validation wording):** detached gate waiters MUST
    be `oc-waiter arm --ref <sha|branch> --notify <session-uuid>`; hand-rolled
    pollers whose notify text interpolates shell variables are FORBIDDEN —
@@ -148,23 +158,33 @@ supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
    journal-start check proves the waiter LAUNCHED; it does not prove its
    payload — with oc-waiter both are enforced in-tool; if you must hand-roll
    anyway, check both.
-11. **oc-prchecks detaches or fails fast (Duty-4 P2, v0.4.80):** never run
+12. **oc-prchecks detaches or fails fast (Duty-4 P2, v0.4.80):** never run
    oc-prchecks INLINE inside a bounded bash tool call — an orphaned inline
    poll keeps polling after the caller moves on and can adopt a peer run by
    time-window (false RED, journal-corrected 2026-09-01, ledger n=1366). Run
    it detached with journal-start verify, or bound it to the tool budget and
    treat a timeout as an ERROR, never a verdict.
-12. **Per-run-id journal filenames (Duty-4 P5, v0.4.80):** waiter/driver
+13. **Per-run-id journal filenames (Duty-4 P5, v0.4.80):** waiter/driver
    journal files embed the run id (the `/tmp/swap-<sha>-*.log` pattern) — two
    waiters sharing one journal path nearly read an old run's verdict as the
    new one (2026-09-01). New file or append-only per run; never append a
    second wait to a finished run's journal.
-13. **Full shas from rev-parse only (Duty-4 P8, v0.4.80):** any 40-char sha in
+14. **Full shas from rev-parse only (Duty-4 P8, v0.4.80):** any 40-char sha in
    a command or report is copied from SAME-TURN `git rev-parse` / `gh api`
    output — never completed from a remembered prefix (2026-09-01 incident
    n=1452: a fabricated tail burned two gh dispatches; the first hypothesis
    after a lookup failure following a from-memory sha is SELF-FABRICATION —
    re-derive before blaming GitHub).
+15. **Solo-surface rule (Duty-4 proposal d5863180, owner "All 4 go"
+   2026-09-07, semantic):** a SIDE-EFFECT command whose output is the only
+   receipt of the action it took (`gh pr create`, `gh issue create`, dispatch
+   verbs, anything minting an identifier) runs SOLO in its tool call so its
+   output is witnessed. Batched inside a multi-command call whose tail output
+   was truncated/lost → the identifier is UNFILED until a fresh verification
+   call (`gh pr view`, `gh api`) names it in a same-turn receipt. Root cause
+   of the #1272 phantom-PR report (2026-09-07) — a `gh pr create` whose
+   output the lane never saw got reported as filed; third phantom-family
+   instance for that lane.
 ## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52)
 
 Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep
@@ -515,6 +535,14 @@ The lane runs its own ship as an agent-launched BACKGROUND task:
   --sha <full-40-sha> --features <comma-set> --execute
 ```
 
+**One-command shape (lens E F-1, v0.4.90, owner "All 4 go" — GOAL, tool
+change lands via TOOLSMITH):** ship+poll chain fuses into
+`oc-deploy ship --sha <40> --features <set> --execute --wait N` = ONE
+detached invocation (ORDER gates → carrier dispatch → bounded poll → GREEN
+auto-swap; timeout rc 5 + run id + URL — the contract poll --wait already
+has). Until that flag ships, run ship then `oc-deploy poll --execute --wait N`
+as two steps (below).
+
 The script performs the chain Phase 6's push legs feed into (ORDER gates + carrier dispatch) beyond the hand-run fork-main fetch +
 fast-forward check → push → 4 ORDER gates (oc-order-validate) → carrier
 dispatch on `ci/quick-build-linux` — appends every verdict to the shadow
@@ -630,7 +658,7 @@ ONLY on owner approval.
 #    ROUTING (reply or positive reaction counts; silence does NOT).
 
 # 1. list fork-only commits, pick THIS feature's (trailers + touched files)
-#    — mechanized: `tools/oc-deploy contributors <old>..<new>` (3-col TSV:
+#    — mechanized: `tools/oc-attrib --range <old>..<new> --contributors` (3-col TSV:
 #    session-uuid / issue_refs / sha7s) or `tools/oc-attrib --range` for
 #    roster-resolved roles; the raw form:
 git -C ~/opencrabs fetch adolfousier
@@ -756,6 +784,12 @@ Rules:
   head alive).
 
 ## Phase 7b — PR lifecycle (monitor & unblock, v0.4.0)
+
+> **SPLIT NOTE (lens B-16, v0.4.90):** Phase 7 + 7b (~30% of this file) are
+> the designated split candidate → `editor-upstream-pr.md` when the next
+> major reorganization runs; the split is DISCLOSED here, not executed
+> (split-cost judgment = lens G: phase ordering still coherent, no forced
+> mid-procedure loads). Standing law stays in this file.
 
 Every OPEN upstream PR has an owning editor: the Session-Id trailers of its
 harvested commits. When a PR is not mergeable, route by BLOCKER CLASS:
