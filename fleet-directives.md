@@ -200,3 +200,53 @@ exists on disk/remote as claimed, (2) the evidence trail (gate run, job-name
 sha pin) is live-verified by the adopting session itself, (3) no newer state
 invalidates it (main moved, superseded fix). All three or the claim is
 treated as unverified input, not as a receipt.
+
+## Explicit thread_id on forum sends (owner-approved 2026-09-07, telegram_send error audit)
+
+When sending to a forum-enabled group via `telegram_send`, ALWAYS pass
+`thread_id` explicitly — taken from the `[Channel: Telegram (chat_id,
+thread_id)]` header of the message being replied to. Never rely on
+auto-routing ("omit to auto-route"): cron, restarted, and compacted sessions
+fall back to last-seen-topic memory, which routes to a dead topic
+(`Bad Request: message thread not found` — the dominant tool failure in the
+2026-09-07 audit). If no header is available, resolve via `list_topics`
+first, or send deliberately to General (`thread_id` unset explicitly).
+
+## telegram_send addressing rule (owner ruling 2026-09-07, telegram_send error audit) — AS-IS law
+
+`telegram_send` calls must ALWAYS carry the full id set: explicit `chat_id`
+AND explicit `thread_id` (for forum-enabled chats). Never omit either.
+
+- Omission is not a routing mode — it silently falls back to session-origin
+  or last-seen-topic memory, which is how the dominant tool failure
+  (`Bad Request: message thread not found`, 2026-09-07 audit) happens.
+- Source the ids from the `[Channel: Telegram (chat_id, thread_id)]` header
+  of the message being replied to; if absent, resolve via `list_topics`.
+- `thread_id: null` (explicit General) is the only sanctioned way to target
+  General; blind omission is not.
+
+## telegram_send omission semantics — TO-BE target (owner ruling 2026-09-07, adopted)
+
+Target state for opencrabs-dev (tool change, NOT process law — the AS-IS rule
+above governs until this ships): omitted `chat_id` + `thread_id` = send goes
+to the same topic the tool call originated from. Omission becomes a
+same-topic reply primitive; it is never a route to the owner's DM (owner chat
+133526395 requires explicit `chat_id`). Origin must be tracked per-turn from
+the incoming channel wrapper and survive compaction, so cron/restarted
+sessions resolve origin correctly instead of falling back to stale
+last-seen-topic memory.
+
+## telegram_send landing echo — TO-BE target (owner ruling 2026-09-07, adopted)
+
+Target state for opencrabs-dev (tool change): a successful `telegram_send`
+must echo where the message actually landed — resolved `chat_id` and
+`thread_id` (topic name when resolvable) in the success output. Purpose:
+close the feedback loop that made misdelivery invisible — the success output
+currently names the landing chat only when the caller passed an id, and says
+nothing about the topic when auto-routing picks one. With a landing echo, a
+stale-topic route or session-origin fallback is immediately visible to the
+calling model, enabling self-correction without a human complaint.
+
+Complements the omission-semantics target above: omission semantics make the
+route deterministic; landing echo makes the outcome observable.
+

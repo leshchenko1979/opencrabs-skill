@@ -339,3 +339,7 @@ Supervisor-lane split: interrupt-shaped duties carved out into a new TRIAGE lane
 - triage.md: Duty T2 item 3 — `tools/` CLI code routes to the TOOLSMITH lane, every other area to the owning editor.
 - editor.md: QUIRK mirror bullet — `tools/` CLI code to the TOOLSMITH lane, everything else to the owning editor.
 - Pre-bump gate: oc-deploy --selftest 184 pass / 0 fail; battery tools/tests/run.sh 144 PASS / 0 FAIL (receipt refreshed).
+## v0.4.88 (2026-09-07, owner "Reload skill" 11:24Z — telegram_send error-audit law adoption)
+- fleet-directives.md gains FOUR sections from the 2026-09-07 telegram_send error audit (owner-adopted): (1) AS-IS law — explicit chat_id + thread_id on EVERY forum-group telegram_send, ids sourced from the incoming [Channel] header or list_topics; omission is not a routing mode (the dominant failure, "message thread not found", came from stale last-seen-topic memory). (2) TO-BE target — omission semantics: omitted chat_id+thread_id = same-topic origin send; never a route to the owner DM. (3) TO-BE target — landing echo: successful sends echo resolved chat_id + thread_id/topic name so misdelivery is visible to the caller. (4) Explicit-thread_id guidance.
+- Routing-law mirror: AGENTS.md:128 (HQ board routing = decision-points only) + :129 (stamp/write claims need same-turn tool receipt) — persisted 2026-09-07 08:20Z after a verified phantom-stamp incident; mirrored here for skill-side provenance.
+- Doc-only bump: no tools/ changes, battery unchanged (144/0).
