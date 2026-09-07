@@ -291,14 +291,23 @@ Issue-Ref: #99"
     OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
     "$SELF_BIN" ship --sha "$SHA2" 2>&1)"; rc=$?
   check_rc "ship-plan-rc" $rc 0
+  local SHIP_PLAN_OUT="$out"   # keep for 4b's plan-complete check (phantom cases clobber $out)
   check_has "ship-plan-lines" "$out" "would: git push"
   check_has "ship-plan-ff" "$out" "FF ok"
   check_has "ship-plan-carrier-features" "$out" "features=telegram"
+  # 4a-phantom (n=1878): format-valid sha that does not EXIST -> refuse rc1,
+  # before any plan/rebase output (fabricated-sha incident guard).
+  local PHANTOM="4c0115ba9aa052f5cfeda01383c0d20be9e2392e"
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$PHANTOM" 2>&1)"; check_rc "ship-phantom-sha" $? 1
+  check_has "ship-phantom-msg" "$out" "sha not found in this repo"
+  grep -q "PLAN: ship" <<<"$out" && { fail=$((fail+1)); echo "SELFTEST FAIL: phantom sha produced plan lines"; } || pass=$((pass+1))
   # 4b. carrier read FAIL -> ship aborts (KERNEL D2: no silent fallback set)
   (cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
     OC_DEPLOY_CARRIER="$SD/tools/carrier-fail" \
     "$SELF_BIN" ship --sha "$SHA2" >/dev/null 2>&1); check_rc "carrier-fail-aborts" $? 2
-  check_has "ship-plan-complete" "$out" "plan complete"
+  check_has "ship-plan-complete" "$SHIP_PLAN_OUT" "plan complete"
   if [ "$(git -C "$T/remote.git" rev-parse main)" != "$SHA2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "SELFTEST FAIL: plan mode mutated remote"; fi
   grep -q "ship-plan" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no ship-plan shadow row"; }
   # 5. ship execute non-FF -> exit 2 (diverge remote main)
@@ -1692,6 +1701,11 @@ case "$MODE" in
         || die 1 "no --sha given and CWD is not a git repo"
     fi
     echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
+    # n=1878 hard guard: format-valid does not mean real — refuse phantom
+    # shas BEFORE any plan/rebase logic (fabricated sha incident: lane-planned
+    # ship sha=4c0115ba…, bad object, misleading 'rebase needed' downstream).
+    git cat-file -e "$SHA^{commit}" 2>/dev/null \
+      || die 1 "sha not found in this repo (phantom?): $SHA — pass --sha <real commit sha>"
     plan "ship sha=$SHA features=$FEATURES stage=$(stage) execute=$EXECUTE"
     git fetch -q "$REMOTE" +refs/heads/main:refs/oc-deploy/main 2>/dev/null \
       || git fetch -q "$REMOTE" main \
@@ -1810,6 +1824,9 @@ case "$MODE" in
   swap-execute)
     [ -n "$SHA" ] && [ -n "$RUN_ID" ] || die 1 "swap-execute needs --sha <40-hex> and --run <id>"
     echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
+    # NOTE (n=1878): NO local cat-file guard here — swap-execute targets the
+    # remote host; its sha is authenticated by the carrier-run job-name decode
+    # inside swap_execute, not by the local object DB. Local guard = false stops.
     swap_execute "$SHA" "$RUN_ID" "$FEATURES" "$DRILL" "$ARTDIR" "$ALLOW_DROP"
     ;;
   # ---------------------------------------------------------------- fanout --
