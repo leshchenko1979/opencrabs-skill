@@ -52,7 +52,8 @@ on census evidence + owner word (supervisor.md step 7).
      every line is live and unique (cure: disclose reference, then split by
      branch — not word-trimming).
    - **Reviewer G — ROLE-FILE STRUCTURE:** the ORGANIZATION of EACH role file
-     — the three role files (editor.md, supervisor.md, SKILL.md) plus every
+     — the role files (re-derived from `ls *.md` at spawn time; count not
+     hardcoded — lens G-F8 v0.4.89) plus every
      split-out reference page in the skill root, re-derived from `ls *.md`
      at spawn time (objects rot, the dimension doesn't) — phase/duty ordering vs actual
      work sequence, sections grown past cohesion (one section = one concern),

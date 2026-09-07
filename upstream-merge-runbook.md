@@ -24,7 +24,7 @@ commits, 133 fork-only, 68 overlapping files, merge-base `4776bee2`).
 |---|---|
 | **HQ** | freeze check, run the merge, arbitrate textual conflicts, ledger stamps, consolidated report with the per-feature decisions table |
 | **Review lens** (one spawn) | audits each semantic pair — diff fork behavior vs upstream's, flag anything upstream's version *loses* |
-| **Carrier tools lane** | builds the merged tree via the `oc-deploy` lane, runs the battery — HQ never hand-builds |
+| **TOOLSMITH lane** (ex carrier-tools, v0.4.87) | builds the merged tree via the `oc-deploy` lane, runs the battery — HQ never hand-builds |
 | **Harvest lane** | unaffected for open PRs, but **pauses new branch creation** off fork main until the merge lands (stale bases) |
 | **Owner** | semantic-pair overrides + the final prod swap |
 

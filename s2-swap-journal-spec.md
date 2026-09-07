@@ -1,4 +1,4 @@
-# S2 swap-leg journal spec (proposal) — for oc-deploy wiring
+# S2 swap-leg journal spec — for oc-deploy wiring (live since v0.4.62; title "(proposal)" retired lens A13 v0.4.89)
 
 Author: compiler lane e756b84b · 2026-08-28
 Answers: owner tool-logging law 2026-08-28 (fleet-directives.md) + HQ ledger-1264 gap list

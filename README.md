@@ -21,7 +21,7 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `upstream-merge-runbook.md` | Procedure for the merge-on-arrival policy: gates, roles, conflict classes, migration-union rule |
 | `s2-swap-journal-spec.md` | Journal vocabulary spec for the oc-deploy swap leg |
 | `CHANGELOG.md` | Version history, **newest entry LAST** |
-| `tools/` | The `oc-*` tool fleet (30 executables) + `lib/` + `tests/` |
+| `tools/` | The `oc-*` tool fleet (31 executables) + `lib/` + `tests/` |
 | `tools/lib/` | Shared shell libs: `oc-log.sh` (journal + rc register + flood guard), `oc-embed.sh` (job-embed decoder) |
 | `tools/RC-CONTRACT.md` | SOLE per-tool rc register: fleet conventions + verdict codes (v0.4.78) |
 | `tools/tests/run.sh` | Battery: full selftest suite + coverage sections. Receipt → `tools/tests/battery-last.json` |
@@ -33,6 +33,8 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 |---|---|---|
 | **EDITOR** | live | Fork issues, per-task worktrees, CI gates, signed commits, `oc-deploy ship`, upstream PRs |
 | **SUPERVISOR** | live | Worker ledger, duty cadence, multi-lens code/structure reviews |
+| **TRIAGE** | live (v0.4.86 carve-out) | Idea-box + QUIRK intake, evidence verification, fix routing, new-editor creation |
+| **TOOLSMITH** | live (v0.4.87 carve-out) | Owns `tools/` CODE — makes and fixes the CLI tools every other role uses |
 | **COMPILER** | **RETIRED 2026-08-28** (S3 cutover) | duties absorbed by `tools/oc-deploy` (ship / poll / swap-execute) |
 
 ## Tool fleet (quick index)

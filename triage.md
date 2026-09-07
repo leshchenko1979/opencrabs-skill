@@ -109,12 +109,12 @@ WHAT escalates: ACCEPT-MECHANICAL batch items, KERNEL-SEMANTIC verdicts,
 protocol disputes, skill-edit requests, semantic questions, sanctioned-sender
 judgments, upstream matters, owner-verdict-table material.
 
-HOW: `session_notify` per fleet-directives cadence law — quiet DEFAULT;
-turn-end for boundary-bound signals; `interrupt=true` failsafe ONLY for an
-urgent wake the Supervisor is blocked on. Batch at turn-end — one notify with
+HOW: `session_notify` per fleet-directives §Cross-lane delivery (cadence law
+canonical — quiet DEFAULT, turn-end for boundary-bound, `interrupt=true`
+failsafe only). Batch at turn-end — one notify with
 N items beats N notifies. Receipts, ACKs, and ROUTED stamps NEVER escalate;
 they live in the ledger.
 
 WHAT comes back: the Supervisor's rulings and version batches absorb here the
-same way they absorb everywhere — disk absorption, zero-ping (supervisor.md
-Duty 3). This lane re-reads its role file at turn start like every other lane.
+same way they absorb everywhere — disk absorption (§Glossary, SKILL.md),
+zero-ping (supervisor.md Duty 3).

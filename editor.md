@@ -32,7 +32,7 @@ rustfmt wrapper), and its compile binaries were DISABLED 2026-08-28
 invocation that WORKS is still a ruling violation. Sanctioned local
 tools ONLY: `/usr/local/bin/rustfmt` wrapper (fmt only — `--edition 2024`
 + entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, Phase 5 —
-the generic CI ritual; Phase 7 step 2c reuses it on upstream PR heads).
+the CI gate, §Glossary; Phase 7 step 2c reuses it on upstream PR heads).
 Everything
 else — build, test, clippy — is CI dispatch: `pr-checks.yml` (Phase 5) or
 quick-build-linux dispatched via `oc-deploy ship`. Need
@@ -168,7 +168,8 @@ supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
 ## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52)
 
 Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep
-shipping mid-flight (cadence is FIRE territory). Skill files are plain disk
+shipping mid-flight (cadence is FIRE territory — FIRE = the release window
+between version bump and prod swap, defined here lens A8 v0.4.89). Skill files are plain disk
 files read on demand — nothing is cached in-session — so "reload" = re-read:
 
 1. On every turn that resumes from a detached long command (result injection)

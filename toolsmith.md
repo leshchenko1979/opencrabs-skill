@@ -52,7 +52,9 @@ Hard discipline for every change:
 
 ## Duty S2 — Battery stewardship
 
-`tools/tests/run.sh` (the tooling half of the review battery, lenses E/F)
+`tools/tests/run.sh` (the tooling half of the review battery — "review
+battery" = the full `bash tools/tests/run.sh` selftest suite every version
+bump must pass GREEN, lens A9 v0.4.89 definition; lenses E/F)
 runs on every tool change and on Supervisor request; failures route back to
 the offending change, never waived. Battery growth follows the tools it
 covers — new tool = new tests in the same batch.
@@ -63,12 +65,12 @@ WHAT escalates: skill-edit requests, protocol disputes, semantic questions,
 daemon/carrier defects (or route to an editor lane via TRIAGE if that's the
 faster path), anything owner-verdict-shaped.
 
-HOW: `session_notify` per fleet-directives cadence law — quiet DEFAULT;
-turn-end for boundary-bound signals; `interrupt=true` failsafe ONLY for an
-urgent wake the Supervisor is blocked on. Batch at turn-end — one notify with
+HOW: `session_notify` per fleet-directives §Cross-lane delivery (cadence law
+canonical — quiet DEFAULT, turn-end for boundary-bound, `interrupt=true`
+failsafe only). Batch at turn-end — one notify with
 N items beats N notifies. Receipts, ACKs, and ROUTED stamps NEVER escalate;
 they live in the ledger.
 
 WHAT comes back: the Supervisor's rulings and version batches absorb here the
-same way they absorb everywhere — disk absorption, zero-ping (supervisor.md
-Duty 3). This lane re-reads its role file at turn start like every other lane.
+same way they absorb everywhere — disk absorption (§Glossary, SKILL.md),
+zero-ping (supervisor.md Duty 3).

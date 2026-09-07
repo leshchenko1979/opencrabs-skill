@@ -93,13 +93,7 @@ Trigger: a NEW area is discussed and a research/code task needs doing, and NO ex
 
 **The intake lane for tool anomalies is OC DEV TRIAGE (v0.4.86 carve-out, owner "Go with Option A" 2026-09-06); the supervisor of record remains OC DEV HQ.** Owner order 2026-09-03 20:31Z: "we do have a supervisor lane — it's OC DEV HQ" — that identity is unchanged for ESCALATION (semantic/KERNEL verdicts, rulings); the interrupt-shaped intake moved to the Triage lane so HQ keeps deep-work windows. Workers/editors route tool-use anomaly reports (failed invocations, wrong args, false journal rows, misreads that survive into claims, unbacked persistence claims) to the OC DEV TRIAGE session via `session_notify` (discover the session via session_search — never uuid-from-memory) — never lane-status-only, and never to an ad-hoc "carrier tools" chat as supervisor (superseded interim routing, 2026-09-03 19:16–20:13Z; carrier-tool channel remains a valid NOTIFICATION target, not the supervisor of record). Journal/worker vocabulary fixes authored by HQ flow to the TOOLSMITH lane for execution (tool code); the carrier-tool channel was promoted to the TOOLSMITH lane at v0.4.87 (owner "Go toolsmith" 2026-09-06); HQ-authored skill text still lands via the TRIAGE lane's intake, never as a direct edit.
 
-Workers/editors report tool failures, inconsistencies, and quirks to the **TRIAGE lane (OC DEV TRIAGE)** — `QUIRK: <tool> <observed> BECAUSE <expected>` + evidence, same turn (skill: triage.md §Duty T2, ex supervisor.md §Duty 7 items 5–6, editor.md lane duty). The Triage lane's duty on receipt:
-
-1. ACK same turn; stamp ledger `idea` event.
-2. Verify evidence against disk/logs before routing (reports can be wrong — see fanout refutation, 2026-09-01).
-3. Route the FIX: skill `tools/` CLI code → the TOOLSMITH lane (OC DEV TOOLSMITH, v0.4.87 carve-out); every other area → owning editor lane by TOPIC name (session_search, never remembered uuid); brief via session_notify with the quirk + evidence. No lane covers the area → create a NEW editor (§Creating new editors above).
-4. Stamp `idea-verdict` ROUTED (target topic named) or REJECT (reason journaled). The fix ships through the normal editor flow — Duty 7 documents the report, it never bypasses Phase-7.
-5. Semantic/KERNEL escalations, sanctioned-sender judgments, and skill-edit requests go to the SUPERVISOR (OC DEV HQ), batched per the cadence law (triage.md §Escalation).
+Workers/editors report tool failures, inconsistencies, and quirks to the **TRIAGE lane (OC DEV TRIAGE)** — `QUIRK: <tool> <observed> BECAUSE <expected>` + evidence, same turn (skill: triage.md §Duty T2, ex supervisor.md §Duty 7 items 5–6, editor.md lane duty). The Triage lane's duty on receipt — ACK, verify evidence against disk/logs, route the FIX (skill `tools/` CLI code → the TOOLSMITH lane; every other area → owning editor lane by TOPIC name), stamp `idea-verdict` ROUTED or REJECT — lives verbatim in `triage.md` §Duty T2; THIS FILE CARRIES NO PROCEDURE COPY.
 
 ## Cadence boundary is stamped at review consolidation
 
@@ -201,17 +195,6 @@ sha pin) is live-verified by the adopting session itself, (3) no newer state
 invalidates it (main moved, superseded fix). All three or the claim is
 treated as unverified input, not as a receipt.
 
-## Explicit thread_id on forum sends (owner-approved 2026-09-07, telegram_send error audit)
-
-When sending to a forum-enabled group via `telegram_send`, ALWAYS pass
-`thread_id` explicitly — taken from the `[Channel: Telegram (chat_id,
-thread_id)]` header of the message being replied to. Never rely on
-auto-routing ("omit to auto-route"): cron, restarted, and compacted sessions
-fall back to last-seen-topic memory, which routes to a dead topic
-(`Bad Request: message thread not found` — the dominant tool failure in the
-2026-09-07 audit). If no header is available, resolve via `list_topics`
-first, or send deliberately to General (`thread_id` unset explicitly).
-
 ## telegram_send addressing rule (owner ruling 2026-09-07, telegram_send error audit) — AS-IS law
 
 `telegram_send` calls must ALWAYS carry the full id set: explicit `chat_id`
@@ -221,11 +204,11 @@ AND explicit `thread_id` (for forum-enabled chats). Never omit either.
   or last-seen-topic memory, which is how the dominant tool failure
   (`Bad Request: message thread not found`, 2026-09-07 audit) happens.
 - Source the ids from the `[Channel: Telegram (chat_id, thread_id)]` header
-  of the message being replied to; if absent, resolve via `list_topics`.
+  of the message being replied to; if absent, resolve via `list_topics`
+  before sending.
 - `thread_id: null` (explicit General) is the only sanctioned way to target
   General; blind omission is not.
 
-## telegram_send omission semantics — TO-BE target (owner ruling 2026-09-07, adopted)
 
 Target state for opencrabs-dev (tool change, NOT process law — the AS-IS rule
 above governs until this ships): omitted `chat_id` + `thread_id` = send goes
@@ -249,4 +232,3 @@ calling model, enabling self-correction without a human complaint.
 
 Complements the omission-semantics target above: omission semantics make the
 route deterministic; landing echo makes the outcome observable.
-

@@ -14,17 +14,18 @@ Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `fleet-
 turn field evidence into rules. The Supervisor NEVER dispatches builds, NEVER swaps
 binaries, NEVER touches the binary, NEVER writes feature code.
 
-**PROCESS-TOOL OWNERSHIP:** CLI tools that automate OUR process steps
-(sealing state files, presence gates, roster pulls, job-name verification,
-health receipts) are the Supervisor's to CREATE, FIX, and MAINTAIN — that is
-ops tooling, NOT opencrabs feature code. Tools live in
+**PROCESS-TOOL OWNERSHIP (v0.4.87 Toolsmith carve-out):** CLI tools that
+automate OUR process steps (sealing state files, presence gates, roster
+pulls, job-name verification, health receipts) are the TOOLSMITH lane's to
+CREATE, FIX, and MAINTAIN (toolsmith.md) — ops tooling, NOT opencrabs
+feature code. Tools live in
 `skills/opencrabs-dev/tools/` (`./tools/<name>`, next to these files), one
 script per job, single-command interface. Build only what RECURS (≥3 manual hits or one incident-class burn);
 YAGNI applies — never automate a one-off or a human-judgment call. **Guard
-(S3-rewired 2026-08-28):** the Supervisor authors/maintains these tools; the
-build-cycle tools (`oc-deploy` ship/poll/swap-execute) RUN the cycle
-themselves — the old guard ("Supervisor never runs tools inside a build cycle;
-the Compiler validates before adoption") retired WITH the Compiler role.
+(S3-rewired 2026-08-28):** the build-cycle tools (`oc-deploy`
+ship/poll/swap-execute) RUN the cycle themselves — the old guard
+("Supervisor never runs tools inside a build cycle; the Compiler validates
+before adoption") retired WITH the Compiler role.
 Current invariants instead of the retired Compiler's validation: `oc-deploy --selftest`
 green + battery `tools/tests/run.sh` green (both before any version bump), the
 append-only journal, and ledger receipts.
@@ -189,15 +190,13 @@ moment it happens; no waiting for a poll.
 
 Operations (same-turn ACKs, ledger stamps, evidence verification, fix
 routing to the owning editor, new-editor creation) live in `triage.md`
-§Duty T1/T2/T3 — the channel's policy is unchanged:
+§Duty T1/T2/T3 — the channel's policy is unchanged. THIS SECTION CARRIES
+NO PROCEDURE COPY (lens A2/G-F4, v0.4.89 — one concept, one home):
 
 - Format = Duty-4 strict format with an `IDEA:` prefix (T1); tool problems
-  use the `QUIRK:` format (T2, owner order 2026-09-01 22:2xZ).
-- INBOX = the ledger (`workers-ledger.json`, flock-serialized via
-  `oc-ledger` — Triage and Supervisor both write it, safely). Kinds:
-  `idea` / `idea-verdict`.
-- Verdicts: ACCEPT-MECHANICAL / KERNEL-SEMANTIC / REJECT / ROUTED — never
-  silently dropped.
+  use the `QUIRK:` format (T2, owner order 2026-09-01 22:2xZ); verdict
+  taxonomy + INBOX mechanics live in triage.md (ledger kinds `idea` /
+  `idea-verdict` — never silently dropped).
 
 What stays HERE (Supervisor side):
 
@@ -231,7 +230,9 @@ one-line summaries; this section is the procedure — re-homed from the archived
 compiler runbook, where it had been stranded since the 2026-08-28 S3 cutover).
 
 **SYNC LAW (owner 2026-09-02 "Land it"): fork main MERGES `adolfousier/main`
-when upstream shifts — merge, never rebase/reset, on fork main.** Executing
+when upstream shifts — merge, never rebase/reset, on fork main.** CANONICAL
+STATEMENT — SKILL.md §Upstream relations and supervisor.md §Upstream sync
+carry pointers only (lens A3 v0.4.89: one concept, one home). Executing
 procedure: `upstream-merge-runbook.md` (freeze gate, roles, conflict classes,
 migration-union rule, semantic-triage defaults). The REBASE-PORT procedure
 below is RETIRED — kept for PR-chain ports only (harvest branches onto
@@ -292,8 +293,8 @@ REMOVED, order cc100dc6; carrier branch is the sole build lane; oc-ci-parity
 
 Moved from editor.md §CI-wait — these bind SUPERVISOR waiters and any detached
 lane polling. The editor carries its OWN full set in editor.md §CI-wait
-(items 1–9 since v0.4.71 — lens B F10, v0.4.79: the "editor keeps items 1–3"
-partition is retired). Cross-references to these items use the W-prefix to
+(items 1–13 since v0.4.71 — lens B F10, v0.4.79: the "editor keeps items 1–3"
+partition is retired; count re-verified lens A18 v0.4.89). Cross-references to these items use the W-prefix to
 avoid collision with the editor's local numbering.
 
 - **W1. Poll floor — EVERY detached gh poller ≥60s.** Waiter, watchdog,

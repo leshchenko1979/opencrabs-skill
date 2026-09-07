@@ -8,7 +8,7 @@ description: >
   TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.88
+version: 0.4.89
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -69,7 +69,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-issue-log <issue-n> <sha> [--state <text>] [--repo <slug>] [--dry-run]` | per-commit implementation comment (owner 2026-08-28 22:54Z) composed from git metadata and posted via gh `--body-file` ONLY — the inline-heredoc substitution class is impossible through this tool (lens C3, v0.4.64) |
 | `./tools/oc-commit -m <msg> [--issue N] [--no-comment] [--state <dir>] [--repo <path>]` | gated commit wrapper (lens C5, v0.4.65): refuses detached HEAD, refuses unset `OC_ACTOR`, refuses empty index (NEVER stages anything), derives `Issue-Ref` from the actor's latest ledger claim via `oc-ledger claim-ref` (override `--issue`); adds `Session-Id` + `Issue-Ref` trailers; post-commit implementation comment folded in (E2 #2, v0.4.72) via `oc-issue-log` — `--no-comment`/`OC_COMMIT_COMMENT=0` skips, comment-fail-after-commit = loud rc 5 |
 | `./tools/oc-ship-audit [--hours N] [--log f] [--journal-dir d] [--grace min]` | dispatch-WITHOUT-swap alarm (lens C6, v0.4.65): pairs every successful `ship --sha … --execute` tools.log row against swap-journal evidence; dispatches under `--grace` (default 120 min) read IN-FLIGHT; rogue non-JSON log lines are skipped LOUDLY, never truncated into a false clean |
-| `./tools/oc-tg-audit <uuid> [--date D] [--days N] [--log-dir P]` | Telegram surface-law evidence scan (lens C7, v0.4.65): TOOL_ACCUM rows by the accused session carrying a banned telegram surface tool (send/edit set, supervisor.md Duty 7 A12); falls back to Executing-tool rows; sanctioned senders remain supervisor judgment |
+| `./tools/oc-tg-audit <uuid> [--date D] [--days N] [--log-dir P]` | Telegram surface-law evidence scan (lens C7, v0.4.65): TOOL_ACCUM rows by the accused session carrying a banned telegram surface tool (send/edit set, triage.md Duty T4); falls back to Executing-tool rows; sanctioned senders remain supervisor judgment |
 | `./tools/oc-ledger sync` CHANGELOG gate | sync refuses a version bump whose `## v<v>` CHANGELOG entry is missing (lens C8, v0.4.65, kills the v0.4.54 backfill class) — same rc 6 register as the frontmatter gate |
 | `./tools/oc-harvest-sweep <pr-branch> [--base adolfousier/main] [--repo P] [--port-of sha1,sha2]` | pre-gate harvest verification (editor Phase 7 sweep, mechanical legs): Session-Id trailer sweep over base..branch, empty-diff probe, patch-id match per ported sha (lens C4, v0.4.64 — replaces the 3-gate-rounds-burned hand sweep). Leg (c) behavioral judgment stays human |
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5): FULL-sha shape gate → LOUD yml-on-carrier check → dispatch under a state-dir dispatch LOCK → **time-window run adoption** (v0.4.48 Duty-7 fix: workflow_dispatch headSha is the carrier ref, never the `-f ref` input, so adoption filters `headSha==carrier head + createdAt>=dispatch_ts−5s`, LATEST-wins (`.[-1]` — v0.4.53; under the lock the newest carrier dispatch IS this lane's own run; selftest fixture 111 proves the old earliest-wins rule decoy-adopts), under the lock — concurrent-lane safe) → watch → per-job/per-step report with the **fmt soft-fail exposed**; wraps the raw `gh` row below; `--repo` accepts a slug or a repo/worktree PATH (resolved via its origin remote); `--fault-scope PR` (E5, v0.4.78) auto-runs `oc-pr-fault-scope` on a RED verdict — IN-SCOPE/BASE-FAULT triage line, RED stays rc 3; identical-arg rc=2 repeats back off 2s..10s within 120s (C-#1, v0.4.78) |
@@ -120,7 +120,7 @@ Ask the operator which role this session employs before doing anything:
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
 | **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + supervisor watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
-| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), eight-lens skill review (Duty 6, Reviewers A–G + standing brain-scrub, grouped by target — DOCS A/B/G · TOOLS E/F · EVIDENCE+LIFECYCLE C/D; incl. Reviewer D deletion safety, Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `supervisor.md` |
+| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), eight-lens skill review (Duty 6, Reviewers A–G + standing brain-scrub, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D (sole deletion safety); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `supervisor.md` |
 | **TRIAGE** | Interrupt lane (carved out of SUPERVISOR at v0.4.86, owner "Go with Option A"): idea-box + `QUIRK:` tool-problem intake (same-turn ACK, ledger stamps), evidence verification, fix routing to owning editor, new-editor creation, TOOL_ACCUM / cadence enforcement; escalates semantic/KERNEL to the Supervisor — NEVER edits skill files | `triage.md` |
 | **TOOLSMITH** | CLI tool lane (carved out at v0.4.87, owner "Go toolsmith" 2026-09-06; promoted from the carrier-tools editor row): owns `tools/` CODE — makes and fixes the CLI tools every other role uses (`oc-ledger`, `oc-deploy`, `oc-prchecks`, `oc-tg-audit`, battery); daemon/carrier source stays EDITOR territory, skill markdown stays Supervisor-only — NEVER edits skill files | `toolsmith.md` |
 
@@ -198,10 +198,9 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   | redirect | target no longer owns its channel | auto-steered to the occupying session with provenance | follow the redirect, never re-send to the dead uuid |
   | no-route | dead/cross-instance target | error → `a2a_send` fallback, else UNREACHABLE | — |
 
-  Escalation: quiet → re-send turn-end if unclaimed ~30 min AND time-critical →
-  `interrupt: true` only as the last resort (2026-08-31: 24 mid-turn refusals in
-  one day when immediate was the default — the flip side: 2026-09-04 cadence audit
-  showed 1,267 `now` vs 7 `turn-end` vs 0 `quiet`, which is why the default flipped).
+  Escalation ladder canonical: fleet-directives.md §Cross-lane delivery
+  (quiet → turn-end ~30 min if time-critical → interrupt last resort — lens A5
+  v0.4.89: pointer only, no second copy).
 - Refusal handling: a mid-turn refusal is NOT delivery. Operational content →
   resend with `interrupt: true` in the same turn; deferrable content → ledger
   skip note + retry at your next boundary.
@@ -239,7 +238,7 @@ General area, an unrelated chat, or the owner DM.
 | Where | live `opencrabs-ops` unit, its real surfaces (Telegram, cron, MCP) | GitHub Actions ONLY — the CI gate (`pr-checks.yml`; upstream's own checks on PRs). Carrier build COMPILES the artifact but runs NO test leg (removed 2026-08-31, `e71dba58`) | this box, against the DOWNLOADED artifact + its source tree — nothing running |
 | When | after a swap notify (`editor.md` Phase 6b) | pre-flight gate before PRs/ff-merge (Phase 7 step 2c) — `pr-checks.yml` is the ONLY CODE-TESTS locus | pre-swap, every cycle (`oc-deploy` swap path) |
 | Who | owning Editor | Editor dispatches the gate and reads conclusions; `oc-deploy` reads build conclusions | `oc-deploy` swap path (pre-S3: Compiler alone) |
-| Toolchain | none — local cargo FORBIDDEN in any form (binaries disabled 2026-08-28; editor.md §Box law) | CI's own — never local | `strings`, `sha256sum`, `git grep` — none compile anything |
+| Toolchain | none — local cargo FORBIDDEN in any form (binaries disabled 2026-08-28; editor.md §Box law — canonical, other files reference "(box law)") | CI's own — never local | `strings`, `sha256sum`, `git grep` — none compile anything |
 | Evidence | one line: drove X, observed Y (+ run id / sha) | job/step conclusions read via API | marker found/not-found + checksum line in baseline.json |
 | On FAIL | issue FIRST, then evidence to the supervisor lane (`session_notify`) | fix before merge / PR | NO swap — feature missing from build; regression stated plainly |
 
@@ -283,6 +282,12 @@ nothing about behavior.
   GREEN; S3 = live cutover 2026-08-28 (swap chain mechanical, consent
   eliminated). Rules saying "below S2"/"S3" mean the stage gate.
 - **Lane** — one editor session (worker) owning one fork issue + its topic.
+  (v0.4.89, lens A7: extended to any role session — Triage/TOOLSMITH/Supervisor
+  lanes exist too; "lane" ≠ editor-only.)
+- **disk absorption** — the v0.4.19 worker-update model: skill files are plain
+  disk; workers absorb re-reads at their own boundaries (turn start, role-file
+  load), no reload pings are owed or sent (defined here lens A16 v0.4.89;
+  used in editor.md/triage.md/toolsmith.md).
 - **Triage lane** — the interrupt lane carved out of the Supervisor at v0.4.86
   (idea/QUIRK intake, fix routing, enforcement patrols — `triage.md`); never
   edits skill files. Discover its session via `session_search`, never
@@ -349,8 +354,8 @@ uses them as a licence to fix outside its scope.
   **the wrapper is NEWER than CI's rustfmt: cosmetic diffs it flags on
   CI-green committed code are KEPT AS-IS, not applied; fix only formatting
   artifacts you introduced yourself**; modum RETIRED 2026-08-28; lint evidence =
-  GREEN pr-checks.yml run. Full ban list:
-  editor.md §Box law.
+  GREEN pr-checks.yml run. Full ban list: editor.md §Box law (canonical;
+  "(box law)" tags elsewhere refer to it).
 - Live binary: `/usr/local/bin/opencrabs`. Daemons run as systemd **user** units
   (`systemctl --user`) — system-scope queries (`systemctl`, `/etc/systemd`) find nothing.
 - Daemon PID identity (v0.4.15): NEVER `pgrep | head -1` — three daemons share
@@ -403,11 +408,10 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    Alexey with the delta and WAIT. Procedure: `supervisor.md` §Upstream sync.
 2. **Sync model = MERGE-ON-ARRIVAL** (owner 2026-09-02 "Land it"; supersedes the
    2026-08-26 REBASE-PORT, which is RETIRED — historical, PR chains only):
-   fork main **merges** `adolfousier/main` when upstream shifts — merge, never
-   rebase/reset, on fork main (preserves history + deployed-sha containment for
-   oc-deploy rollback). Sync LAW: `fleet-directives.md` §remotes; executing
-   procedure: `upstream-merge-runbook.md` (freeze gate, roles, conflict
-   classes, migration-union rule, semantic-triage defaults).
+   fork main **merges** `adolfousier/main` when upstream shifts. Sync LAW
+   canonical: `fleet-directives.md` §remotes (one concept, one home — lens A3
+   v0.4.89); executing procedure: `upstream-merge-runbook.md` (freeze gate,
+   roles, conflict classes, migration-union rule, semantic-triage defaults).
 3. **Absorption rule**: when upstream merges or reimplements one of OUR
    features, matching fork-only commits auto-classify DROPPABLE at the next
    sync (patch-id match or title-twin against his rework). The owning editor
