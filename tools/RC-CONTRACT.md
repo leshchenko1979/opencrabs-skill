@@ -28,7 +28,7 @@ Fleet conventions:
 | oc-carrier-features | 0 | 2 | 0 set / 3 yml-unfetchable / 4 no-features-input |
 | oc-ci-parity | 0 | 5 | 0 identical / 4 DRIFT / 6 api-fail |
 | oc-commit | 0 | 2 | 0 committed / 3 gate-fail / 4 git-fail / 5 comment-fail |
-| oc-deploy | 0 | 1 | 0 ok-noop / 2 rebase-gate-push-verify-rollback AND usage/validation diags (flag-validation `die 2`, e.g. poll `--wait` non-integer, `--notify-session` empty — arg diags share the 2 register with gate-fail; message text disambiguates) / 3 retired / 4 stage-gate-launch / 5 poll-wait-timeout / 9 kill-file · `contributors` verb RETIRED v0.4.91 (lens E-2, rc 1 + loud pointer to `oc-attrib --contributors`) |
+| oc-deploy | 0 | 1 | 0 ok-noop / 2 rebase-gate-push-verify-rollback AND usage/validation diags (flag-validation `die 2`, e.g. poll `--wait` non-integer, `--notify-session` empty — arg diags share the 2 register with gate-fail; message text disambiguates) AND ship FEATURE-DEFAULT explicit-mismatch (`--features` != deployed.meta.json, refused pre-dispatch; default path auto-adopts deployed set) / 3 retired / 4 stage-gate-launch / 5 poll-wait-timeout / 9 kill-file · `contributors` verb RETIRED v0.4.91 (lens E-2, rc 1 + loud pointer to `oc-attrib --contributors`) |
 | oc-drift-check | 0 | 2 | 0 no-drift / 1 DRIFT / 3 ledger-skilldir-fail |
 | oc-harvest-sweep | 0 | 2 | 0 clean / 1 findings / 3 git-fail |
 | oc-index-worktree | 0 | 5 | 0 OK / 4 index-failed |

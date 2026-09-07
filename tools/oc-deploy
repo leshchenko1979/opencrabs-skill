@@ -302,6 +302,27 @@ STUB
   check_has "ship-plan-complete" "$SHIP_PLAN_OUT" "plan complete"
   if [ "$(git -C "$T/remote.git" rev-parse main)" != "$SHA2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "SELFTEST FAIL: plan mode mutated remote"; fi
   grep -q "ship-plan" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no ship-plan shadow row"; }
+  # 4c. FEATURE-DEFAULT (HQ 2026-09-07, incident #125/d5863180): ship without
+  # --features adopts deployed.meta.json features when the carrier default
+  # disagrees; explicit mismatching --features refuses pre-dispatch rc 2.
+  printf '{"prev_sha":"0000000000000000000000000000000000000000","features":"telegram,code-graph"}' > "$SD/deployed.meta.json"
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$SHA2" 2>&1)"; check_rc "featdef-adopt-rc" $? 0
+  check_has "featdef-adopt-line" "$out" "adopting deployed set (FEATURE-DEFAULT)"
+  check_has "featdef-adopt-features" "$out" "features=telegram,code-graph"
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$SHA2" --features telegram 2>&1)"; check_rc "featdef-mismatch-rc" $? 2
+  check_has "featdef-mismatch-msg" "$out" "refusing pre-dispatch"
+  grep -q "features-mismatch-refused" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no features-mismatch-refused shadow row"; }
+  grep -q "PLAN: ship" <<<"$out" && { fail=$((fail+1)); echo "SELFTEST FAIL: mismatch reached plan lines"; } || pass=$((pass+1))
+  # matching explicit set passes the gate (order-insensitive compare)
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$SHA2" --features code-graph,telegram 2>&1)"; check_rc "featdef-match-reorder-rc" $? 0
+  rm -f "$SD/deployed.meta.json"   # restore pre-case state for later sections
+
   # 5. ship execute non-FF -> exit 2 (diverge remote main)
   git -C "$T/repo" checkout -qb div HEAD~1
   echo div > "$T/repo/f3"; git -C "$T/repo" add f3; git -C "$T/repo" commit -qm div
@@ -1633,12 +1654,12 @@ case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] 
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. Kill-file check already ran above.
 if [ "$MODE" = contributors ]; then contributors_run "$@"; exit $?; fi
-SHA=""; FEATURES=""; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0; ALLOW_DROP=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
+SHA=""; FEATURES=""; FEATURES_EXPLICIT=0; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0; ALLOW_DROP=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
 WAIT_SECS=0; NOTIFY_SESSION=""   # C-#2: poll --wait / --notify-session
 while [ $# -gt 0 ]; do
   case "$1" in
     --sha)      SHA="${2:-}"; shift ;;
-    --features) FEATURES="${2:-}"; shift ;;
+    --features) FEATURES="${2:-}"; shift; FEATURES_EXPLICIT=1 ;;
     --execute)  EXECUTE=1 ;;
     --run)      RUN_ID="${2:-}"; shift ;;
     --drill)    DRILL=1 ;;
@@ -1657,6 +1678,13 @@ done
 # KERNEL D2 (2026-08-28): --features omitted -> resolve the carrier's
 # features default via oc-carrier-features. A carrier read FAILURE ABORTS —
 # the hardcoded fallback set was deleted, never silently ship a wrong set.
+# FEATURE-DEFAULT law (HQ 2026-09-07, incident #125 lane d5863180 / carrier
+# run 34143410835): the carrier default (telegram) DESYNCED from the live
+# deployment (deployed.meta.json: telegram,code-graph) — artifact name embeds
+# features verbatim, so the Phase-B swap units died 'artifact download
+# failed'. Ship now DEFERS to deployed.meta.json when the two disagree, and
+# an EXPLICIT --features that mismatches the deployment fails fast here,
+# BEFORE dispatch — never a silently non-swappable artifact.
 if [ -z "$FEATURES" ]; then
   CARRIER_TOOL="${OC_DEPLOY_CARRIER:-$(cd "$(dirname "$0")" && pwd)/oc-carrier-features}"
   case "$MODE" in
@@ -1667,6 +1695,27 @@ if [ -z "$FEATURES" ]; then
       ;;
     swap-execute) : ;;  # stage-gate in swap_execute decides first; empty FEATURES fails loudly downstream, never silently
   esac
+fi
+# ship-only reconciliation against the live deployment (runs AFTER carrier
+# resolution so both default and explicit paths are covered; poll keeps the
+# pre-incident behavior — the incident window was ship dispatch).
+if [ "$MODE" = ship ] && [ -n "$FEATURES" ] && [ -f "$DEPLOYED_META" ]; then
+  DEP_FEATS="$(jq -r '.features // ""' "$DEPLOYED_META" 2>/dev/null || true)"
+  if [ -n "$DEP_FEATS" ]; then
+    # order-insensitive set compare (comma lists), same normalization the
+    # features-compat swap gate uses — 'a,b' == 'b,a' is not a mismatch
+    if [ "$(printf '%s' "$DEP_FEATS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | sort -u)" \
+      != "$(printf '%s' "$FEATURES" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | sort -u)" ]; then
+      if [ "$FEATURES_EXPLICIT" = 1 ]; then
+        shadow_log ship "$FEATURES" "$FEATURES" "features-mismatch-refused"
+        die 2 "explicit --features '$FEATURES' != deployed '$DEP_FEATS' (deployed.meta.json) — refusing pre-dispatch: artifact name embeds features verbatim, this build could never be swapped. Deploy a matching set first or pass the deployed set."
+      else
+        shadow_log ship "-" "$FEATURES" "features-default-corrected:$DEP_FEATS"
+        echo "oc-deploy: carrier default '$FEATURES' != deployed '$DEP_FEATS' — adopting deployed set (FEATURE-DEFAULT)"
+        FEATURES="$DEP_FEATS"
+      fi
+    fi
+  fi
 fi
 
 case "$MODE" in
