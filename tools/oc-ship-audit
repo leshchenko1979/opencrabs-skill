@@ -71,15 +71,19 @@ EOF
   echo "selftest OK"; exit 0
 fi
 
-HOURS=24; GRACE=120
+HOURS=24; GRACE=120; SUPERSEDE_HOURS=12
 LOG="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
 JDIR="/root/.opencrabs/profiles/ops/opencrabs-dev/oc-deploy/journal"
+OCDEV_DIR="/root/.opencrabs/profiles/ops/opencrabs-dev"
+DEPLOYED_META="$OCDEV_DIR/deployed.meta.json"
 while [ $# -gt 0 ]; do
   case "$1" in
     --hours) HOURS="${2:-}"; shift 2 ;;
     --log) LOG="${2:-}"; shift 2 ;;
     --journal-dir) JDIR="${2:-}"; shift 2 ;;
     --grace) GRACE="${2:-}"; shift 2 ;;
+    --meta) DEPLOYED_META="${2:-}"; shift 2 ;;
+    --supersede-hours) SUPERSEDE_HOURS="${2:-}"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -130,7 +134,29 @@ jq -r --argjson since "$SINCE" 'select(.tool=="oc-deploy" and .exit==0)
     if [ $((NOW - TE)) -lt $((GRACE * 60)) ]; then
       printf 'IN-FLIGHT\t%s\t%s\t%s\t-\n' "$short" "$ts" "$LAG"
     else
-      printf 'ORPHANED\t%s\t%s\t%s\tno swap journal for sha\n' "$short" "$ts" "$LAG"
+      # Superseded-orphan aging (2026-09-08 study): a dispatch older than
+      # SUPERSEDE_HOURS (default 12h) whose sha is an ANCESTOR of the sha
+      # currently recorded in deployed.meta.json was never swapped because a
+      # LATER build replaced it — a superseded orphan, not a live incident.
+      # Reported as SUPERSEDED (no rc-1 alarm); only a non-ancestor orphan
+      # (dispatch-only rc=0 with nothing shipped after) stays ORPHANED rc 1.
+      # Ancestor authority is gh compare (GitHub), NOT local git: old fork
+      # shas can be unreachable locally (fetch by sha refused, GC'd on the
+      # fork side) while still resolving server-side (2e161df3 case).
+      DEPLOYED_SHA=""
+      [ -f "$DEPLOYED_META" ] && DEPLOYED_SHA="$(jq -r '.sha // .commit // empty' "$DEPLOYED_META" 2>/dev/null)"
+      SUPERSEDED=0
+      if [ $((NOW - TE)) -gt $((SUPERSEDE_HOURS * 3600)) ] && [ -n "$DEPLOYED_SHA" ] && [ "$sha" != "$DEPLOYED_SHA" ]; then
+        if command -v gh >/dev/null 2>&1 && [ -n "${OC_SHIP_AUDIT_REPO:-leshchenko1979/opencrabs}" ]; then
+          CMP="$(gh api "repos/${OC_SHIP_AUDIT_REPO:-leshchenko1979/opencrabs}/compare/${sha}...main" --jq '.status' 2>/dev/null)" || CMP=""
+          [ "$CMP" = "ahead" ] && SUPERSEDED=1   # sha is behind main: main moved on
+        fi
+      fi
+      if [ "$SUPERSEDED" -eq 1 ]; then
+        printf 'SUPERSEDED\t%s\t%s\t%s\tbehind fork main (gh compare)\n' "$short" "$ts" "$LAG"
+      else
+        printf 'ORPHANED\t%s\t%s\t%s\tno swap journal for sha\n' "$short" "$ts" "$LAG"
+      fi
     fi
   else
     printf 'SWAPPED\t%s\t%s\t%s\t%s\n' "$short" "$ts" "$LAG" "$EV"
