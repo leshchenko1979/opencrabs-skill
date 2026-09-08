@@ -511,3 +511,16 @@ Owner ruling was a suggest_options button pick (option 0: "Agreed - codify the s
 
 - **fleet-directives.md** — PORT-WORK OWNERSHIP three-role table added above §Upstream PR law: editors build (all port commits + harvest ports), Triage queues (disposition census, backlog, commissioning), HQ gates (classification ruling + approval gate; owner ask-decider). Supersedes HQ's 17:02Z three-class proposal and Triage's 16:50Z three-hand chain wherever they differ.
 - Defect note: the #1226 mid-turn swallow cost ~15 min of ruling-hunting (board 30220, topic 42487, ledger, session logs all checked before the callback trail). Root cause is daemon code (agent.rs:716 re-arm path), not lane process — routed as a defect family to HQ.
+
+## v0.4.111
+- N-1: editor.md S3 ship path rewritten to the shipped one-command contract (`ship --execute --wait N`, v0.4.100 fusion; two-step demoted to fallback).
+- D5: base-freshness-at-filing-time law added (editor.md harvest sweep; census/gate CLEAN must name the upstream base sha — #1451 lesson, n=2083).
+- A-11: editor.md BUILD-TRIGGERS duplicate collapsed to SKILL.md canonical pointer (third-pass finding).
+- A-12: supervisor.md SYNC-LAW restatement collapsed to fleet-directives canonical pointer.
+- A-15: SKILL.md writer-census clarifies README.md tool-fleet section + tools/RC-CONTRACT.md are toolsmith-writable.
+- B-9/A11: supervisor.md Duty 6 documents second-pass report naming (-run2, B2/A2); family-map letters stay A–G.
+- F1/F2: editor.md Rollcall telegram_send restatement marked as surface-law merge (media ban noted).
+- Register: SKILL.md tool table gains oc-waiter row (repeat finding closed); retired `oc-deploy contributors` redundant row removed.
+- fd: post-compaction reload law synced to the v0.4.95 three-file form.
+- RC-CONTRACT: oc-review-persist row corrected to actual code exits (0/2; stale 3/4 removed).
+- README.md: census corrected 30 executables (oc-toolaccum deleted v0.4.110); oc-waiter/oc-attrib/oc-notify.sh highlight rows added (TOOLSMITH + HQ, owner order 19:31Z).
