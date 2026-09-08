@@ -400,6 +400,32 @@ if tool oc-deploy; then
   [ $? -eq 1 ] && ok "poll bad --wait -> 1 before side effects" || bad "poll bad --wait -> expected 1"
   [ "$(ls -A "$d2" 2>/dev/null)" = "oc-deploy-shadow.log" ] && ok "poll bad --wait: no state writes beyond shadow log" || bad "poll bad --wait wrote state: $(ls "$d2")"
   rm -rf "$d2"
+  # Ship-pending law (n=2003 family, v0.4.99): poll --sha S with S already
+  # deployed must NOT say "nothing new" — dispatched-sha GREEN = SWAP PENDING.
+  # Full-loop dry check: state dir with deployed.sha == the only decodable
+  # green run's sha, plus --sha of that same sha -> swap-execute handoff path
+  # reached, never rc5 "already deployed". (Uses --execute but stage < S2 in
+  # the sandbox, so the loop breaks and lands in the LOCKED plan branch.)
+  d3="$(mktemp -d)"; SD3="$d3/state"; mkdir -p "$SD3"
+  PEN_SHA="0123456789abcdef0123456789abcdef01234567"
+  printf '%s\n' "$PEN_SHA" > "$SD3/deployed.sha"
+  printf '{"sha":"%s","features":"telegram","ts":"2026-09-08T00:00:00Z"}\n' "$PEN_SHA" > "$SD3/deployed.meta.json"
+  # gh stub: one success run whose job name embeds PEN_SHA (both-shapes decode)
+  cat > "$d3/gh" <<GHEOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"/runs?status=success"*) echo '{"workflow_runs":[{"id":111}]}';;
+  *"/runs/111/jobs"*) echo '{"jobs":[{"name":"build (0123456789abcdef0123456789abcdef01234567, telegram)"},{"name":"gates (0123456789abcdef0123456789abcdef01234567)"}]}';;
+  *) echo '{}';;
+esac
+GHEOF
+  chmod +x "$d3/gh"
+  OC_DEPLOY_STATE_DIR="$SD3" OC_DEPLOY_GH="$d3/gh" OC_DEPLOY_NOFANOUT=1 \
+    "$TOOLS_DIR/oc-deploy" poll --wait 2 --sha "$PEN_SHA" --execute >/dev/null 2>&1
+  RC3=$?
+  grep -q "nothing new" "$d3"/oc-deploy-shadow.log 2>/dev/null && MISSED=1 || MISSED=0
+  [ "$RC3" != 5 ] && [ "$MISSED" = 0 ] && ok "poll --sha pending: dispatched-sha GREEN never reports 'already deployed'" || bad "poll --sha pending: rc=$RC3 missed=$MISSED"
+  rm -rf "$d3"
   rm -rf "$d"
   # stale pinned ref: diverge remote -> ship --execute (pins div tip) -> restore
   # remote -> plan MUST report FF ok (old code: rc 2 via resurrected stale ref)

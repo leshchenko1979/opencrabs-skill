@@ -1915,12 +1915,27 @@ case "$MODE" in
       fi
       DEP="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
       plan "latest green run=$RUN_ID built sha=$B_SHA deployed=$DEP"
+      # Ship-pending law (defect family: 2e161df3 + ebbae0aa rc=5 misses,
+      # disposed n=2003): when a ship dispatched a SPECIFIC sha (--sha), that
+      # sha going GREEN means the swap is PENDING — the deployed marker
+      # lagging behind it is expected mid-chain, not "nothing new". Only an
+      # UNDISPATCHED poll treats B_SHA == DEP as idle.
+      if [ -n "$SHA" ] && [ "$B_SHA" = "$SHA" ]; then
+        plan "poll --wait: dispatched sha ${SHA:0:8} is GREEN — SWAP PENDING (deployed=${DEP:0:8} lagging is expected mid-chain)"
+        break
+      fi
       [ "$B_SHA" != "$DEP" ] && break
       if [ "$WAIT_SECS" -eq 0 ]; then
         echo "nothing to do: $B_SHA already deployed"
         exit 0
       fi
       if [ "$(date +%s)" -ge "$POLL_DEADLINE" ]; then
+        if [ -n "$SHA" ] && [ "$B_SHA" = "$SHA" ]; then
+          # Dispatched sha GREEN but swap didn't complete within the window —
+          # a STUCK swap, never report "nothing new" (rc=5 miss family n=2003).
+          if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait STUCK: dispatched sha ${SHA:0:8} GREEN but swap not completed in ${WAIT_SECS}s (deployed=${DEP:0:8}) — SWAP PENDING, investigate" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — supervisor not woken)" >&2; fi
+          die 5 "poll --wait ${WAIT_SECS}s: dispatched sha ${SHA:0:8} GREEN but swap PENDING (stuck — deployed marker still ${DEP:0:8})"
+        fi
         if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: latest green $B_SHA already deployed — nothing new to swap" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — supervisor not woken)" >&2; fi
         die 5 "poll --wait ${WAIT_SECS}s timed out: $B_SHA already deployed (nothing new)"
       fi
