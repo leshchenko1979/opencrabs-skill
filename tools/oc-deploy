@@ -296,6 +296,7 @@ STUB
     OC_DEPLOY_CARRIER="$SD/tools/carrier" \
     "$SELF_BIN" ship 2>&1)"; check_rc "ship-no-sha-refused" $? 2
   check_has "ship-no-sha-msg" "$out" "ship requires --sha"
+  check_has "ship-no-sha-gate-token" "$out" "OC_DEPLOY_GATE=missing-sha"   # C-A2
   out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
     OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
     "$SELF_BIN" ship --sha "$SHA2" 2>&1)"; rc=$?
@@ -316,8 +317,13 @@ STUB
   # non-integer --wait dies 1 at validation.
   out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git"     OC_DEPLOY_CARRIER="$SD/tools/carrier"     "$SELF_BIN" ship --sha "$SHA2" --wait 30 2>&1)"; check_rc "ship-wait-refused" $? 2
   check_has "ship-wait-msg" "$out" "--wait on ship requires --execute"
+  # C-A2 (lens C2 A2): rc-2 gate deaths carry machine-readable OC_DEPLOY_GATE
+  # tokens — the retry loop branches on the token, not prose (>=10 manual
+  # ship->validate->ship cycles in tools.log motivated this).
+  check_has "ship-wait-gate-token" "$out" "OC_DEPLOY_GATE=wait-plan-mode"
   out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git"     OC_DEPLOY_CARRIER="$SD/tools/carrier"     "$SELF_BIN" ship --sha "$SHA2" --notify-session aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa 2>&1)"; check_rc "ship-notify-refused" $? 2
   check_has "ship-notify-msg" "$out" "--notify-session is poll-mode only"
+  check_has "ship-notify-gate-token" "$out" "OC_DEPLOY_GATE=notify-poll-only"
   # 4b. carrier read FAIL -> ship aborts (KERNEL D2: no silent fallback set)
   (cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
     OC_DEPLOY_CARRIER="$SD/tools/carrier-fail" \
@@ -1751,7 +1757,7 @@ if [ "$MODE" = ship ] && [ -n "$FEATURES" ] && [ -f "$DEPLOYED_META" ]; then
       != "$(printf '%s' "$FEATURES" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | sort -u)" ]; then
       if [ "$FEATURES_EXPLICIT" = 1 ]; then
         shadow_log ship "-" "$FEATURES" "features-mismatch-refused"
-        die 2 "explicit --features '$FEATURES' != deployed '$DEP_FEATS' (deployed.meta.json) — refusing pre-dispatch: artifact name embeds features verbatim, this build could never be swapped. Deploy a matching set first or pass the deployed set."
+        die 2 "OC_DEPLOY_GATE=feature-mismatch: explicit --features '$FEATURES' != deployed '$DEP_FEATS' (deployed.meta.json) — refusing pre-dispatch: artifact name embeds features verbatim, this build could never be swapped. Deploy a matching set first or pass the deployed set."
       else
         shadow_log ship "-" "$FEATURES" "features-default-corrected:$DEP_FEATS"
         echo "oc-deploy: carrier default '$FEATURES' != deployed '$DEP_FEATS' — adopting deployed set (FEATURE-DEFAULT)"
@@ -1772,15 +1778,15 @@ case "$MODE" in
     if [ "$WAIT_SECS" != 0 ]; then
       case "$WAIT_SECS" in ''|*[!0-9]*) die 1 "--wait needs an integer (seconds)" ;; esac
       if [ "$EXECUTE" != 1 ]; then
-        die 2 "--wait on ship requires --execute (plan mode has nothing to poll — chain poll --wait N explicitly)"
+        die 2 "OC_DEPLOY_GATE=wait-plan-mode: --wait on ship requires --execute (plan mode has nothing to poll — chain poll --wait N explicitly)"
       fi
     fi
-    [ -z "$NOTIFY_SESSION" ] || die 2 "--notify-session is poll-mode only; ship does not poll (chain the poll leg explicitly)"
+    [ -z "$NOTIFY_SESSION" ] || die 2 "OC_DEPLOY_GATE=notify-poll-only: --notify-session is poll-mode only; ship does not poll (chain the poll leg explicitly)"
     # Duty-6 lens F task 3: ship must NEVER silently adopt CWD HEAD — an
     # operator shipping from the wrong directory pushes an unintended sha.
     # --sha is mandatory; the sha must also be contained in the fork main
     # lineage (the push target), not just present as an unrelated object.
-    [ -n "$SHA" ] || die 2 "ship requires --sha <40-hex> (no implicit CWD-HEAD adoption)"
+    [ -n "$SHA" ] || die 2 "OC_DEPLOY_GATE=missing-sha: ship requires --sha <40-hex> (no implicit CWD-HEAD adoption)"
     echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
     # n=1878 hard guard: format-valid does not mean real — refuse phantom
     # shas BEFORE any plan/rebase logic (fabricated sha incident: lane-planned
@@ -1790,7 +1796,7 @@ case "$MODE" in
     plan "ship sha=$SHA features=$FEATURES stage=$(stage) execute=$EXECUTE"
     git fetch -q "$REMOTE" +refs/heads/main:refs/oc-deploy/main 2>/dev/null \
       || git fetch -q "$REMOTE" main \
-      || { shadow_log ship "$SHA" "$FEATURES" "fetch-fail"; die 2 "cannot fetch fork main from $REMOTE"; }
+      || { shadow_log ship "$SHA" "$FEATURES" "fetch-fail"; die 2 "OC_DEPLOY_GATE=fetch-fail: cannot fetch fork main from $REMOTE"; }
     MAIN_TIP="$(git rev-parse FETCH_HEAD 2>/dev/null || git rev-parse refs/oc-deploy/main 2>/dev/null)" \
       || die 2 "cannot resolve fork main tip"
     plan "fork main tip = $MAIN_TIP"
@@ -1799,7 +1805,7 @@ case "$MODE" in
       plan "FF ok: main is ancestor of sha — push would fast-forward"
     else
       shadow_log ship "$SHA" "$FEATURES" "rebase-needed"
-      die 2 "rebase needed: $SHA does not fast-forward main ($MAIN_TIP)"
+      die 2 "OC_DEPLOY_GATE=rebase-needed: $SHA does not fast-forward main ($MAIN_TIP)"
     fi
     if [ "$EXECUTE" = 1 ]; then
       git push -q "$REMOTE" "$SHA:refs/heads/main" \

@@ -150,11 +150,18 @@ cmd_arm() {
   # the whole timeout budget — TMO/WIN windows + 2 — else a long CI build
   # false-escalates mid-flight (r8: stall_k=8 tripped at 12 min on a 35-min build).
   [ -n "$SK" ] || SK=$(( TMO / WIN + 2 ))
+  # C-A1 (lens C2 A1, run-based arming): --run <id> may stand alone — the run id
+  # IS the watch target, so a placeholder ref is recorded and never dispatched
+  # (the child's first poll takes the resume path, which skips shape gate /
+  # dispatch / adoption entirely). A bare --ref arm still works unchanged.
+  if [ -z "$REF" ] && [ -n "$SEED_RUN" ]; then REF="run:$SEED_RUN"; fi
   [ -n "$REF" ] || usage "arm needs --ref"
   # full-sha law (#74, r7 lesson): a hex ref shorter than 40 chars arms fine but
   # the child burns a poll and dies FAILED-TOOL at oc-prchecks. Branch names are
-  # fine; hex must be the full 40.
+  # fine; hex must be the full 40. C-A1: the run:<id> placeholder ref is exempt —
+  # it is never dispatched, only journaled (first poll resumes the seeded run).
   case "$REF" in
+    run:[0-9]*) : ;;                           # C-A1 placeholder from --run-only arm
     *[!0-9a-fA-F]*) : ;;                       # non-hex => branch name, allowed
     ????????????????????????????????????????) : ;;  # exactly 40 hex, allowed
     *) usage "--ref hex must be the full 40-char sha (got ${#REF}); short shas die at pr-checks" ;;
@@ -242,6 +249,13 @@ cmd_run() {
       8) VERDICT="AMBIGUOUS" ;;   # #115 B: gate refused dispatch (same-ref candidate run unverifiable) — NON-RETRYABLE (n=1674): resolve by hand
       2|4|7) RC4=$((RC4+1))
          [ "$RC" = 2 ] && VERDICT="FAILED-TOOL"        # usage = waiter bug, not transient
+         # C-A1 (lens C2 A1): an rc-4 whose output carries the SUPERSEDED token
+         # is NON-retryable — the gate verified the run's identity and it is not
+         # ours (adoption_pin=mismatch). Retrying cannot fix an identity
+         # mismatch (35-row retry storm evidence, tools.log 2026-09-07).
+         if [ "$RC" = 4 ] && printf '%s' "$OUT" | grep -q "OC_PR_SUPERSEDED"; then
+           VERDICT="SUPERSEDED"
+         fi
          [ "$RC4" -ge "$RC4_CAP" ] && [ -z "$VERDICT" ] && VERDICT="FAILED-TOOL"
          [ -n "$VERDICT" ] || { sleep "$POLL_SLEEP"; continue; } ;;
       *) VERDICT="FAILED-TOOL" ;;
@@ -257,10 +271,17 @@ cmd_run() {
   # verdict payload validated BEFORE notify (the "404 Not Found" wake class)
   local TEXT="oc-waiter: $VERDICT ref=${REF:0:8} label=${LABEL:-none} polls=$POLLS run=${RUN_ID:-none}"
   [ "$VERDICT" = "AMBIGUOUS" ] && TEXT="$TEXT — gate refused dispatch (same-ref run may be live); resolve: oc-prchecks resume <id> --wait N or gh run view <id>"
+  # C-A1: SUPERSEDED is terminal-by-design — the run was adopted/witnessed and
+  # turned out to belong to a different identity (adoption_pin=mismatch, i.e.
+  # event/branch mismatch: "run superseded — do not resume this id"). The
+  # pre-C-A1 behavior retried the same resume 5-15x per run (tools.log: 35
+  # mismatch rows, all identical rc-4 retry storms) because rc 4 was read as
+  # generic transient gate failure.
+  [ "$VERDICT" = "SUPERSEDED" ] && TEXT="$TEXT — run superseded (identity mismatch: event/branch is not this carrier's); do NOT resume this id — re-check with gh run view or dispatch fresh"
   case "$VERDICT" in
     GREEN|RED)  [ -n "$RUN_ID" ] || { jline "$JOURNAL" notify-failed '{"reason":"payload-no-run-id"}'
                   rec_upd "$REC" "\"status\":\"notify-failed\""; exit 4; } ;;
-    TIMEOUT|ESCALATED|ESCALATED-CHURN|FAILED-TOOL|AMBIGUOUS) : ;;
+    TIMEOUT|ESCALATED|ESCALATED-CHURN|FAILED-TOOL|AMBIGUOUS|SUPERSEDED) : ;;
     *) jline "$JOURNAL" notify-failed "{\"reason\":\"payload-bad-verdict:$VERDICT\"}"
        rec_upd "$REC" "\"status\":\"notify-failed\""; exit 4 ;;
   esac
@@ -545,6 +566,28 @@ GSTUB
   OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm \
     --ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --notify 11111111-2222-3333-4444-555555555555 --bogus x >/dev/null 2>&1
   [ $? -eq 2 ] && t_ok "unknown arm arg still refused rc 2" || t_bad "unknown-arg guard broken"
+
+  # 21. C-A1 run-based arming: --run alone (no --ref) arms with placeholder ref
+  mk_notify deliver
+  ARM21="$(OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm \
+    --run 222 --notify 11111111-2222-3333-4444-555555555555 --label ca1 2>&1)"; RC21=$?
+  ARM21_ID="$(printf '%s' "$ARM21" | grep -oE 'id=[^ ]+' | head -1 | cut -d= -f2)"
+  { [ "$RC21" -eq 0 ] && [ -n "$ARM21_ID" ] && [ "$(jq -r '.ref' "$D/waiters/$ARM21_ID.json")" = "run:222" ] \
+      && [ "$(jq -r '.run_id' "$D/waiters/$ARM21_ID.json")" = "222" ]; } \
+    && t_ok "C-A1: arm --run without --ref accepted, ref=run:222 placeholder" || t_bad "C-A1 arm-only-run rc=$RC21 out=$ARM21"
+  # 21b. C-A1 non-retryable SUPERSEDED: gate rc-4 carrying OC_PR_SUPERSEDED token
+  #      -> verdict SUPERSEDED after ONE poll, notified, no RC4 backoff
+  cat > "$D/gate" <<'GSTUB2'
+#!/usr/bin/env bash
+echo "oc-prchecks: OC_PR_SUPERSEDED: run superseded/foreign — do NOT resume; verify with gh run view" >&2
+exit 4
+GSTUB2
+  chmod +x "$D/gate"
+  run_case deliver "4"
+  { [ "$RUN_RC" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t0.json")" = "SUPERSEDED" ] && [ "$(jq -r '.polls' "$D/waiters/t0.json")" = "1" ] \
+      && grep -q 'SUPERSEDED' "$D/notify.log" && grep -q 'do NOT resume' "$D/notify.log"; } \
+    && t_ok "C-A1: rc-4 with OC_PR_SUPERSEDED -> SUPERSEDED after ONE poll (non-retryable), lane notified" \
+    || t_bad "C-A1 superseded rc=$RUN_RC verdict=$(jq -r .verdict "$D/waiters/t0.json" 2>/dev/null) polls=$(jq -r .polls "$D/waiters/t0.json")"
 
   echo "selftest: $pass/$((pass+fail)) passed"
   rm -rf "$D"
