@@ -42,10 +42,14 @@ EDITOR territory — this lane touches neither.
   cron health on its own cadence and repairs/re-arms a dead one with a
   ledger stamp. Triage's daily liveness patrol (Duty T4) is the check;
   this lane is the fixer.
-- **Rollback drill schedule:** re-run a full `oc-deploy` rollback drill
-  every 14 days (next due 2026-09-22), with battery receipts + a ledger
-  stamp per drill. Skill atrophy between incidents is the failure mode —
-  the drill IS the maintenance.
+- **Rollback drills: RETIRED as scheduled duty (owner ruling 2026-09-08,
+  "do we need rollback at all?" — v0.4.110).** Rollback readiness is
+  verified on every ship instead: the swap journal + `/proc/<pid>/exe`
+  identity check (v0.4.109) prove the deploy path live each cycle, so a
+  scheduled rehearsal duplicates evidence we already get per-ship. If a
+  rollback is ever NEEDED, the owner calls it; `oc-deploy` rollback
+  procedure stays documented and the on-ship checks keep it exercised.
+  Supersedes the every-14-days schedule (was: next due 2026-09-22).
 
 The CLI tools every other role uses: create, extend, repair under `tools/`.
 Authorship of tool CODE moved HERE at v0.4.87; skill markdown, CHANGELOG,

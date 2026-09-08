@@ -50,7 +50,6 @@ Fleet conventions:
 | oc-skew-scan | 0 | 2 | 0 clean / 1 skew / 3 parse-fail |
 | oc-smoke-evidence | 0 | 2 | 0 IDENTITY-MATCH / 1 MISMATCH / 3 unit-or-proc-fail |
 | oc-tg-audit | 0 | 2 | 0 clean / 1 violation / 3 log-missing |
-| oc-toolaccum | 0 | 2 | 0 clean / 1 repeat-offense / 3 log-missing |
 | oc-upstream-delta | 0 | 2 | 0 clean / 1 delta (verdict) / 3 fetch-git-fail |
 | oc-waiter | 0 | 2 (arm: usage-OR-actor-refused, OC_ACTOR unset/'unknown', #115C) | arm: 0 armed / 3 notify-bin-unresolvable (`arm --run <id>` alone is valid C-A1 — run id IS the target, ref recorded as run:<id>) · _run: 0 delivered / 4 NOTIFY-FAILED (verdicts GREEN/RED/TIMEOUT/ESCALATED/ESCALATED-CHURN/FAILED-TOOL/AMBIGUOUS/SUPERSEDED — AMBIGUOUS = gate rc 8 NON-retryable #115B; SUPERSEDED = gate rc-4 carrying OC_PR_SUPERSEDED, NON-retryable identity mismatch, C-A1 v0.4.104) · sweep: 0 clean / 1 orphans-reported / 3 notify-bin-unresolvable · list: 0 |
 | oc-wt | 0 | 2 | 0 ok / 3 path-exists-dirty / 4 index-failed / 5 repo-branch-missing / 6 behind-base |

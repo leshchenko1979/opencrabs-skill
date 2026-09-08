@@ -1,5 +1,11 @@
 # opencrabs-dev — release history (provenance)
 
+## v0.4.110 (2026-09-08, owner "1 2 3 go" — deletions + redaction batch)
+- REMOVED tools/oc-toolaccum (3 uses, all --help; battery test + SKILL.md/RC-CONTRACT.md references cleared) — owner GO on Decision Rollcall Q3.
+- State repo: workers-ledger.json.pre-merge-20260828-113207 deleted (commit 86c97600, owner GO). poll-110.log already absent.
+- SECURITY.md: 17 secret literals redacted (5 bot tokens, GH PAT, 4 Grafana tokens, Gatus bearer, Gemini key, MTProto API hash, n8n JWT, Mixpanel secret, SSH password, Grafana pass+b64) — tokens WERE live on disk in plaintext; owner advised rotation.
+- Rollback drill cadence: owner ruling "do we need rollback at all?" — HQ answer: keep on-ship verification only (oc-deploy swap journal + /proc identity per v0.4.109), scheduled drills retired; codified in editor.md ship phase.
+
 ## v0.4.109 (2026-09-08, owner "Go then duty 4+6" — consolidated Duty-4/6 law batch, all premises HQ-verified)
 
 - fd: two new sections — CI-run identity + verdict laws (job-pin identity, run-existence, staleness/re-gate, watcher-resume/no-detached-watchers, rendered-output acceptance, structural-pending-organic leg); receipt + delivery discipline (UI-emit receipts, self-delivered notify, lane-side verify-unclaimed, waiter poll-not-trust, REST settle, worktree path check, TG research-before-design, /proc post-swap proof, poll target-pinning, profile-scoped state dir). Lanes: 1a63f103 x3, aaa8d8ae x3, c6b1a539, 61161247 x3, 329bf3a3 x3, d5863180, facd50af x2, c78e78e0 x2. Duty-6: 8/8 lens reports persisted (A,B,C,D,E,F,G,brain-scrub) — mechanical fixes route to toolsmith batch; semantic items (B8 port-ownership creep, brain-scrub HIGHs, editor.md split timing) await owner.

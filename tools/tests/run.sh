@@ -514,12 +514,6 @@ if tool oc-drift-check; then
   "$TOOLS_DIR/oc-drift-check" u1 0.4 >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad version shape -> 2" || bad "bad shape -> expected 2"
 fi
 
-section "oc-toolaccum"
-run_selftest oc-toolaccum
-if tool oc-toolaccum; then
-  "$TOOLS_DIR/oc-toolaccum" --log /nonexistent.log u1 >/dev/null 2>&1; [ $? -eq 3 ] && ok "missing log -> 3" || bad "missing log -> expected 3"
-fi
-
 section "oc-branch-sweep"
 run_selftest oc-branch-sweep
 if tool oc-branch-sweep; then

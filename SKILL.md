@@ -8,7 +8,7 @@ description: >
   TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.109
+version: 0.4.110
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -76,7 +76,6 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic for §Upstream relations item 1: fetch + merge-base + `AHEAD`/`BEHIND` TSV + patch-id `ABSORBED-CANDIDATE` rows; READ-ONLY (never merges/pushes/rebases) — PROPOSE/WAIT judgment stays human |
 | `./tools/oc-wt add\|remove\|--force` | editor worktree manager: `add` chains prune → fetch → worktree add → oc-index-worktree (index step UN-SKIPPABLE), refuses `--create` on an existing branch; `remove` gated on clean tree — `--force` journals the destroyed listing BEFORE removal (lens-D posture) |
 | `./tools/oc-drift-check <uuid> <claimed-ver> [--ack]` | editor §Mid-cycle skill drift step 1-2, mechanical: claimed vs live SKILL.md version; `--ack` delegates oc-ledger ack on drift |
-| `./tools/oc-toolaccum <uuid> [--days N]` | TOOL_ACCUM scan + repeat-offense arithmetic (per-tool failure counts in window, threshold 3) from tools.log |
 | `./tools/oc-branch-sweep --repo <p> [--dry-run]` | branch-death proof (MERGED/ABSORBED/STALE/ACTIVE) + archive-then-delete for MERGED only; protected: base/HEAD/--keep regex |
 | `./tools/oc-pr-fault-scope <pr#> --run <id>` | failing-files ∩ PR-files = IN-SCOPE/BASE-FAULT (2026-08-26 clippy-wall misattribution lesson, mechanical) |
 | `./tools/oc-ledger confirm <uuid>` | lens C #5: verifies the worker's latest claim (#N ref resolvable on the live fork) then flips workers[].confirmed=true — first verb to flip it (was unsanctioned hand-edit) |
@@ -326,8 +325,8 @@ Origin: the ship-38585459 smoke (n=2036) passed all bookkeeping legs while its
 - **GREEN / RED** — a GitHub Actions run conclusion read by terminal truth
   (`gh run view --json conclusion`), never exit-code inference.
 - **TOOL_ACCUM** — the per-session tool-usage rows accumulated in the unified
-  tools log; the evidence base for `oc-toolaccum` repeat-offense scans and
-  Telegram surface-law audits (triage.md Duty T4 — ex supervisor.md Duty 7).
+  tools log; evidence base for Telegram surface-law audits (triage.md Duty T4
+  — ex supervisor.md Duty 7).
 
 ## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
 
