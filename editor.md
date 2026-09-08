@@ -665,6 +665,18 @@ right here (`opencrabs-ops` user unit).
    duty for it ENDS — no further fork maintenance, no fix rounds. Future work
    on that feature happens upstream only: new claim via Phase 1, normal rules.
 
+**Behavioral probe is the smoke PASS GATE (owner order 2026-09-08 12:16Z):**
+lineage (is-ancestor), identity (`oc-smoke-evidence` MATCH) and CI gate
+evidence do NOT constitute smoke PASS — they are bookkeeping legs. A smoke
+verdict of PASS requires step 3 to have TRIGGERED the fix's actual runtime
+path on the live box and observed it execute (real message round-trip, real
+interrupt, real stamp — not CI test counts). If the fix has no observable
+runtime surface, declare the probe N/A with the structural reason in the
+smoke evidence (precedent: #92 no-runtime-string finding) — never silent-skip.
+A verdict citing only legs 1–3 is INCOMPLETE and gets returned to the lane.
+(A stripped binary that compiles the fix but crashes on the path must FAIL —
+that is the exact hole this rule closes; origin: ship-38585459 smoke n=2036.)
+
 **Swap timing is NOT coordinated with smokes** (owner decision, closing editor
 proposal #8): NO advance announce, NO swap delay — deploys land whenever the
 pipeline is ready, even mid-smoke; loss of in-flight in-memory state is ACCEPTED

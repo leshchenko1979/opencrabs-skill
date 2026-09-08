@@ -469,3 +469,7 @@ Triage enforces the format on coverage check (targeted lane correction, not boar
 
 - **Corrected-code presence != smoke success** (SKILL.md evidence-kinds block): presence evidence (strings marker, sha match, deployed.meta identity) can never back a smoke-GREEN verdict on its own; GREEN requires at least one behavioral probe of the corrected path. Presence-only verdicts are labeled UNPROVEN (presence-only).
 - **Explicit ack contracts in session_notify** (fleet-directives.md Cross-lane delivery): every notify ends with its ack expectation - No ack needed / ACK by date: what / Reply required: question; no pure-ack replies to No-ack-needed traffic.
+
+## v0.4.104
+
+Owner rule (2026-09-08 12:16Z): bookkeeping legs (lineage/identity/CI) never constitute smoke PASS - a live behavioral probe of the corrected runtime path on the running box is required, or a stamped structural N/A (editor.md Phase 6b + SKILL.md evidence-kinds; origin: ship-38585459 smoke n=2036).
