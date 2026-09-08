@@ -80,6 +80,11 @@ Owner override 2026-09-08 09:05Z, topic 30220 ("I don't want the decisions to be
 - triage.md Duty T7 item 7: rewritten from present-here duty to RETIREMENT notice — Triage's answer to "where are the decisions" is a coverage report, never a consolidated list.
 - editor.md §Decision Rollcall duty: present-here exception deleted, replaced with NO-Triage-exception instruction — a lane told to send its list to Triage/HQ refuses and posts in its own topic.
 
+## v0.4.106
+
+- HARVEST no-hold law (owner override 2026-09-08 15:2xZ): no holding state — editor fires behavioral smoke on probe commission, probe PASS files the PR without owner confirmation; owner “smoke” later = ratification (fd HARVEST LAW + triage.md filing gate).
+- Internal feature set widened to telegram,code-graph,browser (owner order 15:28Z); features-compat gate supersets legal.
+
 ## Imported pre-v0.4.60 dump — one-line provenance records
 (structured `##` entries begin at v0.4.60; block sequestered into
 position per the newest-LAST contract, lens B F14, v0.4.80)

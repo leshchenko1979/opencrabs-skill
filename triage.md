@@ -138,10 +138,12 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
   when census shows ≥3 Tier-1 candidates AND no upstream PR of ours is open,
   file candidates autonomously — cherry onto upstream base, 4-leg verify,
   CI green at push, frozen at filing (PR-freeze law). FILING GATE (owner
-  override 2026-09-08 13:51Z): file as soon as tests are green AND smokes
-  confirmed — parallel PRs allowed; the only hold is a feature whose smoke
-  readiness the owner has not confirmed. PR filing itself follows the full
-  Upstream PR law.
+  override 2026-09-08 13:51Z, amended 15:2xZ “no holding, just instruct
+  the editor to fire smoke”): file as soon as tests are green AND the
+  behavioral smoke PASSES — parallel PRs allowed; NO holding state exists.
+  On probe commission the editor fires the smoke immediately; probe PASS
+  files the PR without owner confirmation (owner “smoke” later =
+  ratification). PR filing follows the full Upstream PR law.
 
 ## Duty T5 — Post-compaction issue sweep (owner order 2026-09-07 17:23Z, v0.4.92)
 
