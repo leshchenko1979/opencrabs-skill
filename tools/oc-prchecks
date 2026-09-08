@@ -27,6 +27,9 @@
 # Defaults: --repo leshchenko1979/opencrabs, --carrier ci/quick-build-linux,
 # --wait 600 (15s poll). Env: OC_GH (gh shim), OC_PRCHECKS_POLL,
 # OC_PRCHECKS_RESOLVE_WAIT, OC_PRCHECKS_RESOLVE_POLL,
+# OC_PRCHECKS_DEDUP_WINDOW (pre-dispatch dedup window, seconds, default 21600=6h;
+# a same-sha/ref run witness inside the window is adopted if still live —
+# kills the re-dispatch/concurrency-cancel loop, 2026-09-08 study),
 # OC_DEPLOY_STATE_DIR (lock home), OC_PRCHECKS_LOCK_WAIT (tests/ops).
 #
 # Exit: 0 GREEN (terminal, run conclusion success, zero FAILED steps/jobs)
@@ -341,7 +344,8 @@ do_selftest() {
 
   # #115 B: C-F2 matcher rebuilt — exit-agnostic, extra.sha/ref matching, fail-closed rc 8
   CF_LOG="$D/cf2.log"
-  NOW_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; OLD_TS="$(date -u -d '-11 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+  NOW_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; OLD_TS="$(date -u -d '-7 hours' +%Y-%m-%dT%H:%M:%SZ)"
+  OLD11_TS="$(date -u -d '-11 minutes' +%Y-%m-%dT%H:%M:%SZ)"
   cf_run() { # $1=shim-scenario $2..=tool args ; OC_TOOLS_LOG=$CF_LOG wired, rc in T_RC, out in T_OUT
     local sc="$1"; shift
     GHDISPATCH_LOG="$D/gh-dispatch.log"; : > "$GHDISPATCH_LOG"; export GHDISPATCH_LOG
@@ -387,12 +391,22 @@ do_selftest() {
   if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"adopted run=222"*) true ;; *) false ;; esac && ! case "$T_OUT" in *"C-F2 resume"*"AMBIGUOUS"*) true ;; *) false ;; esac; then
     t_ok "C-F2 ref-equality: main does NOT witness feature/fix-main (fresh dispatch, no rc-8) (#115B)"
   else t_bad "C-F2 ref-equality (rc=$T_RC out=$T_OUT)"; fi
-  # (d) stale witness (11 min > 10-min cutoff) -> ignored; dispatch proceeds (watch then fails rc 4 under run_view_fail)
+  # (d) stale witness (7h > 6h dedup window) -> ignored; dispatch proceeds
+  # (watch then fails rc 4 under run_view_fail). Window was 600s, widened
+  # 2026-09-08 to OC_PRCHECKS_DEDUP_WINDOW (default 6h) — see dedup comment.
   printf '{"ts":"%s","tool":"oc-prchecks","exit":5,"args":"%s --wait 600","extra":{"run_id":"777","sha":"%s"}}\n' "$OLD_TS" "$SHA" "$SHA" > "$CF_LOG"
   cf_run run_view_fail "$SHA"
   if [ "$T_RC" -eq 4 ] && ! case "$T_OUT" in *"AMBIGUOUS"*) true ;; *) false ;; esac; then
     t_ok "C-F2 cutoff: 11-min-old witness ignored, no fail-closed (rc 4 = watch-death after fresh dispatch) (#115B)"
   else t_bad "C-F2 cutoff (rc=$T_RC out=$T_OUT)"; fi
+  # (e) pre-dispatch dedup (2026-09-08 study): an 11-min-old witness with a
+  # LIVE run is now IN window (6h default) -> adopted, not re-dispatched
+  # (builds outlive the old 600s window; re-dispatch concurrency-cancelled).
+  printf '{"ts":"%s","tool":"oc-prchecks","exit":5,"args":"%s --wait 600","extra":{"run_id":"777","sha":"%s"}}\n' "$OLD11_TS" "$SHA" "$SHA" > "$CF_LOG"
+  cf_run inflight "$SHA" --wait 1
+  if [ "$T_RC" -eq 5 ] && case "$T_OUT" in *"C-F2 resume: run=777"*) true ;; *) false ;; esac; then
+    t_ok "dedup window 6h: 11-min-old witness with LIVE run adopted (no re-dispatch cancel)"
+  else t_bad "dedup window 6h (rc=$T_RC out=$T_OUT)"; fi
 
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
@@ -546,7 +560,15 @@ DISPATCH_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # fall-through could concurrency-cancel a live run (field evidence:
 # 34018277474/34018322317, 13:07Z — dossier n=1620).
 if command -v jq >/dev/null 2>&1 && [ -f "${OC_TOOLS_LOG:-/nonexistent}" ]; then
-  PR_CUTOFF="$(($(date +%s) - 600))"
+  # Pre-dispatch dedup (2026-09-08 study, research/waiter-deploy-20260908.md):
+  # builds run 15-30+ min but the C-F2 witness window was 600s — every
+  # re-invocation after 10 min saw no witness and re-dispatched, and GitHub
+  # concurrency-cancelled the still-live run (77 distinct shas re-dispatched,
+  # worst 7x). The window is now configurable and defaults to 6h: long enough
+  # to span a real build, still bounded. Semantics unchanged: witness
+  # non-terminal -> adopt; completed -> fall through to fresh dispatch;
+  # liveness unverifiable -> fail-closed rc 8 (#115B, n=1663 Q2).
+  PR_CUTOFF="$(($(date +%s) - ${OC_PRCHECKS_DEDUP_WINDOW:-21600}))"
   PR_PRIOR="$(tail -n 300 "$OC_TOOLS_LOG" 2>/dev/null | jq -R -r --arg sha "$SHA" --arg ref "$REF" --argjson cutoff "$PR_CUTOFF" '
     fromjson? | select(.tool == "oc-prchecks")
     | select(((.extra.run_id // "") | tostring) != "")
