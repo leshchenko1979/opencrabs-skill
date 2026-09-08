@@ -1,6 +1,6 @@
 # review-lenses.md — Duty-6 reviewer lens catalog (B4+G-F4 split, v0.4.78)
 
-Full briefs for the eight Duty-6 review lenses (A–G + standing brain-scrub). supervisor.md §Duty 6 owns the
+Full briefs for the nine Duty-6 review lenses (A–H + standing brain-scrub). supervisor.md §Duty 6 owns the
 method (read-only sub-agents, verbatim-quote verification, oc-review-persist
 persistence, poll triple-check, verdict table) and keeps only the family map
 there; this file owns the per-lens scope briefs. Letters keep chronological
@@ -131,3 +131,21 @@ on census evidence + owner word (supervisor.md step 7).
      DELETE-SAFE / ARCHIVE / KEEP with that reference list as the evidence.
      "Looks stale" is a hypothesis, never a verdict. Nothing deletes without
      the Supervisor's poll triple-check + owner word.
+   - **Reviewer H — LEDGER HEALTH (added v0.4.113, owner GO 2026-09-08 20:16Z):**
+     the workers-ledger.json read AS A WHOLE, not per-slice — the slice tools
+     (`oc-ledger claims`, `oc-ship-audit`, `oc-waiter-sweep`) each audit one
+     family and stay the enforcement surface; H reads for what they cannot
+     see: (1) RECEIPT COMPLETENESS — incident/lesson-mention rows with no
+     corresponding codified rule in fleet-directives.md/editor.md/AGENTS.md
+     (lesson-extraction completeness; each finding names the row AND the law
+     home that should carry it, or the explicit owner waiver), (2) PHANTOM
+     FAMILIES — rows claiming stamps/writes/deliveries with no same-turn tool
+     receipt verifiable from the row's own citations (the n=1845/n=1555 class),
+     (3) CLAIM LIFECYCLE — open claim-refs whose chains closed (merged/shipped/
+     retracted) without a release row, (4) CONTRADICTION PAIRS — later rows
+     asserting the opposite of earlier rows for the same object without a
+     retraction, (5) CADENCE/VERSION SYNC — skill-bump rows vs tags vs
+     CHANGELOG monotonicity. Evidence format unchanged: every finding cites
+     the ledger row n + the verifiable artifact (git/gh/log) that confirms or
+     breaks it — quote-or-no-finding. H reviews the JOURNAL, never edits it;
+     corrections land as new rows or law edits via the Supervisor.

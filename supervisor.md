@@ -176,11 +176,11 @@ incident suggests drift.
 
 Method:
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
-   one per lens (A/B/C/D/E/F/G + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
+   one per lens (A/B/C/D/E/F/G/H + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
    are ALWAYS sub-agent work, never Supervisor-only inline reading. Same-day
    second passes of one lens suffix the report name (`-run2`) and split scopes
    (`B2`/`A2`) — the lens catalog (review-lenses.md) is unchanged by that;
-   family map letters stay A–G. Findings
+   family map letters stay A–H. Findings
    must carry verbatim quotes; Supervisor verifies every accepted quote against
    disk before acting. Hollow report → ONE retry with the prompt narrowed to
    that single lens; a second hollow result unlocks inline fallback, which
