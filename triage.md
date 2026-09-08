@@ -117,6 +117,14 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
 
 ## Duty T4 — Enforcement patrols
 
+- **Stale-branch sweep patrol (owner 2026-09-08 "Go then duty 4+6",
+  v0.4.108 — DAILY, rides the T4 census turn):** run
+  `./tools/oc-branch-sweep` (fresh receipt) against the fork; the sweep
+  reports contained/stale branches; deletion of any referenced branch
+  (open PR head, lane worktree ref) stays lane-reference-checked — sweep
+  SURFACES, owner/deletion law disposes. Closes the ownerless gap: the
+  tool existed (editor.md) with no caller, and ~55 contained branches sat
+  queued a full day.
 - **Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12):** the violation
   pattern is caught from evidence, not intuition. On suspicion run
   `./tools/oc-tg-audit <session-uuid> [--days N]` (replaces the hand grep;
@@ -144,6 +152,21 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
   On probe commission the editor fires the smoke immediately; probe PASS
   files the PR without owner confirmation (owner “smoke” later =
   ratification). PR filing follows the full Upstream PR law.
+- **Upstream PR-state patrol (owner 2026-09-08 "Go then duty 4+6",
+  v0.4.108 — DAILY, rides the T4 census turn):** on each harvest census,
+  re-verify the state of every OPEN upstream PR of ours
+  (`gh pr view <n> -R adolfousier/opencrabs --json state,mergeable` —
+  fresh receipt, never memory) and post the states in the census line.
+  Closes the ownerless gap that let #1451's CONFLICTING sit undiscovered
+  for hours (found ad hoc 2026-09-08 16:48Z). Base-freshness law extends
+  to filing-time: census CLEAN results must name the upstream sha tested
+  against (Triage lesson, ledger n=2083).
+- **Cron liveness patrol (owner 2026-09-08 "Go then duty 4+6",
+  v0.4.108 — DAILY, rides the T4 census turn):** verify the law-carrying
+  crons are enabled and have recent last-run rows (harvest-patrol-daily,
+  upstream-shift-watch, oc-waiter-sweep — via the cron tool, fresh
+  receipt); a dead patrol cron posts no census and trips no alarm, so the
+  liveness check IS the heartbeat for the heartbeat.
 
 ## Duty T5 — Post-compaction issue sweep (owner order 2026-09-07 17:23Z, v0.4.92)
 

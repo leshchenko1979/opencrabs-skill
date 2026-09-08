@@ -135,6 +135,14 @@ this paragraph is kept only as the runbook for any future re-enabled lane.)*
 Cadence: STANDING — after every FIVE shipped version bumps (shared trigger
 with Duty 6), on owner request, or when incidents cluster without a rule.
 
+**Rollcall proactive trigger (owner 2026-09-08 "Go then duty 4+6",
+v0.4.108):** on each Duty-4 firing, HQ also checks the fleet for
+owner-decision items sitting unprompted between rollcalls (gates the law
+reserves for the owner: designs, smoke-readiness, dispatch priority) and,
+if any are found, lists them in the consolidated verdict table — Triage
+T7 execution stays on-demand; HQ's duty here is only to make the owner
+see what's waiting, never to fire the Rollcall itself.
+
 1. Live roster FIRST (`session_search`, same turn).
 2. Notify every non-dormant editor: proposals in strict format —
    `ADD|CHANGE <rule> in <file+section> BECAUSE <gap actually hit>` with dates

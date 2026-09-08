@@ -1,5 +1,15 @@
 # opencrabs-dev — release history (provenance)
 
+## v0.4.108 (2026-09-08, owner "Go then duty 4+6" 17:53Z — ownerless-procedure assignments + Duties 4+6 fired at 21/5 FIRE)
+- triage.md Duty T4: three new daily patrols riding the census turn — stale-branch sweep (`oc-branch-sweep` gets its caller; ~55 contained branches were queued with nobody dispatched), upstream PR-state re-verify (every open PR's state+mergeable fresh each census; closes the #1451 CONFLICTING-found-hours-late gap), cron liveness check (the three law-carrying crons; liveness check = the heartbeat's heartbeat). Base-freshness-at-filing-time folded into the PR-state patrol text (census CLEAN results name the upstream sha tested against — Triage lesson n=2083).
+- toolsmith.md Duty S1: cron liveness AUDIT ownership (fixer side vs Triage's checker side) + rollback drill schedule (every 14 days, next 2026-09-22, battery + ledger stamp per drill).
+- supervisor.md Duty 4: Rollcall proactive-trigger duty — on each firing HQ lists owner-decision items sitting unprompted between rollcalls in the verdict table; T7 execution stays on-demand.
+- Owner-gated items intentionally left unassigned (need owner priority pick, not law): defect-family fixes (#136 tap delivery, display-layer corruption ×3 sessions), state-repo stash@{0} recovery (stays with owning lanes, now NAMED in fd state-repo hygiene law).
+- Fired with this bump: Duty 4 poll + Duty 6 lens review at 21/5 FIRE (boundary n=1594).
+
+## v0.4.107 (2026-09-08, owner button ruling 17:04Z — port-work ownership)
+- fleet-directives.md §Port-work ownership NEW (owner ruling recovered from daemon callback log after the #1226 mid-turn tap swallow): editors build ports (merge-time ports by the running merge editor; harvest ports dispatched to an editor lane), Triage owns the harvest-port queue, HQ gates classifications; owner remains ask-decider. Filed l1979/opencrabs#136 for the tap-delivery defect (mid-turn picks re-armed but never re-delivered silently).
+
 Moved out of SKILL.md frontmatter at v0.4.43 (Duty-6 run-2 finding B6 —
 ~3k tokens of changelog loaded on every role-file claim; history is reference
 material, not procedure). Git-tracked in the skill repo; append one entry per

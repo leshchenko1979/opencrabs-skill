@@ -34,6 +34,19 @@ EDITOR territory — this lane touches neither.
 
 ## Duty S1 — Own `tools/` code (author + fixer, ex-Supervisor at v0.4.87)
 
+**Standing duties (owner 2026-09-08 "Go then duty 4+6", v0.4.108):**
+
+- **Cron liveness audit ownership:** the three law-carrying crons
+  (harvest-patrol-daily, upstream-shift-watch, oc-waiter-sweep) plus any
+  future law-carrying cron are TOOLSMITH's to keep alive — the lane audits
+  cron health on its own cadence and repairs/re-arms a dead one with a
+  ledger stamp. Triage's daily liveness patrol (Duty T4) is the check;
+  this lane is the fixer.
+- **Rollback drill schedule:** re-run a full `oc-deploy` rollback drill
+  every 14 days (next due 2026-09-22), with battery receipts + a ledger
+  stamp per drill. Skill atrophy between incidents is the failure mode —
+  the drill IS the maintenance.
+
 The CLI tools every other role uses: create, extend, repair under `tools/`.
 Authorship of tool CODE moved HERE at v0.4.87; skill markdown, CHANGELOG,
 and version bumps stay with the Supervisor. Intake shapes:
