@@ -36,7 +36,7 @@ Fleet conventions:
 | oc-issue-log | 0 | 2 | 0 posted / 3 gh-fail |
 | oc-issue-sweep | 0 | 2 | 0 no-candidates / 1 candidates / 3 api-fail |
 | oc-job-verify | 0 | 1 | 0 VERIFIED / 2 IN-FLIGHT / 3 FAILED / 4 REF-MISMATCH / 5 NOT-FOUND · embed-sha compares exact OR first-12-hex prefix (old-embed truncation tolerance) |
-| oc-ledger | 0 | 2 | 0 ok / 1 verdict (cadence FIRE / version mismatch) / 3 ledger / 4 write / 5 battery-gate / 6 version-sync-gate |
+| oc-ledger | 0 | 2 | 0 ok / 1 verdict (cadence FIRE / version mismatch) / 3 ledger / 4 write / 5 battery-gate / 6 version-sync-gate · `claims <N>` verb (v0.4.97, #129): open claim-refs by issue, empty output + rc 0 = clean/unclaimed (dispatch=verify-unclaimed backend); rc 2 usage, rc 3 ledger |
 | oc-order-validate | 0 | 1 | 0 VALID / 2 UNMERGED / 3 UNSIGNED-unknown / 4 UNKNOWN-REF |
 | oc-ping-proof | 0 | 2 | 0 WOKEN / 1 SILENT / 3 UNREACHABLE / 4 parse-fail |
 | oc-pr-atomicity | 0 | 1 | 0 ATOMIC / 2 NON-ATOMIC / 4 PR-not-found |
