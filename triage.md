@@ -168,12 +168,16 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
   receipt); a dead patrol cron posts no census and trips no alarm, so the
   liveness check IS the heartbeat for the heartbeat.
 
-## Duty T5 — Post-compaction issue sweep (owner order 2026-09-07 17:23Z, v0.4.92)
+## Duty T5 — Post-compaction + daily issue sweep (owner order 2026-09-07
+17:23Z, v0.4.92; daily cadence added owner order 2026-09-08 20:0xZ, v0.4.112)
 
-**Trigger:** every time the Triage lane itself resumes from a context
+**Trigger:** (1) every time the Triage lane itself resumes from a context
 compaction (post-compaction turns are otherwise skill-blind — the same gap
-editor.md §Mid-cycle skill drift + Phase 1 step 0 and the #125 skill-stamp fix address for editors), FIRST
-action after reloading the skill: sweep the backlog for unclaimed work.
+editor.md §Mid-cycle skill drift + Phase 1 step 0 and the #125 skill-stamp
+fix address for editors), FIRST action after reloading the skill: sweep the
+backlog for unclaimed work. (2) **Daily sweep (v0.4.112):** run the same
+procedure once per day regardless of compactions — the closure authority
+below needs a regular cadence to be worth anything.
 
 **Procedure:**
 1. Load this skill (post-compaction law) — then, in the same turn:
@@ -188,9 +192,21 @@ action after reloading the skill: sweep the backlog for unclaimed work.
    someone claims it" is not assignment).
 5. Already-claimed issues: no action; the owning editor's chain owns them.
 
-**Never:** close or park an issue on your own authority — closure follows
-the harvest law (fork issue closes only after its upstream PR is filed).
-This sweep SURFACES; it does not dispose.
+**Autonomous closure — limited disposal authority (owner option 2, ruling
+2026-09-08 20:0xZ, v0.4.112):** the Never-clause above is now BOUNDED. On
+each sweep Triage MAY close an open fork issue WITHOUT the owner's word,
+ONLY when it meets one of:
+(a) **superseded-by** — the feature/fix landed via a different issue/PR
+    (cite the superseding number in the close comment);
+(b) **duplicate** — an earlier open issue tracks the same work (close the
+    newer one, cite the survivor);
+(c) **owner-confirmed-withdrawn** — the owner explicitly said the work is
+    dropped (cite the board/topic message; never infer).
+Everything else stays open: harvest-gated closure law unchanged (done-work
+issues close only after their upstream PR files). Every autonomous close:
+one ledger stamp per issue (`oc-ledger stamp note "T5 auto-close #N <test>"
+`), and the close comment names the test class (a)/(b)/(c). Reversible by
+owner word (reopen + note).
 
 ## Duty T7 — Decision Rollcall: trigger, coverage, stamp (owner order 2026-09-08, topic 42487, ruling n=1994)
 
