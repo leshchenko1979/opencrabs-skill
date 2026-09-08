@@ -597,14 +597,17 @@ The lane runs its own ship as an agent-launched BACKGROUND task:
   --sha <full-40-sha> --features <comma-set> --execute
 ```
 
-**One-command shape (SHIPPED v0.4.100, toolsmith 86f422ed — this IS the
-contract now):** `oc-deploy ship --sha <40> --features <set> --execute
---wait N` = ONE detached invocation (ORDER gates → carrier dispatch →
-bounded poll → GREEN auto-swap; timeout rc 5 + run id + URL). Gates carry
-machine tokens (`OC_DEPLOY_GATE=<cause>` on rc 2; `wait-plan-mode` when
---wait is used without --execute). The old two-step (ship, then
-`oc-deploy poll --execute --wait N`) still works but is the fallback, not
-the taught path.
+**Two-step truth (corrected v0.4.116, lens E-H1 — the ONE-command
+auto-swap promise was retired):** `oc-deploy ship --sha <40> --features
+<set> --execute --wait N` = ONE detached invocation that runs ORDER gates →
+carrier dispatch → bounded poll and EXITS GREEN when the run lands (rc 0 +
+run id; rc 5 timeout + run id; rc 6 RED). GREEN is a VERDICT, not a swap —
+the swap is a SEPARATE execute leg: `oc-deploy poll --execute --wait N`
+(re-run until it reports SWAPPED). Skipping the execute leg = the #134
+orphan class: build GREEN, deployed marker never moves. Gates carry machine
+tokens (`OC_DEPLOY_GATE=<cause>` on rc 2; `wait-plan-mode` when --wait is
+used without --execute). Never report a ship as deployed off ship-wait GREEN
+alone.
 
 The script performs the chain Phase 6's push legs feed into (ORDER gates + carrier dispatch) beyond the hand-run fork-main fetch +
 fast-forward check → push → 4 ORDER gates (oc-order-validate) → carrier
@@ -612,8 +615,9 @@ dispatch on `ci/quick-build-linux` — appends every verdict to the shadow
 journal (`oc-deploy-shadow.log` in the state dir), and exits 0 with the
 dispatch confirmation (poll discovers the run id) or exit 2 + failing
 gate to the invoking session. **Ship semantics: dispatch is real always; deploys are real — auto-swap on
-GREEN (consent eliminated 2026-08-28; smoke-FAIL rollback = owner call;
-stage is S3 — no consent step, no sub-S2 exit path).** Plan-only
+GREEN lives in the SWAP-EXECUTE leg (`poll --execute`), not in ship --wait
+(E-H1 v0.4.116: consent eliminated 2026-08-28; smoke-FAIL rollback = owner
+call; stage is S3 — no consent step, no sub-S2 exit path).** Plan-only
 default: omit `--execute` → full delta printed, nothing touched. Brake:
 `touch /root/.opencrabs/profiles/ops/opencrabs-dev/oc-deploy.kill` (or
 `/root/oc-work/oc-deploy.disabled`) aborts every invocation, exit 9. The

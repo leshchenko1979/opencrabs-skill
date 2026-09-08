@@ -32,7 +32,7 @@ deputization. Expected reply shape: "routed to <lane>", not done-work.
 - NEVER messages the owner directly with verdict tables — the Supervisor owns
   owner-facing verdict batches (Duty 4 / supervisor.md §Duty 7 discipline).
 
-## Duty T1 — Idea box intake (ex supervisor.md Duty 7 items 1-4)
+## Duty T1 — Idea box intake (historical origin: ex supervisor.md Duty 7, first half — migrated v0.4.86; supervisor Duty 7 no longer carries numbered items)
 
 Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
 a wrong tool or a wrong process MAY report it the moment it happens; no
@@ -57,7 +57,7 @@ waiting for a poll.
 4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
    (convergence beats volume); duplicate ideas stamp ONE event, not N.
 
-## Duty T2 — QUIRK intake + fix routing (ex supervisor.md Duty 7 items 5-6)
+## Duty T2 — QUIRK intake + fix routing (historical origin: ex supervisor.md Duty 7, second half — migrated v0.4.86; supervisor Duty 7 no longer carries numbered items)
 
 Any worker that hits a tool FAILURE, INCONSISTENCY, or QUIRK — non-zero rc out
 of documented register (see tools/RC-CONTRACT.md), hang/timeout, corrupt or
@@ -92,28 +92,6 @@ Procedure = fleet-directives.md §Creating new editors, unchanged: topic FIRST
 prompt ("Load opencrabs-dev skill. You are an editor." + task), brief the lane
 via `session_notify` ONLY (never the spawn prompt), and enroll the roster row
 per that section. Owner veto overrides retroactively, as with rulings.
-
-## Duty T6 — Registry writes: schema + seed rules (moved from supervisor.md Duty 2, lens B-F10 v0.4.96)
-
-Triage owns ALL `workers-ledger.json` writes (owner law v0.4.91): claims, ack
-rows, event notes, roster enrollment (T3), `confirmed` flags.
-
-- Canonical path `/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json`
-  (NOT next to the skill — two-file drift incident 2026-08-29; `oc-deploy`
-  defaults to the canonical file since v0.4.38). Flock-serialize via `oc-ledger`.
-- Fields per worker (slow-changing ONLY): uuid, role, forum topic, feature,
-  `confirmed` flag (provisional until first signed commit — trailer = identity
-  proof), `last_notified` {version, at}, `last_acked` {version, at}, append-only
-  event notes.
-- **LIVE STATUS IS NEVER STORED:** a stored ACTIVE/DORMANT/UNREACHABLE is stale
-  on arrival. Discover liveness same-turn (`session_search`, `gh run list`,
-  `git ls-remote`); the registry answers "who exists and which version".
-- Seed/update ONLY from proven facts: a worker message naming the version, or
-  the delivery receipt/error of a notify you sent. Never assume.
-- Ack contract (v0.4.91): acks NOT expected; delivery proof = notify receipt,
-  comprehension guard = disk absorption + `oc-drift-check`. New ack rows opt-in.
-- Version-skew policy: any version valid until acked; chase only if a worker
-  ACTS substantively while >1 version stale.
 
 ## Duty T4 — Enforcement patrols
 
@@ -214,6 +192,28 @@ one ledger stamp per issue (`oc-ledger stamp note "T5 auto-close #N <test>"
 `), and the close comment names the test class (a)/(b)/(c). Reversible by
 owner word (reopen + note).
 
+## Duty T6 — Registry writes: schema + seed rules (moved from supervisor.md Duty 2, lens B-F10 v0.4.96)
+
+Triage owns ALL `workers-ledger.json` writes (owner law v0.4.91): claims, ack
+rows, event notes, roster enrollment (T3), `confirmed` flags.
+
+- Canonical path `/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json`
+  (NOT next to the skill — two-file drift incident 2026-08-29; `oc-deploy`
+  defaults to the canonical file since v0.4.38). Flock-serialize via `oc-ledger`.
+- Fields per worker (slow-changing ONLY): uuid, role, forum topic, feature,
+  `confirmed` flag (provisional until first signed commit — trailer = identity
+  proof), `last_notified` {version, at}, `last_acked` {version, at}, append-only
+  event notes.
+- **LIVE STATUS IS NEVER STORED:** a stored ACTIVE/DORMANT/UNREACHABLE is stale
+  on arrival. Discover liveness same-turn (`session_search`, `gh run list`,
+  `git ls-remote`); the registry answers "who exists and which version".
+- Seed/update ONLY from proven facts: a worker message naming the version, or
+  the delivery receipt/error of a notify you sent. Never assume.
+- Ack contract (v0.4.91): acks NOT expected; delivery proof = notify receipt,
+  comprehension guard = disk absorption + `oc-drift-check`. New ack rows opt-in.
+- Version-skew policy: any version valid until acked; chase only if a worker
+  ACTS substantively while >1 version stale.
+
 ## Duty T7 — Decision Rollcall: trigger, coverage, stamp (owner order 2026-09-08, topic 42487, ruling n=1994)
 
 **Trigger:** the owner's word "run a Decision Rollcall" — on demand, never
@@ -257,11 +257,9 @@ WHAT escalates: ACCEPT-MECHANICAL batch items, KERNEL-SEMANTIC verdicts,
 protocol disputes, skill-edit requests, semantic questions, sanctioned-sender
 judgments, upstream matters, owner-verdict-table material.
 
-HOW: `session_notify` per fleet-directives §Cross-lane delivery (cadence law
-canonical — quiet DEFAULT, turn-end for boundary-bound, `interrupt=true`
-failsafe only). Batch at turn-end — one notify with
-N items beats N notifies. Receipts, ACKs, and ROUTED stamps NEVER escalate;
-they live in the ledger.
+HOW: same escalation mechanics as toolsmith.md §Escalation (canonical HOW —
+one concept, one home, lens A-L7 v0.4.116). Receipts, ACKs, and ROUTED
+stamps NEVER escalate; they live in the ledger.
 
 WHAT comes back: the Supervisor's rulings and version batches absorb here the
 same way they absorb everywhere — disk absorption (§Glossary, SKILL.md),

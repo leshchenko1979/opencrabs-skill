@@ -9,6 +9,9 @@
 # Subcommands:
 #   stamp <kind> "<what>" [--by <label>]   append event under lock (flock +
 #                                          tmp -> jq-validate -> mv) + git leg
+#   lessons [--kind <lesson|incident|all>] [--class <text>]
+#                                          extract lesson/incident rows by class
+#                                          (H-2 v0.4.116; read-only)
 #   sync --version <v> [--why <text>] [--catch-up]
 #                                          ONE atomic write: 3 version fields
 #                                          + skill-bump event; battery-receipt
@@ -66,7 +69,7 @@ LEDGER=""
 SELFTEST=0
 # confirm + swap-result: tool-written mechanical kinds (cmd_confirm, oc-deploy
 # ledger_stamp) admitted v0.4.77 — the enum is closed to EVERY writer now.
-KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident note ack roster-enroll claim confirm swap-result "
+KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident lesson note ack roster-enroll claim confirm swap-result "
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 die() { echo "oc-ledger: $2" >&2; exit "$1"; }
@@ -726,6 +729,15 @@ EOF
   grep -q "$W4" "$T/claims-closed.out" && bad "claims-closed-still-open" || ok
   bash "$ME" claims >/dev/null 2>&1; chk "claims-noarg-rc2" 2 $?
   bash "$ME" claims abc >/dev/null 2>&1; chk "claims-nonnum-rc2" 2 $?
+  # 51-54 (v0.4.116, H-2): lessons — lesson/incident row extraction by class.
+  OC_ACTOR="$W4" bash "$ME" stamp lesson "LESSON-FIXTURE uncoded gate-bypass lesson" >/dev/null 2>&1
+  OC_ACTOR="$W4" bash "$ME" stamp incident "INCIDENT-FIXTURE phantom write without receipt" >/dev/null 2>&1
+  bash "$ME" lessons --kind lesson > "$T/lessons-l.out" 2>/dev/null; chk "lessons-lesson-rc" 0 $?
+  grep -q "LESSON-FIXTURE" "$T/lessons-l.out" && ok || bad "lessons-lesson-row"
+  grep -q "INCIDENT-FIXTURE" "$T/lessons-l.out" && bad "lessons-wrong-kind-leak" || ok
+  bash "$ME" lessons --kind all --class "phantom" > "$T/lessons-c.out" 2>/dev/null; chk "lessons-class-rc" 0 $?
+  grep -q "phantom" "$T/lessons-c.out" && ok || bad "lessons-class-match"
+  bash "$ME" lessons --kind bogus >/dev/null 2>&1; chk "lessons-bad-kind-rc2" 2 $?
   rm -rf "$T"
   echo "oc-ledger selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
@@ -804,9 +816,9 @@ cmd_lessons() { # oc-ledger lessons — H-2 (v0.4.116): extract lesson/incident 
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   jq -r --arg kind "$kind" --arg cls "$cls" \
     '.events | to_entries[]
-     | select(($kind == "all") or (.value.kind // "") == $kind)
+     | select(($kind == "all") or ((.value.kind // "") == $kind))
      | select(($cls == "") or ((.value.what // "") | test($cls; "i")))
-     | "n=\(.key)\t\(.value.kind // "?")\t\(.value.t // "?")\t\((.value.what // "") | .[0:160]")' "$LEDGER" 2>/dev/null
+     | (["n=" + (.key | tostring), (.value.kind // "?"), (.value.t // "?"), ((.value.what // "") | .[0:160])] | join("\t"))' "$LEDGER" 2>/dev/null
   exit 0
 }
 

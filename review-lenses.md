@@ -17,7 +17,9 @@ on census evidence + owner word (supervisor.md step 7).
    - **Reviewer A — REDUNDANCY + ONTOLOGY:** same rule stated twice across
      files; duplicated war stories; terms violating the SKILL.md test ontology
      (SMOKE TEST / CODE TESTS / FEATURE-PRESENCE CHECK / EXECUTION SANITY
-     SIGNAL); undefined coinages; stale ref names; SEDIMENT — stale layers
+     SIGNAL); undefined coinages; stale ref names (boundary, lens I-2.2
+     v0.4.116: A owns ref CONSISTENCY; B weighs refs only as load-weight —
+     first finder gets attribution); SEDIMENT — stale layers
      that survive because adding feels safe and removing feels risky
      (docs-lens vocabulary reference:
      `skills/writing-great-skills/SKILL.md`). PLUS the churn-drift checklist, EVERY
@@ -128,7 +130,9 @@ on census evidence + owner word (supervisor.md step 7).
      duplicate-looking artifacts in the skill scope (files, state files,
      ledgers, markers, tool flags) and for EACH list what reads or writes it
      (grep tools/, crons, skill files, journal vocabulary), then classify
-     DELETE-SAFE / ARCHIVE / KEEP with that reference list as the evidence.
+     DELETE-SAFE (evidence law, folded from D's own method note v0.4.116:
+     a zero-hit claim from a |-pattern grep in literal mode is UNVERIFIED —
+     quote the query + scope for every negative-existence claim) / ARCHIVE / KEEP with that reference list as the evidence.
      "Looks stale" is a hypothesis, never a verdict. Nothing deletes without
      the Supervisor's poll triple-check + owner word.
    - **Reviewer H — LEDGER HEALTH (shipped v0.4.114, owner GO 2026-09-08 20:16Z):**
@@ -159,7 +163,15 @@ on census evidence + owner word (supervisor.md step 7).
      per-lens accuracy record from the Supervisor's premise-verification
      history (precedents: brain-scrub "cargo ban homeless" overstatement, the
      B-8 misattribution — both rejected 2026-09-08), (4) EVIDENCE DISCIPLINE —
-     quote-or-no-finding adherence rate in persisted reports. I reads
+     quote-or-no-finding adherence rate in persisted reports (I-4.1
+     v0.4.116 evidence unit: locator + verbatim snippet for HIGH/P-class;
+     locator-only permitted for mechanical nits; volatile files cited by
+     section header + short quote, line numbers secondary — I-4.2).
+     CORPUS (I-5.1 v0.4.116): durable reports live in
+     `reviews/<cycle>/reports/`; when two skill-review-index.log files
+     diverge, the CYCLE-LOCAL index wins over the root one. Severity scale:
+     HIGH (load-bearing lie / stall class) · MED (real gap, bounded blast
+     radius) · LOW (nit). I reads
      persisted reports + this catalog + the Supervisor's validation notes; it
      does NOT re-litigate findings already triple-checked, it audits the
      PATTERN. Output feeds catalog brief edits and reviewer spawning. Same

@@ -185,10 +185,13 @@ Method:
    (same dir as this file) — read it before spawning reviewers; each brief
    names the lens scope, exclusions, and evidence format.
 
-3. PERSISTENCE: the Supervisor persists each returned report via
-   `oc-review-persist <lens> @<file>` on receipt (read-only reviewers cannot
-   write; the tool re-read-verifies and indexes by sha256); a report existing
-   only in push-transit does not count as delivered.
+3. PERSISTENCE (persist-first write-through, owner law 2026-09-08, v0.4.116):
+   the SPAWN PROMPT instructs each reviewer to write its FULL report to
+   `/tmp/duty6/lens-<X>.md` before finishing — the reviewer's own file write
+   is the PRIMARY copy; the Supervisor's persist step
+   (`oc-review-persist <lens> @<file>`, re-read-verified + sha256-indexed)
+   becomes a VERIFIED COPY (byte-count + sha check), never the only copy.
+   A report existing only in push-transit does not count as delivered.
 4. Supervisor VALIDATES every finding with the poll triple-check (disk truth /
    evidence / coherence): ACCEPT · KERNEL (already covered) · REJECT (reason
    recorded, never silently dropped).
