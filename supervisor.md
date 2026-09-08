@@ -177,7 +177,10 @@ incident suggests drift.
 Method:
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
    one per lens (A/B/C/D/E/F/G + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
-   are ALWAYS sub-agent work, never Supervisor-only inline reading. Findings
+   are ALWAYS sub-agent work, never Supervisor-only inline reading. Same-day
+   second passes of one lens suffix the report name (`-run2`) and split scopes
+   (`B2`/`A2`) — the lens catalog (review-lenses.md) is unchanged by that;
+   family map letters stay A–G. Findings
    must carry verbatim quotes; Supervisor verifies every accepted quote against
    disk before acting. Hollow report → ONE retry with the prompt narrowed to
    that single lens; a second hollow result unlocks inline fallback, which
@@ -264,13 +267,12 @@ supervisor-side ownership pointer.
 
 ## Upstream sync — watch, MERGE-ON-ARRIVAL, parity (re-homed v0.4.80; sync model re-ruled 2026-09-02, lens G1/A-F1 v0.4.84)
 
-Sync is SUPERVISOR-owned. **SYNC LAW (owner 2026-09-02 "Land it"): fork main
-MERGES `adolfousier/main` when upstream shifts — merge, never rebase/reset, on
-fork main.** Executing procedure: `upstream-merge-runbook.md` (freeze gate,
-roles, conflict classes, migration-union rule, semantic-triage defaults) —
-re-homed from the archived compiler runbook, where it had been stranded since
-the 2026-08-28 S3 cutover. SKILL.md §Upstream relations items 1/2/6 carry the
-one-line summaries only (lens A3 v0.4.89: one concept, one home). The
+Sync is SUPERVISOR-owned. **SYNC LAW canonical = `fleet-directives.md`
+§remotes (owner 2026-09-02 "Land it"; one concept, one home — this section
+carries pointers only, lens A-12 v0.4.111).** Executing procedure:
+`upstream-merge-runbook.md` (freeze gate, roles, conflict classes,
+migration-union rule, semantic-triage defaults). SKILL.md §Upstream relations
+items 1/2/6 carry the one-line summaries. The
 REBASE-PORT procedure below is RETIRED — kept for PR-chain ports only (harvest
 branches onto upstream PR heads, where force-push-with-lease applies to the PR
 BRANCH, never to fork main).

@@ -55,7 +55,6 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ci-parity` | workflows parity fork↔upstream post-merge (live: editor Phase 7 parity) |
 | `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>] [--contributors]` | commit-range → worker-lane attribution via Session-Id join against roster (`(unsigned)`/`(unmapped)` rows never dropped); `--contributors` (E6, v0.4.78) projects the 3-col TSV (session/issues/shas) — SINGLE SHAPE (lens E-2, v0.4.90: the `oc-deploy contributors` wrapper is retired; use `oc-attrib --contributors` directly); `--deployed` composes the range from `deployed.sha` + `deployed.meta.json` `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) |
 | `./tools/oc-deploy <mode>` | the ship path itself — `ship` (fetch/push + 4 ORDER gates + carrier dispatch), `poll` (watch + RED scan + swap chain; `--wait N` bounded wait — timeout dies rc 5 + optional `--notify-session <uuid>` wake, `--wait 0` = classic single pass; v0.4.78), `swap-execute` (Phase B swap), `watch [--with-delta]` (stray-commit tripwire; `--with-delta` appends the `oc-upstream-delta` advisory rows — merge B, v0.4.48), `fanout` (row below); `contributors` RETIRED v0.4.91 (lens E-2 — use `oc-attrib --contributors`); the editor's S3 ship path: `editor.md` §Ship — oc-deploy (S3 path) |
-| `./tools/oc-deploy contributors (<old>..<new> or --deployed) [--repo <path>]` | **RETIRED v0.4.91** (lens E-2, owner "All 4 go"): verb-duplicate of `oc-attrib --contributors` — use the oc-attrib shape directly |
 | `./tools/oc-deploy fanout --run <id> [--dry-run]` | mechanical notify fan-out for one carrier run ([#24](https://github.com/leshchenko1979/opencrabs/issues/24) LIVE since v0.4.37): GREEN → contributor notify, RED → blame notify; auto-fired at `swap_execute` tail + on `poll` RED-scan; `OC_DEPLOY_NOFANOUT=1` suppresses — mechanics + journal vocabulary in `s2-swap-journal-spec.md` §Fan-out legs |
 | `./tools/oc-carrier-features [--fetch] [--repo <path>] [--ref <branch>]` | reads the `workflow_dispatch` `features` default from `.github/workflows/quick-build-linux.yml` at `origin/<ref>` (default `ci/quick-build-linux`); `oc-deploy ship/poll` resolves EMPTY `--features` through this — carrier read failure aborts the ship loudly, no silent fallback |
 | `./tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | closed-issue hygiene sweep: fork open + fork closed + upstream closed, harvests `close-reason:` lines from comments (falls back to state_reason); pure TSV, no header, deduped by repo#num (supervisor duty) |
@@ -81,6 +80,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ledger confirm <uuid>` | lens C #5: verifies the worker's latest claim (#N ref resolvable on the live fork) then flips workers[].confirmed=true — first verb to flip it (was unsanctioned hand-edit) |
 | `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | **manual fallback — prefer `./tools/oc-prchecks`** (row above). PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) |
 | `./tools/oc-log-search <pattern> [--log <f>] [--since <ts>] [--module <re>] [--tail N]` | telemetry-only daemon-log search (owner-ordered via lane 1a63f103, 2026-09-01): filters provider stream-echo (`[TEXT_ACCUM]`/`[TOOL_*]` tags) and DEBUG noise by default; HARD FENCE — a line whose source module is `brain::provider` can never match; `--selftest` built in |
+| `./tools/oc-waiter arm\|list\|sweep` | lane wake service (lens C-A1 family): `arm --ref <r> --label <l> --notify <uuid>` arms a background watcher (systemd transient scope — survives daemon restarts, 2026-09-08), `sweep` reaps orphans + wakes owners, `list` prints live waiters; wake verdicts GREEN/RED/TIMEOUT/... per RC-CONTRACT |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (the
 SELFTEST BATTERY — tool selftests, distinct from the CI-gate CODE TESTS
@@ -501,7 +501,9 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
   `s2-swap-journal-spec.md` / `README.md` / `tools/RC-CONTRACT.md` — including all worker lanes AND the TRIAGE lane AND the TOOLSMITH lane (decision 7,
   2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
   write. ONE exception: `tools/**` CODE is owned by the TOOLSMITH lane (v0.4.87 carve-out) — every change ships
-  with battery receipts; skill markdown + fleet-directives stay Supervisor-only.
+  with battery receipts (README.md's tool-fleet section and `tools/RC-CONTRACT.md`
+count as tools/ surface — toolsmith-writable; the rest of README.md stays
+Supervisor-only). Skill markdown + fleet-directives stay Supervisor-only.
 - Relay only PREDICATED claims (v0.4.6, from fabrication deviation #3): any
   build/deploy/artifact claim you pass onward must carry evidence YOU verified
   same-turn — run id against the API, sha against `ls-remote`/job-name embed,

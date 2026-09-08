@@ -42,7 +42,7 @@ Fleet conventions:
 | oc-pr-atomicity | 0 | 1 | 0 ATOMIC / 2 NON-ATOMIC / 4 PR-not-found |
 | oc-pr-fault-scope | 0 | 2 | 0 IN-SCOPE / 1 BASE-FAULT / 3 gh-fail |
 | oc-prchecks | 0 | 2 | 0 GREEN / 3 RED / 4 dispatch-api-lock / 5 in-flight-timeout / 6 CANCELLED-superseded / 7 carrier-head-unresolvable / 8 AMBIGUOUS-same-ref-witness-unverifiable (fail-closed, dispatch refused, #115B) / 4 also = ADOPTION IDENTITY MISMATCH (adopted run is not workflow_dispatch on carrier — n=1721 B; headSha pin impossible by design, n=1730; mismatch rc-4 emits OC_PR_SUPERSEDED token = NON-retryable do-not-resume, C-A1 v0.4.104) · `resume <id> --notify <uuid>` arms oc-waiter backend (one-shot, wakes uuid on TERMINAL; kills the manual resume-retry loop, C-A1) |
-| oc-review-persist | 0 | 2 | 0 persisted / 3 re-read sha256-mismatch / 4 write-failure |
+| oc-review-persist | 0 | 2 | 0 persisted (re-read verified) / 2 usage (bad lens/empty input) — no 3/4 exits exist in code (stale row fixed v0.4.111) |
 | oc-seal-state | 0 | 1 (noop) / 2 (unknown flag, F-L1) | 0 OK / 1 bare-invocation-noop / 2 unknown-flag-usage OR CONTRIBUTOR-SCAN-FAIL / 3 WRITE-FAIL-INVALID (usage surfaces = 2; 3 is always a write fault, lens A-6 v0.4.96) |
 | oc-shadow-rotate | 0 | 2 | 0 ok-noop / 2 io-fail (usage merged into 2, C-#3) |
 | oc-ship-audit | 0 | 2 | 0 all-SWAPPED / 1 ORPHANED |

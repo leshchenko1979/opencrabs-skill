@@ -21,7 +21,7 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `upstream-merge-runbook.md` | Procedure for the merge-on-arrival policy: gates, roles, conflict classes, migration-union rule |
 | `s2-swap-journal-spec.md` | Journal vocabulary spec for the oc-deploy swap leg |
 | `CHANGELOG.md` | Version history, **newest entry LAST** |
-| `tools/` | The `oc-*` tool fleet (31 executables) + `lib/` + `tests/` |
+| `tools/` | The `oc-*` tool fleet (30 executables) + `lib/` + `tests/` |
 | `tools/lib/` | Shared shell libs: `oc-log.sh` (journal + rc register + flood guard), `oc-embed.sh` (job-embed decoder) |
 | `tools/RC-CONTRACT.md` | SOLE per-tool rc register: fleet conventions + verdict codes (v0.4.78) |
 | `tools/tests/run.sh` | Battery: full selftest suite + coverage sections. Receipt → `tools/tests/battery-last.json` |
@@ -42,12 +42,17 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 Full register with rc codes lives in **`tools/RC-CONTRACT.md`** — that file is the source of truth (v0.4.79; SKILL.md carries purpose rows only).
 Highlights:
 
-- `oc-deploy` — ship / poll / swap-execute / fanout (selftest 165 checks, v0.4.79)
-- `oc-ledger` — worker ledger: claims, sync, version stamps, cadence
-- `oc-prchecks` — CI-wait on `pr-checks.yml` (poll, resume-before-dispatch, lane gates)
+- `oc-deploy` — ship / poll (fused `--wait N` bounded poll, v0.4.100) / swap-execute / fanout
+- `oc-ledger` — worker ledger: claims, `claims` verb, sync, version stamps, cadence
+- `oc-prchecks` — CI-wait on `pr-checks.yml` (poll, resume-before-dispatch, `resume --notify` arming, lane gates)
+- `oc-waiter` — lane wake service: arm/_run/sweep/list, systemd transient scopes (cgroup-escape, 2026-09-08)
+- `oc-notify.sh` (tools/lib) — shared wake/notify contract for waiter + prchecks
+- `oc-attrib` — Session-Id attribution; `--contributors` is the single contributors shape (oc-deploy contributors retired v0.4.91)
 - `oc-commit` / `oc-issue-log` — signed commits + tracked-issue receipts
 - `oc-seal-state` — order rows (QUEUED…VOID lifecycle)
 - `tests/run.sh` — run everything: `bash tools/tests/run.sh`
+
+  30 executables in `tools/` (31 − `oc-toolaccum`, deleted v0.4.110; owner-ordered additions 2026-09-01) — full inventory in `tools/RC-CONTRACT.md`.
 
 ## Ship discipline (per version bump)
 

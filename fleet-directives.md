@@ -72,7 +72,7 @@ Mechanics canonical: `oc-deploy fanout` (GREEN leg at the swap_execute tail, RED
 
 ## Post-compaction skill reload (owner 2026-09-04) [LANE]
 
-After ANY context compaction, the first action before any opencrabs-dev work is reloading this skill (`/opencrabs-dev`, or SKILL.md + fleet-directives.md). Editor spawn briefs must carry this rule; the ops AGENTS.md § "OpenCrabs dev" carries the always-loaded anchor. Rationale: compaction clears the skill from context but not the obligation to follow it; mechanical laws are tool-enforced (order-validate, features-compat, pr-checks) but process law (scope-confirmation-first, approval gates, PR body rules) exists only here.
+After ANY context compaction or spawn, the first action before any opencrabs-dev work is reloading this skill (`/opencrabs-dev`, or SKILL.md + your role file + fleet-directives.md — role files and toolsmith.md: [LANE]-tagged sections IN FULL; RELOAD LAW v0.4.95). Editor spawn briefs must carry this rule; the ops AGENTS.md § "OpenCrabs dev" carries the always-loaded anchor. Rationale: compaction clears the skill from context but not the obligation to follow it; mechanical laws are tool-enforced (order-validate, features-compat, pr-checks) but process law (scope-confirmation-first, approval gates, PR body rules) exists only here.
 
 ## Attribution guard (post-compaction wakes)
 

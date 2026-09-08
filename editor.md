@@ -259,7 +259,9 @@ follows it:**
 - **No acks** — your decisions post IS the acknowledgment; no confirmation
   chatter before or after.
 - **No telegram_send** — your post is the topic's final chat message (text
-  auto-posts); media/document sends are forbidden in a Rollcall.
+  auto-posts); media/document sends are forbidden in a Rollcall. (This is the
+  same surface law as the editor-facing block above — restated here only
+  because the Rollcall format adds the media ban; F1/F2 merge, v0.4.111.)
 - **Context + diagrams** — every decision carries its context and, when the
   decision has shape, a mermaid diagram. Owner judges renderings, not prose.
 - **1 by 1** — one decision per message, sequential posts, never batched.
@@ -595,13 +597,14 @@ The lane runs its own ship as an agent-launched BACKGROUND task:
   --sha <full-40-sha> --features <comma-set> --execute
 ```
 
-**One-command shape (lens E F-1, v0.4.90, owner "All 4 go" — GOAL, tool
-change lands via TOOLSMITH):** ship+poll chain fuses into
-`oc-deploy ship --sha <40> --features <set> --execute --wait N` = ONE
-detached invocation (ORDER gates → carrier dispatch → bounded poll → GREEN
-auto-swap; timeout rc 5 + run id + URL — the contract poll --wait already
-has). Until that flag ships, run ship then `oc-deploy poll --execute --wait N`
-as two steps (below).
+**One-command shape (SHIPPED v0.4.100, toolsmith 86f422ed — this IS the
+contract now):** `oc-deploy ship --sha <40> --features <set> --execute
+--wait N` = ONE detached invocation (ORDER gates → carrier dispatch →
+bounded poll → GREEN auto-swap; timeout rc 5 + run id + URL). Gates carry
+machine tokens (`OC_DEPLOY_GATE=<cause>` on rc 2; `wait-plan-mode` when
+--wait is used without --execute). The old two-step (ship, then
+`oc-deploy poll --execute --wait N`) still works but is the fallback, not
+the taught path.
 
 The script performs the chain Phase 6's push legs feed into (ORDER gates + carrier dispatch) beyond the hand-run fork-main fetch +
 fast-forward check → push → 4 ORDER gates (oc-order-validate) → carrier
@@ -836,6 +839,11 @@ Rules:
   callers in the UPSTREAM tree, fork-side attribute port, foreign-hunk drop,
   `git patch-id` verify of rebase-ported commits. Full checklist:
   `editor-phase7-rules.md` (same dir).
+- **BASE-FRESHNESS AT FILING TIME (Triage lesson n=2083, v0.4.111):** the
+  sweep and every gate run are valid against a NAMED upstream base — record
+  the `adolfousier/main` sha the verification was tested against; a census/
+  gate CLEAN result that does not name its base sha is not a CLEAN receipt
+  (stale-base CLEANs masked #1451's CONFLICTING for hours).
 - The PR body MUST reference THE issue as a FULL FORK URL at the END of the
   description (`Original issue: https://github.com/leshchenko1979/opencrabs/issues/N`
   — EXACTLY one, atomicity rule). `Closes #N` is FORBIDDEN on upstream PR bodies:
@@ -860,13 +868,11 @@ Rules:
   FORWARD on the same PR or the PR is closed — no draft limbo. A MERGED PR is
   closed forever: follow-up work = new branch + new PR, NEVER extend a merged
   branch.
-- **BUILD TRIGGERS = exactly TWO, no exceptions (A3 owner ruling 2026-08-29;**
-  full rule + rationale = SKILL.md §Hard rules BUILD TRIGGERS): no direct
-  quick-build PR-head dispatch; ORDER gate 3 (CONTAINMENT, oc-order-validate)
-  rejects any PR-head sha — PR-head compile+lint evidence = step 2c's
-  pr-checks dispatch (runs on ANY branch ref). The workflow yml lives ONLY on
-  the carrier branch `ci/quick-build-linux` — never fork main, never the
-  PR-head branch: zero infra commits in Adolfo's diff.
+- **BUILD TRIGGERS = exactly TWO, no exceptions** (full rule + rationale +
+  yml-location law = SKILL.md §Hard rules BUILD TRIGGERS — canonical, do not
+  restate here): checkable consequence for the editor — no direct quick-build
+  PR-head dispatch; ORDER gate 3 (CONTAINMENT) rejects any PR-head sha;
+  compile+lint evidence = step 2c's pr-checks dispatch.
 - **PR-BASE-PRE-OPEN (v0.4.71, Duty-4 P6):** an upstream PR head is a harvest
   branch off `adolfousier/main` — NEVER a fork-main-based branch; base +
   atomicity check runs BEFORE the PR opens (a post-open atomicity FALSE
