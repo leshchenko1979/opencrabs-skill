@@ -8,7 +8,7 @@ description: >
   TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.102
+version: 0.4.103
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -251,6 +251,16 @@ The table above carries the content; what remains prose:
 Rule: never write "tests pass" without naming the kind. A green Lint run is NOT
 a smoke pass; a smoke pass says nothing about clippy; a presence hit says
 nothing about behavior.
+
+**Corrected-code presence ≠ smoke success (owner order 2026-09-08):** evidence
+that the corrected code is merely PRESENT in the swapped binary — strings
+marker hit, sha match, deployed.meta identity — can NEVER back a smoke-success
+verdict on its own. Presence proves the artifact shipped; it says nothing
+about behavior. A smoke verdict of GREEN additionally requires at least one
+BEHAVIORAL probe of the corrected path actually executing (a live call, a
+forced trigger, an observed output through the new code). If only presence
+evidence exists, the verdict is `UNPROVEN (presence-only)` — never GREEN, and
+the lane's ledger append must carry that label.
 
 ## Glossary — official terms (v0.4.62; one concept = one name)
 

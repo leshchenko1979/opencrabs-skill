@@ -464,3 +464,8 @@ Owner amendment minutes after codification — five format rules added to all th
 - **Owner gates designs and special cases** — lanes present, never self-implement on their own recommendation.
 
 Triage enforces the format on coverage check (targeted lane correction, not board complaint). Mechanical amendment; battery expected unchanged except version stamp.
+
+## v0.4.103 - owner rule pair, 2026-09-08 ~09:1xZ (HQ d72bd52d)
+
+- **Corrected-code presence != smoke success** (SKILL.md evidence-kinds block): presence evidence (strings marker, sha match, deployed.meta identity) can never back a smoke-GREEN verdict on its own; GREEN requires at least one behavioral probe of the corrected path. Presence-only verdicts are labeled UNPROVEN (presence-only).
+- **Explicit ack contracts in session_notify** (fleet-directives.md Cross-lane delivery): every notify ends with its ack expectation - No ack needed / ACK by date: what / Reply required: question; no pure-ack replies to No-ack-needed traffic.
