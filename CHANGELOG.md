@@ -1,3 +1,6 @@
+## v0.4.117 (2026-09-08)
+- ERRATUM on v0.4.116: the bump commit b05a493d did not merely DISPATCH the TOOLSMITH batch — it SHIPPED it. TOOLSMITH had already implemented the batch in-tree (oc-ledger lessons verb, oc-review-persist whitelist, E-H1/F-3/A-1/A-H1 + ~30 prose fixes across editor.md/triage.md/supervisor.md/review-lenses.md/upstream-merge-runbook.md/war-stories.md/toolsmith.md) when HQ ran oc-ledger sync for its own ruling codifications; the sync swept the combined tree. Battery 141/0 tested the combined tree before the commit — completeness is battery-covered, attribution was wrong. Lesson: HQ must run `git status --short` and identify lane WIP BEFORE oc-ledger sync (the v0.4.111 hand-off discipline exists for exactly this and was skipped).
+
 ## v0.4.116 (2026-09-08)
 - TOOLSMITH mechanical batch DISPATCHED (owner "Go what you can" 21:39Z): E-H1 swap-text fix, F-3 rc-register correction, A-1 census sync incl. A-H1 roster law (Duty-6 spawn text A-H → A-I), persist-first write-through law (spawn-path report persistence — the lens-A restart lesson), oc-ledger lessons verb (H-2), D-4 closure stamp (n=2115), ~30 MED/LOW prose. ACK due 12:00Z 09-09.
 
