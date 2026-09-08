@@ -33,11 +33,27 @@ while [ $# -gt 0 ]; do
       d="$(mktemp -d)"
       git -C "$d" init -q && git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
       b="$(git -C "$d" rev-parse HEAD)"
-      git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "x" --trailer "Session-Id: u1"
+      echo m > "$d/m" && git -C "$d" add m   # master-only commit: pr will lack it (non-empty diff)
+      git -C "$d" -c user.email=t@t -c user.name=t commit -q -m "m" --trailer "Session-Id: um"
+      echo x > "$d/x" && git -C "$d" add x
+      git -C "$d" -c user.email=t@t -c user.name=t commit -q -m "x" --trailer "Session-Id: u1"
       h="$(git -C "$d" rev-parse HEAD)"
+      echo y > "$d/y" && git -C "$d" add y
+      git -C "$d" -c user.email=t@t -c user.name=t commit -q -m "y" --trailer "Session-Id: u2"
+      h2="$(git -C "$d" rev-parse HEAD)"
+      mainbr="$(git -C "$d" rev-parse --abbrev-ref HEAD)"
       git -C "$d" checkout -q -b pr "$b" 2>/dev/null
       p="$(git -C "$d" log -1 --format='%H%x09%(trailers:key=Session-Id,valueonly)' pr | cut -f2)"
       [ -z "$p" ] || { echo "selftest: empty-trailer probe broken" >&2; exit 1; }
+      # leg-P regression (lesson n=1543): a MULTI-commit port must MATCH.
+      # The original single-commit fixture hid the `git log -p --format=`
+      # patch-id concatenation bug for 4 days.
+      git -C "$d" -c user.email=t@t -c user.name=t cherry-pick "$h" "$h2" \
+        || { echo "selftest: fixture cherry-pick failed" >&2; exit 1; }
+      self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+      out="$(OC_TOOLS_NOLOG=1 OC_DEPLOY_STATE_DIR="$(mktemp -d)" "$self" pr --repo "$d" --base "$mainbr" --port-of "$h,$h2" 2>/dev/null)"
+      [ $? -eq 0 ] || { echo "selftest: multi-commit leg-P rc!=0: $out" >&2; exit 1; }
+      [ "$(grep -c MATCH <<< "$out")" -eq 2 ] || { echo "selftest: multi-commit leg-P missing MATCH: $out" >&2; exit 1; }
       echo "selftest OK"; exit 0 ;;
     -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) if [ -z "$BRANCH" ]; then BRANCH="$1"; else usage; fi; shift ;;
@@ -69,7 +85,15 @@ fi
 
 # Leg P — patch-id verification of ported shas
 if [ -n "$PORT" ]; then
-  BRANCH_PIDS="$(git -C "$REPO" log "$BASE..$BRANCH" -p --format= | git patch-id --stable | cut -d' ' -f1)"
+  # Per-commit patch-ids (lesson n=1543, template tools/oc-upstream-delta
+  # ABSORBED-CANDIDATE block): `git log -p --format=` strips the commit
+  # delimiter lines git patch-id uses to split patches, so a multi-commit
+  # range concatenates into ONE garbage patch-id and every port check on it
+  # silently NO-MATCHes. Computing ONE patch-id per commit survives
+  # multi-commit cherry chains.
+  BRANCH_PIDS="$(git -C "$REPO" rev-list "$BASE..$BRANCH" | while read -r c; do
+    git -C "$REPO" show "$c" --format= -p 2>/dev/null | git patch-id --stable | cut -d' ' -f1
+  done)"
   IFS=',' read -ra PCS <<< "$PORT"
   for psha in "${PCS[@]}"; do
     pid="$(git -C "$REPO" show "$psha" --format= -p 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
