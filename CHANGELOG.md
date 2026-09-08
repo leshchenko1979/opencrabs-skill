@@ -1,5 +1,14 @@
+## v0.4.116 (2026-09-08)
+- TOOLSMITH mechanical batch DISPATCHED (owner "Go what you can" 21:39Z): E-H1 swap-text fix, F-3 rc-register correction, A-1 census sync incl. A-H1 roster law (Duty-6 spawn text A-H → A-I), persist-first write-through law (spawn-path report persistence — the lens-A restart lesson), oc-ledger lessons verb (H-2), D-4 closure stamp (n=2115), ~30 MED/LOW prose. ACK due 12:00Z 09-09.
+
+## v0.4.117 (2026-09-08)
+- NO-HOLD law AMENDED (owner 21:44Z "1 - no, my go before pr"): no holding STATE ever, but PR filing is OWNER-GATED again — probe PASS → editor presents ready PR → owner go (per-PR or batch) → file. Codified in fleet-directives §Upstream-merge cadence, triage.md T4 gate, SKILL.md consent register ("UNTOUCHED" → RESTATED with the amendment). Ruling supersedes the 15:2xZ "no holding" reading that auto-filed on PASS.
+- I-2.1 ERRATUM adjudicated (owner "2 - go"): contributors retirement = v0.4.90 (tag 90c9e1d8, 2026-09-07 14:12:23Z, commits fc02ddeb+129ca40e+d6a66b51, lens E-2, owner "All 4 go") — not v0.4.91. Ledger n=2116.
+- oc-ci-parity RETIRED (owner "3 - ok": fix oc-issue-sweep + retire oc-ci-parity): zero live use in 12 days (C-H2), the merge runbook three-way-diff check supersedes. Tool + battery block + SKILL register row + RC-CONTRACT row + supervisor/SKILL parity prose removed. oc-issue-sweep FIX stays open (fix-lane batch).
+- Battery gate: see battery-last.json at sync.
+
 ## v0.4.115 (2026-09-08)
-- FIX — oc-review-persist LENSES whitelist actually extended to A-I (v0.4.114 shipped a message-only edit: die-string said A-I but the LENSES var still lacked H/I — H/I persist would have died rc 2; caught by Supervisor at Duty-6 spawn on owner "run duty-6"). Help-text lens line synced. Battery 144/0.
+- FIX — oc-review-persist LENSES whitelist var extended to A-I (v0.4.114 extended the single-letter case-glob to [A-I] but the LENSES var still lacked H/I — named-lens H/I persist died rc 2; single-letter H/I were NOT affected, the case-glob bypasses the whitelist. Caught by Supervisor at Duty-6 spawn on owner "run duty-6"). Help-text lens line synced. Battery 144/0.
 
 ## v0.4.114
 - Duty-6 lens I — META-REVIEW added (owner pick 2026-09-08 ~20:45Z, "Add Lens I — meta-review (recommended)"): reviews the lens catalog AND its output — brief correctness vs persisted reports, overlap/coverage gaps A–H, false-positive/negative history from the Supervisor's premise-verification record, quote-or-no-finding adherence. Self-reference capped: may flag its own brief, never reviews its own report. Brief in review-lenses.md; oc-review-persist whitelist A-G → A-I (selftest: I-report persist smoke OK); SKILL.md router row → nine-lens A–I. Joins the next Duty-6 cycle (due 26/5 FIRE).
@@ -94,15 +103,15 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 - **#119 naming-collision note** (Triage flag, verified distinct): fork issue leshchenko1979/opencrabs#119 (single-option fold UX, Harvest-filed) ≠ upstream-numbered #119 (single budget verdict, `55ddec34`, already shipped). Rename/qualify ruling stays Triage's at next triage pass.
 - Battery: see receipts below. Includes v0.4.97 era reorder fix (97 block had landed after the Imported dump — now 96→97→dump).
 
-## v0.4.101 (2026-09-08) — Decision Rollcall present-here mode
-
-- Owner amendment 2026-09-08 08:34Z, topic 42487 (Present decisions here): Rollcall delivery gains present-here mode — on owner word, Triage collects lanes outstanding owner decisions and presents ONE consolidated numbered list in the owners topic (decision + recommendation + context + diagram per item; faithful relay, no filtering/paraphrasing/ranking). Lane-direct posting remains the default mode. Sites: fleet-directives.md section Decision Rollcall item 2 (two-mode delivery), triage.md Duty T7 item 7, editor.md Decision Rollcall duty present-here exception. Lane-side format law unchanged.
-
 ## v0.4.100 (2026-09-08) - oc-deploy poll ship-pending law (Triage disposal n=2003, HQ implemented)
 
 - oc-deploy poll --sha S: the DISPATCHED sha going GREEN is SWAP PENDING - poll no longer dies rc5 already-deployed while the deployed marker lags mid-chain. Defect family n=2003 ate the 2e161df3 and ebbae0aa swaps; both recovered only by lane re-execute.
 - Poll --wait timeout on a GREEN dispatched sha reports STUCK SWAP (distinct message + notify-session wake), never nothing-new.
 - New selftest: poll --sha pending never reports already-deployed. Battery 147/0.
+
+## v0.4.101 (2026-09-08) — Decision Rollcall present-here mode
+
+- Owner amendment 2026-09-08 08:34Z, topic 42487 (Present decisions here): Rollcall delivery gains present-here mode — on owner word, Triage collects lanes outstanding owner decisions and presents ONE consolidated numbered list in the owners topic (decision + recommendation + context + diagram per item; faithful relay, no filtering/paraphrasing/ranking). Lane-direct posting remains the default mode. Sites: fleet-directives.md section Decision Rollcall item 2 (two-mode delivery), triage.md Duty T7 item 7, editor.md Decision Rollcall duty present-here exception. Lane-side format law unchanged.
 
 ## v0.4.102 — Decision Rollcall: present-here mode RETIRED (owner override)
 

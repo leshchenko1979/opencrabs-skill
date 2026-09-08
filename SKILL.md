@@ -8,7 +8,7 @@ description: >
   TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.115
+version: 0.4.116
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -38,7 +38,7 @@ classes, migration-union rule, semantic-triage defaults).
 ## Canonical tooling (v0.4.12, PROCESS-TOOL ownership)
 
 Mechanical rituals the roles once hand-ran are now single commands in `tools/`
-(owner-aware: CLI-tool creation/fix is the Supervisor's scope). Canonical
+(owner-aware: CLI-tool creation/fix is the TOOLSMITH lane's scope — v0.4.87 carve-out). Canonical
 commands run INSIDE `oc-deploy` (ship/poll/swap-execute); this section is the
 register + test source of truth (archived compiler-step anchors stripped
 2026-08-29 — `tools/archive/compiler.md` carries the old numbering for re-enable context).
@@ -52,9 +52,9 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-seal-state [--sha S] [...]` | baseline/orders seal (flag-based interface — no positional `<sha>`); order vocabulary QUEUED…VOID, per-row `--order-evidence`, `--purge-order`; matches legacy `order_sha` rows |
 | `./tools/archive/oc-post-receipts ...` | **INTERNAL/ARCHIVED** (E2 #7, v0.4.72 — was compiler-era manual fallback): zero live consumers, raw-bot posting violates the Telegram surface law; kept for archaeology only, do NOT call |
 | `./tools/oc-index-worktree <path>` | INTERNAL since v0.4.47 — chained automatically by `oc-wt add` (worktrees inherit NO index; standalone call = legacy fallback) |
-| `./tools/oc-ci-parity` | workflows parity fork↔upstream post-merge (live: editor Phase 7 parity) |
+
 | `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>] [--contributors]` | commit-range → worker-lane attribution via Session-Id join against roster (`(unsigned)`/`(unmapped)` rows never dropped); `--contributors` (E6, v0.4.78) projects the 3-col TSV (session/issues/shas) — SINGLE SHAPE (lens E-2, v0.4.90: the `oc-deploy contributors` wrapper is retired; use `oc-attrib --contributors` directly); `--deployed` composes the range from `deployed.sha` + `deployed.meta.json` `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) |
-| `./tools/oc-deploy <mode>` | the ship path itself — `ship` (fetch/push + 4 ORDER gates + carrier dispatch), `poll` (watch + RED scan + swap chain; `--wait N` bounded wait — timeout dies rc 5 + optional `--notify-session <uuid>` wake, `--wait 0` = classic single pass; v0.4.78), `swap-execute` (Phase B swap), `watch [--with-delta]` (stray-commit tripwire; `--with-delta` appends the `oc-upstream-delta` advisory rows — merge B, v0.4.48), `fanout` (row below); `contributors` RETIRED v0.4.91 (lens E-2 — use `oc-attrib --contributors`); the editor's S3 ship path: `editor.md` §Ship — oc-deploy (S3 path) |
+| `./tools/oc-deploy <mode>` | the ship path itself — `ship` (fetch/push + 4 ORDER gates + carrier dispatch), `poll` (watch + RED scan + swap chain; `--wait N` bounded wait — timeout dies rc 5 + optional `--notify-session <uuid>` wake, `--wait 0` = classic single pass; v0.4.78), `swap-execute` (Phase B swap), `watch [--with-delta]` (stray-commit tripwire; `--with-delta` appends the `oc-upstream-delta` advisory rows — merge B, v0.4.48), `fanout` (row below); `contributors` RETIRED v0.4.90 (lens E-2 — use `oc-attrib --contributors`); the editor's S3 ship path: `editor.md` §Ship — oc-deploy (S3 path) |
 | `./tools/oc-deploy fanout --run <id> [--dry-run]` | mechanical notify fan-out for one carrier run ([#24](https://github.com/leshchenko1979/opencrabs/issues/24) LIVE since v0.4.37): GREEN → contributor notify, RED → blame notify; auto-fired at `swap_execute` tail + on `poll` RED-scan; `OC_DEPLOY_NOFANOUT=1` suppresses — mechanics + journal vocabulary in `s2-swap-journal-spec.md` §Fan-out legs |
 | `./tools/oc-carrier-features [--fetch] [--repo <path>] [--ref <branch>]` | reads the `workflow_dispatch` `features` default from `.github/workflows/quick-build-linux.yml` at `origin/<ref>` (default `ci/quick-build-linux`); `oc-deploy ship/poll` resolves EMPTY `--features` through this — carrier read failure aborts the ship loudly, no silent fallback |
 | `./tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | closed-issue hygiene sweep: fork open + fork closed + upstream closed, harvests `close-reason:` lines from comments (falls back to state_reason); pure TSV, no header, deduped by repo#num (supervisor duty) |
@@ -120,7 +120,7 @@ Ask the operator which role this session employs before doing anything:
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
 | **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + supervisor watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
-| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.113) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `supervisor.md` |
+| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `supervisor.md` |
 | **TRIAGE** | Interrupt lane (carved out of SUPERVISOR at v0.4.86, owner "Go with Option A"): idea-box + `QUIRK:` tool-problem intake (same-turn ACK, ledger stamps), evidence verification, fix routing to owning editor, new-editor creation, TOOL_ACCUM / cadence enforcement; escalates semantic/KERNEL to the Supervisor — NEVER edits skill files | `triage.md` |
 | **TOOLSMITH** | CLI tool lane (carved out at v0.4.87, owner "Go toolsmith" 2026-09-06; promoted from the carrier-tools editor row): owns `tools/` CODE — makes and fixes the CLI tools every other role uses (`oc-ledger`, `oc-deploy`, `oc-prchecks`, `oc-tg-audit`, battery); daemon/carrier source stays EDITOR territory, skill markdown stays Supervisor-only — NEVER edits skill files | `toolsmith.md` |
 
@@ -317,8 +317,11 @@ Origin: the ship-38585459 smoke (n=2036) passed all bookkeeping legs while its
   `session_search`, never uuid-from-memory.
 - **Roster** — the worker registry in `workers-ledger.json` (enroll / claim /
   ack rows); `oc-attrib` joins Session-Id trailers against it.
-- **Lens (Reviewer A–H)** — one Duty-6 read-only review perspective
+- **Lens (Reviewer A–I)** — one Duty-6 read-only review perspective
   (supervisor.md §Duty 6; full briefs: `review-lenses.md`).
+- **Supervisor (HQ)** — the canonical name for the supervisor lane; unofficial
+  variants ("Author lane", "Carrier") seen in lane files are retired — lens
+  A-L3 v0.4.116.
 - **Selftest** — a tool's built-in test mode (`oc-deploy --selftest` etc.);
   **battery** — `tools/tests/run.sh` across all tools. Both green before
   ANY version bump.
@@ -428,7 +431,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
 2. **Sync model = MERGE-ON-ARRIVAL** (owner 2026-09-02 "Land it"; supersedes the
    2026-08-26 REBASE-PORT, which is RETIRED — historical, PR chains only):
    fork main **merges** `adolfousier/main` when upstream shifts. Sync LAW
-   canonical: `fleet-directives.md` §remotes (one concept, one home — lens A3
+   canonical: `fleet-directives.md` §Remotes & sync (one concept, one home — lens A3
    v0.4.89); executing procedure: `upstream-merge-runbook.md` (freeze gate,
    roles, conflict classes, migration-union rule, semantic-triage defaults).
 3. **Absorption rule**: when upstream merges or reimplements one of OUR
@@ -456,13 +459,11 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    files live ONLY on `ci/*` branches, NEVER on fork `main` — anything under
    `.github/workflows/` on main rides the next PR diff toward upstream.
    Dispatch via `gh workflow run --ref ci/<name>`. After every upstream
-   merge/port verify parity mechanically (`./tools/oc-ci-parity` exit 0
-   identical / 4 DRIFT listing / 6 api-fail + carrier proof-dispatch —
+   merge/port verify parity mechanically (three-way-diff workflow check —
    procedure: `supervisor.md` §Upstream sync). **DRIFT PERMANENT (owner
    ruling):** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6);
-   the carrier branch is the sole build lane; an oc-ci-parity `exit 4` naming
-   `.github/workflows/ci.yml` is ACCEPTED output forever, never repaired by
-   restoring the file.
+   the carrier branch is the sole build lane. oc-ci-parity RETIRED v0.4.117
+   (owner "3 - ok" 21:44Z: zero live use, C-H2; runbook diff check supersedes).
 7. **Fork branch lifecycle (v0.4.24)**: the fork carries
    PERMANENT refs only — `main` (sync mirror; pre-S3: compiler rebase-port), `ci/quick-build-linux`
    (carrier), `backup/pre-port-*` (until the port cycle settles) — plus short-lived
@@ -495,7 +496,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
   synonyms for existing concepts; a NEW concept gets proposed via the poll
   format and named on owner word — never improvised mid-report. Reviewer A
   (REDUNDANCY + ONTOLOGY) enforces this lens-side.
-- ONLY the Supervisor edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/RC-CONTRACT.md` added v0.4.96, lens A15): `SKILL.md` /
+- ONLY the Supervisor edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9): `SKILL.md` /
   `editor.md` / `supervisor.md` / `triage.md` / `toolsmith.md` / `review-lenses.md` / `fleet-directives.md` /
   `upstream-merge-runbook.md` / `editor-phase7-rules.md` / `war-stories.md` /
   `s2-swap-journal-spec.md` / `README.md` / `tools/RC-CONTRACT.md` — including all worker lanes AND the TRIAGE lane AND the TOOLSMITH lane (decision 7,
@@ -532,8 +533,10 @@ links; development-time upstream contact is PR-comments only (supersedes the
 - CONSENT REGISTER — **Never rule from codified memory — grep the live record
   (chat / ledger) before denying any permission** (v0.4.17 lesson, 2026-08-26).
   Deploy consent RETIRED 2026-08-28 (owner 18:50Z): GREEN carrier run + artifact
-  verify IS the authorization. Upstream-PR owner-word gate UNTOUCHED
-  (APPROVAL row above is the single statement of it — silence is NOT consent).
+  verify IS the authorization. Upstream-PR owner-word gate RESTATED 2026-09-08
+  21:44Z (owner: "my go before pr") — probe PASS does NOT auto-file; the
+  editor presents the ready PR and files on the owner's go. APPROVAL row
+  above is the single statement of it — silence is NOT consent.
   (Deleted-tool history: CHANGELOG.md.)
 - ROLE-SCOPED BROADCASTS: messages reach non-owning roles ONLY when tagged
   [ALL]; otherwise send strictly to the owning role. CC-everyone is noise.

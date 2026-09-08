@@ -94,7 +94,7 @@ runs on every tool change and on Supervisor request; failures route back to
 the offending change, never waived. Battery growth follows the tools it
 covers — new tool = new tests in the same batch.
 
-## Escalation to the Supervisor (Author lane)
+## Escalation to the Supervisor (HQ)
 
 WHAT escalates: skill-edit requests, protocol disputes, semantic questions,
 daemon/carrier defects (or route to an editor lane via TRIAGE if that's the

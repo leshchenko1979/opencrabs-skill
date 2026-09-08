@@ -223,7 +223,7 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
    always the newest version — that is also why tool-level fixes (vocabulary,
    sweep lists) never strand a running lane.
 5. **Tool discovery (owner order 2026-09-07, v0.4.94):** the table below is
-   the role-DAILY subset, not the inventory — the full tool list (31 tools)
+   the role-DAILY subset, not the inventory — the full tool list (30 tools)
    lives in `tools/RC-CONTRACT.md` (every tool: invocation, rc register,
    selftest owner). Before hand-rolling any check (item 11), grep
    RC-CONTRACT.md for a purpose-built tool — verification, audit, smoke,
@@ -271,7 +271,7 @@ follows it:**
 ## Tool reference — editor's quick table
 
 Canonical descriptions + selftest contracts: `tools/RC-CONTRACT.md` (full
-inventory, all 31 tools) + SKILL.md tool table. The
+inventory, all 30 tools) + SKILL.md tool table. The
 editor-relevant subset, invocation forms only (all paths relative to the skill
 dir; `OC_ACTOR=<your full uuid>` on every call):
 
@@ -913,7 +913,7 @@ Hard rules: verify the failing log names files THIS PR actually touches BEFORE
 pinging anyone (identical clippy walls on every PR can live on the upstream base). Soft-fail fmt diffs are
 cosmetic — NEVER ping for fmt alone. Absorption ends the lifecycle: if the
 maintainer merges/reimplements the feature, the PR story closes with a SHIPPED
-UPSTREAM notice (Phase 6b item 5), not more fork-side work.
+UPSTREAM notice (Phase 6b item 6), not more fork-side work.
 Two same-turn checks (v0.4.5): (1) BEFORE any push to a gated/frozen head branch,
 RE-READ live gate state — latest issue comments + supervisor notifies — session-start
 knowledge structurally cannot know what changed mid-turn. (2) Before preparing ANY follow-up

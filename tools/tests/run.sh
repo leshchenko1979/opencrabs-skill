@@ -176,12 +176,7 @@ if tool oc-pr-atomicity; then
   "$TOOLS_DIR/oc-pr-atomicity" >/dev/null 2>&1; [ $? -eq 1 ] && ok "no args -> 1 (usage)" || bad "no args -> expected 1"
 fi
 
-# ---- 8. oc-ci-parity -------------------------------------------------------
-section "oc-ci-parity"
-run_selftest oc-ci-parity
-if tool oc-ci-parity; then
-  "$TOOLS_DIR/oc-ci-parity" --bogus >/dev/null 2>&1; [ $? -eq 5 ] && ok "unknown arg -> 5" || bad "unknown arg -> expected 5"
-fi
+# ---- 8. oc-ci-parity RETIRED v0.4.117 (owner "3 - ok" 21:44Z: zero live use in 12d, C-H2; three-way-diff check in merge runbook supersedes) ----
 
 # ---- 9. oc-contributors RETIRED v0.4.72 (E2 #1: subset of oc-attrib, zero live callers) ----
 # coverage lives in the oc-attrib section; oc-seal-state derives the same list.

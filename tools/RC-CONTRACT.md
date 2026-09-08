@@ -10,7 +10,7 @@ Fleet conventions:
 
 - `--help` / `-h` → **0** (usage text on stdout).
 - Usage/argument error → **2** on every tool EXCEPT the EIGHT legacy registers
-  noted below (usage≠2: `oc-deploy` 1, `oc-ci-parity` 5, `oc-artifact-verify` 1,
+  noted below (usage≠2: `oc-deploy` 1, `oc-artifact-verify` 1,
   `oc-job-verify` 1, `oc-order-validate` 1, `oc-index-worktree` 5,
   `oc-pr-atomicity` 1, `oc-seal-state` 1/2/3 — long-documented, selftest-asserted
   vocabularies; changing them would break every lane keyed on the old codes).
@@ -27,9 +27,8 @@ Fleet conventions:
 | oc-attrib | 0 | 2 | 0 ok / 3 git-fail / 4 empty-range / 5 markers-missing |
 | oc-branch-sweep | 0 | 2 | 0 nothing-deleted / 1 deletions / 3 git-fail |
 | oc-carrier-features | 0 | 2 | 0 set / 3 yml-unfetchable / 4 no-features-input |
-| oc-ci-parity | 0 | 5 | 0 identical / 4 DRIFT / 6 api-fail |
 | oc-commit | 0 | 2 | 0 committed / 3 gate-fail / 4 git-fail / 5 comment-fail |
-| oc-deploy | 0 | 1 | 0 ok-noop / 2 rebase-gate-push-verify-rollback AND usage/validation diags (flag-validation `die 2`, e.g. poll `--wait` non-integer, `--notify-session` empty — arg diags share the 2 register with gate-fail; message text disambiguates; ship rc-2 gate deaths carry machine-readable `OC_DEPLOY_GATE=<cause>` tokens — missing-sha / wait-plan-mode / notify-poll-only / rebase-needed / feature-mismatch / fetch-fail, C-A2 v0.4.104) AND ship FEATURE-DEFAULT explicit-mismatch (`--features` != deployed.meta.json, refused pre-dispatch; default path auto-adopts deployed set) / 3 retired / 4 stage-gate-launch + ship features-compat gate (silent feature-drop refused pre-dispatch, HQ law 2026-09-04; `--allow-features-drop` override) / 5 poll-wait-timeout + ship `--wait` timeout (F-1 fusion v0.4.97: ship --execute --wait N bounded-polls the dispatched run; GREEN rc 0, timeout rc 5, terminal-RED rc 6; plan-mode `--wait` refuses rc 2) / 9 kill-file · `contributors` verb RETIRED v0.4.91 (lens E-2, rc 1 + loud pointer to `oc-attrib --contributors`) |
+| oc-deploy | 0 | 1 | 0 ok-noop / 2 rebase-gate-push-verify-rollback AND usage/validation diags (flag-validation `die 2`, e.g. poll `--wait` non-integer, `--notify-session` empty — arg diags share the 2 register with gate-fail; message text disambiguates; ship rc-2 gate deaths carry machine-readable `OC_DEPLOY_GATE=<cause>` tokens — missing-sha / wait-plan-mode / notify-poll-only / rebase-needed / feature-mismatch / fetch-fail, C-A2 v0.4.104) AND ship FEATURE-DEFAULT explicit-mismatch (`--features` != deployed.meta.json, refused pre-dispatch; default path auto-adopts deployed set) / 3 retired / 4 stage-gate-launch + ship features-compat gate (silent feature-drop refused pre-dispatch, HQ law 2026-09-04; `--allow-features-drop` override) / 5 poll-wait-timeout + ship `--wait` timeout (F-1 fusion v0.4.97: ship --execute --wait N bounded-polls the dispatched run; GREEN rc 0, timeout rc 5, terminal-RED rc 6; plan-mode `--wait` refuses rc 2) / 9 kill-file · `contributors` verb RETIRED v0.4.90 (lens E-2, rc 1 + loud pointer to `oc-attrib --contributors`; date adjudicated against git history v0.4.116) |
 | oc-drift-check | 0 | 2 | 0 no-drift / 1 DRIFT / 3 ledger-skilldir-fail |
 | oc-harvest-sweep | 0 | 2 | 0 clean / 1 findings / 3 git-fail |
 | oc-index-worktree | 0 | 5 | 0 OK / 4 index-failed |
@@ -42,7 +41,7 @@ Fleet conventions:
 | oc-pr-atomicity | 0 | 1 | 0 ATOMIC / 2 NON-ATOMIC / 4 PR-not-found |
 | oc-pr-fault-scope | 0 | 2 | 0 IN-SCOPE / 1 BASE-FAULT / 3 gh-fail |
 | oc-prchecks | 0 | 2 | 0 GREEN / 3 RED / 4 dispatch-api-lock / 5 in-flight-timeout / 6 CANCELLED-superseded / 7 carrier-head-unresolvable / 8 AMBIGUOUS-same-ref-witness-unverifiable (fail-closed, dispatch refused, #115B) / 4 also = ADOPTION IDENTITY MISMATCH (adopted run is not workflow_dispatch on carrier — n=1721 B; headSha pin impossible by design, n=1730; mismatch rc-4 emits OC_PR_SUPERSEDED token = NON-retryable do-not-resume, C-A1 v0.4.104) · `resume <id> --notify <uuid>` arms oc-waiter backend (one-shot, wakes uuid on TERMINAL; kills the manual resume-retry loop, C-A1) |
-| oc-review-persist | 0 | 2 | 0 persisted (re-read verified) / 2 usage (bad lens/empty input) — no 3/4 exits exist in code (stale row fixed v0.4.111) |
+| oc-review-persist | 0 | 2 / 3 / 4 | 0 persisted (re-read verified) / 2 usage (bad lens/empty input) / 3 re-read sha256 mismatch (storage NOT trusted) / 4 write-fail (mkdir/write/index-append) |
 | oc-seal-state | 0 | 1 (noop) / 2 (unknown flag, F-L1) | 0 OK / 1 bare-invocation-noop / 2 unknown-flag-usage OR CONTRIBUTOR-SCAN-FAIL / 3 WRITE-FAIL-INVALID (usage surfaces = 2; 3 is always a write fault, lens A-6 v0.4.96) |
 | oc-shadow-rotate | 0 | 2 | 0 ok-noop / 2 io-fail (usage merged into 2, C-#3) |
 | oc-ship-audit | 0 | 2 | 0 all-SWAPPED / 1 ORPHANED |

@@ -1,9 +1,9 @@
 # review-lenses.md — Duty-6 reviewer lens catalog (B4+G-F4 split, v0.4.78)
 
-Full briefs for the nine Duty-6 review lenses (A–H + standing brain-scrub). supervisor.md §Duty 6 owns the
+Full briefs for the ten Duty-6 review lenses (A–I + standing brain-scrub; regrouped v0.4.81 with C joining TOOLS and D sole in ARTIFACTS — H later joined D in ARTIFACTS, v0.4.113/115). supervisor.md §Duty 6 owns the
 method (read-only sub-agents, verbatim-quote verification, oc-review-persist
 persistence, poll triple-check, verdict table) and keeps only the family map
-there; this file owns the per-lens scope briefs. Letters keep chronological
+there; this file owns the per-lens scope briefs (brain-scrub brief lives at fleet-directives.md § Review lens brain-scrub). Letters keep chronological
 birth order (stable report/persist keys, not an ordering). Reviewer-performance
 loop lessons (supervisor.md step 7) fold INTO these briefs at ship time,
 attributed to the reviewer that produced the evidence. Family identity is the
@@ -131,7 +131,7 @@ on census evidence + owner word (supervisor.md step 7).
      DELETE-SAFE / ARCHIVE / KEEP with that reference list as the evidence.
      "Looks stale" is a hypothesis, never a verdict. Nothing deletes without
      the Supervisor's poll triple-check + owner word.
-   - **Reviewer H — LEDGER HEALTH (added v0.4.113, owner GO 2026-09-08 20:16Z):**
+   - **Reviewer H — LEDGER HEALTH (shipped v0.4.114, owner GO 2026-09-08 20:16Z):**
      the workers-ledger.json read AS A WHOLE, not per-slice — the slice tools
      (`oc-ledger claims`, `oc-ship-audit`, `oc-waiter-sweep`) each audit one
      family and stay the enforcement surface; H reads for what they cannot
@@ -152,7 +152,7 @@ on census evidence + owner word (supervisor.md step 7).
    - **Reviewer I — META-REVIEW (added v0.4.114, owner pick 2026-09-08 ~20:4xZ, recommended shape 1):**
      reviews the LENS CATALOG AND ITS OUTPUT — the only reviewer whose object
      is the review machinery itself. Scope: (1) BRIEF CORRECTNESS — each brief
-     in this file (A–H) still matches what its reviewer actually checked in
+     in this file (A–I) still matches what its reviewer actually checked in
      the latest persisted report (scope drift, stale check classes), (2)
      OVERLAP — findings double-covered by two lenses, or coverage GAPS where
      no lens owns an artifact class, (3) FALSE-POSITIVE/NEGATIVE HISTORY —

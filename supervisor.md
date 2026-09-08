@@ -60,21 +60,15 @@ stay here. Expected reply shape: "routed to <worker>", not done-work.
 
 ## Duty 2 — Worker registry: identity + versions, NEVER live status
 
-`workers-ledger.json` — canonical path `/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json`
-(NOT next to this skill — two-file drift incident 2026-08-29, SKILL.md §Shared
-war stories; `oc-deploy` defaults to the canonical file since v0.4.38). It stores
-ONLY slow-changing
-facts per worker: uuid, role, forum topic, feature, `confirmed` flag
-(provisional until first signed commit — trailer = identity proof),
-`last_notified` {version, at}, `last_acked` {version, at}, and append-only
-event notes (deviations, incidents, rulings applied).
+**Ownership only — full schema, write rules, and seed law live in
+triage.md §Duty T6** (lens B-F10 v0.4.96 cross-role move; A-M1 v0.4.116
+pointer collapse — this file no longer restates the field list). Scope here:
+the registry answers "who exists and which version are they on"; discovery
+answers "who is alive right now".
 
-- **LIVE STATUS IS NEVER STORED:** status churns too fast — sessions wake and
-  die within minutes, so a stored ACTIVE/DORMANT/UNREACHABLE is stale on
-  arrival. Whenever liveness or freshness matters, DISCOVER it in the same
-  turn: `session_search` roster for sessions, `gh run list` for CI,
-  `git ls-remote` for refs. The registry answers "who exists and which version
-  are they on"; discovery answers "who is alive right now".
+- **LIVE STATUS IS NEVER STORED:** whenever liveness or freshness matters,
+  DISCOVER it in the same turn: `session_search` roster for sessions,
+  `gh run list` for CI, `git ls-remote` for refs.
 - Seed/update ONLY from proven facts (full schema + write rules now live in
   triage.md §Duty T6 — lens B-F10 v0.4.96 cross-role move).
 - **REGISTRY WRITES BELONG TO TRIAGE (owner law 2026-09-07, v0.4.91):** claims,
@@ -176,17 +170,17 @@ incident suggests drift.
 
 Method:
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
-   one per lens (A/B/C/D/E/F/G/H + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
+   one per lens (A/B/C/D/E/F/G/H/I + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
    are ALWAYS sub-agent work, never Supervisor-only inline reading. Same-day
    second passes of one lens suffix the report name (`-run2`) and split scopes
    (`B2`/`A2`) — the lens catalog (review-lenses.md) is unchanged by that;
-   family map letters stay A–H. Findings
+   family map letters stay A–I. Findings
    must carry verbatim quotes; Supervisor verifies every accepted quote against
    disk before acting. Hollow report → ONE retry with the prompt narrowed to
    that single lens; a second hollow result unlocks inline fallback, which
    must be flagged as such in the review record.
 2. Split lenses for independence by family (DOCS=A,B,G · TOOLS=C,E,F ·
-   ARTIFACTS=D) — letters keep chronological birth order (stable
+   ARTIFACTS=D+H · META=I) — letters keep chronological birth order (stable
    report/persist keys, not an ordering). FULL LENS CATALOG: `review-lenses.md`
    (same dir as this file) — read it before spawning reviewers; each brief
    names the lens scope, exclusions, and evidence format.
@@ -268,8 +262,8 @@ supervisor-side ownership pointer.
 ## Upstream sync — watch, MERGE-ON-ARRIVAL, parity (re-homed v0.4.80; sync model re-ruled 2026-09-02, lens G1/A-F1 v0.4.84)
 
 Sync is SUPERVISOR-owned. **SYNC LAW canonical = `fleet-directives.md`
-§remotes (owner 2026-09-02 "Land it"; one concept, one home — this section
-carries pointers only, lens A-12 v0.4.111).** Executing procedure:
+§Remotes & sync (owner 2026-09-02 "Land it"; one concept, one home — this
+section carries pointers only, lens A-12 v0.4.111).** Executing procedure:
 `upstream-merge-runbook.md` (freeze gate, roles, conflict classes,
 migration-union rule, semantic-triage defaults). SKILL.md §Upstream relations
 items 1/2/6 carry the one-line summaries. The
@@ -297,11 +291,12 @@ port, not the mechanics.
 
 ### Parity — after every upstream merge/port
 
-`./tools/oc-ci-parity` (exit 0 identical / 4 DRIFT listing / 6 api-fail) +
-carrier proof-dispatch (`--ref ci/quick-build-linux`). **DRIFT PERMANENT:**
-canonical text lives in SKILL.md §Upstream relations (fork `ci.yml` stays
-REMOVED, order cc100dc6; carrier branch is the sole build lane; oc-ci-parity
-`exit 4` naming ci.yml is ACCEPTED output forever).
+Three-way-diff workflow check (runbook §Port) + carrier proof-dispatch
+(`--ref ci/quick-build-linux`). **DRIFT PERMANENT:** canonical text lives in
+SKILL.md §Upstream relations (fork `ci.yml` stays REMOVED, order cc100dc6;
+carrier branch is the sole build lane). oc-ci-parity RETIRED v0.4.117
+(owner "3 - ok": zero live use in 12 days, C-H2; the runbook's diff check
+supersedes it).
 
 ## CI-wait & waiter discipline (supervisor-scoped items; local numbering W1-W6)
 

@@ -787,6 +787,29 @@ cmd_confirm() { # oc-ledger confirm <uuid> [--gh <cmd>] — verify the worker's
   with_lock _confirm_locked
 }
 
+cmd_lessons() { # oc-ledger lessons — H-2 (v0.4.116): extract lesson/incident rows
+  # by class. Usage: oc-ledger lessons [--kind <lesson|incident|all>] [--class <text>]
+  # Prints one line per matching event: "n=<idx>\t<kind>\t<t>\t<what-first-160>".
+  # --class is a case-insensitive substring match over the row text (H-1/H-2 class
+  # extraction: uncoded-lesson sweep). Read-only, no lock. rc 3 = ledger unreadable.
+  local kind="all" cls=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --kind) [ $# -ge 2 ] || die 2 "lessons: --kind needs a value"; kind="$2"; shift 2 ;;
+      --class) [ $# -ge 2 ] || die 2 "lessons: --class needs a value"; cls="$2"; shift 2 ;;
+      *) die 2 "lessons: unknown arg '$1' (usage: oc-ledger lessons [--kind <lesson|incident|all>] [--class <text>])" ;;
+    esac
+  done
+  case "$kind" in lesson|incident|all) ;; *) die 2 "lessons: --kind must be lesson|incident|all (got '$kind')" ;; esac
+  ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+  jq -r --arg kind "$kind" --arg cls "$cls" \
+    '.events | to_entries[]
+     | select(($kind == "all") or (.value.kind // "") == $kind)
+     | select(($cls == "") or ((.value.what // "") | test($cls; "i")))
+     | "n=\(.key)\t\(.value.kind // "?")\t\(.value.t // "?")\t\((.value.what // "") | .[0:160]")' "$LEDGER" 2>/dev/null
+  exit 0
+}
+
 cmd_claims() { # oc-ledger claims <N> — dispatch=verify-unclaimed backend (#129
   # family, v0.4.97): print every OPEN claim-refs on issue #N from the ledger
   # events, one line per claim: "<uuid> <t> <what>". Empty output + rc 0 =
@@ -837,7 +860,7 @@ oc_ship_audit_chain() {
 
 # ---- dispatch -----------------------------------------------------------------
 parse_global "$@"
-case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims> | [selftest|--selftest]"; exit 0 ;; esac
+case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons> | [selftest|--selftest]"; exit 0 ;; esac
 if [ "$SELFTEST" -eq 1 ]; then cmd_selftest; exit $?; fi
 sub="${ARGS[0]:-}"; rest=("${ARGS[@]:1}")
 case "$sub" in
@@ -852,6 +875,7 @@ case "$sub" in
   confirm) cmd_confirm "${rest[@]+"${rest[@]}"}" ;;
   claim-ref) cmd_claim_ref "${rest[@]+"${rest[@]}"}" ;;
   claims) cmd_claims "${rest[@]+"${rest[@]}"}" ;;
+  lessons) cmd_lessons "${rest[@]+"${rest[@]}"}" ;;
   selftest) cmd_selftest; exit $? ;;
-  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims> | --selftest" ;;
+  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons> | --selftest" ;;
 esac

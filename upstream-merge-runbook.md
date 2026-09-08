@@ -24,7 +24,7 @@ commits, 133 fork-only, 68 overlapping files, merge-base `4776bee2`).
 |---|---|
 | **HQ** | freeze check, run the merge, arbitrate textual conflicts, ledger stamps, consolidated report with the per-feature decisions table |
 | **Review lens** (one spawn) | audits each semantic pair — diff fork behavior vs upstream's, flag anything upstream's version *loses* |
-| **TOOLSMITH lane** (ex carrier-tools, v0.4.87) | builds the merged tree via the `oc-deploy` lane, runs the battery — HQ never hand-builds |
+| **Editor lane** (hosting editor; TOOLSMITH builds no trees per toolsmith.md law) | runs `oc-deploy ship` on the marker commit via the `oc-deploy` lane, runs the battery — HQ never hand-builds |
 | **Harvest lane** | unaffected for open PRs, but **pauses new branch creation** off fork main until the merge lands (stale bases). **v0.4.93:** filed upstream PRs stay FROZEN during the merge window — the merge does NOT trigger re-ports; conflicts on filed PRs are maintainer-side at merge time (editor.md Phase 7 PR-freeze law) |
 | **Owner** | semantic-pair overrides + the final prod swap |
 
@@ -33,14 +33,11 @@ commits, 133 fork-only, 68 overlapping files, merge-base `4776bee2`).
 1. Freeze check (ledger) → branch `merge/upstream-YYYYMMDD` off `origin/main`.
 2. `git merge adolfousier/main` — merge, never rebase/reset (deployed-sha
    containment survives).
-3. Textual conflicts: **upstream wins WHOLESALE (owner 2026-09-02 — merge-
-   resolution shape, canonical in fleet-directives.md)** — conflicted files
-   ship byte-exact as adolfo wrote them, never hand-blended; verify
-   `git diff adolfousier/main` over conflicted files is empty. Fork features
-   from those files re-land as named `port(fork→merge)` commits adapted onto
-   his shapes, each gated by the overlay-disposition analysis (drop/port/ask
-   vs upstream's revealed stance) + owner human gate. Shared TEST files union
-   both sides' cases. Expect the worst overlap in tests, not source.
+3. Textual conflicts: resolve per the **merge-resolution shape, canonical in
+   fleet-directives.md** (upstream wins WHOLESALE; verify
+   `git diff adolfousier/main` over conflicted files is empty). Shared TEST
+   files union both sides' cases — expect the worst overlap in tests, not
+   source.
 4. **Database migrations — dedicated pass, never drive-by.** Both sides may sit
    at the SAME `MIGRATION_COUNT` with DIFFERENT sets (2026-09-02: fork #37
    `20260828_pending_requests_origin` vs upstream #37
@@ -52,9 +49,9 @@ commits, 133 fork-only, 68 overlapping files, merge-base `4776bee2`).
    decision: adopt upstream (default), keep fork, or reconcile. Auto-keep with
    no decision: commits adolfo merged from our own harvest PRs. **[GATE]** for
    any keep-ours.
-6. `cargo clippy --all-features` + full test suite on the merged tree (carrier
-   lane builds, battery runs — no local cargo per build-lane directive).
-7. Fork CI (`pr-checks`) GREEN → FF-push `origin/main`, consolidated report
+6. Fork CI (`pr-checks`) GREEN on the merged tree — the only CODE-TESTS locus
+   (box law; no local cargo per build-lane directive) → FF-push `origin/main`,
+   consolidated report
    with the decisions table.
 8. **Swap stamp — merge-derived heads.** A merge commit cannot carry the
    `Session-Id` trailer, so the build leg's ORDER gate 4 refuses it
@@ -117,7 +114,7 @@ compaction/followup patches. Auto-keep: adolfo's merges of harvest PRs
 6. Verify carrier dispatch still works and proof-dispatch the ported tip
    before reporting done.
 7. Notify each dropped feature's owning editor: SHIPPED UPSTREAM — fork duty
-   ended (their Phase 6b item 5). Record verdicts next to `baseline.json`.
+   ended (their Phase 6b item 6). Record verdicts next to `baseline.json`.
 
 Boundary: port-seam conflict fixups only — keep-both resolutions on
 genuinely-additive picks + the SEAM-COMPILES brace-level verification; never

@@ -9,7 +9,7 @@ pointers, not substitutes; briefs die at compaction, disk doesn't.
 **Load only after SKILL.md confirmed the role is TRIAGE.** This is the OC DEV
 TRIAGE session's standing role — carved out of the Supervisor lane at v0.4.86
 (owner word "Go with Option A" 2026-09-06). Interrupt-shaped duties moved HERE
-so the Supervisor (Author lane) keeps uninterrupted deep-work windows: skill
+so the Supervisor (HQ) keeps uninterrupted deep-work windows: skill
 authoring, procedure rulings, review batteries, upstream sync.
 
 The Triage lane is INTERRUPTIBLE BY DESIGN: every work item is small and fast —
@@ -23,7 +23,7 @@ deputization. Expected reply shape: "routed to <lane>", not done-work.
 ## NEVER list (hard boundaries)
 
 - NEVER edits skill files — the single-writer law is UNCHANGED: only the
-  Supervisor (Author lane) writes SKILL.md / role files / fleet-directives.md /
+  Supervisor (HQ) writes SKILL.md / role files / fleet-directives.md /
   reference pages (SKILL.md §Hard rules census). Every skill-edit request
   leaves this lane as an IDEA:/QUIRK: intake item, never a direct edit.
 - NEVER dispatches builds, swaps binaries, writes feature code.
@@ -143,15 +143,21 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
   candidates + counter line: fork-only commit count + open upstream PR count)
   to board topic 30220 — one line even on zero-change days (heartbeat).
   Standing order (fleet-directives.md §Upstream-merge cadence, HARVEST LAW):
-  when census shows ≥3 Tier-1 candidates AND no upstream PR of ours is open,
-  file candidates autonomously — cherry onto upstream base, 4-leg verify,
-  CI green at push, frozen at filing (PR-freeze law). FILING GATE (owner
+  when census shows ≥3 Tier-1 candidates with green tests, commission probes
+  and file on PASS — several open upstream PRs may run concurrently
+  (fleet-directives.md §Upstream-merge cadence is canonical; PR-freeze law
+  governs filed PRs after filing). Port WORK (cherry onto upstream base,
+  4-leg verify, build) is commissioned to an editor lane per PORT-WORK
+  OWNERSHIP (Triage queues, editors build); Triage files the PR on the
+  lane's GREEN + smoke-PASS receipt — frozen at filing (PR-freeze law). FILING GATE (owner
   override 2026-09-08 13:51Z, amended 15:2xZ “no holding, just instruct
   the editor to fire smoke”): file as soon as tests are green AND the
   behavioral smoke PASSES — parallel PRs allowed; NO holding state exists.
   On probe commission the editor fires the smoke immediately; probe PASS
-  files the PR without owner confirmation (owner “smoke” later =
-  ratification). PR filing follows the full Upstream PR law.
+  presents the ready PR for the OWNER'S FILING GO (one word per PR or
+  batch — owner ruling 21:44Z "my go before pr"; batch go acceptable).
+  The smoke-readiness hold is dead, but PR filing is owner-gated.
+  PR filing follows the full Upstream PR law.
 - **Upstream PR-state patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** on each harvest census,
   re-verify the state of every OPEN upstream PR of ours
@@ -245,7 +251,7 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
    "where are the decisions", the answer is a coverage report — which lanes
    posted, which are silent-by-zero — never a consolidated list.
 
-## Escalation to the Supervisor (Author lane)
+## Escalation to the Supervisor (HQ)
 
 WHAT escalates: ACCEPT-MECHANICAL batch items, KERNEL-SEMANTIC verdicts,
 protocol disputes, skill-edit requests, semantic questions, sanctioned-sender
