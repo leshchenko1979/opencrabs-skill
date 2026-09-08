@@ -12,7 +12,7 @@
 # Design: THIN wrapper — it calls oc-prchecks (reusing its dispatch lock,
 # adoption and verdict rule; never re-implements them) and adds only the
 # missing glue:
-#   - detach (arm -> setsid child, state in the tools STATE DIR, never /tmp)
+#   - detach (arm -> setsid child in a systemd transient scope when available, state in the tools STATE DIR, never /tmp)
 #   - journal-first logging: start line written BEFORE the first poll
 #   - VERIFIED notify: the session-notify exit-code contract
 #     (src/cli/session_notify.rs) is enforced — 0 delivered, 2 no_route dead,
@@ -192,7 +192,20 @@ cmd_arm() {
   : > "$STATE_DIR/journal/$ID.jsonl"
   jline "$STATE_DIR/journal/$ID.jsonl" start \
     "$(jq -nc --arg ref "$REF" --arg notify "$TARGET" --arg label "$LABEL" --arg actor "${OC_ACTOR:-}" --arg seed_run "$SEED_RUN" --argjson dl "$(($(date +%s) + TMO))" '{pid:0,ref:$ref,notify:$notify,label:$label,deadline_epoch:$dl,actor:$actor,seed_run:$seed_run}')"
-  ( setsid "$SELF" _run "$REC" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  # cgroup escape (2026-09-08 study, research/waiter-deploy-20260908.md):
+  # plain setsid children stay in opencrabs-ops.service's cgroup; the daemon
+  # unit has KillMode=control-group + Restart=always, so EVERY daemon restart
+  # (swap/ship chain) killed all armed watches -> ORPHANED class (14/104, ~13%).
+  # systemd-run --user --scope moves the child to a transient scope unit the
+  # daemon's KillMode cannot reach. Falls back to plain setsid where
+  # systemd-run is unavailable (non-systemd boxes, selftest sandboxes).
+  if command -v systemd-run >/dev/null 2>&1 \
+     && systemd-run --user --scope true >/dev/null 2>&1; then
+    ( setsid systemd-run --user --scope --unit="oc-waiter-$ID" \
+        "$SELF" _run "$REC" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  else
+    ( setsid "$SELF" _run "$REC" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  fi
   echo "armed id=$ID"
   echo "  record: $REC"
   echo "  journal: $STATE_DIR/journal/$ID.jsonl"
