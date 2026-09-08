@@ -136,10 +136,12 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
   to board topic 30220 — one line even on zero-change days (heartbeat).
   Standing order (fleet-directives.md §Upstream-merge cadence, HARVEST LAW):
   when census shows ≥3 Tier-1 candidates AND no upstream PR of ours is open,
-  file the top Tier-1 candidate autonomously — cherry onto upstream base,
-  4-leg verify, CI green at push, frozen at filing (PR-freeze law), ONE at a
-  time (one-PR law). PR filing itself follows the full Upstream PR law
-  (owner smoke-PASSED gates still apply to any PR beyond the standing order).
+  file candidates autonomously — cherry onto upstream base, 4-leg verify,
+  CI green at push, frozen at filing (PR-freeze law). FILING GATE (owner
+  override 2026-09-08 13:51Z): file as soon as tests are green AND smokes
+  confirmed — parallel PRs allowed; the only hold is a feature whose smoke
+  readiness the owner has not confirmed. PR filing itself follows the full
+  Upstream PR law.
 
 ## Duty T5 — Post-compaction issue sweep (owner order 2026-09-07 17:23Z, v0.4.92)
 

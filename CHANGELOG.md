@@ -473,3 +473,9 @@ Triage enforces the format on coverage check (targeted lane correction, not boar
 ## v0.4.104
 
 Owner rule (2026-09-08 12:16Z): bookkeeping legs (lineage/identity/CI) never constitute smoke PASS - a live behavioral probe of the corrected runtime path on the running box is required, or a stamped structural N/A (editor.md Phase 6b + SKILL.md evidence-kinds; origin: ship-38585459 smoke n=2036).
+
+## v0.4.105 (2026-09-08) — one-PR law RETIRED (owner override 13:51Z)
+
+- **fleet-directives.md HARVEST LAW** — filing gate rewritten: file PRs as soon as tests are green AND smokes confirmed (v0.4.104 behavioral rubric); parallel upstream PRs allowed; the previous one-PR-at-a-time rule RETIRED (owner: "this law is incorrect, Adolfo never told this"). The ONLY hold: a feature whose smoke readiness the owner has not confirmed.
+- **triage.md duty text** — same filing gate; autonomous trigger now files all qualifying candidates, not just the top one.
+- Harvest queue consequence: #1439 no longer blocks #100/#118 — both cherry-verified clean, filing proceeds on their own smoke confirmation.
