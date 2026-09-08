@@ -62,11 +62,11 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 - **#119 naming-collision note** (Triage flag, verified distinct): fork issue leshchenko1979/opencrabs#119 (single-option fold UX, Harvest-filed) ≠ upstream-numbered #119 (single budget verdict, `55ddec34`, already shipped). Rename/qualify ruling stays Triage's at next triage pass.
 - Battery: see receipts below. Includes v0.4.97 era reorder fix (97 block had landed after the Imported dump — now 96→97→dump).
 
-## 0.4.100 - 2026-09-08 (oc-deploy poll ship-pending law)
+## v0.4.100 (2026-09-08) - oc-deploy poll ship-pending law (Triage disposal n=2003, HQ implemented)
 
-- oc-deploy poll --sha S: when the DISPATCHED sha goes GREEN, poll treats it as SWAP PENDING - it no longer dies rc5 already-deployed-nothing-new while the deployed marker lags mid-chain (defect family n=2003: ate the 2e161df3 and ebbae0aa swaps; both recovered only by lane re-execute).
-- Poll --wait timeout on a GREEN dispatched sha now reports STUCK SWAP (distinct message + notify-session wake), never nothing-new.
-- New selftest: poll --sha pending never reports already-deployed (battery 147/0).
+- oc-deploy poll --sha S: the DISPATCHED sha going GREEN is SWAP PENDING - poll no longer dies rc5 already-deployed while the deployed marker lags mid-chain. Defect family n=2003 ate the 2e161df3 and ebbae0aa swaps; both recovered only by lane re-execute.
+- Poll --wait timeout on a GREEN dispatched sha reports STUCK SWAP (distinct message + notify-session wake), never nothing-new.
+- New selftest: poll --sha pending never reports already-deployed. Battery 147/0.
 
 ## Imported pre-v0.4.60 dump — one-line provenance records
 (structured `##` entries begin at v0.4.60; block sequestered into
