@@ -281,3 +281,9 @@ calling model, enabling self-correction without a human complaint.
 Complements the omission-semantics target above: omission semantics make the
 route deterministic; landing echo makes the outcome observable.
 
+
+## Deployed-state markers and state-repo hygiene (owner incident #2066, ruled 2026-09-08 ~16:4xZ)
+
+- **NO `git stash`/`checkout`/`clean` inside the opencrabs-dev STATE repo** without first checking for uncommitted deployed-state files (`deployed.sha`, `deployed.meta.json`, `baseline.json`). oc-deploy writes swap markers as working-tree changes; they are committed only by oc-ledger's next state commit. Stashing reverts deployed-state to a stale sha while the box runs the new binary — smoke-evidence then reports MISMATCH on a CORRECT deploy. Origin: HQ stash at 16:06:54Z during a cleanliness check reverted #134 swap markers (n=2066).
+- **`oc-smoke-evidence` MISMATCH is not yet a verdict**: before anyone treats the running binary as wrong, cross-check `/proc/<pid>/exe` sha256 against the swap journal. Mismatch between marker file and disk must be resolved as "stale marker" vs "stale binary" — never assumed.
+- State-repo stashes that still hold other lanes' WIP (waiters/, tools.log, fanout locks) are recovered ONLY by the owning lane, deliberately — never bulk-popped by HQ.
