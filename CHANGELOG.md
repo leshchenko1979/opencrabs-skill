@@ -72,6 +72,14 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 - Poll --wait timeout on a GREEN dispatched sha reports STUCK SWAP (distinct message + notify-session wake), never nothing-new.
 - New selftest: poll --sha pending never reports already-deployed. Battery 147/0.
 
+## v0.4.102 — Decision Rollcall: present-here mode RETIRED (owner override)
+
+Owner override 2026-09-08 09:05Z, topic 30220 ("I don't want the decisions to be presented in triage lane. Every editor should be instructed to present their decisions in their own lane") — supersedes the 08:34Z topic-42487 amendment (v0.4.101).
+
+- fleet-directives.md §Decision Rollcall item 2: delivery is LANE-DIRECT, THE ONLY MODE. Present-here marked RETIRED with provenance. Triage NEVER collects or presents decisions on any word.
+- triage.md Duty T7 item 7: rewritten from present-here duty to RETIREMENT notice — Triage's answer to "where are the decisions" is a coverage report, never a consolidated list.
+- editor.md §Decision Rollcall duty: present-here exception deleted, replaced with NO-Triage-exception instruction — a lane told to send its list to Triage/HQ refuses and posts in its own topic.
+
 ## Imported pre-v0.4.60 dump — one-line provenance records
 (structured `##` entries begin at v0.4.60; block sequestered into
 position per the newest-LAST contract, lens B F14, v0.4.80)

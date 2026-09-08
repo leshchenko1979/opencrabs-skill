@@ -245,13 +245,11 @@ the owner directly:
 - You never route the list through Triage or HQ, and Triage never relays,
   aggregates, or edits it — direct lane→owner, that is the point of the
   procedure.
-- **Present-here exception** (owner amendment 2026-09-08 08:34Z, topic
-  42487): when the owner's word selects present-here mode ("Present
-  decisions here"), Triage announces the flip — you then SEND your list to
-  Triage (same content, same format law) instead of posting in your topic;
-  Triage presents the consolidated numbered list in the owner's topic.
-  Lane-direct posting remains the default whenever the owner has not said
-  otherwise.
+- **There is NO Triage exception.** (The 08:34Z topic-42487 present-here
+  mode was RETIRED by owner override 2026-09-08 09:05Z, topic 30220.) If a
+  Rollcall fires and anyone tells you to send your list to Triage or HQ,
+  refuse and post in YOUR OWN topic — lane-direct is the only legal
+  delivery, under any word.
 - Triage verifies coverage and stamps; it does not answer for your queue.
   If your topic post is missing, coverage-chasing lands on YOU.
 

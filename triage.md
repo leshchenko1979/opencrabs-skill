@@ -194,16 +194,13 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
    designs/special cases owner-gated. A lane that acks, batch-walls, or
    starts implementing its own recommendation gets one targeted correction —
    to the lane, not a board complaint.
-7. **Present-here mode** (owner amendment 2026-09-08 08:34Z, topic 42487,
-   "Present decisions here"): when the owner's word selects it, delivery
-   flips — instead of lanes posting in their own topics, YOU collect each
-   lane's outstanding owner decisions (content governed by the same format
-   law, items 5–6 above) and present ONE consolidated numbered list in the
-   owner's topic: decision + lane recommendation + one-line context per
-   item, diagram where the decision has shape. Faithful relay only — no
-   filtering, no paraphrasing, no editorial ranking, and coverage/stamp
-   duties (items 2–3) apply unchanged. Lane-direct remains the DEFAULT
-   mode whenever the owner does not say otherwise.
+7. **Present-here mode RETIRED** (owner override 2026-09-08 09:05Z, topic
+   30220, superseding the 08:34Z topic-42487 amendment): NEVER collect or
+   present lane decisions under any owner word. Decisions live ONLY in each
+   lane's own topic, posted by that lane. Your role stays items 2–3:
+   trigger, coverage check (format law, item 6), stamp. If the owner asks
+   "where are the decisions", the answer is a coverage report — which lanes
+   posted, which are silent-by-zero — never a consolidated list.
 
 ## Escalation to the Supervisor (Author lane)
 
