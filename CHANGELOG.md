@@ -62,6 +62,10 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 - **#119 naming-collision note** (Triage flag, verified distinct): fork issue leshchenko1979/opencrabs#119 (single-option fold UX, Harvest-filed) ≠ upstream-numbered #119 (single budget verdict, `55ddec34`, already shipped). Rename/qualify ruling stays Triage's at next triage pass.
 - Battery: see receipts below. Includes v0.4.97 era reorder fix (97 block had landed after the Imported dump — now 96→97→dump).
 
+## v0.4.101 (2026-09-08) — Decision Rollcall present-here mode
+
+- Owner amendment 2026-09-08 08:34Z, topic 42487 (Present decisions here): Rollcall delivery gains present-here mode — on owner word, Triage collects lanes outstanding owner decisions and presents ONE consolidated numbered list in the owners topic (decision + recommendation + context + diagram per item; faithful relay, no filtering/paraphrasing/ranking). Lane-direct posting remains the default mode. Sites: fleet-directives.md section Decision Rollcall item 2 (two-mode delivery), triage.md Duty T7 item 7, editor.md Decision Rollcall duty present-here exception. Lane-side format law unchanged.
+
 ## v0.4.100 (2026-09-08) - oc-deploy poll ship-pending law (Triage disposal n=2003, HQ implemented)
 
 - oc-deploy poll --sha S: the DISPATCHED sha going GREEN is SWAP PENDING - poll no longer dies rc5 already-deployed while the deployed marker lags mid-chain. Defect family n=2003 ate the 2e161df3 and ebbae0aa swaps; both recovered only by lane re-execute.

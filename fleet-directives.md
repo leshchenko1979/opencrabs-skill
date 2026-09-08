@@ -153,10 +153,22 @@ and Duty-4 (skill input). When the owner says **"run a Decision Rollcall"**:
    line of context each. NO status reports, no "nothing owed" chatter, no
    ledger trivia. The lane knows its own asks best — nobody filters or
    paraphrases them.
-2. **Delivery — each lane posts IN ITS OWN LANE TOPIC, addressed to the owner
-   directly.** Lanes do NOT route their list through Triage or HQ; Triage does
-   not relay, aggregate, or edit. A lane with zero outstanding owner decisions
-   posts NOTHING — silence is the "nothing owed" signal.
+2. **Delivery — TWO MODES, owner word selects.**
+   - **Lane-direct mode (default):** each lane posts IN ITS OWN LANE TOPIC,
+     addressed to the owner directly. Lanes do NOT route their list through
+     Triage or HQ; Triage does not relay, aggregate, or edit. A lane with zero
+     outstanding owner decisions posts NOTHING — silence is the "nothing owed"
+     signal.
+   - **Present-here mode (owner amendment 2026-09-08 08:34Z, topic 42487,
+     "Present decisions here"):** on the owner's word, Triage collects the
+     lanes' outstanding owner decisions and presents ONE consolidated
+     numbered list IN THE OWNER'S TOPIC (topic 30220 or the topic the owner
+     spoke in) — each item: decision + lane recommendation + one-line context
+     (+ mermaid diagram where the decision has shape). Supersedes
+     lane-direct delivery for PRESENTATION only: lane-side format law
+     (items 5–9) still governs what each lane reports to Triage on request,
+     and Triage still relays content faithfully — collect, number, present;
+     no filtering, no paraphrasing, no editorial ranking.
 3. **Triage role — coverage + stamp, nothing more.** Triage triggers the
    Rollcall on owner word, verifies every holding lane actually posted (or is
    legitimately silent-by-zero), and stamps completion in the ledger.
