@@ -484,3 +484,10 @@ Owner rule (2026-09-08 12:16Z): bookkeeping legs (lineage/identity/CI) never con
 - **fleet-directives.md HARVEST LAW** — filing gate rewritten: file PRs as soon as tests are green AND smokes confirmed (v0.4.104 behavioral rubric); parallel upstream PRs allowed; the previous one-PR-at-a-time rule RETIRED (owner: "this law is incorrect, Adolfo never told this"). The ONLY hold: a feature whose smoke readiness the owner has not confirmed.
 - **triage.md duty text** — same filing gate; autonomous trigger now files all qualifying candidates, not just the top one.
 - Harvest queue consequence: #1439 no longer blocks #100/#118 — both cherry-verified clean, filing proceeds on their own smoke confirmation.
+
+## v0.4.107 (2026-09-08) — port-work ownership law (owner button ruling, recovered)
+
+Owner ruling was a suggest_options button pick (option 0: "Agreed - codify the split: editors build, Triage queues, HQ gates") at 17:04:02Z on the port-ownership message. The pick was swallowed by the daemon's #1226 mid-turn guard (log: "session d72bd52d mid-turn — re-arming token, choice not delivered") and never reached HQ's prompt; recovered first-hand from the daemon callback log (log lines 995871-995878: followup:47d8185f:0 → pick recorded on msg 46104 → re-arm WARN).
+
+- **fleet-directives.md** — PORT-WORK OWNERSHIP three-role table added above §Upstream PR law: editors build (all port commits + harvest ports), Triage queues (disposition census, backlog, commissioning), HQ gates (classification ruling + approval gate; owner ask-decider). Supersedes HQ's 17:02Z three-class proposal and Triage's 16:50Z three-hand chain wherever they differ.
+- Defect note: the #1226 mid-turn swallow cost ~15 min of ruling-hunting (board 30220, topic 42487, ledger, session logs all checked before the callback trail). Root cause is daemon code (agent.rs:716 re-arm path), not lane process — routed as a defect family to HQ.
