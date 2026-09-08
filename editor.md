@@ -232,6 +232,22 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
 No reload volley is owed to you (v0.4.19 disk absorption stands) — the
 pull-check is YOUR duty; supervisor notifies stay targeted per Duty 3.
 
+## Decision Rollcall duty — owner decisions post direct, in YOUR topic (owner order 2026-09-08, topic 42487, ruling n=1994)
+
+When Triage announces a **Decision Rollcall** (full law: fleet-directives.md
+§Decision Rollcall), each editor answers in ITS OWN LANE TOPIC, addressed to
+the owner directly:
+
+- Each item = one outstanding OWNER decision + your recommendation + one line
+  of context. Status reports, ledger trivia, and "nothing owed" chatter posts
+  are forbidden — a lane with zero owner decisions posts NOTHING (silence is
+  the signal).
+- You never route the list through Triage or HQ, and Triage never relays,
+  aggregates, or edits it — direct lane→owner, that is the point of the
+  procedure.
+- Triage verifies coverage and stamps; it does not answer for your queue.
+  If your topic post is missing, coverage-chasing lands on YOU.
+
 ## Tool reference — editor's quick table
 
 Canonical descriptions + selftest contracts: `tools/RC-CONTRACT.md` (full

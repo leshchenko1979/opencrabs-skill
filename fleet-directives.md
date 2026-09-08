@@ -143,6 +143,26 @@ Lane-to-lane and lane-to-HQ `session_notify` traffic MUST default to deferred de
 
 The fleet runs many lanes; the owner cannot track them all. Therefore EVERY lane and HQ turn — channel replies, reports, acks — MUST end with a short **What now/next** block answering: what is in flight, what happens next and by whom, and what (if anything) is blocked on the owner. No turn ends on bare receipts or a bare ack without orientation. Keep it to 1-3 lines; a "nothing pending" answer is valid and required too. This is report discipline, not status spam — it replaces the owner having to ask "What now?" every time.
 
+## Decision Rollcall — owner-decision sweep, lanes post direct (owner order 2026-09-08 ~06:1xZ, topic 42487, ruling n=1994)
+
+A repeatable owner-facing procedure, distinct from the T5 sweep (issue triage)
+and Duty-4 (skill input). When the owner says **"run a Decision Rollcall"**:
+
+1. **Content — owner decisions ONLY.** Each lane presents outstanding decisions
+   that need the OWNER's word: one decision + the lane's recommendation + one
+   line of context each. NO status reports, no "nothing owed" chatter, no
+   ledger trivia. The lane knows its own asks best — nobody filters or
+   paraphrases them.
+2. **Delivery — each lane posts IN ITS OWN LANE TOPIC, addressed to the owner
+   directly.** Lanes do NOT route their list through Triage or HQ; Triage does
+   not relay, aggregate, or edit. A lane with zero outstanding owner decisions
+   posts NOTHING — silence is the "nothing owed" signal.
+3. **Triage role — coverage + stamp, nothing more.** Triage triggers the
+   Rollcall on owner word, verifies every holding lane actually posted (or is
+   legitimately silent-by-zero), and stamps completion in the ledger.
+4. **Trigger — on demand** ("run a Decision Rollcall"). A cron or post-ship-chain
+   hook is possible later; the owner has not ordered one. Do not self-schedule.
+
 ## Review lens `brain-scrub` (owner order 2026-09-05)
 
 Standing lens in the Duty 4+6 skill-review rotation (registered in `oc-review-persist` LENSES). Scrubs the ops profile's brain files for opencrabs-dev process content living outside the skill:

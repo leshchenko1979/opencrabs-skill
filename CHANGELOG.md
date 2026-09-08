@@ -49,6 +49,19 @@ bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 - **Lens reports archived:** reviews/20260907-duty46-cycle2/ — 38 report files (7 lenses x 2026-08-29->09-07 incl. cycle-1/2 variants) + skill-review-index.log (oc-review-persist sha-indexed).
 - Battery: 146 PASS / 0 FAIL (146th = new E-F1 ship-refused pair; prior 144 + 2).
 
+## v0.4.97 (2026-09-08, owner "Go" 05:30Z — harvest enforcement law: daily patrol + standing filing order)
+
+- **HARVEST LAW** (fleet-directives.md §Upstream-merge cadence): merge-from-upstream on every detected shift was already law, but nothing ever fired the give-back direction — 156 fork-only commits piled up demand-driven. New standing order: Duty T4 harvest patrol runs DAILY (cron `harvest-patrol-daily` 03:00Z, first run 2026-09-09); census posts to board topic 30220 every day even on zero-change days (heartbeat = patrol alive); `upstream-shift-watch` (4h) carries the same HARVEST COUNTER line. Standing autonomous-filing order: fork-only backlog ≥3 Tier-1 candidates AND zero open upstream PRs of ours → Triage files the top candidate autonomously (cherry onto upstream base, green at push, frozen at filing, one at a time per one-PR law). Beyond the standing order the full Upstream PR law (owner smoke-PASSED gates) still applies.
+- triage.md Duty T4: new patrol item — run `oc-upstream-delta`, post tiered census + counter (Triage owns it post-compaction too).
+- Battery: 146/0. Tag v0.4.97, commit 73d31e8a, ledger n=1987. #129 build ebbae0a SWAPPED 05:38Z same turn.
+
+## v0.4.98 (2026-09-08, owner "Decision Rollcall" term pick ~06:1xZ, topic 42487, ruling n=1994 — lane→owner direct decision sweep)
+
+- **Decision Rollcall codified** (owner picked the term via buttons; Triage proposed shape, HQ finalized wording): repeatable owner-facing procedure, distinct from T5 sweep and Duty-4. Content = outstanding owner decisions ONLY (one decision + lane recommendation + one-line context; no status reports, no chatter). Delivery = each lane posts IN ITS OWN LANE TOPIC, addressed to the owner DIRECTLY — no relay through Triage/HQ; zero decisions = silence, no chatter post. Triage = trigger on owner word + coverage verification + ledger stamp, nothing more. Trigger = on demand ("run a Decision Rollcall"); no cron/hook unless the owner orders one later.
+- **Codification homes:** fleet-directives.md §Decision Rollcall (canonical law, after the what-now/next section); editor.md §Decision Rollcall duty (lane-side posting duty, after Mid-cycle skill drift); triage.md NEW Duty T7 (trigger/coverage/stamp; relay model of 2026-09-08 morning RETIRED).
+- **#119 naming-collision note** (Triage flag, verified distinct): fork issue leshchenko1979/opencrabs#119 (single-option fold UX, Harvest-filed) ≠ upstream-numbered #119 (single budget verdict, `55ddec34`, already shipped). Rename/qualify ruling stays Triage's at next triage pass.
+- Battery: see receipts below. Includes v0.4.97 era reorder fix (97 block had landed after the Imported dump — now 96→97→dump).
+
 ## Imported pre-v0.4.60 dump — one-line provenance records
 (structured `##` entries begin at v0.4.60; block sequestered into
 position per the newest-LAST contract, lens B F14, v0.4.80)

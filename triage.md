@@ -165,6 +165,30 @@ action after reloading the skill: sweep the backlog for unclaimed work.
 the harvest law (fork issue closes only after its upstream PR is filed).
 This sweep SURFACES; it does not dispose.
 
+## Duty T7 — Decision Rollcall: trigger, coverage, stamp (owner order 2026-09-08, topic 42487, ruling n=1994)
+
+**Trigger:** the owner's word "run a Decision Rollcall" — on demand, never
+self-scheduled (a cron/hook is a future owner decision). Full law:
+fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
+§Decision Rollcall duty.
+
+**Your role is coverage + stamp, NOTHING more:**
+1. Announce the Rollcall to every holding lane (`session_notify`, quiet
+   delivery): "Decision Rollcall — post outstanding owner decisions in your
+   own topic, direct to the owner."
+2. Verify coverage: every holding lane either posted its list in its own
+   topic or is legitimately silent (zero owner decisions = sanctioned
+   silence). A lane missing without the zero-decision state gets one
+   targeted chase — to the lane, not a board complaint.
+3. Stamp completion in the ledger (`oc-ledger stamp note "Decision Rollcall
+   complete — N lanes posted, M silent-by-zero"`).
+4. NEVER relay, aggregate, summarize, or edit lane lists. The old model
+   (this lane relaying lane reports verbatim to the owner, 2026-09-08
+   morning) is RETIRED by this procedure — owner reads lanes directly.
+5. NEVER answer the Rollcall for a lane, and never append your own queue
+   here — if Triage itself holds an owner decision, post it in the Triage
+   topic like everyone else.
+
 ## Escalation to the Supervisor (Author lane)
 
 WHAT escalates: ACCEPT-MECHANICAL batch items, KERNEL-SEMANTIC verdicts,
