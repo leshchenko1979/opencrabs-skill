@@ -214,6 +214,21 @@ NSTUB
   cat > "$SD/gh" <<'STUB'
 #!/usr/bin/env bash
 [ -n "${GH_LOG:-}" ] && echo "$*" >> "$GH_LOG"
+# 6b-6e (F-1 fusion v0.4.97): ship-wait stub arm PREEMPTS the main case when
+# OC_TEST_SHIPWAIT_HEAD is set — run 555's head_sha tracks the shipped sha.
+if [ -n "${OC_TEST_SHIPWAIT_HEAD:-}" ]; then
+  case "$*" in
+    *actions/runs/555*)
+      case "${OC_TEST_SHIPWAIT_CONCL:-}" in
+        completed-success) echo "{\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"$OC_TEST_SHIPWAIT_HEAD\"}" ;;
+        completed-failure) echo "{\"status\":\"completed\",\"conclusion\":\"failure\",\"head_sha\":\"$OC_TEST_SHIPWAIT_HEAD\"}" ;;
+        *)                 echo "{\"status\":\"in_progress\",\"conclusion\":null,\"head_sha\":\"$OC_TEST_SHIPWAIT_HEAD\"}" ;;
+      esac ;;
+    *workflows/quick-build-linux.yml/runs*) echo '{"workflow_runs":[{"id":555}]}' ;;
+    *) echo '{}' ;;
+  esac
+  exit 0
+fi
 case "$*" in
   *runs?status=failure*) echo '{"workflow_runs":[{"id":888,"status":"completed","conclusion":"failure"}]}' ;;
   *actions/runs/777/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, telegram)","conclusion":"success"}]}' ;;
@@ -295,9 +310,10 @@ STUB
     "$SELF_BIN" ship --sha "$PHANTOM" 2>&1)"; check_rc "ship-phantom-sha" $? 1
   check_has "ship-phantom-msg" "$out" "sha not found in this repo"
   grep -q "PLAN: ship" <<<"$out" && { fail=$((fail+1)); echo "SELFTEST FAIL: phantom sha produced plan lines"; } || pass=$((pass+1))
-  # E-F1 (v0.4.96): ship with poll-only flags must die 2 (no silent ignore)
+  # F-1 fusion (v0.4.97): plan-mode ship with --wait refuses (nothing to poll);
+  # non-integer --wait dies 1 at validation.
   out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git"     OC_DEPLOY_CARRIER="$SD/tools/carrier"     "$SELF_BIN" ship --sha "$SHA2" --wait 30 2>&1)"; check_rc "ship-wait-refused" $? 2
-  check_has "ship-wait-msg" "$out" "--wait is poll-mode only"
+  check_has "ship-wait-msg" "$out" "--wait on ship requires --execute"
   out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git"     OC_DEPLOY_CARRIER="$SD/tools/carrier"     "$SELF_BIN" ship --sha "$SHA2" --notify-session aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa 2>&1)"; check_rc "ship-notify-refused" $? 2
   check_has "ship-notify-msg" "$out" "--notify-session is poll-mode only"
   # 4b. carrier read FAIL -> ship aborts (KERNEL D2: no silent fallback set)
@@ -346,6 +362,41 @@ STUB
   if [ "$(git -C "$T/remote.git" rev-parse main)" = "$SHA2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "SELFTEST FAIL: main not pushed"; fi
   grep -q "workflow run" "$GH_LOG" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: gh dispatch not called"; }
   grep -q "dispatched" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no dispatched shadow row"; }
+  # 6b. F-1 fusion (v0.4.97): ship --execute --wait N bounded-polls the run we
+  #     just dispatched. Stub env: OC_TEST_SHIPWAIT_HEAD=the shipped sha (run
+  #     555 head matches), OC_TEST_SHIPWAIT_CONCL=completed/success -> GREEN
+  #     rc 0. Interval override keeps the loop tight.
+  printf 'zzz\n' > "$T/shipwait-flag"   # marker: flag file present = fusion active
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_POLL_INTERVAL=1 OC_TEST_SHIPWAIT_HEAD="$SHA2" OC_TEST_SHIPWAIT_CONCL=completed-success \
+    "$SELF_BIN" ship --sha "$SHA2" --execute --wait 5 2>&1)"; rc=$?
+  check_rc "shipwait-green-rc" $rc 0
+  check_has "shipwait-green-line" "$out" "SHIP-WAIT: run 555 GREEN"
+  grep -q "ship-wait-green:555" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no ship-wait-green shadow row"; }
+  # 6c. RED within the window: terminal failure -> rc 6, no swap leg.
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_POLL_INTERVAL=1 OC_TEST_SHIPWAIT_HEAD="$SHA2" OC_TEST_SHIPWAIT_CONCL=completed-failure \
+    "$SELF_BIN" ship --sha "$SHA2" --execute --wait 5 2>&1)"; rc=$?
+  check_rc "shipwait-red-rc" $rc 6
+  check_has "shipwait-red-line" "$out" "terminal-failure"
+  grep -q "ship-wait-red:555:failure" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no ship-wait-red shadow row"; }
+  # 6d. timeout: run never terminal within --wait 2 -> rc 5.
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_POLL_INTERVAL=1 OC_TEST_SHIPWAIT_HEAD="$SHA2" OC_TEST_SHIPWAIT_CONCL=in_progress \
+    "$SELF_BIN" ship --sha "$SHA2" --execute --wait 2 2>&1)"; rc=$?
+  check_rc "shipwait-timeout-rc" $rc 5
+  check_has "shipwait-timeout-line" "$out" "never reached a terminal state"
+  grep -q "ship-wait-timeout" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no ship-wait-timeout shadow row"; }
+  # 6e. wrong-sha run ignored: run head is a DIFFERENT sha -> our run never
+  #     "exists" -> rc 5 timeout even though a completed run is visible.
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    OC_DEPLOY_POLL_INTERVAL=1 OC_TEST_SHIPWAIT_HEAD="9999999999999999999999999999999999999999" OC_TEST_SHIPWAIT_CONCL=completed-success \
+    "$SELF_BIN" ship --sha "$SHA2" --execute --wait 2 2>&1)"; check_rc "shipwait-wrongsha-rc" $? 5
+  rm -f "$T/shipwait-flag"
   # 7. ship execute gate-fail -> exit 2 (validator stub exits 2; push is no-op)
   (cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
     OC_DEPLOY_VALIDATE="$SD/tools/val-fail" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
@@ -1726,11 +1777,17 @@ fi
 case "$MODE" in
   # ------------------------------------------------------------------ ship --
   ship)
-    # E-F1 (v0.4.96): --wait / --notify-session are POLL-mode flags; ship mode
-    # parses them mode-agnostically and used to SILENTLY IGNORE them — an
-    # operator passing `ship --wait N` believed a poll chain would follow.
-    # Fail fast instead of ignoring (die 2 = usage).
-    [ "$WAIT_SECS" = 0 ] || die 2 "--wait is poll-mode only; ship does not poll (chain the poll leg explicitly)"
+    # F-1 fusion (v0.4.97, editor.md Phase 6a lens E promise): --wait N on an
+    # EXECUTE ship is now honoured — after a successful dispatch the SAME
+    # process bounded-polls the carrier run (N seconds) and exits on GREEN /
+    # terminal-RED / timeout. Plan mode still refuses: a poll needs a dispatch
+    # to watch. --notify-session stays poll-only (ship-wait is fire-and-see).
+    if [ "$WAIT_SECS" != 0 ]; then
+      case "$WAIT_SECS" in ''|*[!0-9]*) die 1 "--wait needs an integer (seconds)" ;; esac
+      if [ "$EXECUTE" != 1 ]; then
+        die 2 "--wait on ship requires --execute (plan mode has nothing to poll — chain poll --wait N explicitly)"
+      fi
+    fi
     [ -z "$NOTIFY_SESSION" ] || die 2 "--notify-session is poll-mode only; ship does not poll (chain the poll leg explicitly)"
     # Duty-6 lens F task 3: ship must NEVER silently adopt CWD HEAD — an
     # operator shipping from the wrong directory pushes an unintended sha.
@@ -1770,6 +1827,48 @@ case "$MODE" in
         || { shadow_log ship "$SHA" "$FEATURES" "dispatch-fail"; die 2 "carrier dispatch failed"; }
       echo "dispatched carrier run for $SHA (features=$FEATURES)"
       shadow_log ship "$SHA" "$FEATURES" "dispatched"
+      # F-1 fusion (v0.4.97): bounded in-process poll of the run we just
+      # dispatched — editor.md Phase 6a lens E F-1 promise. GREEN (or any
+      # terminal state, success|failure) ends the poll; rc 6 = RED, rc 5 =
+      # timeout. No --wait (or 0): classic fire-and-forget, poll leg chained
+      # explicitly by the operator.
+      if [ "$WAIT_SECS" != 0 ]; then
+        local POLL_INTERVAL SW_DEADLINE RID JN CONCL B_SHA
+        POLL_INTERVAL="${OC_DEPLOY_POLL_INTERVAL:-15}"
+        SW_DEADLINE=$(( $(date +%s) + WAIT_SECS ))
+        while :; do
+          RID=""
+          for CANDID in $(RUNS_JSON="$("$GH" api "repos/$FORK/actions/workflows/$WF/runs?per_page=5" 2>/dev/null)" \
+            && printf '%s' "$RUNS_JSON" | jq -r '.workflow_runs[].id // empty' 2>/dev/null); do
+            JN="$("$GH" api "repos/$FORK/actions/runs/$CANDID" 2>/dev/null | jq -r '.head_sha // empty' 2>/dev/null)"
+            [ "$JN" = "$SHA" ] || continue   # only the run WE dispatched
+            RID="$CANDID"; break
+          done
+          if [ -n "$RID" ]; then
+            CONCL="$("$GH" api "repos/$FORK/actions/runs/$RID" 2>/dev/null | jq -r '.status // empty' 2>/dev/null)"
+            case "$CONCL" in
+              completed)
+                CONCL="$("$GH" api "repos/$FORK/actions/runs/$RID" 2>/dev/null | jq -r '.conclusion // empty' 2>/dev/null)"
+                if [ "$CONCL" = success ]; then
+                  B_SHA="$(run_built_sha "$RID" || true)"
+                  shadow_log ship "$SHA" "$FEATURES" "ship-wait-green:$RID"
+                  echo "SHIP-WAIT: run $RID GREEN (sha=${B_SHA:-unknown}) within --wait ${WAIT_SECS}s — swap chain ready: poll --execute"
+                  exit 0
+                fi
+                shadow_log ship "$SHA" "$FEATURES" "ship-wait-red:$RID:$CONCL"
+                die 6 "SHIP-WAIT: run $RID terminal-$CONCL within --wait ${WAIT_SECS}s — RED, no swap leg"
+                ;;
+              queued|in_progress|waiting|pending) : ;;   # keep polling
+              *) echo "oc-deploy ship-wait: odd run status '$CONCL' — keep polling until deadline" >&2 ;;
+            esac
+          fi
+          [ "$(date +%s)" -lt "$SW_DEADLINE" ] || {
+            shadow_log ship "$SHA" "$FEATURES" "ship-wait-timeout"
+            die 5 "ship --wait ${WAIT_SECS}s timed out: run ${RID:-?} never reached a terminal state (still building or not found)"
+          }
+          sleep "$POLL_INTERVAL"
+        done
+      fi
       echo "NEXT: fanout auto-notifies contributors on swap; poll --execute drives the swap chain"
     else
       plan "would: git push $REMOTE $SHA:refs/heads/main"
