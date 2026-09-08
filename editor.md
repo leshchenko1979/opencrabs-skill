@@ -248,6 +248,19 @@ the owner directly:
 - Triage verifies coverage and stamps; it does not answer for your queue.
   If your topic post is missing, coverage-chasing lands on YOU.
 
+**Format law (owner amendment 2026-09-08, topic 30220) — every item of yours
+follows it:**
+
+- **No acks** — your decisions post IS the acknowledgment; no confirmation
+  chatter before or after.
+- **No telegram_send** — your post is the topic's final chat message (text
+  auto-posts); media/document sends are forbidden in a Rollcall.
+- **Context + diagrams** — every decision carries its context and, when the
+  decision has shape, a mermaid diagram. Owner judges renderings, not prose.
+- **1 by 1** — one decision per message, sequential posts, never batched.
+- **Designs and special cases are OWNER-GATED** — you present them, you do
+  not start them on your own recommendation.
+
 ## Tool reference — editor's quick table
 
 Canonical descriptions + selftest contracts: `tools/RC-CONTRACT.md` (full

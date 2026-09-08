@@ -188,6 +188,12 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
 5. NEVER answer the Rollcall for a lane, and never append your own queue
    here — if Triage itself holds an owner decision, post it in the Triage
    topic like everyone else.
+6. Enforce the format law on coverage check (owner amendment 2026-09-08,
+   topic 30220): no acks, no telegram_send in Rollcall posts, context +
+   mermaid diagrams per decision, ONE decision per message presented 1 by 1,
+   designs/special cases owner-gated. A lane that acks, batch-walls, or
+   starts implementing its own recommendation gets one targeted correction —
+   to the lane, not a board complaint.
 
 ## Escalation to the Supervisor (Author lane)
 

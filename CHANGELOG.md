@@ -424,3 +424,25 @@ Daily harvest enforcement: the 145-commit fork-only backlog grew because harvest
 - **Standing harvest order (same section):** census shows ≥3 Tier-1 candidates AND no upstream PR of ours is open → Triage files the top Tier-1 candidate autonomously — cherry onto upstream base, 4-leg verify, CI green at push, frozen at filing (v0.4.93 PR-freeze law), ONE at a time (one-PR law). Beyond the standing order, the full Upstream PR law (owner smoke-PASSED gates) still applies.
 - **Duty T4 (triage.md):** harvest backlog patrol added as a standing enforcement item with the same mechanics, so Triage owns it post-compaction too (RELOAD LAW reaches it).
 - Cron `harvest-patrol-daily` created (03:00Z daily, delivers census to topic 30220); `upstream-shift-watch` prompt extended with the counter line.
+
+## v0.4.98 (2026-09-08) — Decision Rollcall codified (owner term pick via buttons, topic 42487, ruling n=1994)
+
+Owner-ruled procedure for sweeping outstanding owner decisions across lanes:
+
+- **fleet-directives.md §Decision Rollcall** — canonical law: lanes post owner-decisions-ONLY lists in their own topics, addressed to the owner directly; Triage triggers on owner word, verifies coverage, stamps the ledger; the morning relay-verbatim model is explicitly RETIRED. Zero owner decisions = sanctioned silence (no chatter posts).
+- **editor.md §Decision Rollcall duty** — lane-side: one decision + recommendation + one-line context each; missing topic post = coverage chase lands on the lane.
+- **triage.md NEW Duty T7** — trigger/coverage/stamp mechanics; Triage never relays, aggregates, or answers for a lane; Triage's own decisions post in the Triage topic like everyone else.
+- Fork-issue #119 (Harvest-filed single-option UX) vs upstream #119 (shipped `55ddec34`) — collision note added to the verdict-table lineage (Triage to rule on rename/qualify at next triage).
+- CHANGELOG: the v0.4.97 block had landed after the "Imported pre-v0.4.60 dump" — moved to newest-LAST position.
+
+## v0.4.99 (2026-09-08) — Decision Rollcall format law (owner amendment, topic 30220)
+
+Owner amendment minutes after codification — five format rules added to all three law sites (fd §Decision Rollcall items 5–9, editor.md format-law block, triage.md Duty T7 step 6):
+
+- **No acks** — the decisions post IS the acknowledgment; no confirmation chatter.
+- **No telegram_send** — Rollcall posts are the topic's final chat message (text auto-posts); media/document sends forbidden.
+- **Context + diagrams** — every decision carries context and, where it has shape, a mermaid diagram (owner judges renderings, not descriptions).
+- **1 by 1** — one decision per message, sequential posts, never a batched wall.
+- **Owner gates designs and special cases** — lanes present, never self-implement on their own recommendation.
+
+Triage enforces the format on coverage check (targeted lane correction, not board complaint). Mechanical amendment; battery expected unchanged except version stamp.

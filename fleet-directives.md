@@ -163,6 +163,22 @@ and Duty-4 (skill input). When the owner says **"run a Decision Rollcall"**:
 4. **Trigger — on demand** ("run a Decision Rollcall"). A cron or post-ship-chain
    hook is possible later; the owner has not ordered one. Do not self-schedule.
 
+**Format law (owner amendment 2026-09-08 ~06:3xZ, topic 30220):**
+
+5. **No acks.** A lane posts its decisions and nothing else — no "Rollcall
+   received", no confirmation posts, no receipt chatter. The post IS the ack.
+6. **No telegram_send.** Lane posts as its topic's final chat message
+   (text auto-posts). `telegram_send` / `send_document` / media calls are
+   forbidden in a Rollcall post.
+7. **Context + diagrams.** Each decision is presented WITH its context and,
+   where the decision has shape (flow, options, architecture), a mermaid
+   diagram — the owner judges renderings, not descriptions.
+8. **One decision per message.** Present 1 by 1 — sequential posts, never a
+   batched wall. Each post: decision + recommendation + context (+ diagram).
+9. **Owner gates designs and special cases.** A lane does NOT implement a
+   design or a special case on its own recommendation — those await the
+   owner's explicit word, same as any semantic gate.
+
 ## Review lens `brain-scrub` (owner order 2026-09-05)
 
 Standing lens in the Duty 4+6 skill-review rotation (registered in `oc-review-persist` LENSES). Scrubs the ops profile's brain files for opencrabs-dev process content living outside the skill:
