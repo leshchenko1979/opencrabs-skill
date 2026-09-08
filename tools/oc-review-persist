@@ -61,8 +61,8 @@ while [ $# -gt 0 ]; do case "$1" in --dir) DIR="${2:-}"; shift 2 ;; *) shift ;; 
 
 [ -n "$lens" ] || die 2 "usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]"
 case "$lens" in
-  [A-G]|[A-G][0-9]) ;;  # multi-pass lens names (C-F7, v0.4.71)
-  *) case "$LENSES" in *" $lens "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES or A-G / A1-G9)" ;; esac ;;
+  [A-I]|[A-I][0-9]) ;;  # multi-pass lens names (C-F7, v0.4.71; I = meta-review v0.4.114)
+  *) case "$LENSES" in *" $lens "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES or A-I / A1-I9)" ;; esac ;;
 esac
 [ -n "$src" ] || die 2 "report input is empty (pass text, @file, or -)"
 

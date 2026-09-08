@@ -1,4 +1,5 @@
-## v0.4.113
+## v0.4.114
+- Duty-6 lens I — META-REVIEW added (owner pick 2026-09-08 ~20:45Z, "Add Lens I — meta-review (recommended)"): reviews the lens catalog AND its output — brief correctness vs persisted reports, overlap/coverage gaps A–H, false-positive/negative history from the Supervisor's premise-verification record, quote-or-no-finding adherence. Self-reference capped: may flag its own brief, never reviews its own report. Brief in review-lenses.md; oc-review-persist whitelist A-G → A-I (selftest: I-report persist smoke OK); SKILL.md router row → nine-lens A–I. Joins the next Duty-6 cycle (due 26/5 FIRE).
 - Duty-6 lens H — LEDGER HEALTH added (owner "go" 2026-09-08 20:16Z, on HQ proposal after "what lens analyses ledger?"): reviews workers-ledger.json AS A WHOLE — lesson-extraction completeness (incident rows → codified laws), phantom-row families, open claims on closed chains, contradiction pairs, version/cadence sync. Slice tools (oc-ledger claims / oc-ship-audit / oc-waiter-sweep) stay the enforcement surface. Brief in review-lenses.md; family map updated to A–H (supervisor.md, SKILL.md router row, glossary). Joins the next Duty-6 cycle (due 25/5 FIRE).
 
 ## v0.4.112

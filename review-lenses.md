@@ -149,3 +149,20 @@ on census evidence + owner word (supervisor.md step 7).
      the ledger row n + the verifiable artifact (git/gh/log) that confirms or
      breaks it — quote-or-no-finding. H reviews the JOURNAL, never edits it;
      corrections land as new rows or law edits via the Supervisor.
+   - **Reviewer I — META-REVIEW (added v0.4.114, owner pick 2026-09-08 ~20:4xZ, recommended shape 1):**
+     reviews the LENS CATALOG AND ITS OUTPUT — the only reviewer whose object
+     is the review machinery itself. Scope: (1) BRIEF CORRECTNESS — each brief
+     in this file (A–H) still matches what its reviewer actually checked in
+     the latest persisted report (scope drift, stale check classes), (2)
+     OVERLAP — findings double-covered by two lenses, or coverage GAPS where
+     no lens owns an artifact class, (3) FALSE-POSITIVE/NEGATIVE HISTORY —
+     per-lens accuracy record from the Supervisor's premise-verification
+     history (precedents: brain-scrub "cargo ban homeless" overstatement, the
+     B-8 misattribution — both rejected 2026-09-08), (4) EVIDENCE DISCIPLINE —
+     quote-or-no-finding adherence rate in persisted reports. I reads
+     persisted reports + this catalog + the Supervisor's validation notes; it
+     does NOT re-litigate findings already triple-checked, it audits the
+     PATTERN. Output feeds catalog brief edits and reviewer spawning. Same
+     quote-or-no-finding evidence rule. Self-reference cap: I may flag its own
+     brief's defects, but never reviews its own report (recursion capped at
+     one level).
