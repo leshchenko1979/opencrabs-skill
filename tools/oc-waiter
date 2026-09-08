@@ -61,6 +61,8 @@ set -u
 set -o pipefail
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-waiter" "$@"; else oc_log_finish() { :; }; fi
+_OC_NOTIFY_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-notify.sh"
+[ -f "$_OC_NOTIFY_LIB" ] && source "$_OC_NOTIFY_LIB"   # E-F4 (v0.4.97): shared wake contract
 trap 'oc_log_finish $?' EXIT
 
 PROG="$(basename "$0")"
@@ -111,19 +113,15 @@ jline() { # $1=journal $2=event $3=extra-json-object-or-empty (merged at top lev
 }
 
 resolve_notify_bin() { # -> echoes binary path, rc 1 if unresolvable
-  if [ -n "$NOTIFY_BIN" ]; then [ -x "$NOTIFY_BIN" ] && { echo "$NOTIFY_BIN"; return 0; }; return 1; fi
-  if [ -x /usr/local/bin/opencrabs ]; then echo /usr/local/bin/opencrabs; return 0; fi
-  command -v opencrabs 2>/dev/null
+  # E-F4 (v0.4.97): delegated to lib/oc-notify.sh (shared wake contract);
+  # env chain OC_NOTIFY_BIN -> NOTIFY_BIN preserved.
+  oc_notify_resolve_bin
 }
 
 notify_lane() { # $1=bin $2=target $3=title $4=text -> 0 delivered / 1 failed
-  local nrc=0 rrc=0
-  "$1" session notify --profile ops --sender "oc-waiter" --title "$3" --text "$4" "$2" >/dev/null 2>&1 || nrc=$?
-  if [ "$nrc" = 3 ]; then   # refused_in_flight: mid-turn target — MUST be woken
-    "$1" session notify --profile ops --sender "oc-waiter" --title "$3" --text "$4" --interrupt "$2" >/dev/null 2>&1 || rrc=$?
-    nrc=$rrc
-  fi
-  [ "$nrc" = 0 ]
+  # E-F4 (v0.4.97): delegated to lib/oc-notify.sh — contract + interrupt retry
+  # live in ONE place now. Sender label kept "oc-waiter" for journal grep.
+  oc_notify_session "$1" "${OC_WAITER_PROFILE:-ops}" "oc-waiter" "$2" "$3" "$4"
 }
 
 # ---------- arm ----------------------------------------------------------------

@@ -63,6 +63,8 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-deploy" "$@"; else oc_log_finish() { :; }; fi
 _OC_EMBED="$(cd "$(dirname "$0")" && pwd)/lib/oc-embed.sh"
 [ -f "$_OC_EMBED" ] && source "$_OC_EMBED"   # single embed decoder (E2 finding 3, v0.4.72; oc-deploy re-threaded v0.4.77)
+_OC_NOTIFY_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-notify.sh"
+[ -f "$_OC_NOTIFY_LIB" ] && source "$_OC_NOTIFY_LIB"   # E-F4 (v0.4.97): shared wake contract
 trap 'oc_log_finish $?' EXIT
 
 # v0.4.60 (owner order 2026-08-31 06:03Z "move all accounting files and markers
@@ -1030,25 +1032,10 @@ fanout_journal_init() { # $1 = run id
 }
 
 notify_session() { # $1=uuid $2=title $3=text -> verb rc (0 delivered)
+  # E-F4 (v0.4.97): wake logic delegated to lib/oc-notify.sh — single owner of
+  # the session-notify exit-code contract + refused_in_flight interrupt retry.
   if [ "${DRYRUN:-0}" = 1 ]; then return 0; fi
-  # --profile MANDATORY: without it the call hits the default-profile gateway
-  # which predates the verb (Method not found, rc 4) — probed live 2026-08-28.
-  # Dead uuid -> verb rc 2 (no_route), journaled as skip by the caller.
-  # #74 FM-2: exit-code contract (src/cli/session_notify.rs): 0 delivered /
-  # 2 no_route (dead uuid, permanent) / 3 refused_in_flight (target mid-turn,
-  # deferred wake refused — 11 lost wakes across /tmp journals) / 4 transport.
-  # Retry ONCE with --interrupt ONLY on 3 — a mid-turn target MUST be woken or
-  # the verdict is lost; dead uuids and transport faults are not retryable.
-  local nrc=0
-  $NOTIFY_CMD session notify --profile "$NOTIFY_PROFILE" --sender "oc-deploy fan-out" \
-    --title "$2" --text "$3" "$1" >/dev/null 2>&1 || nrc=$?
-  if [ "$nrc" = 3 ]; then
-    local rrc=0
-    $NOTIFY_CMD session notify --profile "$NOTIFY_PROFILE" --sender "oc-deploy fan-out" \
-      --title "$2" --text "$3" --interrupt "$1" >/dev/null 2>&1 || rrc=$?
-    nrc=$rrc
-  fi
-  return "$nrc"
+  oc_notify_session "$NOTIFY_CMD" "$NOTIFY_PROFILE" "oc-deploy fan-out" "$1" "$2" "$3"
 }
 
 fanout_mark_done() { # $1=run $2=verdict $3=notified $4=skipped $5=unowned
