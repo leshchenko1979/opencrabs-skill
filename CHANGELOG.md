@@ -402,3 +402,12 @@ Supervisor-lane split: interrupt-shaped duties carved out into a new TRIAGE lane
 - editor.md: "generic CI ritual" coinage → CI gate §Glossary (A15); FIRE coinage defined (A8); toolsmith.md "review battery" defined (A9); triage/toolsmith escalation boilerplate → pointer to fleet-directives cadence law (A19); "re-reads role file at turn start" no-op line removed (B-13).
 - Mechanical only — no semantic changes; the 2 Duty-4 proposals (dispatch-receipt gate, solo-surface rule) + B-15/B-16/B-17 + lens-E merge + owner-word deletions ship separately per owner word.
 - Doc-only bump: no tools/ changes, battery unchanged (144/0).
+
+## v0.4.97 (2026-09-08) — harvest enforcement law (owner order "Go", 05:30Z)
+
+Daily harvest enforcement: the 145-commit fork-only backlog grew because harvesting was purely demand-driven (no trigger ever fired it). Owner ruled "at least daily" — three pieces:
+
+- **HARVEST LAW (fleet-directives.md, §Upstream-merge cadence):** DAILY patrol — cron `harvest-patrol-daily` (03:00Z) runs `tools/oc-upstream-delta`, posts the tiered backlog census (Tier-1/2/3 + counter line: fork-only commits + open upstream PRs) to board topic 30220; the counter line is also appended to every `upstream-shift-watch` (4h) report. Zero-change days still post a one-line census (heartbeat = patrol alive).
+- **Standing harvest order (same section):** census shows ≥3 Tier-1 candidates AND no upstream PR of ours is open → Triage files the top Tier-1 candidate autonomously — cherry onto upstream base, 4-leg verify, CI green at push, frozen at filing (v0.4.93 PR-freeze law), ONE at a time (one-PR law). Beyond the standing order, the full Upstream PR law (owner smoke-PASSED gates) still applies.
+- **Duty T4 (triage.md):** harvest backlog patrol added as a standing enforcement item with the same mechanics, so Triage owns it post-compaction too (RELOAD LAW reaches it).
+- Cron `harvest-patrol-daily` created (03:00Z daily, delivers census to topic 30220); `upstream-shift-watch` prompt extended with the counter line.

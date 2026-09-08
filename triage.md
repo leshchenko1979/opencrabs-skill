@@ -130,6 +130,16 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
   `now`-mode for receipts/ACKs violate the cadence law — flag with evidence,
   route the correction to the offending lane, escalate repeat offenders to the
   Supervisor.
+- **Harvest backlog patrol (owner 2026-09-08 "Go", v0.4.97 — DAILY):** run
+  `./tools/oc-upstream-delta` and post the tiered backlog census (Tier-1/2/3
+  candidates + counter line: fork-only commit count + open upstream PR count)
+  to board topic 30220 — one line even on zero-change days (heartbeat).
+  Standing order (fleet-directives.md §Upstream-merge cadence, HARVEST LAW):
+  when census shows ≥3 Tier-1 candidates AND no upstream PR of ours is open,
+  file the top Tier-1 candidate autonomously — cherry onto upstream base,
+  4-leg verify, CI green at push, frozen at filing (PR-freeze law), ONE at a
+  time (one-PR law). PR filing itself follows the full Upstream PR law
+  (owner smoke-PASSED gates still apply to any PR beyond the standing order).
 
 ## Duty T5 — Post-compaction issue sweep (owner order 2026-09-07 17:23Z, v0.4.92)
 
