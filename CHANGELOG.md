@@ -533,3 +533,4 @@ Owner ruling was a suggest_options button pick (option 0: "Agreed - codify the s
 - fd: post-compaction reload law synced to the v0.4.95 three-file form.
 - RC-CONTRACT: oc-review-persist row corrected to actual code exits (0/2; stale 3/4 removed).
 - README.md: census corrected 30 executables (oc-toolaccum deleted v0.4.110); oc-waiter/oc-attrib/oc-notify.sh highlight rows added (TOOLSMITH + HQ, owner order 19:31Z).
+- v0.4.115 (2026-09-08): FIX — oc-review-persist LENSES whitelist actually extended to A-I (v0.4.114 shipped a message-only edit: die-string said A-I but the LENSES var still lacked H/I — H/I persist would have died rc 2; caught by Supervisor at Duty-6 spawn on owner "run duty-6"); help-text lens line synced; battery green.

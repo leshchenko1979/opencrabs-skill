@@ -5,7 +5,7 @@
 # correction: a report that lives only in session memory is NOT persisted.
 #
 # usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]
-#   lens ∈ A B C D self redundancy-ontology efficiency-creep cli-automation
+#   lens ∈ A-I + self + named lenses (see LENSES whitelist below)
 #          deletion-safety
 #   @file reads the report body from a file; - reads stdin; anything else is
 #         literal report text (quote it).
@@ -26,7 +26,7 @@ _OC_LIB="$_OC_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-review-persist" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
-LENSES=" A B C D E F G self redundancy-ontology efficiency-creep cli-automation deletion-safety brain-scrub "   # E F G added v0.4.72 (lens F #9 — report-of-record must accept the live lens regime); brain-scrub added 2026-09-05 (owner order — see fleet-directives.md § Review lens brain-scrub)
+LENSES=" A B C D E F G H I self redundancy-ontology efficiency-creep cli-automation deletion-safety brain-scrub "   # E F G added v0.4.72; H (ledger health) v0.4.113; I (meta-review) v0.4.115 — whitelist var itself missed in v0.4.114 (message-only edit), fixed v0.4.115
 die() { echo "oc-review-persist: $2" >&2; exit "$1"; }
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { echo "usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]"; echo "Exit: 0 persisted + re-read verified / 2 usage"; exit 0; }  # C-#3: help=0
 
