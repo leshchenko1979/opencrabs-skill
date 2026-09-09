@@ -69,7 +69,14 @@ version="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL_DIR/SKILL.md" | head -1)"
 [ -f "$LEDGER" ] || die 3 "roster missing: $LEDGER"
 bin="$(oc_notify_resolve_bin)" || die "notify binary unresolvable (set OC_NOTIFY_BIN)"
 LIVE_SESSIONS="$(mktemp /tmp/fanout-sessions.XXXXXX)"
-"$bin" session list --profile "$PROFILE" > "$LIVE_SESSIONS" 2>/dev/null || die 3 "session list failed — cannot validate targets"
+# FULL-ID roster from the profile session DB (READ-ONLY, ~0s) — v0.4.129:
+# session list prints only 8-char prefixes and session get costs ~37s/call;
+# the DB is the canonical full-id source (CLI list ≡ archived_at IS NULL AND
+# title NOT LIKE 'subagent:%', set-equality verified 2026-09-09). OC_NOTIFY_DB
+# overrides the path for selftests.
+sqlite3 "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
+  "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
+  > "$LIVE_SESSIONS" 2>/dev/null || die 3 "session DB unreadable — cannot validate targets"
 
 if [ -n "$text_file" ]; then
   [ -f "$text_file" ] || die "--text-file missing: $text_file"
@@ -101,10 +108,12 @@ validate_target() { # $1=uuid -> 0 ok; else echo reason
     *) echo "malformed uuid"; return 1 ;;
   esac
   if zero_segment "$u"; then echo "placeholder/all-zero-segment uuid (n=2167 class)"; return 1; fi
-  # live check via ONE cached session-list pass (session get is ~5s/uuid —
-  # 33 targets would take minutes; the list is a single CLI call)
-  if ! grep -qE "^  ${u:0:8} " "$LIVE_SESSIONS" 2>/dev/null; then
-    echo "not a live session (8-char prefix absent from session list)"; return 1
+  # FULL-ID roster match (v0.4.129, same source as oc-waiter): the cached
+  # DB roster holds canonical full uuids; a frankenstein id (real prefix +
+  # foreign tail, n=2221 class) fails the exact match. All-zero segments
+  # die before this check (n=2167 placeholder class).
+  if ! grep -qxF "$u" "$LIVE_SESSIONS" 2>/dev/null; then
+    echo "not a live session (full-id absent from session DB roster)"; return 1
   fi
   return 0
 }
