@@ -9,7 +9,10 @@
 #          deletion-safety
 #   @file reads the report body from a file; - reads stdin; anything else is
 #         literal report text (quote it).
-#   DIR defaults to /tmp. Writes skill-review-<lens>-<YYYYMMDD>.md (same-day
+#   DIR defaults to the I-5.1 CORPUS: reviews/<YYYYMMDD>-cycle/reports/ in the
+#   skill repo (cycle-local index.log - the one that wins on divergence).
+#   OC_REVIEW_DIR=/tmp restores the volatile fallback. Writes
+#   skill-review-<lens>-<YYYYMMDD>.md (same-day
 #   re-run OVERWRITES, noted in the file header) and appends ONE index line:
 #       skill-review-index.log:  ts|lens|path|sha256|bytes
 #   The index line is the receipt Duty-6/7 quote — no receipt, no "persisted".
@@ -55,13 +58,25 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   okf "grep -q 'from file' '$T/skill-review-B-$day.md'" "at-file-content"
   bash "$ME" A "report two" --dir "$T" >/dev/null 2>&1; chk "same-day-overwrite" 0 $?
   okf "grep -q 'report two' '$T/skill-review-A-$day.md' && grep -q 'same-day overwrite' '$T/skill-review-A-$day.md'" "overwrite-noted"
+  # I-5.1 CORPUS default (v0.4.127): unset OC_REVIEW_DIR must land in
+  # reviews/<cycle>/reports/ under the skill repo, NOT /tmp root.
+  OC_REVIEW_DIR= bash "$ME" C "corpus-default probe" >/dev/null 2>&1; chk "corpus-default-rc" 0 $?
+  CORPUS_DIR="$(realpath "$_OC_DIR/..")/reviews/$(date -u +%Y%m%d)-cycle/reports"
+  [ -f "$CORPUS_DIR/skill-review-C-$day.md" ] && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - corpus-default-file" >&2; }
+  grep -qF "|C|$CORPUS_DIR/skill-review-C-$day.md|" "$CORPUS_DIR/skill-review-index.log" 2>/dev/null && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - corpus-default-index" >&2; }
+  rm -rf "$CORPUS_DIR"
   rm -rf "$T"
   echo "oc-review-persist selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]; exit $?
 fi
 
 # ---- main ----------------------------------------------------------------------
-lens="${1:-}"; src="${2:-}"; DIR="${OC_REVIEW_DIR:-/tmp}"; shift 2 2>/dev/null || true
+lens="${1:-}"; src="${2:-}"; # I-5.1 CORPUS default (v0.4.127): unset OC_REVIEW_DIR -> durable corpus
+# reviews/<YYYYMMDD-cycle>/reports/ under the skill repo (index is cycle-local,
+# which wins over the root index). Volatile /tmp only by explicit override.
+_SKILL_ROOT="$(cd "$_OC_DIR/.." && pwd)"
+DEFAULT_DIR="$_SKILL_ROOT/reviews/$(date -u +%Y%m%d)-cycle/reports"
+DIR="${OC_REVIEW_DIR:-$DEFAULT_DIR}"; shift 2 2>/dev/null || true
 while [ $# -gt 0 ]; do case "$1" in --dir) DIR="${2:-}"; shift 2 ;; *) shift ;; esac; done
 
 [ -n "$lens" ] || die 2 "usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]"
