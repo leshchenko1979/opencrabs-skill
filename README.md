@@ -14,14 +14,14 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `SKILL.md` | Main entry: roles, hard rules, tool register, ship path, glossary |
 | `editor.md` | EDITOR role procedure — Phases 0–7b (issue claim → worktree → edit → gate → commit → ship → upstream PR) |
 | `supervisor.md` | SUPERVISOR role — worker roster, duty cadence, CI-wait & waiter discipline, review lenses |
-| `review-lenses.md` | Full Duty-6 lens briefs (A–G) — split from supervisor.md v0.4.78 |
+| `review-lenses.md` | Full Duty-6 lens briefs (A–I) — split from supervisor.md v0.4.78 |
 | `editor-phase7-rules.md` | Phase-7 reference rules disclosed from editor.md (v0.4.78) |
 | `war-stories.md` | Incident histories behind the hard rules (disclosed from SKILL.md, v0.4.80) |
 | `fleet-directives.md` | Binding owner directives (sync policy, PR law, builds, gates, triage) — re-homed from ops AGENTS.md/MEMORY.md, 2026-09-02 |
 | `upstream-merge-runbook.md` | Procedure for the merge-on-arrival policy: gates, roles, conflict classes, migration-union rule |
 | `s2-swap-journal-spec.md` | Journal vocabulary spec for the oc-deploy swap leg |
 | `CHANGELOG.md` | Version history, **newest entry LAST** |
-| `tools/` | The `oc-*` tool fleet (30 executables) + `lib/` + `tests/` |
+| `tools/` | The `oc-*` tool fleet (29 executables) + `lib/` + `tests/` |
 | `tools/lib/` | Shared shell libs: `oc-log.sh` (journal + rc register + flood guard), `oc-embed.sh` (job-embed decoder) |
 | `tools/RC-CONTRACT.md` | SOLE per-tool rc register: fleet conventions + verdict codes (v0.4.78) |
 | `tools/tests/run.sh` | Battery: full selftest suite + coverage sections. Receipt → `tools/tests/battery-last.json` |
@@ -47,12 +47,12 @@ Highlights:
 - `oc-prchecks` — CI-wait on `pr-checks.yml` (poll, resume-before-dispatch, `resume --notify` arming, lane gates)
 - `oc-waiter` — lane wake service: arm/_run/sweep/list, systemd transient scopes (cgroup-escape, 2026-09-08)
 - `oc-notify.sh` (tools/lib) — shared wake/notify contract for waiter + prchecks
-- `oc-attrib` — Session-Id attribution; `--contributors` is the single contributors shape (oc-deploy contributors retired v0.4.91)
+- `oc-attrib` — Session-Id attribution; `--contributors` is the single contributors shape (oc-deploy contributors retired v0.4.90)
 - `oc-commit` / `oc-issue-log` — signed commits + tracked-issue receipts
 - `oc-seal-state` — order rows (QUEUED…VOID lifecycle)
 - `tests/run.sh` — run everything: `bash tools/tests/run.sh`
 
-  30 executables in `tools/` (31 − `oc-toolaccum`, deleted v0.4.110; owner-ordered additions 2026-09-01) — full inventory in `tools/RC-CONTRACT.md`.
+  29 executables in `tools/` (31 − `oc-toolaccum` v0.4.110 − `oc-ci-parity` v0.4.117; owner-ordered additions 2026-09-01) — full inventory in `tools/RC-CONTRACT.md`.
 
 ## Ship discipline (per version bump)
 

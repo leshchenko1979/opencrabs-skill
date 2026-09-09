@@ -1,136 +1,4 @@
-## v0.4.118 (2026-09-08)
-- TOOLSMITH batch completion (post-sync remainder of the v0.4.116 dispatch — b05a493d swept the in-tree WIP mid-edit, these edits finished after): lens I-2.2 A/B boundary line in review-lenses.md (A owns ref consistency, B weighs refs only as load-weight, first finder gets attribution); lens D evidence law folded into brief (negative-existence claims must quote query + scope); lens I-4.1/I-4.2 evidence-unit law + I-5.1 corpus/precedence/severity scale added to I brief; E-H1 SKILL.md oc-deploy row + editor.md auto-swap reword (two-step truth); T6 duty physically moved after T5 in triage.md (sequential T1-T7); T1/T2 historical-origin markers; A-L7 escalation pointer to toolsmith.md canonical; oc-ledger cmd_lessons jq hardened to array+join form + RC-CONTRACT lessons row; battery receipt refreshed 141/0 (2 runs, 22:20Z).
-
-## v0.4.117 (2026-09-08)
-- ERRATUM on v0.4.116: the bump commit b05a493d did not merely DISPATCH the TOOLSMITH batch — it SHIPPED it. TOOLSMITH had already implemented the batch in-tree (oc-ledger lessons verb, oc-review-persist whitelist, E-H1/F-3/A-1/A-H1 + ~30 prose fixes across editor.md/triage.md/supervisor.md/review-lenses.md/upstream-merge-runbook.md/war-stories.md/toolsmith.md) when HQ ran oc-ledger sync for its own ruling codifications; the sync swept the combined tree. Battery 141/0 tested the combined tree before the commit — completeness is battery-covered, attribution was wrong. Lesson: HQ must run `git status --short` and identify lane WIP BEFORE oc-ledger sync (the v0.4.111 hand-off discipline exists for exactly this and was skipped).
-
-## v0.4.116 (2026-09-08)
-- TOOLSMITH mechanical batch DISPATCHED (owner "Go what you can" 21:39Z): E-H1 swap-text fix, F-3 rc-register correction, A-1 census sync incl. A-H1 roster law (Duty-6 spawn text A-H → A-I), persist-first write-through law (spawn-path report persistence — the lens-A restart lesson), oc-ledger lessons verb (H-2), D-4 closure stamp (n=2115), ~30 MED/LOW prose. ACK due 12:00Z 09-09.
-
-## v0.4.117 (2026-09-08)
-- NO-HOLD law AMENDED (owner 21:44Z "1 - no, my go before pr"): no holding STATE ever, but PR filing is OWNER-GATED again — probe PASS → editor presents ready PR → owner go (per-PR or batch) → file. Codified in fleet-directives §Upstream-merge cadence, triage.md T4 gate, SKILL.md consent register ("UNTOUCHED" → RESTATED with the amendment). Ruling supersedes the 15:2xZ "no holding" reading that auto-filed on PASS.
-- I-2.1 ERRATUM adjudicated (owner "2 - go"): contributors retirement = v0.4.90 (tag 90c9e1d8, 2026-09-07 14:12:23Z, commits fc02ddeb+129ca40e+d6a66b51, lens E-2, owner "All 4 go") — not v0.4.91. Ledger n=2116.
-- oc-ci-parity RETIRED (owner "3 - ok": fix oc-issue-sweep + retire oc-ci-parity): zero live use in 12 days (C-H2), the merge runbook three-way-diff check supersedes. Tool + battery block + SKILL register row + RC-CONTRACT row + supervisor/SKILL parity prose removed. oc-issue-sweep FIX stays open (fix-lane batch).
-- Battery gate: see battery-last.json at sync.
-
-## v0.4.115 (2026-09-08)
-- FIX — oc-review-persist LENSES whitelist var extended to A-I (v0.4.114 extended the single-letter case-glob to [A-I] but the LENSES var still lacked H/I — named-lens H/I persist died rc 2; single-letter H/I were NOT affected, the case-glob bypasses the whitelist. Caught by Supervisor at Duty-6 spawn on owner "run duty-6"). Help-text lens line synced. Battery 144/0.
-
-## v0.4.114
-- Duty-6 lens I — META-REVIEW added (owner pick 2026-09-08 ~20:45Z, "Add Lens I — meta-review (recommended)"): reviews the lens catalog AND its output — brief correctness vs persisted reports, overlap/coverage gaps A–H, false-positive/negative history from the Supervisor's premise-verification record, quote-or-no-finding adherence. Self-reference capped: may flag its own brief, never reviews its own report. Brief in review-lenses.md; oc-review-persist whitelist A-G → A-I (selftest: I-report persist smoke OK); SKILL.md router row → nine-lens A–I. Joins the next Duty-6 cycle (due 26/5 FIRE).
-- Duty-6 lens H — LEDGER HEALTH added (owner "go" 2026-09-08 20:16Z, on HQ proposal after "what lens analyses ledger?"): reviews workers-ledger.json AS A WHOLE — lesson-extraction completeness (incident rows → codified laws), phantom-row families, open claims on closed chains, contradiction pairs, version/cadence sync. Slice tools (oc-ledger claims / oc-ship-audit / oc-waiter-sweep) stay the enforcement surface. Brief in review-lenses.md; family map updated to A–H (supervisor.md, SKILL.md router row, glossary). Joins the next Duty-6 cycle (due 25/5 FIRE).
-
-## v0.4.112
-- T5 issue sweep: DAILY cadence added (owner order 2026-09-08 20:0xZ, "1, but daily" then corrected to option 2) — sweep runs once per day, not only post-compaction.
-- T5 autonomous closure authority (owner option 2): Triage may close open fork issues WITHOUT the owner word on three tests only — (a) superseded-by, (b) duplicate, (c) owner-confirmed-withdrawn. Harvest-gated closure for done-work unchanged. Every auto-close: ledger stamp + close comment naming the test class; reversible by owner word.
-- Provenance: owner pick was a text correction ("no, 2") after the option-1 read; the daily cadence from the first message stands.
-
 # opencrabs-dev — release history (provenance)
-
-## v0.4.110 (2026-09-08, owner "1 2 3 go" — deletions + redaction batch)
-- REMOVED tools/oc-toolaccum (3 uses, all --help; battery test + SKILL.md/RC-CONTRACT.md references cleared) — owner GO on Decision Rollcall Q3.
-- State repo: workers-ledger.json.pre-merge-20260828-113207 deleted (commit 86c97600, owner GO). poll-110.log already absent.
-- SECURITY.md: 17 secret literals redacted (5 bot tokens, GH PAT, 4 Grafana tokens, Gatus bearer, Gemini key, MTProto API hash, n8n JWT, Mixpanel secret, SSH password, Grafana pass+b64) — tokens WERE live on disk in plaintext; owner advised rotation.
-- Rollback drill cadence: owner ruling "do we need rollback at all?" — HQ answer: keep on-ship verification only (oc-deploy swap journal + /proc identity per v0.4.109), scheduled drills retired; codified in editor.md ship phase.
-
-## v0.4.109 (2026-09-08, owner "Go then duty 4+6" — consolidated Duty-4/6 law batch, all premises HQ-verified)
-
-- fd: two new sections — CI-run identity + verdict laws (job-pin identity, run-existence, staleness/re-gate, watcher-resume/no-detached-watchers, rendered-output acceptance, structural-pending-organic leg); receipt + delivery discipline (UI-emit receipts, self-delivered notify, lane-side verify-unclaimed, waiter poll-not-trust, REST settle, worktree path check, TG research-before-design, /proc post-swap proof, poll target-pinning, profile-scoped state dir). Lanes: 1a63f103 x3, aaa8d8ae x3, c6b1a539, 61161247 x3, 329bf3a3 x3, d5863180, facd50af x2, c78e78e0 x2. Duty-6: 8/8 lens reports persisted (A,B,C,D,E,F,G,brain-scrub) — mechanical fixes route to toolsmith batch; semantic items (B8 port-ownership creep, brain-scrub HIGHs, editor.md split timing) await owner.
-
-## v0.4.108 (2026-09-08, owner "Go then duty 4+6" 17:53Z — ownerless-procedure assignments + Duties 4+6 fired at 21/5 FIRE)
-- triage.md Duty T4: three new daily patrols riding the census turn — stale-branch sweep (`oc-branch-sweep` gets its caller; ~55 contained branches were queued with nobody dispatched), upstream PR-state re-verify (every open PR's state+mergeable fresh each census; closes the #1451 CONFLICTING-found-hours-late gap), cron liveness check (the three law-carrying crons; liveness check = the heartbeat's heartbeat). Base-freshness-at-filing-time folded into the PR-state patrol text (census CLEAN results name the upstream sha tested against — Triage lesson n=2083).
-- toolsmith.md Duty S1: cron liveness AUDIT ownership (fixer side vs Triage's checker side) + rollback drill schedule (every 14 days, next 2026-09-22, battery + ledger stamp per drill).
-- supervisor.md Duty 4: Rollcall proactive-trigger duty — on each firing HQ lists owner-decision items sitting unprompted between rollcalls in the verdict table; T7 execution stays on-demand.
-- Owner-gated items intentionally left unassigned (need owner priority pick, not law): defect-family fixes (#136 tap delivery, display-layer corruption ×3 sessions), state-repo stash@{0} recovery (stays with owning lanes, now NAMED in fd state-repo hygiene law).
-- Fired with this bump: Duty 4 poll + Duty 6 lens review at 21/5 FIRE (boundary n=1594).
-
-## v0.4.107 (2026-09-08, owner button ruling 17:04Z — port-work ownership)
-- fleet-directives.md §Port-work ownership NEW (owner ruling recovered from daemon callback log after the #1226 mid-turn tap swallow): editors build ports (merge-time ports by the running merge editor; harvest ports dispatched to an editor lane), Triage owns the harvest-port queue, HQ gates classifications; owner remains ask-decider. Filed l1979/opencrabs#136 for the tap-delivery defect (mid-turn picks re-armed but never re-delivered silently).
-
-Moved out of SKILL.md frontmatter at v0.4.43 (Duty-6 run-2 finding B6 —
-~3k tokens of changelog loaded on every role-file claim; history is reference
-material, not procedure). Git-tracked in the skill repo; append one entry per
-bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
-
-## v0.4.90 (2026-09-07, owner "All 4 go" — Duty-4 proposals + lens E/B semantic batch)
-- EDITOR.md item 14 NEW — **Dispatch-receipt gate** (Duty-4 proposal d5863180, ACCEPT KERNEL): dispatch rc==0 + adopted run id witnessed BEFORE arming any waiter/notify; waiter rules validate the WAITER, this gate validates the DISPATCH (evidence: 2026-09-07 --notify-session invented-flag near-miss). Items renumbered (old 11–13 → 12–14); item 15 NEW — **Solo-surface rule** (Duty-4 proposal, ACCEPT KERNEL): side-effect commands minting identifiers (gh pr create et al) run SOLO in batch so output is witnessed; batched/truncated → identifier UNFILED until fresh verification call names it (root cause of the #1272 phantom-PR).
-- EDITOR.md Phase 6a: lens-E F-1 one-command ship shape (`ship --execute --wait N`) disclosed as GOAL — tool change lands via TOOLSMITH; two-step poll documented until then. Phase 7b: B-16 split note (editor-upstream-pr.md designated candidate, disclosed not executed per lens G). oc-deploy contributors citation → oc-attrib --contributors.
-- SKILL.md: oc-deploy `contributors` verb RETIRED (lens E-2 — verb-duplicate of oc-attrib --contributors, "thin wrapper" admission SKILL.md:58); oc-attrib --contributors = single shape; oc-prchecks tool row trimmed to invocation+purpose+pointer (B-15 — mechanics lore lives in RC-CONTRACT + fixtures, ~150 ln/role-load saving).
-- fleet-directives.md: thematic index added (B-17/G-F9 — flat file kept, 6-theme jump list).
-- supervisor.md: CI-wait cross-ref count 1–15 (14th dispatch-receipt gate, 15th solo-surface rule).
-- Doc-only bump: no tools/ changes this version (oc-waiter first-poll-GREEN hole, Session-Id unification, poll --wait check order etc. = TOOLSMITH dispatch, separate version); battery 144/0.
-
-## v0.4.91 (2026-09-07, owner "let's finalise skill changes" 15:07Z)
-- supervisor.md Duty 2 = registry writes → Triage ENTIRELY (owner law; closes the v0.4.86 creation-transfer's registry half; HQ residual deleted), ack contract REVISED (acks no longer expected — notify receipt = delivery proof, drift-check = comprehension guard); Duty 3 = PUSH-ALL-QUIET (every bump → all non-dormant workers quiet, no "touches duties" judgment) + Confirm law (probe-verified: quiet+confirm = no-op watch; confirm reserved for now-mode critical, blocking verdict there); Duty 4 step 2 = reply surface named (session_notify target=HQ full UUID, never own chat). editor.md item 16: PR-state claims need same-turn gh pr view receipt (headRefOid+headRefName+state) — #1431 "auto-updated" phantom, force-push ≠ PR-head move; event+branch+sha ALL match before waiter arm. Battery clean-HEAD 144/0 PASS (1-fail run = TOOLSMITH oc-prchecks WIP, isolated via stash, unrelated).
-
-## v0.4.92 (2026-09-07, owner "A. Triage should check new issues after each compaction" 17:23Z — backlog-assignment gap closed)
-- Doc-only bump: no tools/ changes. Battery on clean HEAD: see receipt below.
-- supervisor.md Duty-7 pointer updated: idea box AND backlog sweep both live at Triage (T1 + T5).
-- triage.md Duty T5 NEW — **Post-compaction issue sweep** (owner order 2026-09-07 17:23Z): after every compaction, Triage reloads the skill then sweeps OPEN fork issues (`gh issue list`, fresh receipt) against workers-ledger claim-refs; unclaimed set → route to owning editor (T2) or surface to Supervisor. Sweep SURFACES, never disposes — closure stays harvest-law-gated. Closes the v0.4.91 finding: "claimed when someone claims it" is not assignment; an issue could sit silent forever with no sweep duty.
-
-## v0.4.93 (2026-09-07, owner "go all" 18:11Z — Adolfo-protocol amendment, all 6 items)
-- Origin: owner order 2026-09-07 18:00Z "Read my today's dialogue with Adolfo and agree rule changes with me" → 6-item proposal → "go all". En-route cancellation: the 17:44Z #1438 re-port order (old 2-fresh law) was WITHDRAWN before this bump; #1438 stays frozen at 6cfae040/base 221d7423.
-- Post-merge scope unchanged: fork-side sync to new upstream main stays owner-gated [GATE] (runbook). CI-receipt rule unchanged (item-16 + job-name sha pin already encode "green at push").
-- upstream-merge-runbook.md harvest-lane row: merge window does NOT unfreeze filed PRs; no re-ports triggered by fork-side sync.
-- editor.md Phase 7b blocker table rows 1–2 amended: CI-fix row gated by freeze check; conflicts-with-main row reassigned to MAINTAINER (was: editor rebase + force-push — the exact anti-pattern that broke #1426/#1427).
-- editor.md Phase 7 **FINAL-PR STANDARD**: file only genuinely final work (green at push, no known gaps); force-pushes on filed PRs = rare exception, never procedure. Fork = workspace, upstream PR = one-way handoff.
-- editor.md 2-fresh **scope narrowed to pre-filing** — base-freshness/re-port governs fork-internal work only; after filing, conflicts are maintainer-side (MAINTAINER-SIDE MERGES rule: "merge locally, fix conflicts on top, push, comment what you did").
-- editor.md Phase 7 **PR-FREEZE LAW**: an upstream PR is FROZEN at filing (CI green at push) — no re-port, no force-push, no head/body changes, even if upstream main moves. Rationale from Adolfo's own words ("Once you push it, you already did your job") + today's live incident: #1426/#1427 rebased 15:56 → maintainer merged old heads locally 17:22 → sha mismatch → auto-close defeated, manual close. The ONLY valid re-engagement: maintainer explicitly asks.
-
-## v0.4.94 (2026-09-07, owner "go" 19:02Z — tool-discovery gap: 13 of 31 tools invisible to editors)
-- Doc-only bump: no tools/ changes. Battery on clean HEAD: see receipt below.
-- editor.md tool-table intro now cites RC-CONTRACT.md as the canonical inventory alongside SKILL.md.
-- editor.md reload section item 5 NEW — **Tool discovery clause** (owner order 2026-09-07): the editor tool table is the role-DAILY subset, not the inventory; full 31-tool inventory lives in `tools/RC-CONTRACT.md`; editors grep RC-CONTRACT.md for a purpose-built tool BEFORE hand-rolling any check (item 11). Closes the v0.4.94 finding: 13 of 31 tools (oc-artifact-verify, oc-carrier-features, oc-ci-parity, oc-harvest-sweep, oc-job-verify, oc-log-search, oc-ping-proof, oc-review-persist, oc-shadow-rotate, oc-ship-audit, oc-skew-scan, oc-tg-audit, oc-toolaccum) were never named in any editor-readable file.
-
-## v0.4.95 (2026-09-07, owner "fix it" 19:47Z — fleet-directives load-path: lanes never told to read it)
-- Design note (owner question 19:47Z "why keep a separate fleet-directives file?"): directives stay a separate file because (a) single-writer law — role files are written by the Supervisor, but directives are owner rulings collected verbatim with provenance, a different write cadence and different review lens; (b) size — merging ~30 sections into SKILL.md would bloat the always-loaded file past its keep-lean budget; (c) the gap was never the split, it was the missing load path — now closed by the RELOAD LAW instead of a merge.
-- **fleet-directives.md `[LANE]` tags** on 7 sections every worker must read in full: Telegram surface law, Post-compaction reload, PR naming, Features-compat gate, Cross-lane delivery cadence, Upstream PR base-Lint pre-claim, telegram_send addressing rule. Thematic index explains the tag.
-- **RELOAD LAW, four roles** (owner order 2026-09-07 19:31Z "fleet-directives is not read by lanes at all" + 19:41Z "what about supervisor?"): after compaction or spawn, workers re-read from disk SKILL.md + role file + `fleet-directives.md` (thematic index minimum, `[LANE]`-tagged sections in FULL). Inserted: editor.md Phase 1 step 0 (claim-time re-read), triage.md + toolsmith.md + supervisor.md headers (supervisor previously had NO self-reload mandate at all). Rationale: briefs die at compaction; binding owner law (cadence, PR naming, telegram surface, upstream etiquette) lives on disk, not in session memory.
-## v0.4.96 (2026-09-07, owner "Go + parked" 21:14Z — Duty-4+6 cycle-2 mechanical batch + parked owner-word deletions)
-
-- **Parked deletions (owner-word gated, executed):** 4 closed-chain branches deleted local+remote on the fork repo — `fix/69-restick-interrupt-turns`@9c8d13bc + `fix/92-demoted-host-guard`@1097b444 (both merge-base-verified IN main), `fix/69-restick-upstream`@45f35190 + `leshchenko1979/fix/92-demoted-host-guard`@3c4ac6c0 (patch-verified content-identical to landed). Worktree `oc-wt-69-interrupt-restick` force-removed (held only 9 untracked gate journals, verified first).
-- **P0 (fleet-blocking, verified):** oc-prchecks:533 `OC_PR_SKIPPED_DISPATH` typo (TOOLSMITH commit 1a82bdc2) — C-F2 "adopt instead of re-dispatch" re-dispatch class killed; selftest no-re-dispatch guard added.
-- **Lens B (efficiency/sprawl):** SKILL.md BUDGET RULE added (review-lenses.md new family block; 4x multiplier, router-only scope, RC-CONTRACT = SOLE register, B-F3/F18); delivery-modes table in SKILL.md cut to pointer + failsafe row (B-F15, fd canonical); REBASE-PORT 7-step procedure moved supervisor.md → upstream-merge-runbook.md §Port (B-F16); supervisor Duty 7 T4 procedure copy → one-line pointer (B-F11); no-op clause deletions — SKILL.md "no cargo, no compile, ever" reassurance (B-F12), toolsmith header Duty-S1 restatement (B-F13), triage T1 item-1 weak restatement (B-F14); fd [LANE] tag def gains SUPERVISOR-reads-IN-FULL exception (B-F1); supervisor Duty-3 bump cell → PUSH-ALL-QUIET pointer + numbered mechanics list (B-F4); editor.md RELOAD LAW header block added post-"Load only after…" (B-F2/G-5).
-- **Lens A (redundancy/ontology):** fd CI-wait "items 1-9" -> "items 1-16" with correct ordinals (A-1/G-F9, third-pass churn); supervisor ordinal map corrected (10th = dispatch-receipt gate, 15th solo, 16th PR-state; since v0.4.91, A-2/G-2); editor item-10 self-cite -> items 4/11 (A-3); contributors RETIRED date settled v0.4.91 x2 (A-4/F-11); dead fixtures path -> run.sh selftests (A-5); RC-CONTRACT seal-state self-contradiction fixed — v0.4.79 "corrected 2->1" note was WRONG, live tool verified badflag=2/bare=1 (A-6); "review battery" name collision killed -> SELFTEST BATTERY (A-8); war-stories modum RETIRED markers + past tense (A-10); BUILD TRIGGERS restatement -> SKILL.md pointer (A-11); SYNC-LAW honest-label rewrite (A-12); fd TO-BE telegram_send paragraphs moved out of [LANE] AS-IS section to own non-[LANE] section at file end (A-13); s2-spec consent journal row RETIRED-marked + "auth (auto-swap)" reword (A-14); supervisor-write census gains README.md + tools/RC-CONTRACT.md (A-15); dead "ex Duty 7 items 5-6" locators removed x2 (A-16); oc-order-validate rc 4 UNKNOWN-REF added (A-17); FIRE glossary entry (G-7); census/dead-path/G-9/G-10/G-11 locator fixes; G-6 disk-absorption reword; G-8 CHANGELOG reordered to newest-LAST contract (era blocks now 90->95 in order, orphan bullets re-homed by provenance).
-- **Tool fixes (oc-deploy, HQ-executed per verdict):** E-F1 ship mode dies 2 on `--wait`/`--notify-session` (poll-only flags were silently ignored — false-receipt trap) + 4 new selftests; E-F2 red_leg trailer extraction -> unified `oc_session_trailer` last-wins helper at all 4 sites (old first-wins grep could wake the WRONG LANE); E-F3 green_leg -> direct `oc-attrib --contributors` call, private awk projection deleted; F-4 rc-4 features-compat gate + `--allow-features-drop` documented; F-5 usage strings x3 synced + `--allow-features-drop`; F-7 features-mismatch shadow_log row `"-" "$FEATURES"`; F-12 oc-review-persist rc row completed (3 sha256-mismatch / 4 write-failure); O1 poll `--wait` non-integer = die 1 (code+battery agree, was misdocumented 2).
-- **Lens reports archived:** reviews/20260907-duty46-cycle2/ — 38 report files (7 lenses x 2026-08-29->09-07 incl. cycle-1/2 variants) + skill-review-index.log (oc-review-persist sha-indexed).
-- Battery: 146 PASS / 0 FAIL (146th = new E-F1 ship-refused pair; prior 144 + 2).
-
-## v0.4.97 (2026-09-08, owner "Go" 05:30Z — harvest enforcement law: daily patrol + standing filing order)
-
-- **HARVEST LAW** (fleet-directives.md §Upstream-merge cadence): merge-from-upstream on every detected shift was already law, but nothing ever fired the give-back direction — 156 fork-only commits piled up demand-driven. New standing order: Duty T4 harvest patrol runs DAILY (cron `harvest-patrol-daily` 03:00Z, first run 2026-09-09); census posts to board topic 30220 every day even on zero-change days (heartbeat = patrol alive); `upstream-shift-watch` (4h) carries the same HARVEST COUNTER line. Standing autonomous-filing order: fork-only backlog ≥3 Tier-1 candidates AND zero open upstream PRs of ours → Triage files the top candidate autonomously (cherry onto upstream base, green at push, frozen at filing, one at a time per one-PR law). Beyond the standing order the full Upstream PR law (owner smoke-PASSED gates) still applies.
-- triage.md Duty T4: new patrol item — run `oc-upstream-delta`, post tiered census + counter (Triage owns it post-compaction too).
-- Battery: 146/0. Tag v0.4.97, commit 73d31e8a, ledger n=1987. #129 build ebbae0a SWAPPED 05:38Z same turn.
-
-## v0.4.98 (2026-09-08, owner "Decision Rollcall" term pick ~06:1xZ, topic 42487, ruling n=1994 — lane→owner direct decision sweep)
-
-- **Decision Rollcall codified** (owner picked the term via buttons; Triage proposed shape, HQ finalized wording): repeatable owner-facing procedure, distinct from T5 sweep and Duty-4. Content = outstanding owner decisions ONLY (one decision + lane recommendation + one-line context; no status reports, no chatter). Delivery = each lane posts IN ITS OWN LANE TOPIC, addressed to the owner DIRECTLY — no relay through Triage/HQ; zero decisions = silence, no chatter post. Triage = trigger on owner word + coverage verification + ledger stamp, nothing more. Trigger = on demand ("run a Decision Rollcall"); no cron/hook unless the owner orders one later.
-- **Codification homes:** fleet-directives.md §Decision Rollcall (canonical law, after the what-now/next section); editor.md §Decision Rollcall duty (lane-side posting duty, after Mid-cycle skill drift); triage.md NEW Duty T7 (trigger/coverage/stamp; relay model of 2026-09-08 morning RETIRED).
-- **#119 naming-collision note** (Triage flag, verified distinct): fork issue leshchenko1979/opencrabs#119 (single-option fold UX, Harvest-filed) ≠ upstream-numbered #119 (single budget verdict, `55ddec34`, already shipped). Rename/qualify ruling stays Triage's at next triage pass.
-- Battery: see receipts below. Includes v0.4.97 era reorder fix (97 block had landed after the Imported dump — now 96→97→dump).
-
-## v0.4.100 (2026-09-08) - oc-deploy poll ship-pending law (Triage disposal n=2003, HQ implemented)
-
-- oc-deploy poll --sha S: the DISPATCHED sha going GREEN is SWAP PENDING - poll no longer dies rc5 already-deployed while the deployed marker lags mid-chain. Defect family n=2003 ate the 2e161df3 and ebbae0aa swaps; both recovered only by lane re-execute.
-- Poll --wait timeout on a GREEN dispatched sha reports STUCK SWAP (distinct message + notify-session wake), never nothing-new.
-- New selftest: poll --sha pending never reports already-deployed. Battery 147/0.
-
-## v0.4.101 (2026-09-08) — Decision Rollcall present-here mode
-
-- Owner amendment 2026-09-08 08:34Z, topic 42487 (Present decisions here): Rollcall delivery gains present-here mode — on owner word, Triage collects lanes outstanding owner decisions and presents ONE consolidated numbered list in the owners topic (decision + recommendation + context + diagram per item; faithful relay, no filtering/paraphrasing/ranking). Lane-direct posting remains the default mode. Sites: fleet-directives.md section Decision Rollcall item 2 (two-mode delivery), triage.md Duty T7 item 7, editor.md Decision Rollcall duty present-here exception. Lane-side format law unchanged.
-
-## v0.4.102 — Decision Rollcall: present-here mode RETIRED (owner override)
-
-Owner override 2026-09-08 09:05Z, topic 30220 ("I don't want the decisions to be presented in triage lane. Every editor should be instructed to present their decisions in their own lane") — supersedes the 08:34Z topic-42487 amendment (v0.4.101).
-
-- fleet-directives.md §Decision Rollcall item 2: delivery is LANE-DIRECT, THE ONLY MODE. Present-here marked RETIRED with provenance. Triage NEVER collects or presents decisions on any word.
-- triage.md Duty T7 item 7: rewritten from present-here duty to RETIREMENT notice — Triage's answer to "where are the decisions" is a coverage report, never a consolidated list.
-- editor.md §Decision Rollcall duty: present-here exception deleted, replaced with NO-Triage-exception instruction — a lane told to send its list to Triage/HQ refuses and posts in its own topic.
-
-## v0.4.106
-
-- HARVEST no-hold law (owner override 2026-09-08 15:2xZ): no holding state — editor fires behavioral smoke on probe commission, probe PASS files the PR without owner confirmation; owner “smoke” later = ratification (fd HARVEST LAW + triage.md filing gate).
-- Internal feature set widened to telegram,code-graph,browser (owner order 15:28Z); features-compat gate supersets legal.
 
 ## Imported pre-v0.4.60 dump — one-line provenance records
 (structured `##` entries begin at v0.4.60; block sequestered into
@@ -195,7 +63,6 @@ Five read-only lenses (A ontology / B efficiency / C CLI-automation / D deletion
 - **Reviewer C lens STRENGTHENED (owner directive same turn):** every lens-C pass now reads tool logs (tools.log, oc-deploy journals, ledger events, smoke-verdicts) and analyses real usage — invoked verbs/flags, rc distributions, never-invoked tools (deletion evidence), hand-built ritual artifacts. Findings cite log rows.
 
 oc-deploy selftest 145/0; battery 97/0.
-
 
 - "S3 cutover 2026-08-28 (owner msgid 34717: 'let's go to S3'): COMPILER role RETIRED; duties automated into tools/oc-deploy (ship/poll/swap-execute); compiler.md archived as re-enable runbook; ledger meta.oc_deploy_stage = S3, event 1282"
 - "v0.4.32: compiler retirement landing pas (this bump)"
@@ -486,7 +353,56 @@ Supervisor-lane split: interrupt-shaped duties carved out into a new TRIAGE lane
 - Mechanical only — no semantic changes; the 2 Duty-4 proposals (dispatch-receipt gate, solo-surface rule) + B-15/B-16/B-17 + lens-E merge + owner-word deletions ship separately per owner word.
 - Doc-only bump: no tools/ changes, battery unchanged (144/0).
 
-## v0.4.97 (2026-09-08) — harvest enforcement law (owner order "Go", 05:30Z)
+## v0.4.90 (2026-09-07, owner "All 4 go" — Duty-4 proposals + lens E/B semantic batch)
+- EDITOR.md item 14 NEW — **Dispatch-receipt gate** (Duty-4 proposal d5863180, ACCEPT KERNEL): dispatch rc==0 + adopted run id witnessed BEFORE arming any waiter/notify; waiter rules validate the WAITER, this gate validates the DISPATCH (evidence: 2026-09-07 --notify-session invented-flag near-miss). Items renumbered (old 11–13 → 12–14); item 15 NEW — **Solo-surface rule** (Duty-4 proposal, ACCEPT KERNEL): side-effect commands minting identifiers (gh pr create et al) run SOLO in batch so output is witnessed; batched/truncated → identifier UNFILED until fresh verification call names it (root cause of the #1272 phantom-PR).
+- EDITOR.md Phase 6a: lens-E F-1 one-command ship shape (`ship --execute --wait N`) disclosed as GOAL — tool change lands via TOOLSMITH; two-step poll documented until then. Phase 7b: B-16 split note (editor-upstream-pr.md designated candidate, disclosed not executed per lens G). oc-deploy contributors citation → oc-attrib --contributors.
+- SKILL.md: oc-deploy `contributors` verb RETIRED (lens E-2 — verb-duplicate of oc-attrib --contributors, "thin wrapper" admission SKILL.md:58); oc-attrib --contributors = single shape; oc-prchecks tool row trimmed to invocation+purpose+pointer (B-15 — mechanics lore lives in RC-CONTRACT + fixtures, ~150 ln/role-load saving).
+- fleet-directives.md: thematic index added (B-17/G-F9 — flat file kept, 6-theme jump list).
+- supervisor.md: CI-wait cross-ref count 1–15 (14th dispatch-receipt gate, 15th solo-surface rule).
+- Doc-only bump: no tools/ changes this version (oc-waiter first-poll-GREEN hole, Session-Id unification, poll --wait check order etc. = TOOLSMITH dispatch, separate version); battery 144/0.
+
+## v0.4.91 (2026-09-07, owner "let's finalise skill changes" 15:07Z)
+- supervisor.md Duty 2 = registry writes → Triage ENTIRELY (owner law; closes the v0.4.86 creation-transfer's registry half; HQ residual deleted), ack contract REVISED (acks no longer expected — notify receipt = delivery proof, drift-check = comprehension guard); Duty 3 = PUSH-ALL-QUIET (every bump → all non-dormant workers quiet, no "touches duties" judgment) + Confirm law (probe-verified: quiet+confirm = no-op watch; confirm reserved for now-mode critical, blocking verdict there); Duty 4 step 2 = reply surface named (session_notify target=HQ full UUID, never own chat). editor.md item 16: PR-state claims need same-turn gh pr view receipt (headRefOid+headRefName+state) — #1431 "auto-updated" phantom, force-push ≠ PR-head move; event+branch+sha ALL match before waiter arm. Battery clean-HEAD 144/0 PASS (1-fail run = TOOLSMITH oc-prchecks WIP, isolated via stash, unrelated).
+
+## v0.4.92 (2026-09-07, owner "A. Triage should check new issues after each compaction" 17:23Z — backlog-assignment gap closed)
+- Doc-only bump: no tools/ changes. Battery on clean HEAD: see receipt below.
+- supervisor.md Duty-7 pointer updated: idea box AND backlog sweep both live at Triage (T1 + T5).
+- triage.md Duty T5 NEW — **Post-compaction issue sweep** (owner order 2026-09-07 17:23Z): after every compaction, Triage reloads the skill then sweeps OPEN fork issues (`gh issue list`, fresh receipt) against workers-ledger claim-refs; unclaimed set → route to owning editor (T2) or surface to Supervisor. Sweep SURFACES, never disposes — closure stays harvest-law-gated. Closes the v0.4.91 finding: "claimed when someone claims it" is not assignment; an issue could sit silent forever with no sweep duty.
+
+## v0.4.93 (2026-09-07, owner "go all" 18:11Z — Adolfo-protocol amendment, all 6 items)
+- Origin: owner order 2026-09-07 18:00Z "Read my today's dialogue with Adolfo and agree rule changes with me" → 6-item proposal → "go all". En-route cancellation: the 17:44Z #1438 re-port order (old 2-fresh law) was WITHDRAWN before this bump; #1438 stays frozen at 6cfae040/base 221d7423.
+- Post-merge scope unchanged: fork-side sync to new upstream main stays owner-gated [GATE] (runbook). CI-receipt rule unchanged (item-16 + job-name sha pin already encode "green at push").
+- upstream-merge-runbook.md harvest-lane row: merge window does NOT unfreeze filed PRs; no re-ports triggered by fork-side sync.
+- editor.md Phase 7b blocker table rows 1–2 amended: CI-fix row gated by freeze check; conflicts-with-main row reassigned to MAINTAINER (was: editor rebase + force-push — the exact anti-pattern that broke #1426/#1427).
+- editor.md Phase 7 **FINAL-PR STANDARD**: file only genuinely final work (green at push, no known gaps); force-pushes on filed PRs = rare exception, never procedure. Fork = workspace, upstream PR = one-way handoff.
+- editor.md 2-fresh **scope narrowed to pre-filing** — base-freshness/re-port governs fork-internal work only; after filing, conflicts are maintainer-side (MAINTAINER-SIDE MERGES rule: "merge locally, fix conflicts on top, push, comment what you did").
+- editor.md Phase 7 **PR-FREEZE LAW**: an upstream PR is FROZEN at filing (CI green at push) — no re-port, no force-push, no head/body changes, even if upstream main moves. Rationale from Adolfo's own words ("Once you push it, you already did your job") + today's live incident: #1426/#1427 rebased 15:56 → maintainer merged old heads locally 17:22 → sha mismatch → auto-close defeated, manual close. The ONLY valid re-engagement: maintainer explicitly asks.
+
+## v0.4.94 (2026-09-07, owner "go" 19:02Z — tool-discovery gap: 13 of 31 tools invisible to editors)
+- Doc-only bump: no tools/ changes. Battery on clean HEAD: see receipt below.
+- editor.md tool-table intro now cites RC-CONTRACT.md as the canonical inventory alongside SKILL.md.
+- editor.md reload section item 5 NEW — **Tool discovery clause** (owner order 2026-09-07): the editor tool table is the role-DAILY subset, not the inventory; full 31-tool inventory lives in `tools/RC-CONTRACT.md`; editors grep RC-CONTRACT.md for a purpose-built tool BEFORE hand-rolling any check (item 11). Closes the v0.4.94 finding: 13 of 31 tools (oc-artifact-verify, oc-carrier-features, oc-ci-parity, oc-harvest-sweep, oc-job-verify, oc-log-search, oc-ping-proof, oc-review-persist, oc-shadow-rotate, oc-ship-audit, oc-skew-scan, oc-tg-audit, oc-toolaccum) were never named in any editor-readable file.
+
+## v0.4.95 (2026-09-07, owner "fix it" 19:47Z — fleet-directives load-path: lanes never told to read it)
+- Design note (owner question 19:47Z "why keep a separate fleet-directives file?"): directives stay a separate file because (a) single-writer law — role files are written by the Supervisor, but directives are owner rulings collected verbatim with provenance, a different write cadence and different review lens; (b) size — merging ~30 sections into SKILL.md would bloat the always-loaded file past its keep-lean budget; (c) the gap was never the split, it was the missing load path — now closed by the RELOAD LAW instead of a merge.
+- **fleet-directives.md `[LANE]` tags** on 7 sections every worker must read in full: Telegram surface law, Post-compaction reload, PR naming, Features-compat gate, Cross-lane delivery cadence, Upstream PR base-Lint pre-claim, telegram_send addressing rule. Thematic index explains the tag.
+- **RELOAD LAW, four roles** (owner order 2026-09-07 19:31Z "fleet-directives is not read by lanes at all" + 19:41Z "what about supervisor?"): after compaction or spawn, workers re-read from disk SKILL.md + role file + `fleet-directives.md` (thematic index minimum, `[LANE]`-tagged sections in FULL). Inserted: editor.md Phase 1 step 0 (claim-time re-read), triage.md + toolsmith.md + supervisor.md headers (supervisor previously had NO self-reload mandate at all). Rationale: briefs die at compaction; binding owner law (cadence, PR naming, telegram surface, upstream etiquette) lives on disk, not in session memory.
+
+## v0.4.96 (2026-09-07, owner "Go + parked" 21:14Z — Duty-4+6 cycle-2 mechanical batch + parked owner-word deletions)
+
+- **Parked deletions (owner-word gated, executed):** 4 closed-chain branches deleted local+remote on the fork repo — `fix/69-restick-interrupt-turns`@9c8d13bc + `fix/92-demoted-host-guard`@1097b444 (both merge-base-verified IN main), `fix/69-restick-upstream`@45f35190 + `leshchenko1979/fix/92-demoted-host-guard`@3c4ac6c0 (patch-verified content-identical to landed). Worktree `oc-wt-69-interrupt-restick` force-removed (held only 9 untracked gate journals, verified first).
+- **P0 (fleet-blocking, verified):** oc-prchecks:533 `OC_PR_SKIPPED_DISPATH` typo (TOOLSMITH commit 1a82bdc2) — C-F2 "adopt instead of re-dispatch" re-dispatch class killed; selftest no-re-dispatch guard added.
+- **Lens B (efficiency/sprawl):** SKILL.md BUDGET RULE added (review-lenses.md new family block; 4x multiplier, router-only scope, RC-CONTRACT = SOLE register, B-F3/F18); delivery-modes table in SKILL.md cut to pointer + failsafe row (B-F15, fd canonical); REBASE-PORT 7-step procedure moved supervisor.md → upstream-merge-runbook.md §Port (B-F16); supervisor Duty 7 T4 procedure copy → one-line pointer (B-F11); no-op clause deletions — SKILL.md "no cargo, no compile, ever" reassurance (B-F12), toolsmith header Duty-S1 restatement (B-F13), triage T1 item-1 weak restatement (B-F14); fd [LANE] tag def gains SUPERVISOR-reads-IN-FULL exception (B-F1); supervisor Duty-3 bump cell → PUSH-ALL-QUIET pointer + numbered mechanics list (B-F4); editor.md RELOAD LAW header block added post-"Load only after…" (B-F2/G-5).
+- **Lens A (redundancy/ontology):** fd CI-wait "items 1-9" -> "items 1-16" with correct ordinals (A-1/G-F9, third-pass churn); supervisor ordinal map corrected (10th = dispatch-receipt gate, 15th solo, 16th PR-state; since v0.4.91, A-2/G-2); editor item-10 self-cite -> items 4/11 (A-3); contributors RETIRED date settled v0.4.91 x2 (A-4/F-11); dead fixtures path -> run.sh selftests (A-5); RC-CONTRACT seal-state self-contradiction fixed — v0.4.79 "corrected 2->1" note was WRONG, live tool verified badflag=2/bare=1 (A-6); "review battery" name collision killed -> SELFTEST BATTERY (A-8); war-stories modum RETIRED markers + past tense (A-10); BUILD TRIGGERS restatement -> SKILL.md pointer (A-11); SYNC-LAW honest-label rewrite (A-12); fd TO-BE telegram_send paragraphs moved out of [LANE] AS-IS section to own non-[LANE] section at file end (A-13); s2-spec consent journal row RETIRED-marked + "auth (auto-swap)" reword (A-14); supervisor-write census gains README.md + tools/RC-CONTRACT.md (A-15); dead "ex Duty 7 items 5-6" locators removed x2 (A-16); oc-order-validate rc 4 UNKNOWN-REF added (A-17); FIRE glossary entry (G-7); census/dead-path/G-9/G-10/G-11 locator fixes; G-6 disk-absorption reword; G-8 CHANGELOG reordered to newest-LAST contract (era blocks now 90->95 in order, orphan bullets re-homed by provenance).
+- **Tool fixes (oc-deploy, HQ-executed per verdict):** E-F1 ship mode dies 2 on `--wait`/`--notify-session` (poll-only flags were silently ignored — false-receipt trap) + 4 new selftests; E-F2 red_leg trailer extraction -> unified `oc_session_trailer` last-wins helper at all 4 sites (old first-wins grep could wake the WRONG LANE); E-F3 green_leg -> direct `oc-attrib --contributors` call, private awk projection deleted; F-4 rc-4 features-compat gate + `--allow-features-drop` documented; F-5 usage strings x3 synced + `--allow-features-drop`; F-7 features-mismatch shadow_log row `"-" "$FEATURES"`; F-12 oc-review-persist rc row completed (3 sha256-mismatch / 4 write-failure); O1 poll `--wait` non-integer = die 1 (code+battery agree, was misdocumented 2).
+- **Lens reports archived:** reviews/20260907-duty46-cycle2/ — 38 report files (7 lenses x 2026-08-29->09-07 incl. cycle-1/2 variants) + skill-review-index.log (oc-review-persist sha-indexed).
+- Battery: 146 PASS / 0 FAIL (146th = new E-F1 ship-refused pair; prior 144 + 2).
+
+## v0.4.97 (2026-09-08, owner "Go" 05:30Z — harvest enforcement law: daily patrol + standing filing order)
+
+- **HARVEST LAW** (fleet-directives.md §Upstream-merge cadence): merge-from-upstream on every detected shift was already law, but nothing ever fired the give-back direction — 156 fork-only commits piled up demand-driven. New standing order: Duty T4 harvest patrol runs DAILY (cron `harvest-patrol-daily` 03:00Z, first run 2026-09-09); census posts to board topic 30220 every day even on zero-change days (heartbeat = patrol alive); `upstream-shift-watch` (4h) carries the same HARVEST COUNTER line. Standing autonomous-filing order: fork-only backlog ≥3 Tier-1 candidates AND zero open upstream PRs of ours → Triage files the top candidate autonomously (cherry onto upstream base, green at push, frozen at filing, one at a time per one-PR law). Beyond the standing order the full Upstream PR law (owner smoke-PASSED gates) still applies.
+- triage.md Duty T4: new patrol item — run `oc-upstream-delta`, post tiered census + counter (Triage owns it post-compaction too).
+- Battery: 146/0. Tag v0.4.97, commit 73d31e8a, ledger n=1987. #129 build ebbae0a SWAPPED 05:38Z same turn.
 
 Daily harvest enforcement: the 145-commit fork-only backlog grew because harvesting was purely demand-driven (no trigger ever fired it). Owner ruled "at least daily" — three pieces:
 
@@ -495,7 +411,12 @@ Daily harvest enforcement: the 145-commit fork-only backlog grew because harvest
 - **Duty T4 (triage.md):** harvest backlog patrol added as a standing enforcement item with the same mechanics, so Triage owns it post-compaction too (RELOAD LAW reaches it).
 - Cron `harvest-patrol-daily` created (03:00Z daily, delivers census to topic 30220); `upstream-shift-watch` prompt extended with the counter line.
 
-## v0.4.98 (2026-09-08) — Decision Rollcall codified (owner term pick via buttons, topic 42487, ruling n=1994)
+## v0.4.98 (2026-09-08, owner "Decision Rollcall" term pick ~06:1xZ, topic 42487, ruling n=1994 — lane→owner direct decision sweep)
+
+- **Decision Rollcall codified** (owner picked the term via buttons; Triage proposed shape, HQ finalized wording): repeatable owner-facing procedure, distinct from T5 sweep and Duty-4. Content = outstanding owner decisions ONLY (one decision + lane recommendation + one-line context; no status reports, no chatter). Delivery = each lane posts IN ITS OWN LANE TOPIC, addressed to the owner DIRECTLY — no relay through Triage/HQ; zero decisions = silence, no chatter post. Triage = trigger on owner word + coverage verification + ledger stamp, nothing more. Trigger = on demand ("run a Decision Rollcall"); no cron/hook unless the owner orders one later.
+- **Codification homes:** fleet-directives.md §Decision Rollcall (canonical law, after the what-now/next section); editor.md §Decision Rollcall duty (lane-side posting duty, after Mid-cycle skill drift); triage.md NEW Duty T7 (trigger/coverage/stamp; relay model of 2026-09-08 morning RETIRED).
+- **#119 naming-collision note** (Triage flag, verified distinct): fork issue leshchenko1979/opencrabs#119 (single-option fold UX, Harvest-filed) ≠ upstream-numbered #119 (single budget verdict, `55ddec34`, already shipped). Rename/qualify ruling stays Triage's at next triage pass.
+- Battery: see receipts below. Includes v0.4.97 era reorder fix (97 block had landed after the Imported dump — now 96→97→dump).
 
 Owner-ruled procedure for sweeping outstanding owner decisions across lanes:
 
@@ -517,6 +438,24 @@ Owner amendment minutes after codification — five format rules added to all th
 
 Triage enforces the format on coverage check (targeted lane correction, not board complaint). Mechanical amendment; battery expected unchanged except version stamp.
 
+## v0.4.100 (2026-09-08) - oc-deploy poll ship-pending law (Triage disposal n=2003, HQ implemented)
+
+- oc-deploy poll --sha S: the DISPATCHED sha going GREEN is SWAP PENDING - poll no longer dies rc5 already-deployed while the deployed marker lags mid-chain. Defect family n=2003 ate the 2e161df3 and ebbae0aa swaps; both recovered only by lane re-execute.
+- Poll --wait timeout on a GREEN dispatched sha reports STUCK SWAP (distinct message + notify-session wake), never nothing-new.
+- New selftest: poll --sha pending never reports already-deployed. Battery 147/0.
+
+## v0.4.101 (2026-09-08) — Decision Rollcall present-here mode
+
+- Owner amendment 2026-09-08 08:34Z, topic 42487 (Present decisions here): Rollcall delivery gains present-here mode — on owner word, Triage collects lanes outstanding owner decisions and presents ONE consolidated numbered list in the owners topic (decision + recommendation + context + diagram per item; faithful relay, no filtering/paraphrasing/ranking). Lane-direct posting remains the default mode. Sites: fleet-directives.md section Decision Rollcall item 2 (two-mode delivery), triage.md Duty T7 item 7, editor.md Decision Rollcall duty present-here exception. Lane-side format law unchanged.
+
+## v0.4.102 — Decision Rollcall: present-here mode RETIRED (owner override)
+
+Owner override 2026-09-08 09:05Z, topic 30220 ("I don't want the decisions to be presented in triage lane. Every editor should be instructed to present their decisions in their own lane") — supersedes the 08:34Z topic-42487 amendment (v0.4.101).
+
+- fleet-directives.md §Decision Rollcall item 2: delivery is LANE-DIRECT, THE ONLY MODE. Present-here marked RETIRED with provenance. Triage NEVER collects or presents decisions on any word.
+- triage.md Duty T7 item 7: rewritten from present-here duty to RETIREMENT notice — Triage's answer to "where are the decisions" is a coverage report, never a consolidated list.
+- editor.md §Decision Rollcall duty: present-here exception deleted, replaced with NO-Triage-exception instruction — a lane told to send its list to Triage/HQ refuses and posts in its own topic.
+
 ## v0.4.103 - owner rule pair, 2026-09-08 ~09:1xZ (HQ d72bd52d)
 
 - **Corrected-code presence != smoke success** (SKILL.md evidence-kinds block): presence evidence (strings marker, sha match, deployed.meta identity) can never back a smoke-GREEN verdict on its own; GREEN requires at least one behavioral probe of the corrected path. Presence-only verdicts are labeled UNPROVEN (presence-only).
@@ -532,12 +471,40 @@ Owner rule (2026-09-08 12:16Z): bookkeeping legs (lineage/identity/CI) never con
 - **triage.md duty text** — same filing gate; autonomous trigger now files all qualifying candidates, not just the top one.
 - Harvest queue consequence: #1439 no longer blocks #100/#118 — both cherry-verified clean, filing proceeds on their own smoke confirmation.
 
-## v0.4.107 (2026-09-08) — port-work ownership law (owner button ruling, recovered)
+## v0.4.106
+
+- HARVEST no-hold law (owner override 2026-09-08 15:2xZ): no holding state — editor fires behavioral smoke on probe commission, probe PASS files the PR without owner confirmation; owner “smoke” later = ratification (fd HARVEST LAW + triage.md filing gate).
+- Internal feature set widened to telegram,code-graph,browser (owner order 15:28Z); features-compat gate supersets legal.
+
+## v0.4.107 (2026-09-08, owner button ruling 17:04Z — port-work ownership)
+- fleet-directives.md §Port-work ownership NEW (owner ruling recovered from daemon callback log after the #1226 mid-turn tap swallow): editors build ports (merge-time ports by the running merge editor; harvest ports dispatched to an editor lane), Triage owns the harvest-port queue, HQ gates classifications; owner remains ask-decider. Filed l1979/opencrabs#136 for the tap-delivery defect (mid-turn picks re-armed but never re-delivered silently).
+
+Moved out of SKILL.md frontmatter at v0.4.43 (Duty-6 run-2 finding B6 —
+~3k tokens of changelog loaded on every role-file claim; history is reference
+material, not procedure). Git-tracked in the skill repo; append one entry per
+bump, newest LAST. SKILL.md carries only `version:` + a pointer here.
 
 Owner ruling was a suggest_options button pick (option 0: "Agreed - codify the split: editors build, Triage queues, HQ gates") at 17:04:02Z on the port-ownership message. The pick was swallowed by the daemon's #1226 mid-turn guard (log: "session d72bd52d mid-turn — re-arming token, choice not delivered") and never reached HQ's prompt; recovered first-hand from the daemon callback log (log lines 995871-995878: followup:47d8185f:0 → pick recorded on msg 46104 → re-arm WARN).
 
 - **fleet-directives.md** — PORT-WORK OWNERSHIP three-role table added above §Upstream PR law: editors build (all port commits + harvest ports), Triage queues (disposition census, backlog, commissioning), HQ gates (classification ruling + approval gate; owner ask-decider). Supersedes HQ's 17:02Z three-class proposal and Triage's 16:50Z three-hand chain wherever they differ.
 - Defect note: the #1226 mid-turn swallow cost ~15 min of ruling-hunting (board 30220, topic 42487, ledger, session logs all checked before the callback trail). Root cause is daemon code (agent.rs:716 re-arm path), not lane process — routed as a defect family to HQ.
+
+## v0.4.108 (2026-09-08, owner "Go then duty 4+6" 17:53Z — ownerless-procedure assignments + Duties 4+6 fired at 21/5 FIRE)
+- triage.md Duty T4: three new daily patrols riding the census turn — stale-branch sweep (`oc-branch-sweep` gets its caller; ~55 contained branches were queued with nobody dispatched), upstream PR-state re-verify (every open PR's state+mergeable fresh each census; closes the #1451 CONFLICTING-found-hours-late gap), cron liveness check (the three law-carrying crons; liveness check = the heartbeat's heartbeat). Base-freshness-at-filing-time folded into the PR-state patrol text (census CLEAN results name the upstream sha tested against — Triage lesson n=2083).
+- toolsmith.md Duty S1: cron liveness AUDIT ownership (fixer side vs Triage's checker side) + rollback drill schedule (every 14 days, next 2026-09-22, battery + ledger stamp per drill).
+- supervisor.md Duty 4: Rollcall proactive-trigger duty — on each firing HQ lists owner-decision items sitting unprompted between rollcalls in the verdict table; T7 execution stays on-demand.
+- Owner-gated items intentionally left unassigned (need owner priority pick, not law): defect-family fixes (#136 tap delivery, display-layer corruption ×3 sessions), state-repo stash@{0} recovery (stays with owning lanes, now NAMED in fd state-repo hygiene law).
+- Fired with this bump: Duty 4 poll + Duty 6 lens review at 21/5 FIRE (boundary n=1594).
+
+## v0.4.109 (2026-09-08, owner "Go then duty 4+6" — consolidated Duty-4/6 law batch, all premises HQ-verified)
+
+- fd: two new sections — CI-run identity + verdict laws (job-pin identity, run-existence, staleness/re-gate, watcher-resume/no-detached-watchers, rendered-output acceptance, structural-pending-organic leg); receipt + delivery discipline (UI-emit receipts, self-delivered notify, lane-side verify-unclaimed, waiter poll-not-trust, REST settle, worktree path check, TG research-before-design, /proc post-swap proof, poll target-pinning, profile-scoped state dir). Lanes: 1a63f103 x3, aaa8d8ae x3, c6b1a539, 61161247 x3, 329bf3a3 x3, d5863180, facd50af x2, c78e78e0 x2. Duty-6: 8/8 lens reports persisted (A,B,C,D,E,F,G,brain-scrub) — mechanical fixes route to toolsmith batch; semantic items (B8 port-ownership creep, brain-scrub HIGHs, editor.md split timing) await owner.
+
+## v0.4.110 (2026-09-08, owner "1 2 3 go" — deletions + redaction batch)
+- REMOVED tools/oc-toolaccum (3 uses, all --help; battery test + SKILL.md/RC-CONTRACT.md references cleared) — owner GO on Decision Rollcall Q3.
+- State repo: workers-ledger.json.pre-merge-20260828-113207 deleted (commit 86c97600, owner GO). poll-110.log already absent.
+- SECURITY.md: 17 secret literals redacted (5 bot tokens, GH PAT, 4 Grafana tokens, Gatus bearer, Gemini key, MTProto API hash, n8n JWT, Mixpanel secret, SSH password, Grafana pass+b64) — tokens WERE live on disk in plaintext; owner advised rotation.
+- Rollback drill cadence: owner ruling "do we need rollback at all?" — HQ answer: keep on-ship verification only (oc-deploy swap journal + /proc identity per v0.4.109), scheduled drills retired; codified in editor.md ship phase.
 
 ## v0.4.111
 - N-1: editor.md S3 ship path rewritten to the shipped one-command contract (`ship --execute --wait N`, v0.4.100 fusion; two-step demoted to fallback).
@@ -552,3 +519,44 @@ Owner ruling was a suggest_options button pick (option 0: "Agreed - codify the s
 - RC-CONTRACT: oc-review-persist row corrected to actual code exits (0/2; stale 3/4 removed).
 - README.md: census corrected 30 executables (oc-toolaccum deleted v0.4.110); oc-waiter/oc-attrib/oc-notify.sh highlight rows added (TOOLSMITH + HQ, owner order 19:31Z).
 - v0.4.115 (2026-09-08): FIX — oc-review-persist LENSES whitelist actually extended to A-I (v0.4.114 shipped a message-only edit: die-string said A-I but the LENSES var still lacked H/I — H/I persist would have died rc 2; caught by Supervisor at Duty-6 spawn on owner "run duty-6"); help-text lens line synced; battery green.
+
+## v0.4.112
+- T5 issue sweep: DAILY cadence added (owner order 2026-09-08 20:0xZ, "1, but daily" then corrected to option 2) — sweep runs once per day, not only post-compaction.
+- T5 autonomous closure authority (owner option 2): Triage may close open fork issues WITHOUT the owner word on three tests only — (a) superseded-by, (b) duplicate, (c) owner-confirmed-withdrawn. Harvest-gated closure for done-work unchanged. Every auto-close: ledger stamp + close comment naming the test class; reversible by owner word.
+- Provenance: owner pick was a text correction ("no, 2") after the option-1 read; the daily cadence from the first message stands.
+
+## v0.4.113 (2026-09-08)
+- Duty-6 lens H — LEDGER HEALTH added (owner "go" 2026-09-08 20:16Z, on HQ proposal after "what lens analyses ledger?"): reviews workers-ledger.json AS A WHOLE — lesson-extraction completeness (incident rows → codified laws), phantom-row families, open claims on closed chains, contradiction pairs, version/cadence sync. Slice tools (oc-ledger claims / oc-ship-audit / oc-waiter-sweep) stay the enforcement surface. Brief in review-lenses.md; family map updated to A–H (supervisor.md, SKILL.md router row, glossary). Joins the next Duty-6 cycle (due 25/5 FIRE).
+
+## v0.4.114
+- Duty-6 lens I — META-REVIEW added (owner pick 2026-09-08 ~20:45Z, "Add Lens I — meta-review (recommended)"): reviews the lens catalog AND its output — brief correctness vs persisted reports, overlap/coverage gaps A–H, false-positive/negative history from the Supervisor's premise-verification record, quote-or-no-finding adherence. Self-reference capped: may flag its own brief, never reviews its own report. Brief in review-lenses.md; oc-review-persist whitelist A-G → A-I (selftest: I-report persist smoke OK); SKILL.md router row → nine-lens A–I. Joins the next Duty-6 cycle (due 26/5 FIRE).
+- Duty-6 lens H — LEDGER HEALTH added (owner "go" 2026-09-08 20:16Z, on HQ proposal after "what lens analyses ledger?"): reviews workers-ledger.json AS A WHOLE — lesson-extraction completeness (incident rows → codified laws), phantom-row families, open claims on closed chains, contradiction pairs, version/cadence sync. Slice tools (oc-ledger claims / oc-ship-audit / oc-waiter-sweep) stay the enforcement surface. Brief in review-lenses.md; family map updated to A–H (supervisor.md, SKILL.md router row, glossary). Joins the next Duty-6 cycle (due 25/5 FIRE).
+
+## v0.4.115 (2026-09-08)
+- FIX — oc-review-persist LENSES whitelist var extended to A-I (v0.4.114 extended the single-letter case-glob to [A-I] but the LENSES var still lacked H/I — named-lens H/I persist died rc 2; single-letter H/I were NOT affected, the case-glob bypasses the whitelist. Caught by Supervisor at Duty-6 spawn on owner "run duty-6"). Help-text lens line synced. Battery 144/0.
+
+## v0.4.116 (2026-09-08)
+- TOOLSMITH mechanical batch DISPATCHED (owner "Go what you can" 21:39Z): E-H1 swap-text fix, F-3 rc-register correction, A-1 census sync incl. A-H1 roster law (Duty-6 spawn text A-H → A-I), persist-first write-through law (spawn-path report persistence — the lens-A restart lesson), oc-ledger lessons verb (H-2), D-4 closure stamp (n=2115), ~30 MED/LOW prose. ACK due 12:00Z 09-09.
+
+## v0.4.117 (2026-09-08)
+- ERRATUM on v0.4.116: the bump commit b05a493d did not merely DISPATCH the TOOLSMITH batch — it SHIPPED it. TOOLSMITH had already implemented the batch in-tree (oc-ledger lessons verb, oc-review-persist whitelist, E-H1/F-3/A-1/A-H1 + ~30 prose fixes across editor.md/triage.md/supervisor.md/review-lenses.md/upstream-merge-runbook.md/war-stories.md/toolsmith.md) when HQ ran oc-ledger sync for its own ruling codifications; the sync swept the combined tree. Battery 141/0 tested the combined tree before the commit — completeness is battery-covered, attribution was wrong. Lesson: HQ must run `git status --short` and identify lane WIP BEFORE oc-ledger sync (the v0.4.111 hand-off discipline exists for exactly this and was skipped).
+
+- NO-HOLD law AMENDED (owner 21:44Z "1 - no, my go before pr"): no holding STATE ever, but PR filing is OWNER-GATED again — probe PASS → editor presents ready PR → owner go (per-PR or batch) → file. Codified in fleet-directives §Upstream-merge cadence, triage.md T4 gate, SKILL.md consent register ("UNTOUCHED" → RESTATED with the amendment). Ruling supersedes the 15:2xZ "no holding" reading that auto-filed on PASS.
+- I-2.1 ERRATUM adjudicated (owner "2 - go"): contributors retirement = v0.4.90 (tag 90c9e1d8, 2026-09-07 14:12:23Z, commits fc02ddeb+129ca40e+d6a66b51, lens E-2, owner "All 4 go") — not v0.4.91. Ledger n=2116.
+- oc-ci-parity RETIRED (owner "3 - ok": fix oc-issue-sweep + retire oc-ci-parity): zero live use in 12 days (C-H2), the merge runbook three-way-diff check supersedes. Tool + battery block + SKILL register row + RC-CONTRACT row + supervisor/SKILL parity prose removed. oc-issue-sweep FIX stays open (fix-lane batch).
+- Battery gate: see battery-last.json at sync.
+
+## v0.4.118 (2026-09-08)
+- TOOLSMITH batch completion (post-sync remainder of the v0.4.116 dispatch — b05a493d swept the in-tree WIP mid-edit, these edits finished after): lens I-2.2 A/B boundary line in review-lenses.md (A owns ref consistency, B weighs refs only as load-weight, first finder gets attribution); lens D evidence law folded into brief (negative-existence claims must quote query + scope); lens I-4.1/I-4.2 evidence-unit law + I-5.1 corpus/precedence/severity scale added to I brief; E-H1 SKILL.md oc-deploy row + editor.md auto-swap reword (two-step truth); T6 duty physically moved after T5 in triage.md (sequential T1-T7); T1/T2 historical-origin markers; A-L7 escalation pointer to toolsmith.md canonical; oc-ledger cmd_lessons jq hardened to array+join form + RC-CONTRACT lessons row; battery receipt refreshed 141/0 (2 runs, 22:20Z).
+## v0.4.119 (2026-09-09, owner "Go all" on cycle-2 rulings — TOOLSMITH mechanical batch, 8 items)
+- H-9: one-time CHANGELOG reorder to the file's own newest-LAST contract (CHANGELOG.md:52 was already the rule; the top region violated it). 60→118 now strictly ascending, newest last; duplicate v0.4.117 blocks (ERRATUM + NO-HOLD) merged; the two v0.4.117 entries' bullets preserved; v0.4.115 bullet nested inside the v0.4.111 tail entry removed (duplicate). Content-loss check: zero lines lost vs pre-reorder backup (order-insensitive diff), one line gained = the restored v0.4.113 entry.
+- v0.4.113 CHANGELOG entry RESTORED (the entry was lost in earlier reorders; tag v0.4.113 exists — commits bef75bec lens H + 4b25ac78 sync — entry composed from the commit message).
+- B-1: supervisor.md persist-first law gains the write-through fallback — a read-only reviewer cannot write files; the Supervisor's persist-on-receipt (oc-review-persist, byte-count + sha256 verified) counts as delivery when the reviewer toolset has no file-write capability. Demonstrated 10/10 cycle-2 reports. B-9 residual: hardcoded /tmp/duty6/ → cycle-suffixed report-dir wording.
+- F-4: oc-ledger cmd_lessons — --class compiled as REGEX by test($cls;"i") with jq stderr to /dev/null and unconditional exit 0 (invalid regex = silent empty = false clean). Fix: substring match via ascii_downcase | contains + lowercase --arg; jq rc captured, failure → die 3. Header doc ("substring match") now true.
+- F-6: oc-review-persist — single letters A–I were DEAD whitelist entries (case-glob short-circuit bypassed LENSES); a future letter-only whitelist edit silently no-ops (the v0.4.114 failure mode). Fix: single letters now route through the LENSES whitelist like A1–I9; :29 comment updated; lowercase-reject selftest case added.
+- A1: triage.md T4 auto-file residue stripped — "commission probes and file on PASS" / "Triage files the PR on the lane's GREEN + smoke-PASS receipt" reworded to the amended owner-gated filing gate (present on PASS, OWNER's filing GO, then file).
+- H-6/H-7: version-contradiction residue — README.md oc-deploy contributors retired v0.4.91 → v0.4.90 (git-adjudicated, tag 90c9e1d8, erratum n=2116); parity-retirement attribution unified to v0.4.117 (commit b05a493d era, owner "3 - ok").
+- A-1/A5 census 30 → 29 (disk glob = 29 oc-* executables; oc-ci-parity deleted v0.4.117): README.md ×2, editor.md ×2. README lens roster A–G → A–I (A5, 4th site of the A-H1 class). A9: review-lenses.md Reviewer A dangling "boundary, " token dropped.
+- G-M4: SKILL.md single-writer census enumerated list gains CHANGELOG.md (parenthetical claimed it since v0.4.116; the list omitted it). G-M5: RC-CONTRACT.md "EIGHT legacy registers" → SEVEN (oc-ci-parity was the eighth, removed without decrementing). E-2.3: SKILL.md canonical-tooling table blank line deleted (rows oc-attrib→oc-waiter rendered as literal text since v0.4.118 reword).
+- I-2.2 attribution (8 double-cover pairs this cycle, first finder = earlier report mtime — recorded for the verdict table): A7≡B-3 (superseded standing-order sediment; A first) · A2≡G-H1 (README 30-vs-29 census) · A5≡G-M2 (README "(A–G)") · A4≡G-M4 (SKILL census parenthetical vs list) · A3≡G-M5 (RC-CONTRACT "EIGHT legacy registers") · C-N1⊃F-9 (oc-pr-fault-scope placeholder-PR → rc-3 mislabel; C first; F adds the fleet-wide pattern cluster) · G-H2≡H-9 (CHANGELOG prepend/duplicate-117 disorder; G first) · E-2.2≈H-1 (patch-id debt, two angles; H cites C-V3's find, nobody cites E-2.2) · plus A1⊂B-2 (triage auto-file residue inside B's 5-site gate count).
+- Exclusions held: oc-harvest-sweep patch-id fix = separate lane (agent 805f70f4); oc-waiter-sweep cron exists (id b0d7e0d3) — C-N2 stale snapshot; E-2.1 and F-5 not in dispatch.

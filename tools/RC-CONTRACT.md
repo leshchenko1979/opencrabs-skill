@@ -9,7 +9,7 @@ code with no diagnostic is a bug.
 Fleet conventions:
 
 - `--help` / `-h` → **0** (usage text on stdout).
-- Usage/argument error → **2** on every tool EXCEPT the EIGHT legacy registers
+- Usage/argument error → **2** on every tool EXCEPT the SEVEN legacy registers
   noted below (usage≠2: `oc-deploy` 1, `oc-artifact-verify` 1,
   `oc-job-verify` 1, `oc-order-validate` 1, `oc-index-worktree` 5,
   `oc-pr-atomicity` 1, `oc-seal-state` 1/2/3 — long-documented, selftest-asserted

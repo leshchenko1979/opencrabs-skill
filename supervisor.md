@@ -187,11 +187,17 @@ Method:
 
 3. PERSISTENCE (persist-first write-through, owner law 2026-09-08, v0.4.116):
    the SPAWN PROMPT instructs each reviewer to write its FULL report to
-   `/tmp/duty6/lens-<X>.md` before finishing — the reviewer's own file write
-   is the PRIMARY copy; the Supervisor's persist step
+   the cycle report dir (e.g. `/tmp/duty6/`, `/tmp/duty6-c2/` —
+   cycle-suffixed) as `lens-<X>.md` before finishing — the reviewer's own
+   file write is the PRIMARY copy; the Supervisor's persist step
    (`oc-review-persist <lens> @<file>`, re-read-verified + sha256-indexed)
    becomes a VERIFIED COPY (byte-count + sha check), never the only copy.
    A report existing only in push-transit does not count as delivered.
+   Fallback (write-less reviewers, demonstrated 4/4 cycle-2): a read-only
+   reviewer cannot write files — the Supervisor's persist-on-receipt
+   (`oc-review-persist`, byte-count + sha256 verified) counts as delivery
+   when the reviewer toolset has no file-write capability; the report text
+   arrives in the spawn-result push and is persisted verbatim.
 4. Supervisor VALIDATES every finding with the poll triple-check (disk truth /
    evidence / coherence): ACCEPT · KERNEL (already covered) · REJECT (reason
    recorded, never silently dropped).

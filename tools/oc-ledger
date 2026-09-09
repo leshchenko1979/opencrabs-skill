@@ -738,6 +738,12 @@ EOF
   bash "$ME" lessons --kind all --class "phantom" > "$T/lessons-c.out" 2>/dev/null; chk "lessons-class-rc" 0 $?
   grep -q "phantom" "$T/lessons-c.out" && ok || bad "lessons-class-match"
   bash "$ME" lessons --kind bogus >/dev/null 2>&1; chk "lessons-bad-kind-rc2" 2 $?
+  # F-4 (v0.4.119): --class is substring, not regex — invalid-regex input must
+  # be a clean rc-0 empty match (the old test($cls;"i") silently false-cleaned).
+  bash "$ME" lessons --class '[patch-id' > "$T/lessons-ir.out" 2>/dev/null; chk "lessons-invalidregex-clean" 0 $?
+  [ -s "$T/lessons-ir.out" ] && bad "lessons-invalidregex-empty" || ok
+  bash "$ME" lessons --class "GATE-BYPASS" > "$T/lessons-ci.out" 2>/dev/null
+  grep -q "LESSON-FIXTURE" "$T/lessons-ci.out" && ok || bad "lessons-case-insensitive"
   rm -rf "$T"
   echo "oc-ledger selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
@@ -814,11 +820,21 @@ cmd_lessons() { # oc-ledger lessons — H-2 (v0.4.116): extract lesson/incident 
   done
   case "$kind" in lesson|incident|all) ;; *) die 2 "lessons: --kind must be lesson|incident|all (got '$kind')" ;; esac
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
-  jq -r --arg kind "$kind" --arg cls "$cls" \
+  # F-4 (v0.4.119): --class is a SUBSTRING match (header doc was already right;
+  # the old test($cls;"i") compiled it as regex — invalid regex hit jq's
+  # stderr-to-/dev/null + unconditional exit 0 = silent false-clean). Lowercase
+  # both sides + contains; jq rc is captured — jq failure dies rc 3.
+  local lcls
+  lcls="$(printf '%s' "$cls" | tr 'A-Z' 'a-z')"
+  local out rc
+  out="$(jq -r --arg kind "$kind" --arg lcls "$lcls" \
     '.events | to_entries[]
      | select(($kind == "all") or ((.value.kind // "") == $kind))
-     | select(($cls == "") or ((.value.what // "") | test($cls; "i")))
-     | (["n=" + (.key | tostring), (.value.kind // "?"), (.value.t // "?"), ((.value.what // "") | .[0:160])] | join("\t"))' "$LEDGER" 2>/dev/null
+     | select(($lcls == "") or (((.value.what // "") | ascii_downcase) | contains($lcls)))
+     | (["n=" + (.key | tostring), (.value.kind // "?"), (.value.t // "?"), ((.value.what // "") | .[0:160])] | join("\t"))' "$LEDGER")"
+  rc=$?
+  [ $rc -eq 0 ] || die 3 "lessons: jq failed (rc $rc) — ledger unreadable or query error"
+  [ -n "$out" ] && printf '%s\n' "$out"
   exit 0
 }
 

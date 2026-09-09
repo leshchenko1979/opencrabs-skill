@@ -17,7 +17,7 @@ on census evidence + owner word (supervisor.md step 7).
    - **Reviewer A — REDUNDANCY + ONTOLOGY:** same rule stated twice across
      files; duplicated war stories; terms violating the SKILL.md test ontology
      (SMOKE TEST / CODE TESTS / FEATURE-PRESENCE CHECK / EXECUTION SANITY
-     SIGNAL); undefined coinages; stale ref names (boundary, lens I-2.2
+     SIGNAL); undefined coinages; stale ref names (lens I-2.2
      v0.4.116: A owns ref CONSISTENCY; B weighs refs only as load-weight —
      first finder gets attribution); SEDIMENT — stale layers
      that survive because adding feels safe and removing feels risky

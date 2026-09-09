@@ -1,6 +1,6 @@
 {
-  "path": "/root/oc-wt-patchid/tools/tests/battery-last.json",
-  "ts": "2026-09-08T23:58:34Z",
+  "path": "/root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/tests/battery-last.json",
+  "ts": "2026-09-09T00:12:19Z",
   "pass": 141,
   "fail": 0,
   "verdict": "PASS"

@@ -8,7 +8,7 @@ description: >
   TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.118
+version: 0.4.119
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -52,7 +52,6 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-seal-state [--sha S] [...]` | baseline/orders seal (flag-based interface — no positional `<sha>`); order vocabulary QUEUED…VOID, per-row `--order-evidence`, `--purge-order`; matches legacy `order_sha` rows |
 | `./tools/archive/oc-post-receipts ...` | **INTERNAL/ARCHIVED** (E2 #7, v0.4.72 — was compiler-era manual fallback): zero live consumers, raw-bot posting violates the Telegram surface law; kept for archaeology only, do NOT call |
 | `./tools/oc-index-worktree <path>` | INTERNAL since v0.4.47 — chained automatically by `oc-wt add` (worktrees inherit NO index; standalone call = legacy fallback) |
-
 | `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>] [--contributors]` | commit-range → worker-lane attribution via Session-Id join against roster (`(unsigned)`/`(unmapped)` rows never dropped); `--contributors` (E6, v0.4.78) projects the 3-col TSV (session/issues/shas) — SINGLE SHAPE (lens E-2, v0.4.90: the `oc-deploy contributors` wrapper is retired; use `oc-attrib --contributors` directly); `--deployed` composes the range from `deployed.sha` + `deployed.meta.json` `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) |
 | `./tools/oc-deploy <mode>` | the ship path itself — `ship` (fetch/push + 4 ORDER gates + carrier dispatch; `--wait N` bounded in-process poll of the dispatched run — GREEN rc 0 / timeout rc 5 / RED rc 6, verdict only, swap is the separate `poll --execute` leg, v0.4.100/116), `poll` (watch + RED scan + swap chain; `--wait N` bounded wait — timeout dies rc 5 + optional `--notify-session <uuid>` wake, `--wait 0` = classic single pass; v0.4.78), `swap-execute` (Phase B swap), `watch [--with-delta]` (stray-commit tripwire; `--with-delta` appends the `oc-upstream-delta` advisory rows — merge B, v0.4.48), `fanout` (row below); `contributors` RETIRED v0.4.90 (lens E-2 — use `oc-attrib --contributors`); the editor's S3 ship path: `editor.md` §Ship — oc-deploy (S3 path) |
 | `./tools/oc-deploy fanout --run <id> [--dry-run]` | mechanical notify fan-out for one carrier run ([#24](https://github.com/leshchenko1979/opencrabs/issues/24) LIVE since v0.4.37): GREEN → contributor notify, RED → blame notify; auto-fired at `swap_execute` tail + on `poll` RED-scan; `OC_DEPLOY_NOFANOUT=1` suppresses — mechanics + journal vocabulary in `s2-swap-journal-spec.md` §Fan-out legs |
@@ -499,7 +498,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
 - ONLY the Supervisor edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9): `SKILL.md` /
   `editor.md` / `supervisor.md` / `triage.md` / `toolsmith.md` / `review-lenses.md` / `fleet-directives.md` /
   `upstream-merge-runbook.md` / `editor-phase7-rules.md` / `war-stories.md` /
-  `s2-swap-journal-spec.md` / `README.md` / `tools/RC-CONTRACT.md` — including all worker lanes AND the TRIAGE lane AND the TOOLSMITH lane (decision 7,
+  `s2-swap-journal-spec.md` / `README.md` / `CHANGELOG.md` / `tools/RC-CONTRACT.md` — including all worker lanes AND the TRIAGE lane AND the TOOLSMITH lane (decision 7,
   2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
   write. ONE exception: `tools/**` CODE is owned by the TOOLSMITH lane (v0.4.87 carve-out) — every change ships
   with battery receipts (README.md's tool-fleet section and `tools/RC-CONTRACT.md`
