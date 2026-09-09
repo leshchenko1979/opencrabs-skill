@@ -121,7 +121,9 @@ on census evidence + owner word (supervisor.md step 7).
      step writes its log line BEFORE the next step — owner tool-logging
      rule), selftest coverage vs the documented interface, dead flags/verbs,
      divergence between SKILL.md tool-table rows and actual behavior (flags,
-     rc, paths). Findings cite file:line.
+     rc, paths). Findings cite file:line. Fold of ruling n=2265 (v0.4.127
+     ACCEPTED): the F adoption check also covers Duty-4 notify-brief quality
+     (no separate lens).
 
 #### FAMILY: EFFICIENCY — SKILL.md size budget (lens B F3/F18, v0.4.96)
 
