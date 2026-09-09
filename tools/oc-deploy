@@ -352,13 +352,48 @@ STUB
     "$SELF_BIN" ship --sha "$SHA2" --features code-graph,telegram 2>&1)"; check_rc "featdef-match-reorder-rc" $? 0
   rm -f "$SD/deployed.meta.json"   # restore pre-case state for later sections
 
-  # 5. ship execute non-FF -> exit 2 (diverge remote main)
+  # 5. ship execute DIVERGED-but-related (#142 F2 merge-queue): remote main
+  #    moved to a sibling commit (div). OLD law died rebase-needed rc 2; NEW
+  #    law lands a GATED merge-queue commit (merge result carries BOTH sides,
+  #    carrier-gated before swap), pushes it, gates + dispatches the MERGE sha.
   git -C "$T/repo" checkout -qb div HEAD~1
   echo div > "$T/repo/f3"; git -C "$T/repo" add f3; git -C "$T/repo" commit -qm div
   git -C "$T/repo" push -q -f "$T/remote.git" HEAD:refs/heads/main
-  (cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_VALIDATE="$SD/tools/val-ok" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$SHA2" --execute 2>&1)"; rc=$?
+  check_rc "ship-mergequeue-rc" $rc 0
+  check_has "ship-mergequeue-plan" "$out" "merge-queue: merge commit"
+  check_has "ship-mergequeue-gates" "$out" "4/4 PASS"
+  check_has "ship-mergequeue-dispatch" "$out" "dispatched carrier run"
+  MQ_TIP="$(git -C "$T/remote.git" rev-parse main)"
+  MQ_PARENTS="$(git -C "$T/repo" rev-list --parents -n 1 "$MQ_TIP")"
+  case "$MQ_PARENTS" in *" $SHA2 "*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "SELFTEST FAIL: merge-queue tip does not contain tested sha ($MQ_PARENTS)" ;; esac
+  [ "$(printf '%s' "$MQ_PARENTS" | wc -w)" -eq 3 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: merge-queue tip is not a 2-parent merge commit: $MQ_PARENTS"; }
+  grep -q "dispatched" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no merge-queue dispatched shadow row"; }
+  # 5b. ship UNRELATED history (orphan commit) -> rc 2 not-contained
+  git -C "$T/repo" checkout -q --orphan orph
+  git -C "$T/repo" rm -rqf . >/dev/null 2>&1
+  echo orphan > "$T/repo/f9"; git -C "$T/repo" add f9; git -C "$T/repo" commit -qm orphan
+  ORPH="$(git -C "$T/repo" rev-parse HEAD)"
+  git -C "$T/repo" checkout -q div
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
     OC_DEPLOY_CARRIER="$SD/tools/carrier" \
-    "$SELF_BIN" ship --sha "$SHA2" --execute >/dev/null 2>&1); check_rc "ship-nonff" $? 2
+    "$SELF_BIN" ship --sha "$ORPH" 2>&1)"; check_rc "ship-not-contained-rc" $? 2
+  check_has "ship-not-contained-token" "$out" "OC_DEPLOY_GATE=not-contained"
+  grep -q "not-contained" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no not-contained shadow row"; }
+  # 5c. ship CONFLICTING batch (#142 batch-window split): a branch off c1 that
+  #     edits f2 (tested sha's file) cannot auto-merge with main -> rc 2
+  #     merge-conflict, nothing pushed.
+  git -C "$T/repo" checkout -qb conf div~1
+  echo conflict > "$T/repo/f2"; git -C "$T/repo" add f2; git -C "$T/repo" commit -qm conf
+  git -C "$T/repo" checkout -q div
+  out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
+    OC_DEPLOY_CARRIER="$SD/tools/carrier" \
+    "$SELF_BIN" ship --sha "$(git -C "$T/repo" rev-parse conf)" 2>&1)"; check_rc "ship-merge-conflict-rc" $? 2
+  check_has "ship-merge-conflict-token" "$out" "OC_DEPLOY_GATE=merge-conflict"
+  grep -q "merge-conflict" "$SD/oc-deploy-shadow.log" && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: no merge-conflict shadow row"; }
+  if [ "$(git -C "$T/remote.git" rev-parse main)" = "$MQ_TIP" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "SELFTEST FAIL: merge-conflict/refusal cases mutated remote main"; fi
   # 6. ship execute end-to-end: restore FF remote, fake gh + stub validate
   git -C "$T/repo" push -q -f "$T/remote.git" HEAD~1:refs/heads/main   # back to c1
   out="$(cd "$T/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" \
@@ -1801,11 +1836,57 @@ case "$MODE" in
       || die 2 "cannot resolve fork main tip"
     plan "fork main tip = $MAIN_TIP"
     watch_precheck "$MAIN_TIP"
-    if git merge-base --is-ancestor "$MAIN_TIP" "$SHA" 2>/dev/null; then
+    # #142 merge-queue containment gate (owner-ratified F2 design): the
+    # deployed sha must CONTAIN the tested sha (merge commits keep ancestry, so
+    # a merge-commit landing proves contained-sha identity). Equality = the
+    # plain FF case; SHA ahead of MAIN_TIP = the FF case; MAIN_TIP ahead of SHA
+    # without containment = unrelated history, refused. A fast-forwardable sha
+    # (MAIN_TIP is ancestor of SHA) is still legal — ff remains the single-landing
+    # path per the batch-window law.
+    if [ "$SHA" = "$MAIN_TIP" ]; then
+      plan "containment ok: sha == main tip (already landed)"
+    elif git merge-base --is-ancestor "$MAIN_TIP" "$SHA" 2>/dev/null; then
       plan "FF ok: main is ancestor of sha — push would fast-forward"
+    elif git merge-base --is-ancestor "$SHA" "$MAIN_TIP" 2>/dev/null; then
+      # sha is BEHIND main (strict ancestor, not equal): nothing to land — a
+      # re-ship of an already-contained tested sha cannot fast-forward main, so
+      # refuse pre-push with a clear token instead of a doomed non-FF push.
+      # Operator remedy: ship the current main tip (which contains this sha) to
+      # gate/deploy it.
+      shadow_log ship "$SHA" "$FEATURES" "already-contained"
+      die 2 "OC_DEPLOY_GATE=already-contained: $SHA is already contained in fork main ($MAIN_TIP) — nothing to land (a re-ship of a landed sha does not re-run gates); ship the current main tip to gate/deploy it"
+    elif [ -n "$(git merge-base "$SHA" "$MAIN_TIP" 2>/dev/null)" ]; then
+      # merge-queue landing (owner-ratified F2, #142): the tested sha diverged
+      # from main mid-gate. Instead of dying rebase-needed, land a GATED merge
+      # commit: merge main into the tested sha, gate the MERGE RESULT tree, and
+      # record the merge commit as the deployed sha (it CONTAINS the tested sha,
+      # so built-sha identity remains provable by ancestry). Naive ungated merges
+      # stay illegal — the merge result gets its own carrier gate before swap.
+      # A conflict here = the batch window SPLITS (batch-window law): operator
+      # rebases; nothing is pushed.
+      MERGE_OUT="$(git merge-tree --write-tree "$SHA" "$MAIN_TIP" 2>/dev/null)"; MERGE_RC=$?
+      if [ "$MERGE_RC" -ne 0 ]; then
+        shadow_log ship "$SHA" "$FEATURES" "merge-conflict"
+        die 2 "OC_DEPLOY_GATE=merge-conflict: batch window SPLIT — $SHA and fork main ($MAIN_TIP) cannot auto-merge (merge-tree rc=$MERGE_RC); rebase the batch, nothing pushed"
+      fi
+      MERGE_TREE="${MERGE_OUT%%$'\n'*}"
+      # the merge commit inherits the tested sha's Session-Id so the ORDER
+      # signature gate + fan-out attribution keep working through the merge
+      MERGE_SID="$(git log -1 --format=%B "$SHA" 2>/dev/null | sed -n 's/^[[:space:]]*Session-Id:[[:space:]]*//p' | tail -1 | tr -d '[:space:]')"
+      MERGE_MSG="merge-queue landing: merge fork main into ${SHA} (#142 F2 batch window)
+
+Tested sha ${SHA} diverged from main ${MAIN_TIP} mid-gate; merge result carries
+BOTH and is carrier-gated before swap (no ungated merge reaches main)."
+      [ -n "$MERGE_SID" ] && MERGE_MSG="$MERGE_MSG
+
+Session-Id: $MERGE_SID"
+      MERGE_SHA="$(printf '%s\n' "$MERGE_MSG" | git commit-tree "$MERGE_TREE" -p "$SHA" -p "$MAIN_TIP")" \
+        || { shadow_log ship "$SHA" "$FEATURES" "merge-commit-fail"; die 2 "OC_DEPLOY_GATE=merge-commit-fail: could not build merge commit for $SHA + $MAIN_TIP"; }
+      plan "merge-queue: merge commit $MERGE_SHA (contains $SHA + $MAIN_TIP) — the merge RESULT is gated and shipped, deployed sha = $MERGE_SHA"
+      SHA="$MERGE_SHA"   # everything downstream (push, gates, dispatch, markers) targets the merge commit
     else
-      shadow_log ship "$SHA" "$FEATURES" "rebase-needed"
-      die 2 "OC_DEPLOY_GATE=rebase-needed: $SHA does not fast-forward main ($MAIN_TIP)"
+      shadow_log ship "$SHA" "$FEATURES" "not-contained"
+      die 2 "OC_DEPLOY_GATE=not-contained: $SHA is neither ahead of, equal to, nor contained in fork main ($MAIN_TIP) — unrelated history (rebase or merge-queue landing required)"
     fi
     if [ "$EXECUTE" = 1 ]; then
       git push -q "$REMOTE" "$SHA:refs/heads/main" \
