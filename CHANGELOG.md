@@ -602,6 +602,9 @@ Owner ruling was a suggest_options button pick (option 0: "Agreed - codify the s
 - Selftest oc-ship-chain 8/8 (fixture repos + fake binaries, zero real CI/ledger); battery 155/0 (new section: selftest + usage cases; fleet-wide --help rc=0 honored). RC-CONTRACT row added. set -e expected-failure captures in selftest harness (run_t pattern).
 
 
+## v0.4.128 (2026-09-09, owner order ~20:03Z — HQ executed)
+- OWNER DESIGN GATE: §Discussion links + fix-approval gate item 2 widened from fix-scoped to EVERY implementation design (fix, feature, tool, refactor, process change, any size). Design must be presented to the owner in canonical terms (codified ontology, no invented shorthand) WITH a process diagram (Mermaid vertical; sequenceDiagram for multi-actor) and receive explicit owner approval (message or 👍 reaction; silence is NOT approval) before any code work. Diagram is part of the gate. Applies to HQ and all lanes, incl. Duty-4 accepted proposals that change law or tooling behavior. AGENTS.md pointer section added.
+
 ## v0.4.127 (2026-09-09, HQ claim batch c4 lens-I verified items - TOOLSMITH lane 2fae1230)
 - ERRATUM item1 (byte-adjudicated, od/xxd): the "bare word OC_PR_SKIPPED_DISPAT still live at oc-prchecks:614" premise (HQ n=2269 chain + lens-I) was a DISPLAY-LAYER TRUNCATION - the line has been the correct assignment (consumer name + =1) since commit 74325d0a. No code change; erratum prepended to the v0.4.124 CHANGELOG bullet (original kept verbatim). Lesson: the =-sign was dropped from every textual read this session; only od/xxd hex was faithful.
 - item2: dead owner-go gate text reconciled to the AUTO-SHIP law (v0.4.122) in 4 files - SKILL.md ISSUE-ROUTING approval row + CONSENT REGISTER, editor.md smoke-PASS notify + Phase 7 trigger/step 0 (filing notice replaces approval wait), triage.md T4 standing order + filing para, fleet-directives.md :19 tail. Residual grep for owner-filing-go wordings: zero.
