@@ -338,8 +338,15 @@ cmd_check_version() {
 # ---- cadence (RO) ------------------------------------------------------------
 cmd_cadence() {
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+  # Boundary = the latest review-CYCLE-CLOSE row. Cycle closes land as kind=note
+  # whose text starts "vX.Y.Z ACCEPTED" (HQ acceptance = the close receipt,
+  # n=2349 lesson: the old review-battery/skill-review boundary predated the
+  # cycle it claimed to close — stale-boundary drift, instance 2). Falls back
+  # to review-battery/skill-review rows for pre-close epochs (selftest fixtures).
   local out c b
-  out="$(jq -r '([.events[]? | select(.kind == "review-battery" or ((.kind // "") | startswith("skill-review")))] | map(.n // 0) | max // 0) as $b
+  out="$(jq -r '([.events[]? | select((.kind // "") == "note" and ((.what // "") | test("^v[0-9]+\\.[0-9]+\\.[0-9]+ ACCEPTED")))] | map(.n // 0) | max // 0) as $close
+    | (if $close > 0 then $close
+       else ([.events[]? | select(.kind == "review-battery" or ((.kind // "") | startswith("skill-review")))] | map(.n // 0) | max // 0) end) as $b
     | ([.events[]? | select(.kind == "skill-bump" and ((.n // 0) > $b))] | length) as $c
     | "\($c) \($b)"' "$LEDGER")"
   c="${out%% *}"; b="${out##* }"
@@ -610,6 +617,14 @@ EOF
   bash "$ME" cadence >/dev/null 2>&1; chk "cadence-fire-rc" 1 $?
   bash "$ME" stamp review-battery "boundary" >/dev/null 2>&1
   bash "$ME" cadence | grep -q "0/5 WAIT" && ok || bad "cadence-reset-on-review"
+  # 22a. cycle-close boundary (v0.4.129, n=2349 stale-boundary class): a note
+  # "vX.Y.Z ACCEPTED" is the canonical reset point; bumps after it recount.
+  bash "$ME" stamp note "0.4.6 ACCEPTED (fixture cycle close)" >/dev/null 2>&1
+  bash "$ME" cadence | grep -q "0/5 WAIT" && ok || bad "cadence-reset-on-cycle-close"
+  sed -i 's/^version: .*/version: 0.4.7/' "$T/skill/SKILL.md"
+  printf '\n## v0.4.7\nclose-boundary probe\n' >> "$T/skill/CHANGELOG.md"
+  bash "$ME" sync --version 0.4.7 >/dev/null 2>&1
+  bash "$ME" cadence | grep -q "1/5 WAIT" && ok || bad "cadence-counts-after-close"
   # 22b: sync --catch-up (T2 verdict n=1695, HQ-approved 2026-09-06): the
   # shipped-ahead dead zone gains a legal path — multi-step FORWARD jump with
   # mandatory --why; without the flag the old rc6 stands; downgrades refused.
@@ -621,7 +636,7 @@ EOF
   bash "$ME" sync --version 0.4.4 --catch-up --why downgrade-probe >/dev/null 2>&1; chk "sync-catchup-downgrade-rc6" 6 $?
   sed -i 's/^version: .*/version: 0.4.9/' "$T/skill/SKILL.md"
   bash "$ME" sync --version 0.4.9 --catch-up --why selftest-catchup >/dev/null 2>&1; chk "sync-catchup-happy" 0 $?
-  chk "sync-catchup-event" "true" "$(jq -r '[.events[] | select(.kind == "skill-bump")] | last | .what | contains("catch-up from 0.4.6 (skipped 0.4.7, 0.4.8)")' "$OC_LEDGER")"
+  chk "sync-catchup-event" "true" "$(jq -r '[.events[] | select(.kind == "skill-bump")] | last | .what | contains("catch-up from 0.4.7 (skipped 0.4.8)")' "$OC_LEDGER")"
   chk "sync-catchup-heal" "true" "$(jq '(.current_skill_version == "0.4.9") and (.meta.current_skill_version == "0.4.9") and (.meta.skill_version == "0.4.9")' "$OC_LEDGER")"
   # 23-26: ack (v0.4.55: full 0.N.N shape — the old N.N regex could never
   # record a real skill version, which broke the reload convention's ack step)
