@@ -1,0 +1,6 @@
+[2026-09-09T07:0xZ] #138 smoke PASS (4/4 legs) — lane d5863180, driver
+  Leg1 lineage: swap journal 22:54:28Z, range d198c56e..ab666cc4, artifact 97fa076a — oc-deploy fan-out receipt
+  Leg2 identity: oc-smoke-evidence VERDICT: IDENTITY-MATCH — exe_sha256 == artifact_sha256 (97fa076a…), deployed.sha ab666cc4, run 34287338136
+  Leg3 CI: run 34284276944 foreign-RED adopted per HQ isolation ruling (identical 4x telegram_photo_thread_scope_test on main, run 34280677687; exoneration #139/#141-adjacent; zero #138-scoped failures; 8064 passed)
+  Leg4 BEHAVIORAL (persistence): row (d5863180…, opencrabs-dev, seen_at 1788908605 = 2026-09-08T23:03:25Z) written pre-restart; ops daemon restarted 2026-09-09T06:53:56Z (sanctioned Cursor restart, ActiveEnterTimestamp receipt); row SURVIVED restart — sqlite read-back this turn. Second row (2fae1230…) also survived. Stand-down honored: no probe restarts issued (Cursor/VDS + HQ process ruling n=2146).
+  Note: manual nullable skill_slug columns in ops/default DBs are unused by binary (HQ residual note, cleanup candidate).
