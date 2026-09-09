@@ -53,6 +53,10 @@
 # =============================================================================
 set -u
 set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
+set -e            # F-lens (HQ GO batch 2026-09-09): a bare-typo command like the
+                  # old OC_PR_SKIPPED_DISPAT line (n=2226 batch) must abort the
+                  # tool, not be swallowed — silent no-op on unbound var/typos
+                  # is the #124 time-bomb class.
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-prchecks" "$@"; else oc_log_finish() { :; }; fi
 # Exit-honesty guard (n=1725 A, Triage verdict n=1721; field tools.log:3190,
@@ -190,9 +194,13 @@ do_selftest() {
   t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
   run_t() { # $1=scenario $2..=args ; echoes rc in $T_RC, out in $T_OUT
     mk_shim "$D/gh" "$1"; shift
+    # set -e survival (v0.4.124): negative-path scenarios EXPECT nonzero rc —
+    # capture it explicitly or set -e aborts the whole selftest on the first
+    # expected failure (the exact silent-abort class this batch's set -e is
+    # meant to surface, biting its own test harness first).
     T_OUT="$(OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
       OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
-      OC_TOOLS_NOLOG=1 "$SELF" "$@" 2>&1)"; T_RC=$?
+      OC_TOOLS_NOLOG=1 "$SELF" "$@" 2>&1)" && T_RC=0 || T_RC=$?
   }
   SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 
@@ -202,9 +210,10 @@ do_selftest() {
   [ "$T_RC" -eq 2 ] && case "$T_OUT" in *"--wait needs an integer"*) t_ok "usage prints why (C-#1)";; *) t_bad "usage diagnostic missing (out=$T_OUT)";; esac
   printf '#!/usr/bin/env bash\necho "FAULT-SCOPE SHIM IN-SCOPE"\nexit 0\n' > "$D/fault-in"; chmod +x "$D/fault-in"
   mk_shim "$D/gh" run_failed
+  # set -e survival: this call EXPECTS rc 3 (RED triggers fault-scope auto-run)
   T_OUT="$(OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
     OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
-    OC_TOOLS_NOLOG=1 OC_PRCHECKS_FAULT_SCOPE="$D/fault-in" "$SELF" "$SHA" --fault-scope 42 2>&1)"; T_RC=$?
+    OC_TOOLS_NOLOG=1 OC_PRCHECKS_FAULT_SCOPE="$D/fault-in" "$SELF" "$SHA" --fault-scope 42 2>&1)" && T_RC=0 || T_RC=$?
   [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"FAULT-SCOPE SHIM IN-SCOPE"*) t_ok "fault-scope auto-run on RED (E5)";; *) t_bad "fault-scope (rc=$T_RC out=$T_OUT)";; esac
   run_t yml_missing "$SHA";          [ "$T_RC" -eq 4 ] && t_ok "yml missing on carrier -> 4 (LOUD)" || t_bad "yml missing (rc=$T_RC)"
   run_t dispatch_fail "$SHA";        [ "$T_RC" -eq 4 ] && t_ok "dispatch fail -> 4" || t_bad "dispatch fail (rc=$T_RC)"
@@ -263,7 +272,9 @@ do_selftest() {
   KW=$!
   sleep 3
   kill -TERM "$KW" 2>/dev/null
-  wait "$KW"; KW_RC=$?
+  # set -e survival: wait returns the killed child's 143 — that IS the expected
+  # result here; capture it or errexit aborts the whole selftest (rc=143 class).
+  wait "$KW" && KW_RC=0 || KW_RC=$?
   if [ "$(jq -s 'map(select(.exit==143 and .extra.signal=="TERM")) | length' "$D/tools.log" 2>/dev/null)" = "1" ] \
      && [ "$(jq -s 'map(select(.exit==0)) | length' "$D/tools.log" 2>/dev/null)" = "0" ]; then
     t_ok "killed watch: SIGTERM journaled exit 143 + signal, no false success"
@@ -302,11 +313,11 @@ do_selftest() {
   mk_shim "$D/gh" green
   T_OUT="$(OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=1 \
     OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
-    OC_TOOLS_NOLOG=1 "$SELF" "$SHA" 2>&1)"; T_RC=$?
+    OC_TOOLS_NOLOG=1 "$SELF" "$SHA" 2>&1)" && T_RC=0 || T_RC=$?
   if [ "$T_RC" -eq 4 ] && case "$T_OUT" in *"lock"*) true ;; *) false ;; esac; then
     t_ok "dispatch lock contention -> 4 (no double-dispatch)"
   else t_bad "lock contention (rc=$T_RC out=$T_OUT)"; fi
-  kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+  kill "$HOLDER" 2>/dev/null && wait "$HOLDER" 2>/dev/null || true
 
   # #74 H2: resume <run-id> — re-attach to a WITNESSED run, no dispatch/adoption
   run_t none resume 222
@@ -330,7 +341,7 @@ do_selftest() {
   CA1_LOG="$D/ca1.log" OC_PRCHECKS_WAITER="$D/waiter" OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" \
     OC_PRCHECKS_LOCK_WAIT=5 OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
     OC_TOOLS_NOLOG=1 "$SELF" resume 222 --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
-  T_RC=$?
+  T_RC=0 || T_RC=$?
   [ "$T_RC" -eq 0 ] && grep -q "armed id=" "$D/ca1.log" 2>/dev/null \
     && t_ok "C-A1: resume --notify delegates to oc-waiter arm (exec, waiter shim invoked)" \
     || t_bad "C-A1 resume --notify delegation (rc=$T_RC log=$(cat "$D/ca1.log" 2>/dev/null))"
@@ -352,7 +363,7 @@ do_selftest() {
     mk_shim "$D/gh" "$sc"
     T_OUT="$(OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 OC_TOOLS_LOG="$CF_LOG" \
       OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
-      OC_TOOLS_NOLOG=1 "$SELF" "$@" 2>&1)"; T_RC=$?
+      OC_TOOLS_NOLOG=1 "$SELF" "$@" 2>&1)" && T_RC=0 || T_RC=$?
   }
   # (a) exit-4 watch-death row WITH run_id witness + gh run view fails -> 8 AMBIGUOUS, dispatch refused
   printf '{"ts":"%s","tool":"oc-prchecks","exit":4,"args":"%s --wait 600","extra":{"run_id":"777","sha":"%s"}}\n' "$NOW_TS" "$SHA" "$SHA" > "$CF_LOG"
@@ -576,7 +587,9 @@ if command -v jq >/dev/null 2>&1 && [ -f "${OC_TOOLS_LOG:-/nonexistent}" ]; then
     | select(((.ts // "" | fromdateiso8601? // 0)) >= $cutoff)
     | (.extra.run_id // empty)' 2>/dev/null | tail -1)"
   if [ -n "$PR_PRIOR" ]; then
-    PR_ST="$("$GH_BIN" run view "$PR_PRIOR" --repo "$REPO" --json status 2>/dev/null | jq -r '.status // empty' 2>/dev/null)"
+    # set -e survival: run view failing is an EXPECTED path here (drives the
+    # fail-closed rc-8 below) — capture, never let errexit abort the tool.
+    PR_ST="$("$GH_BIN" run view "$PR_PRIOR" --repo "$REPO" --json status 2>/dev/null | jq -r '.status // empty' 2>/dev/null)" || PR_ST=""
     if [ -z "$PR_ST" ]; then
       # #115 B fail-closed (refusal semantics per n=1663 Q2): a same-ref run
       # witness exists but its liveness is undeterminable — dispatching would
@@ -592,7 +605,12 @@ if command -v jq >/dev/null 2>&1 && [ -f "${OC_TOOLS_LOG:-/nonexistent}" ]; then
       oc_log_extra "resume" "$PR_PRIOR"
       flock -u 8
       RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
-      # jump straight to the watch loop: mark dispatch/adoption as skipped
+      # jump straight to the watch loop: mark dispatch/adoption as skipped.
+      # F-lens one-liner fix (HQ GO 2026-09-09): this line used to read bare
+      # `OC_PR_SKIPPED_DISPAT` — a typo'd NAME (missing CH) executing a
+      # nonexistent COMMAND with no assignment; rc was swallowed, the flag
+      # never set, and C-F2 resume re-dispatched anyway (concurrency-cancel
+      # risk the adoption path exists to prevent). Proper assignment now.
       OC_PR_SKIPPED_DISPATCH=1
     fi
   fi
