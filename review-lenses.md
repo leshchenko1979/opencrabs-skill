@@ -112,6 +112,9 @@ on census evidence + owner word (supervisor.md step 7).
      Each finding names the merge/verb-move + its single-command shape.
      EXCLUDES: one-off chains, anything with an approval gate between the
      steps (a gate is human judgment — never merged away).
+     STANDING EXTRA (owner ruling 2026-09-09 18:55Z): E also reviews the
+     upstream-drift census surface (`oc-upstream-delta` patrol output) for
+     silent drift — the next merge window must never start blind.
    - **Reviewer F — TOOL CODE REVIEW:** the tools/ implementations themselves
      — shell correctness (quoting, set -e gaps, rc collisions with the
      documented rc register), journaling completeness (every state-changing
