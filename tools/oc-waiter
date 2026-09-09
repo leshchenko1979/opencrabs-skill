@@ -263,6 +263,25 @@ cmd_run() {
   RUN_ID="$(jq -r '.run_id // ""' "$REC")"   # #115 A: --run seed — first poll takes the resume path; legacy records without the field -> ""
   local DEADLINE=$(( $(date +%s) + TMO ))
   local VERDICT="" RC=0 OUT="" NS_RC
+  # KILLED-on-external-stop (owner GO 2026-09-09 10:30Z, autopsy of watcher
+  # 20260909T093536Z: systemd scope Stopped at 09:54:35, no verdict, lane
+  # learned only via the 5-min sweep ~80s later). A TERM to the waiter child
+  # (systemd scope stop, explicit kill) now writes verdict KILLED + wakes the
+  # owner IMMEDIATELY via the same notify_lane path as real verdicts (now +
+  # one --interrupt retry, lib/oc-notify.sh contract). Sweep stays backstop
+  # for hard kills (-9/OOM/power); status "killed" is terminal for sweep.
+  on_killed() {
+    jline "$JOURNAL" killed "{\"signal\":\"TERM\",\"pid\":$$,\"polls\":${POLLS:-0}}"
+    rec_upd "$REC" "\"status\":\"killed\",\"verdict\":\"KILLED\",\"polls\":${POLLS:-0},\"ended_ts\":\"$(date -u +%FT%TZ)\""
+    local KTEXT="oc-waiter: KILLED ref=${REF:0:8} label=${LABEL:-none} polls=${POLLS:-0} — waiter received an external stop (SIGTERM: systemd scope stop or explicit kill) and exited WITHOUT a CI verdict. Re-arm with: oc-waiter arm ..."
+    if notify_lane "$NBIN" "$TARGET" "oc-waiter KILLED" "$KTEXT"; then
+      jline "$JOURNAL" notify-ok "{\"target\":\"$TARGET\",\"verdict\":\"KILLED\"}"
+    else
+      jline "$JOURNAL" notify-failed "{\"target\":\"$TARGET\",\"verdict\":\"KILLED\",\"reason\":\"killed-notify-undelivered\"}"
+    fi
+    exit 143
+  }
+  trap on_killed TERM
   while :; do
     if [ -n "$RUN_ID" ]; then
       OUT="$("$PRCHECKS_BIN" resume "$RUN_ID" ${REPO:+--repo "$REPO"} --wait "$WIN" 2>&1)"; RC=$?
@@ -360,7 +379,7 @@ cmd_sweep() {
     status="$(jq -r '.status' "$f")"
     case "$status" in armed|running) ;; *) continue ;; esac
     verdict="$(jq -r '.verdict // ""' "$f")"
-    [ -n "$verdict" ] && [ "$verdict" != "" ] && continue   # terminal already
+    [ -n "$verdict" ] && [ "$verdict" != "" ] && continue   # terminal already (incl. KILLED — child's TERM trap owns it)
     armed_ts="$(date -u -d "$(jq -r '.armed_ts' "$f")" +%s 2>/dev/null || echo 0)"
     now="$(date +%s)"
     [ $(( now - armed_ts )) -lt 120 ] && continue            # arm grace: child may not have started
@@ -492,6 +511,37 @@ GSTUB
   { [ "$RC6" -eq 1 ] && [ "$(jq -r '.status' "$D/waiters/old1.json")" = "orphaned" ] && [ "$(jq -r '.status' "$D/waiters/fresh.json")" = "armed" ] && [ "$(jq -r '.status' "$D/waiters/done1.json")" = "done" ]; } \
     && t_ok "sweep: dead-pid old record ORPHANED; grace + done records untouched (rc 1)" || t_bad "sweep rc=$RC6 statuses=$(jq -r .status "$D/waiters"/*.json | tr '\n' ' ')"
   grep -q 'ORPHANED' "$D/notify.log" && t_ok "sweep: owner woken with ORPHANED" || t_bad "sweep: no ORPHANED wake"
+  # 6b. KILLED-on-external-stop (owner GO 2026-09-09 10:30Z, watcher autopsy
+  # 20260909T093536Z): SIGTERM to the _run child -> record killed/KILLED +
+  # owner woken IMMEDIATELY (same notify path as verdicts). stall_k=9999 keeps
+  # the child polling (seq "5" repeats) long enough for the TERM to land.
+  mk_notify deliver
+  printf '%s' "5" > "$D/seq"; rm -f "$D/seq.count" "$D/seq.args"
+  export SEQ_FILE="$D/seq"
+  export NOTIFY_LOG="$D/notify.log"; : > "$NOTIFY_LOG"; rm -f "$D/notify.log.c2"
+  printf '{"id":"k1","pid":0,"ref":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","notify":"11111111-2222-3333-4444-555555555555","label":"killme","timeout":3600,"stall_k":9999,"window":1,"armed_ts":"%s","status":"armed","verdict":"","polls":0,"last_rc":null}\n' "$(date -u +%FT%TZ)" > "$D/waiters/k1.json"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 \
+    "$SELF" _run "$D/waiters/k1.json" >/dev/null 2>&1 &
+  KILL_CHILD=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    CHILD_PID="$(jq -r '.pid // 0' "$D/waiters/k1.json")"
+    [ "$CHILD_PID" -gt 0 ] 2>/dev/null && break
+    sleep 0.2
+  done
+  kill -TERM "$CHILD_PID" 2>/dev/null; wait "$KILL_CHILD" 2>/dev/null; KRC=$?
+  { [ "$(jq -r '.status' "$D/waiters/k1.json")" = "killed" ] \
+      && [ "$(jq -r '.verdict' "$D/waiters/k1.json")" = "KILLED" ] \
+      && grep -q '"event":"killed"' "$D/waiters/journal/k1.jsonl" \
+      && grep -q 'KILLED' "$D/notify.log"; } \
+    && t_ok "killed: SIGTERM -> record killed/KILLED + immediate owner wake" \
+    || t_bad "killed: status=$(jq -r .status "$D/waiters/k1.json" 2>/dev/null) verdict=$(jq -r .verdict "$D/waiters/k1.json" 2>/dev/null) woken=$(grep -c KILLED "$D/notify.log" 2>/dev/null)"
+  # 6c. sweep must NOT re-flag a killed record (KILLED is terminal)
+  : > "$D/notify.log"
+  OC_WAITER_NOTIFY="$D/notify" OC_TOOLS_NOLOG=1 "$SELF" sweep >/dev/null 2>&1; RC6B=$?
+  { [ "$(jq -r '.status' "$D/waiters/k1.json")" = "killed" ] \
+      && ! grep -q 'ORPHANED' "$D/notify.log"; } \
+    && t_ok "sweep: killed record is terminal, not re-flagged" \
+    || t_bad "sweep re-flagged killed record (rc=$RC6B status=$(jq -r .status "$D/waiters/k1.json"))"
   # 7. arm-time refusals: missing notify binary -> 3 (tombstone5 class killed at arm)
   OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
   [ $? -eq 3 ] && t_ok "arm: unresolvable notify binary -> 3 (refused, nothing armed)" || t_bad "arm binary-refuse rc"
