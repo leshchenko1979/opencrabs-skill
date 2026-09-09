@@ -131,10 +131,17 @@ while IFS=$'\t' read -r uuid role topic; do
   if [ "$dry" = 1 ]; then
     receipts+="DRY ${uuid} ${role} brief-ok(${#brief} chars)"$'\n'; sent=$((sent+1)); continue
   fi
-  out="$("$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
+  # n=2221 hang fix: `session notify` to a wedged target can block indefinitely;
+  # with ~33 targets one hang starves the whole fanout and NO receipts flush.
+  # Per-send timeout (default 20s) + receipts printed INCREMENTALLY (flush
+  # before each send), so a mid-run hang leaves every prior receipt on stdout.
+  if [ -z "${OC_FANOUT_SEND_TIMEOUT:-}" ]; then OC_FANOUT_SEND_TIMEOUT=20; fi
+  printf '%s' "$receipts"   # incremental flush: receipts survive a mid-send hang
+  receipts=""
+  out="$(timeout "$OC_FANOUT_SEND_TIMEOUT" "$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
         --title "$title" --text "$brief" "$uuid" 2>&1)" && rc=0 || rc=$?
   if [ "$rc" = 3 ]; then  # mid-turn: interrupt-retry per lib contract
-    out="$("$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
+    out="$(timeout "$OC_FANOUT_SEND_TIMEOUT" "$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
           --title "$title" --text "$brief" --interrupt "$uuid" 2>&1)" && rc=0 || rc=$?
   fi
   nid="$(printf '%s' "$out" | grep -oE 'notification id [0-9a-f-]+' | head -1 || true)"
