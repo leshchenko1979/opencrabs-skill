@@ -523,7 +523,7 @@ Supervisor-only). Skill markdown + fleet-directives stay Supervisor-only.
 | Upstream receives PRs ONLY — body = detailed description ending `Original issue: <full fork URL>`; NEVER `Closes #N` (wrong issue space) | `adolfousier/opencrabs` PR bodies | owner 2026-08-27 |
 | Fork issue closed by US right after the PR is filed | fork issue tracker | — |
 | Fork issues NEVER claimed on GitHub: no tackling comments, assignment, labels/reactions by any lane — claiming = `Issue-Ref` trailer + workers-ledger `claim` row (kind `claim`, v1.1 vocabulary since v0.4.48); uniqueness sweeps stay read-only search | ledger | owner 2026-08-27 17:07Z |
-| PR SHIPMENT gates on owner approval: feature COMPLETE + smoke evidence OWNER-APPROVED → Editor harvests fork-only commits, opens the upstream PR (procedure: `editor.md` Phase 7) | owner word | 2026-08-25 directive |
+| PR SHIPMENT (AUTO-SHIP law, owner 2026-09-09 ~10:4xZ "the owner should not approve shipping, it should be automatic"): feature COMPLETE + smoke PASS (v0.4.104 four-leg rubric) → Editor harvests fork-only commits, files the upstream PR — NO owner word needed; the owner is notified AFTER the act (procedure: `editor.md` Phase 7; supersedes the 2026-08-25 owner-approval gate, retired v0.4.122) | mechanical gates | 2026-09-09 owner order |
 | APPROVAL = Alexey's reply or a positive Telegram reaction to the explicit request in the forum topic; silence is NOT consent; spontaneous / ad-hoc PRs remain forbidden | owner word | v0.4.1 |
 
 *Pre-2026-08-27 upstream issues stay readable for uniqueness sweeps and legacy
@@ -532,10 +532,12 @@ links; development-time upstream contact is PR-comments only (supersedes the
 - CONSENT REGISTER — **Never rule from codified memory — grep the live record
   (chat / ledger) before denying any permission** (v0.4.17 lesson, 2026-08-26).
   Deploy consent RETIRED 2026-08-28 (owner 18:50Z): GREEN carrier run + artifact
-  verify IS the authorization. Upstream-PR owner-word gate RESTATED 2026-09-08
-  21:44Z (owner: "my go before pr") — probe PASS does NOT auto-file; the
-  editor presents the ready PR and files on the owner's go. APPROVAL row
-  above is the single statement of it — silence is NOT consent.
+  verify IS the authorization. Upstream-PR owner-word gate RETIRED 2026-09-09
+  (AUTO-SHIP law, owner ~10:4xZ "the owner should not approve shipping, it
+  should be automatic"; the 2026-09-08 21:44Z "my go before pr" restatement is
+  superseded) — smoke PASS files the PR, owner notified after the act. APPROVAL
+  definition above still governs anything that REMAINS owner-gated
+  (post-swap rollback-is-owner's-call; silence is NOT consent).
   (Deleted-tool history: CHANGELOG.md.)
 - ROLE-SCOPED BROADCASTS: messages reach non-owning roles ONLY when tagged
   [ALL]; otherwise send strictly to the owning role. CC-everyone is noise.

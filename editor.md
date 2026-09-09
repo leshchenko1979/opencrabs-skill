@@ -661,9 +661,9 @@ right here (`opencrabs-ops` user unit).
 4. PASS → reply to the sender (`session_notify`, `target_session` = the `from`
    header): feature OK + one line of evidence + the oc-smoke-evidence
    IDENTITY-MATCH receipt. If the feature is COMPLETE,
-   this same evidence goes to your forum topic as the Phase 7 approval
-   request — do NOT open any upstream PR until Alexey approves it
-   (APPROVAL GATE — Phase 7 step 0).
+   this same evidence goes to your forum topic as the filing notification —
+   under the AUTO-SHIP law (v0.4.122, owner order) smoke PASS itself files
+   the upstream PR; no owner wait (the old approval gate is RETIRED).
 5. FAIL → FILE THE ISSUE FIRST (Phase 1 procedure: symptom + evidence — you
    found it, you file it). Then send raw evidence + the issue link to the
    supervisor lane (`session_notify`) — do NOT attribute, do NOT fix another
@@ -728,16 +728,18 @@ tools/oc-wt remove <task>
 ## Phase 7 — Feature complete → upstream PR
 
 Trigger: the feature is COMPLETE — merged into fork `main`, shipped inside a
-green swapped build, smoke test PASS **and that smoke evidence approved by
-Alexey** (APPROVAL GATE, v0.4.1). Development-time contact stays issues-only;
-this PR is the ONE sanctioned exception (completed features only) — but it fires
-ONLY on owner approval.
+green swapped build, smoke test PASS (v0.4.104 four-leg rubric). Under the
+AUTO-SHIP law (owner order 2026-09-09 ~10:4xZ, v0.4.122) smoke PASS itself
+files the PR — owner approval is NOT a gate anymore; the owner is notified
+AFTER filing in the forum topic. Development-time contact stays issues-only;
+this PR is the ONE sanctioned exception (completed features only).
 
 ```bash
-# 0. OWNER APPROVAL GATE (v0.4.1): post the smoke-test EVIDENCE + an explicit
-#    approval request in YOUR forum topic (what you drove, what you saw,
-#    run id + built sha). Then WAIT. APPROVAL definition = SKILL.md §ISSUE
-#    ROUTING (reply or positive reaction counts; silence does NOT).
+# 0. FILING NOTICE (AUTO-SHIP law, v0.4.122): post the smoke-test EVIDENCE +
+#    the filing report in YOUR forum topic (what you drove, what you saw,
+#    run id + built sha + PR URL) — AFTER the PR is filed, not before.
+#    (The old OWNER APPROVAL GATE is RETIRED; post-swap rollback remains
+#    owner's-call.)
 
 # 1. list fork-only commits, pick THIS feature's (trailers + touched files)
 #    — mechanized: `tools/oc-attrib --range <old>..<new> --contributors` (3-col TSV:
