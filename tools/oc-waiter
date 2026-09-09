@@ -180,17 +180,28 @@ cmd_arm() {
   # hand-assembled uuid that passed the old shape check and sat in the notify
   # queue as a valid target. Shape check is NOT enough; the target must be a
   # LIVE session at arm time. Fail-fast here, not at wake (hours later).
-  # Runs AFTER the binary resolve so binary-refusal keeps its rc-3 semantics;
-  # list comes from the RESOLVED binary (selftest shim serves a fake list).
+  # Full-id source = profile session DB (READ-ONLY) — see the v0.4.129 block
+  # below for why session list/get are not used.
   if [ -z "${OC_WAITER_SKIP_LIVECHECK:-}" ]; then
-    local LIVE
-    LIVE="$("$NBIN" session list --profile "${OC_WAITER_PROFILE:-ops}" 2>/dev/null)" || { echo "$PROG: session list failed — cannot live-validate target (set OC_WAITER_SKIP_LIVECHECK=1 to bypass)" >&2; exit 3; }
-    # Full-id match ONLY (TARGET is [0-9a-f-]-validated, regex-safe). A prefix
-    # hit is not proof (that is how frankenstein uuids happen): the caller-
-    # supplied id must appear as a complete line field in the live roster.
-    if ! printf '%s\n' "$LIVE" | grep -qE "^[[:space:]]+${TARGET}[[:space:]]"; then
-      usage "--notify target '$TARGET' is not a live session (full-id match against session list failed) — refusing to arm a waiter that cannot wake anyone (dead/typo'd/hand-assembled uuid)"
+    # FULL-ID roster match (v0.4.129, n=2249 class): `session list` prints ONLY
+    # the 8-char prefix (no --json) and `session get` costs ~37s per call —
+    # both unusable for identity proof. The canonical full-id source is the
+    # profile session DB (READ-ONLY query, ~0s): CLI list ≡ DB rows where
+    # archived_at IS NULL AND title NOT LIKE 'subagent:%' (set-equality
+    # verified 2026-09-09: 1021==1021, zero diff). A full-id exact match
+    # kills the frankenstein class (real prefix + foreign tail, n=2221) at
+    # arm time with zero latency cost. DB path overridable for selftests.
+    local ROSTER
+    ROSTER="$(mktemp /tmp/oc-waiter-roster.XXXXXX)"
+    sqlite3 "file:${OC_WAITER_DB:-$HOME/.opencrabs/profiles/${OC_WAITER_PROFILE:-ops}/opencrabs.db}?mode=ro" \
+      "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
+      > "$ROSTER" 2>/dev/null \
+      || { rm -f "$ROSTER"; echo "$PROG: session DB unreadable — cannot live-validate target (set OC_WAITER_SKIP_LIVECHECK=1 to bypass)" >&2; exit 3; }
+    if ! grep -qxF "$TARGET" "$ROSTER"; then
+      rm -f "$ROSTER"
+      usage "--notify target '$TARGET' is not a live session (full-id match against session DB failed) — refusing to arm a waiter that cannot wake anyone (dead/typo'd/hand-assembled/frankenstein uuid)"
     fi
+    rm -f "$ROSTER"
   fi
   mkdir -p "$STATE_DIR/journal" || { echo "$PROG: cannot create $STATE_DIR" >&2; exit 3; }
   local ID REC
@@ -464,6 +475,11 @@ GSTUB
     printf '#!/usr/bin/env bash\ncase "$1 $2" in\n  "session list") printf "  abc123de-0000-0000-0000-000000000000  running   fixture session A\\n  11111111-2222-3333-4444-555555555555  running   fixture session B\\n"; exit 0 ;;\nesac\necho "$*" >> "${NOTIFY_LOG:?}"\ncase "${NOTIFY_MODE:-}" in\n  flaky)   [ -f "${NOTIFY_LOG}.c2" ] && exit 0; printf x >> "${NOTIFY_LOG}.c2"; exit 3 ;;\n  refuse)  exit 3 ;;\n  *)       exit 0 ;;\nesac\n' > "$D/notify"
     chmod +x "$D/notify"
     export NOTIFY_MODE="$1"
+    # DB fixture for the arm-time livecheck (v0.4.129): same roster the shim
+    # served as `session list` pre-DB-source. Re-created per mk_notify call.
+    rm -f "$D/roster.db"
+    sqlite3 "$D/roster.db" "CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, archived_at INTEGER); INSERT INTO sessions VALUES('11111111-2222-3333-4444-555555555555','fixture session B',NULL),('abc123de-0000-0000-0000-000000000000','fixture session A',NULL);" >/dev/null 2>&1
+    export OC_WAITER_DB="$D/roster.db"
   }
   run_case() { # $1=notify-mode $2=seq $3...=extra _run args
     mk_notify "$1"
@@ -603,12 +619,13 @@ GSTUB
   [ $? -eq 3 ] && t_ok "arm: full 40-hex passes sha law (reaches notify check -> 3)" || t_bad "arm full-sha rc=$?"
   OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref some/branch-name --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
   [ $? -eq 3 ] && t_ok "arm: branch name passes sha law" || t_bad "arm branch rc=$?"
-  # 7e. frankenstein-uuid gate (v0.4.124): target must be a LIVE session —
-  # full-id match against the notify shim's fixture roster (11111111-2222-3333-
-  # 4444-555555555555 IS a live fixture; 1a63f103-596e-... is hand-assembled).
-  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 1a63f103-596e-43a4-9c7e-1b6dfc3cd870 >/dev/null 2>&1
+  # 7e. frankenstein-uuid gate (v0.4.124, DB-sourced v0.4.129): target must be
+  # a LIVE session — full-id match against the OC_WAITER_DB fixture roster.
+  # The selftest DB serves the same rows the shim's fake `session list` did.
+  sqlite3 "$D/roster.db" "CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, archived_at INTEGER); INSERT INTO sessions VALUES('11111111-2222-3333-4444-555555555555','fixture session B',NULL),('abc123de-0000-0000-0000-000000000000','fixture session A',NULL);" 2>/dev/null
+  OC_WAITER_DB="$D/roster.db" OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 1a63f103-596e-43a4-9c7e-1b6dfc3cd870 >/dev/null 2>&1
   [ $? -eq 2 ] && t_ok "arm: hand-assembled (frankenstein) uuid -> 2, not armed (n=2221 class)" || t_bad "arm frankenstein rc=$?"
-  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555550 >/dev/null 2>&1
+  OC_WAITER_DB="$D/roster.db" OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555550 >/dev/null 2>&1
   [ $? -eq 2 ] && t_ok "arm: prefix-match-but-wrong-tail uuid -> 2 (full-id match law)" || t_bad "arm prefix-tail rc=$?"
   OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_NOTIFY_DEFAULT= OC_TOOLS_NOLOG=1 "$SELF" quick --run 222 >/dev/null 2>&1
   [ $? -eq 2 ] && t_ok "quick: no OC_NOTIFY_DEFAULT -> 2 (no OC_ACTOR fallback, n=2234 foreign-wake law)" || t_bad "quick nodefault rc=$?"
