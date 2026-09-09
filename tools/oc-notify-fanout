@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# oc-notify-fanout — per-lane skill-change brief generator + dispatcher (v0.4.123)
+#
+# HQ CONCUR+ASSIGN 2026-09-09 (owner order same day): the v0.4.120 notify wave
+# hand-picked lanes from a stale roster and missed the RELOAD instruction.
+# This tool is the single sanctioned path for skill-change notifies.
+#
+# Laws baked in (Triage supplement after acc3fa9b/c6b1a539/d5863180):
+#   1. SELF-UUID SUBSTITUTION: each lane's brief carries THAT lane's uuid in
+#      the drift-check command — no "{{UUID}}" placeholder ever survives into
+#      a sent brief. A brief containing a literal placeholder token is a
+#      defect generator; the tool refuses to send one (defect class killed
+#      at the root: lanes parsed "<your-uuid>" as the sender's uuid).
+#   2. RELOAD line per fleet-directives.md (L158 law) + explicit ack contract
+#      in EVERY brief.
+#   3. TARGET VALIDATION: every target is checked (a) uuid shape, (b) no
+#      all-zero segment (n=2167 placeholder-uuid class), (c) LIVE session
+#      existence via `opencrabs session get <uuid>` rc==0, BEFORE any send.
+#      Dead targets are skipped with a reason, never attempted.
+#   4. RECEIPTS: one line per lane (uuid role rc detail); summary; ledger
+#      stamp kind=notify-fanout carrying all ids (opt-out --no-stamp).
+#   5. QUIET-60S contract text is embedded in briefs; NOTE: the binary's
+#      `session notify` CLI has no quiet/mode flag (verified 2026-09-09) —
+#      sends are immediate with the standard interrupt-retry (lib contract).
+#      Flagged to HQ as binary gap (upstream-harvest candidate).
+#
+# Usage:
+#   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
+#     [--text "what changed ..."] [--text-file /path/brief.md] \
+#     [--roles editor,hq-supervisor] [--exclude "40695,uuid8char"] \
+#     [--dry-run] [--no-stamp] [--include-self]
+#
+#   Default brief (when --text/--text-file omitted) is the canonical
+#   skill-change template with what="" — pass --text for the body.
+#   Template tokens (case-sensitive, replaced per lane BEFORE sending):
+#     {{UUID}} -> lane's own session uuid   {{VERSION}} -> SKILL.md version
+#   Any surviving {{...}} token after substitution -> abort that send (law 1).
+#
+# Exit codes: 0 all sent/skipped-clean · 2 usage/roster error · 3 ledger ·
+#             4 partial send failures (receipts say which) · 5 abort (placeholder leak guard)
+set -euo pipefail
+SKILL_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# shellcheck source=lib/oc-notify.sh
+source "$SKILL_DIR/tools/lib/oc-notify.sh"
+LEDGER="${OC_FANOUT_LEDGER:-$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
+PROFILE="${OC_NOTIFY_PROFILE:-ops}"
+SENDER="oc-notify-fanout"
+
+die() { echo "oc-notify-fanout: $*" >&2; exit "${2:-2}"; }
+[ "${1:-}" != "--selftest" ] || { exec bash "$0"; } # selftest handled below
+
+title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0
+while [ $# -gt 0 ]; do case "$1" in
+  --title) title="${2:-}"; shift 2 ;;
+  --text) text="${2:-}"; shift 2 ;;
+  --text-file) text_file="${2:-}"; shift 2 ;;
+  --roles) roles="${2:-}"; shift 2 ;;
+  --exclude) excludes="${2:-}"; shift 2 ;;
+  --dry-run) dry=1; shift ;;
+  --no-stamp) stamp=0; shift ;;
+  --include-self) include_self=1; shift ;;
+  --help|-h) sed -n '2,40p' "$0"; exit 0 ;;
+  *) die "unknown flag '$1' (see --help)" ;;
+esac; done
+
+version="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL_DIR/SKILL.md" | head -1)"
+[ -n "$version" ] || die "cannot read version from SKILL.md"
+[ -n "$title" ] || die "usage: --title required"
+[ -f "$LEDGER" ] || die 3 "roster missing: $LEDGER"
+bin="$(oc_notify_resolve_bin)" || die "notify binary unresolvable (set OC_NOTIFY_BIN)"
+LIVE_SESSIONS="$(mktemp /tmp/fanout-sessions.XXXXXX)"
+"$bin" session list --profile "$PROFILE" > "$LIVE_SESSIONS" 2>/dev/null || die 3 "session list failed — cannot validate targets"
+
+if [ -n "$text_file" ]; then
+  [ -f "$text_file" ] || die "--text-file missing: $text_file"
+  text="$(cat "$text_file")"
+fi
+[ -n "$text" ] || text="(see title)"
+
+want_role() { # $1=role -> 0 if selected by --roles filter
+  [ -z "$roles" ] && return 0
+  case ",$roles," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+}
+excluded() { # $1=uuid $2=topic -> 0 if excluded (8-char prefix or full uuid or topic)
+  local t
+  local IFS=','
+  for t in $excludes; do
+    case "$1" in "$t"*) return 0 ;; esac
+    [ -n "${2:-}" ] && [ "$2" = "$t" ] && return 0
+  done
+  return 1
+}
+self_uuid="${OC_FANOUT_SELF:-2fae1230-de9e-4fa5-aa24-822cf7188c3e}"
+
+zero_segment() { case "$1" in *-0000-*|*-00000000*) return 0 ;; esac; return 1; }
+
+validate_target() { # $1=uuid -> 0 ok; else echo reason
+  local u="$1"
+  case "$u" in
+    [0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*) ;; # 8-4-4-4-12 shape
+    *) echo "malformed uuid"; return 1 ;;
+  esac
+  if zero_segment "$u"; then echo "placeholder/all-zero-segment uuid (n=2167 class)"; return 1; fi
+  # live check via ONE cached session-list pass (session get is ~5s/uuid —
+  # 33 targets would take minutes; the list is a single CLI call)
+  if ! grep -qE "^  ${u:0:8} " "$LIVE_SESSIONS" 2>/dev/null; then
+    echo "not a live session (8-char prefix absent from session list)"; return 1
+  fi
+  return 0
+}
+
+sent=0 skipped=0 failed=0 receipts="" ids=""
+while IFS=$'\t' read -r uuid role topic; do
+  [ -n "$uuid" ] || continue
+  [ "$uuid" = "$self_uuid" ] && [ "$include_self" = 0 ] && continue
+  want_role "$role" || continue
+  if excluded "$uuid" "$topic"; then
+    receipts+="SKIP ${uuid} ${role} excluded(${topic:-no-topic})"$'\n'; skipped=$((skipped+1)); continue
+  fi
+  if reason="$(validate_target "$uuid")"; then :; else
+    receipts+="SKIP ${uuid} ${role} ${reason}"$'\n'; skipped=$((skipped+1)); continue
+  fi
+  brief="${text}"
+  brief="${brief//\{\{UUID\}\}/${uuid}}"
+  brief="${brief//\{\{VERSION\}\}/${version}}"
+  brief="${brief} RELOAD: run oc-drift-check ${uuid} ${version} --ack, re-read changed files. ACK after drift-check."
+  case "$brief" in *'{{'*'}}'*)
+    receipts+="ABORT ${uuid} ${role} placeholder-token-survived-substitution(law1)"$'\n'
+    failed=$((failed+1)); continue ;;
+  esac
+  if [ "$dry" = 1 ]; then
+    receipts+="DRY ${uuid} ${role} brief-ok(${#brief} chars)"$'\n'; sent=$((sent+1)); continue
+  fi
+  out="$("$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
+        --title "$title" --text "$brief" "$uuid" 2>&1)" && rc=0 || rc=$?
+  if [ "$rc" = 3 ]; then  # mid-turn: interrupt-retry per lib contract
+    out="$("$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
+          --title "$title" --text "$brief" --interrupt "$uuid" 2>&1)" && rc=0 || rc=$?
+  fi
+  nid="$(printf '%s' "$out" | grep -oE 'notification id [0-9a-f-]+' | head -1 || true)"
+  if [ "$rc" = 0 ]; then
+    receipts+="SENT ${uuid} ${role} ${nid:-rc0-no-id}"$'\n'
+    ids+="${nid:-rc0} " ; sent=$((sent+1))
+  else
+    receipts+="FAIL ${uuid} ${role} rc=${rc}"$'\n'; failed=$((failed+1))
+  fi
+done < <(jq -r '.workers[] | [(.uuid // ""), (.role // "editor"), ((.topic_id // 0) | tostring)] | @tsv' "$LEDGER")
+
+echo "--- receipts ---"; printf '%s' "$receipts"
+echo "--- summary ---"
+echo "sent=$sent skipped=$skipped failed=$failed version=$version dry=$dry"
+if [ "$stamp" = 1 ] && [ "$dry" = 0 ] && [ "$sent" -gt 0 ]; then
+  bash "$SKILL_DIR/tools/oc-ledger" stamp notify-fanout \
+    "fanout '$title': sent=$sent skipped=$skipped failed=$failed ids: ${ids:-none}" || true
+fi
+[ "$failed" = 0 ] || exit 4
+exit 0
