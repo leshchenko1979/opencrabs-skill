@@ -609,7 +609,12 @@ carrier dispatch → bounded poll and EXITS GREEN when the run lands (rc 0 +
 run id; rc 5 timeout + run id; rc 6 RED). GREEN is a VERDICT, not a swap —
 the swap is a SEPARATE execute leg: `oc-deploy poll --execute --wait N`
 (re-run until it reports SWAPPED). Skipping the execute leg = the #134
-orphan class: build GREEN, deployed marker never moves. Gates carry machine
+orphan class: build GREEN, deployed marker never moves. **PREFERRED PATH
+(v0.4.126): `oc-ship-chain --sha <40> --branch <lane-branch>` runs the
+whole 5→swapped stretch — CI gate → issue-log → ff-merge → ship → swap —
+in one invocation under one chain-id, with no legitimate exit point
+between gate verdict and swap (E-H1 and #134 classes structurally closed;
+RED exits structured rc 4/5, fix rounds stay with the lane).** Gates carry machine
 tokens (`OC_DEPLOY_GATE=<cause>` on rc 2; `wait-plan-mode` when --wait is
 used without --execute). Never report a ship as deployed off ship-wait GREEN
 alone.

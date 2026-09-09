@@ -92,7 +92,7 @@ answers "who is alive right now".
 
 | Situation | Action |
 |---|---|
-| ANY version bump (default) | **PUSH-ALL-QUIET** (owner law 2026-09-07, v0.4.91): notify ALL non-dormant workers `delivery=quiet` — no "touches its duties" judgment; content propagation itself is DISK ABSORPTION (RELOAD LAW, zero-ping). Mechanics = the 5 steps below the table |
+| ANY version bump (default) | **PUSH-ALL-QUIET** (owner law 2026-09-07, v0.4.91): notify ALL non-dormant workers `delivery=quiet` — no "touches its duties" judgment; content propagation itself is DISK ABSORPTION (RELOAD LAW, zero-ping). Mechanics = the 5 steps below the table. **Mechanical path (v0.4.129): `oc-notify-fanout --title "SKILL CHANGE — v<v>"`** generates the per-lane briefs (self-uuid reload instruction, placeholder-leak abort, DB-validated targets, receipts + ledger stamp) — hand-picking lanes from a stale roster is the v0.4.120 defect class the tool kills |
 | Confirm law (probe-verified 2026-09-07) | `delivery=quiet` + `confirm=true` is a NO-OP watch — quiet always returns instantly with a deferred verdict + notify_id; confirm only watches synchronous states. Routine pushes: quiet, NO confirm, fire-and-forget (drift-check is the comprehension guard). CRITICAL notifies (owner-gated orders, breaking `[ALL]`): `delivery=now` + `confirm=true` — that pair gives the blocking watch and a `woke`/`delivered` verdict; `now` refuses while target mid-turn → retry on refusal |
 | Worker >3 versions behind, acting substantively | targeted notify (mechanical drift and ack-row reads don't count) |
 | Breaking security/deploy-gate change | `[ALL]` broadcast (`now` + `confirm=true`) — rules whose absence produces wrong rulings the same day. Everything else waits for each lane's next boundary |
