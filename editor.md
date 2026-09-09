@@ -116,8 +116,10 @@ supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
    Duty-4 P1): a watcher that
    fires on elapsed time alone reports `status=in_progress` runs as verdicts.
    Gate on `gh run view --json status` == `completed` (then read
-   `conclusion`), or use `oc-prchecks --wait`. Verdict fidelity (v0.4.56)
-   covers oc-prchecks only — hand-rolled wrappers do not inherit it.
+   `conclusion`), or use `oc-waiter arm` (the ONE watcher law, v0.4.120 —
+   `oc-prchecks --wait` as a verdict waiter is BANNED by that law; verdict
+   fidelity v0.4.56 covers oc-prchecks only — hand-rolled wrappers do not
+   inherit it).
 5. **Read detached-waiter rc at TOP level** (v0.4.71, Duty-4 P12): in a pipe,
    (`tail`/`head`), not the tool's. Capture the tool's rc before piping
    (`rc=$?` on the bare invocation, then pipe its output), or use
