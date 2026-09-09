@@ -95,7 +95,13 @@ on census evidence + owner word (supervisor.md step 7).
      whose calls cluster on rc 2 is a broken interface), documented tools
      never invoked in the window (YAGNI/deletion evidence for Reviewer D),
      hand-built ritual artifacts that a proposal should replace. Findings
-     cite the log rows they rest on. Boundary watch vs A/B: C's dimension is
+     cite the log rows they rest on. ADOPTION-COMPLIANCE CHECK (v0.4.120,
+     owner-ordered): every C pass samples runtime `Detaching '...'` records
+     and flags ANY `gh run watch` / hand-rolled nohup CI poller spawn as a
+     law violation (one-watcher law, editor.md) — official surfaces are
+     `oc-waiter arm` and one-shot `gh run view`; also flags
+     `oc-prchecks --wait` used as a verdict waiter (double-duty). Each
+     violation names the session id from the log row. Boundary watch vs A/B: C's dimension is
      GAPS (what should be a command), not doc wording or weight.
 
    - **Reviewer E — INTERFACE/TOPOLOGY:** the TOOL SURFACE itself — pairs of

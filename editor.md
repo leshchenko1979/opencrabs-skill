@@ -91,12 +91,15 @@ editor-facing duties:
 verify, notify wiring, log-window cuts, REST casing — are SUPERVISOR-scoped:
 supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
 
-1. **Raw `gh run watch` / `gh watch` are BANNED.** The 3s default refresh across
-   concurrent sessions caused the overnight gh flood. Lane waits go through `oc-prchecks` (15s poll,
-   single-flight dispatch lock + headSha adoption); carrier waits through
-   `oc-deploy watch` or a DETACHED ≥60s poller (proven `/tmp/swap-*.sh`
-   pattern) — carrier waits are SUPERVISOR-owned; an editor never watches a
-   build. Never hand-roll a short-interval `gh run watch` loop.
+1. **One watcher law (v0.4.120, owner-ordered — supersedes all prior watcher
+   text):** CI verdict waits use exactly ONE of two official surfaces —
+   (a) `oc-waiter arm` (preferred: journal verdict, notify wake, survives
+   audit) or (b) one-shot `gh run view` polls on wake. Raw `gh run watch` /
+   `gh watch` / hand-rolled `nohup` pollers / `oc-prchecks --wait` used as a
+   verdict waiter (double-duty) are ALL BANNED, no sanctioned pattern
+   exception — detached watchers die silently on daemon restarts (five-zero-
+   result precedent, aaa8d8ae) and a dead watcher looks like a slow run.
+   Carrier waits remain SUPERVISOR-owned via `oc-deploy watch`/`poll`.
 2. **`OC_ACTOR=<session-uuid>` MUST be exported on every `oc-*` tool
    invocation** — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
    making floods and behavior attributable after the fact and feeding the

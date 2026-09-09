@@ -95,6 +95,7 @@ HQ_SESSION="${OC_WAITER_HQ:-}"
 usage() { [ $# -gt 0 ] && echo "$PROG: $1" >&2
   cat >&2 <<EOS
 Usage: $PROG arm --ref <sha-or-branch> --notify <session-uuid> [--label S] [--timeout N|Ns|Nm|Nh] [--stall-k N] [--window N] [--run <id>] [--repo SLUG]
+       $PROG quick --run <id> [--label S]   (one-liner arm; notifies OC_NOTIFY_DEFAULT or the arming session)
        $PROG list | sweep | _run <record.json> | --selftest
 Exit: arm 0 armed / 2 usage-or-actor-refused / 3 notify-binary-unresolvable · _run 0 delivered / 4 NOTIFY-FAILED · sweep 0 clean / 1 orphans
 Env: OC_ACTOR=<session-uuid> REQUIRED for arm (attribution, #115 C) · --run seeds a witnessed run id (#115 A) · --repo / OC_WAITER_REPO for cross-repo watch (n=1800: upstream CI runs live on the upstream repo, not the fork default)
@@ -211,6 +212,30 @@ cmd_arm() {
   echo "  journal: $STATE_DIR/journal/$ID.jsonl"
   echo "  READ BACK the journal start line before ending the turn (launch-death lesson)."
   exit 0
+}
+
+# ---------- quick (v0.4.120 one-liner arm) -------------------------------------
+# Owner-ordered (watcher audit 2026-09-09): kills the ceremony excuse. A lane
+# that just wants "tell me when run X settles" gets arm semantics in one line.
+# quick --run <id> --label <text>   (uses --notify "$OC_NOTIFY_DEFAULT" or
+#                                    falls back to the arming session via
+#                                    OC_ACTOR; label auto-prefixed quick:)
+cmd_quick() {
+  case "${OC_ACTOR:-}" in
+    ""|unknown) echo "$PROG: quick refused: OC_ACTOR unset or 'unknown' — export OC_ACTOR=<your session uuid>" >&2; exit 2 ;;
+  esac
+  local RUN_ID="" LABEL=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --run)   shift; RUN_ID="${1:-}"; case "$RUN_ID" in ''|*[!0-9]*) usage "quick --run needs a numeric run id" ;; esac ;;
+      --label) shift; LABEL="${1:-}" ;;
+      *) usage "unknown arg '$1' (quick takes only --run and --label)" ;;
+    esac; shift
+  done
+  [ -n "$RUN_ID" ] || usage "quick needs --run <numeric run id>"
+  local TARGET="${OC_NOTIFY_DEFAULT:-${OC_ACTOR:-}}"
+  exec "$SELF" arm --run "$RUN_ID" --notify "$TARGET" \
+    --label "quick:${LABEL:-run-$RUN_ID}" --timeout "$TIMEOUT"
 }
 
 # ---------- _run (detached child) ----------------------------------------------
@@ -619,6 +644,7 @@ EOH
     exit 0 ;;
   --selftest|selftest) do_selftest; exit $? ;;
   arm)   shift; cmd_arm "$@" ;;
+  quick) shift; cmd_quick "$@" ;;
   _run)  shift; cmd_run "$@" ;;
   list)  cmd_list ;;
   sweep) cmd_sweep ;;
