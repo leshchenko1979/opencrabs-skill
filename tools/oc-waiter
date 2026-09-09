@@ -175,6 +175,23 @@ cmd_arm() {
     echo "$PROG: notify binary unresolvable (set OC_WAITER_NOTIFY) — refusing to arm a waiter that cannot wake anyone" >&2
     exit 3
   }
+  # Frankenstein-uuid gate (incident n=2221 class, 3rd instance 2026-09-09):
+  # 1a63f103-596e-43a4-9c7e-1b6dfc3cd870 = #129 lane prefix + Triage tail — a
+  # hand-assembled uuid that passed the old shape check and sat in the notify
+  # queue as a valid target. Shape check is NOT enough; the target must be a
+  # LIVE session at arm time. Fail-fast here, not at wake (hours later).
+  # Runs AFTER the binary resolve so binary-refusal keeps its rc-3 semantics;
+  # list comes from the RESOLVED binary (selftest shim serves a fake list).
+  if [ -z "${OC_WAITER_SKIP_LIVECHECK:-}" ]; then
+    local LIVE
+    LIVE="$("$NBIN" session list --profile "${OC_WAITER_PROFILE:-ops}" 2>/dev/null)" || { echo "$PROG: session list failed — cannot live-validate target (set OC_WAITER_SKIP_LIVECHECK=1 to bypass)" >&2; exit 3; }
+    # Full-id match ONLY (TARGET is [0-9a-f-]-validated, regex-safe). A prefix
+    # hit is not proof (that is how frankenstein uuids happen): the caller-
+    # supplied id must appear as a complete line field in the live roster.
+    if ! printf '%s\n' "$LIVE" | grep -qE "^[[:space:]]+${TARGET}[[:space:]]"; then
+      usage "--notify target '$TARGET' is not a live session (full-id match against session list failed) — refusing to arm a waiter that cannot wake anyone (dead/typo'd/hand-assembled uuid)"
+    fi
+  fi
   mkdir -p "$STATE_DIR/journal" || { echo "$PROG: cannot create $STATE_DIR" >&2; exit 3; }
   local ID REC
   ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
@@ -233,7 +250,17 @@ cmd_quick() {
     esac; shift
   done
   [ -n "$RUN_ID" ] || usage "quick needs --run <numeric run id>"
-  local TARGET="${OC_NOTIFY_DEFAULT:-${OC_ACTOR:-}}"
+  # n=2234 (HQ, 2026-09-09): contaminated actor env armed a waiter whose wake
+  # landed in a foreign session (arm 20260909T123351Z: actor==notify==462181e9,
+  # armer was 1a63f103's tool-loop). quick MUST NOT silently default the wake
+  # target to OC_ACTOR — the actor env is exportable across sessions (attribution
+  # is env-based, not session-based). Explicit target only: export
+  # OC_NOTIFY_DEFAULT=<your own full session uuid>, or use `arm --notify`.
+  local TARGET="${OC_NOTIFY_DEFAULT:-}"
+  if [ -z "$TARGET" ]; then
+    echo "$PROG: quick refused: OC_NOTIFY_DEFAULT unset — refusing to default the wake target to OC_ACTOR (n=2234 foreign-wake class). Export OC_NOTIFY_DEFAULT=<your own full session uuid> or arm with explicit --notify" >&2
+    exit 2
+  fi
   exec "$SELF" arm --run "$RUN_ID" --notify "$TARGET" \
     --label "quick:${LABEL:-run-$RUN_ID}" --timeout "$TIMEOUT"
 }
@@ -432,7 +459,9 @@ GSTUB
   chmod +x "$D/gate"
 
   mk_notify() { # $1=mode: deliver | flaky | refuse (mode read at RUNTIME via env)
-    printf '#!/usr/bin/env bash\necho "$*" >> "${NOTIFY_LOG:?}"\ncase "${NOTIFY_MODE:-}" in\n  flaky)   [ -f "${NOTIFY_LOG}.c2" ] && exit 0; printf x >> "${NOTIFY_LOG}.c2"; exit 3 ;;\n  refuse)  exit 3 ;;\n  *)       exit 0 ;;\nesac\n' > "$D/notify"
+    # Serves `session list` with a fixture roster so the arm-time frankenstein
+    # livecheck (v0.4.124) validates targets against THIS shim, not the live DB.
+    printf '#!/usr/bin/env bash\ncase "$1 $2" in\n  "session list") printf "  abc123de-0000-0000-0000-000000000000  running   fixture session A\\n  11111111-2222-3333-4444-555555555555  running   fixture session B\\n"; exit 0 ;;\nesac\necho "$*" >> "${NOTIFY_LOG:?}"\ncase "${NOTIFY_MODE:-}" in\n  flaky)   [ -f "${NOTIFY_LOG}.c2" ] && exit 0; printf x >> "${NOTIFY_LOG}.c2"; exit 3 ;;\n  refuse)  exit 3 ;;\n  *)       exit 0 ;;\nesac\n' > "$D/notify"
     chmod +x "$D/notify"
     export NOTIFY_MODE="$1"
   }
@@ -574,6 +603,15 @@ GSTUB
   [ $? -eq 3 ] && t_ok "arm: full 40-hex passes sha law (reaches notify check -> 3)" || t_bad "arm full-sha rc=$?"
   OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref some/branch-name --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
   [ $? -eq 3 ] && t_ok "arm: branch name passes sha law" || t_bad "arm branch rc=$?"
+  # 7e. frankenstein-uuid gate (v0.4.124): target must be a LIVE session —
+  # full-id match against the notify shim's fixture roster (11111111-2222-3333-
+  # 4444-555555555555 IS a live fixture; 1a63f103-596e-... is hand-assembled).
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 1a63f103-596e-43a4-9c7e-1b6dfc3cd870 >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "arm: hand-assembled (frankenstein) uuid -> 2, not armed (n=2221 class)" || t_bad "arm frankenstein rc=$?"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555550 >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "arm: prefix-match-but-wrong-tail uuid -> 2 (full-id match law)" || t_bad "arm prefix-tail rc=$?"
+  OC_WAITER_NOTIFY="$D/notify" OC_WAITER_PRCHECKS="$D/gate" OC_NOTIFY_DEFAULT= OC_TOOLS_NOLOG=1 "$SELF" quick --run 222 >/dev/null 2>&1
+  [ $? -eq 2 ] && t_ok "quick: no OC_NOTIFY_DEFAULT -> 2 (no OC_ACTOR fallback, n=2234 foreign-wake law)" || t_bad "quick nodefault rc=$?"
   # 7d. actor guard + --run validation (#115 C/A)
   OC_ACTOR= OC_WAITER_NOTIFY=/nonexistent/opencrabs OC_TOOLS_NOLOG=1 "$SELF" arm --ref fixture-branch --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
   [ $? -eq 2 ] && t_ok "arm: OC_ACTOR unset -> 2 (actor guard #115C)" || t_bad "arm actor-unset rc=$?"
