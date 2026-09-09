@@ -133,23 +133,30 @@ while IFS=$'\t' read -r uuid role topic; do
   fi
   # n=2221 hang fix: `session notify` to a wedged target can block indefinitely;
   # with ~33 targets one hang starves the whole fanout and NO receipts flush.
-  # Per-send timeout (default 20s) + receipts printed INCREMENTALLY (flush
-  # before each send), so a mid-run hang leaves every prior receipt on stdout.
-  if [ -z "${OC_FANOUT_SEND_TIMEOUT:-}" ]; then OC_FANOUT_SEND_TIMEOUT=20; fi
+  # Per-send timeout + receipts printed INCREMENTALLY (flush before each send),
+  # so a mid-run hang leaves every prior receipt on stdout.
+  # n=2269 fix (v0.4.126): measured live latency of `session notify` is ~30s
+  # UNIFORM (probe A plain=34s, probe B --title=31s — --title NOT the delta).
+  # The old 20s default killed EVERY send rc=124 while delivery actually
+  # worked. Default raised to 90s; each receipt carries send latency.
+  if [ -z "${OC_FANOUT_SEND_TIMEOUT:-}" ]; then OC_FANOUT_SEND_TIMEOUT=90; fi
   printf '%s' "$receipts"   # incremental flush: receipts survive a mid-send hang
   receipts=""
+  T0=$(date +%s%N)
   out="$(timeout "$OC_FANOUT_SEND_TIMEOUT" "$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
         --title "$title" --text "$brief" "$uuid" 2>&1)" && rc=0 || rc=$?
   if [ "$rc" = 3 ]; then  # mid-turn: interrupt-retry per lib contract
     out="$(timeout "$OC_FANOUT_SEND_TIMEOUT" "$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
           --title "$title" --text "$brief" --interrupt "$uuid" 2>&1)" && rc=0 || rc=$?
   fi
+  T1=$(date +%s%N)
+  LAT_MS=$(( (T1 - T0) / 1000000 ))
   nid="$(printf '%s' "$out" | grep -oE 'notification id [0-9a-f-]+' | head -1 || true)"
   if [ "$rc" = 0 ]; then
-    receipts+="SENT ${uuid} ${role} ${nid:-rc0-no-id}"$'\n'
+    receipts+="SENT ${uuid} ${role} ${nid:-rc0-no-id} ${LAT_MS}ms"$'\n'
     ids+="${nid:-rc0} " ; sent=$((sent+1))
   else
-    receipts+="FAIL ${uuid} ${role} rc=${rc}"$'\n'; failed=$((failed+1))
+    receipts+="FAIL ${uuid} ${role} rc=${rc} ${LAT_MS}ms"$'\n'; failed=$((failed+1))
   fi
 done < <(jq -r '.workers[] | [(.uuid // ""), (.role // "editor"), ((.topic_id // 0) | tostring)] | @tsv' "$LEDGER")
 
