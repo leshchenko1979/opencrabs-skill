@@ -1,0 +1,301 @@
+#!/usr/bin/env bash
+# oc-ship-chain — single-invocation orchestrator: CI gate → issue-log → ff-merge
+# into fork main → oc-deploy ship → oc-deploy poll until SWAPPED.
+#
+# Owner GO 2026-09-09 16:16Z ("Go" on the 5→swapped design). Scope ends at
+# SWAPPED: smoke (Phase 6b) and owner approval (Phase 7) stay OUTSIDE — the
+# tool never touches them.
+#
+# Why: lanes kept stopping "at GREEN" (E-H1: verdict, not a deploy) and
+# skipping the swap leg (#134 orphan class). One invocation = one clean
+# attempt; there is NO legitimate exit point between gate verdict and swap.
+# RED outcomes are structured exits — the LANE owns the fix round, the tool
+# never retries internally.
+#
+# Usage:
+#   oc-ship-chain --sha <sha> --branch <branch> [--issue <n>] [--repo <fork-slug>]
+#                 [--wait <sec>] [--dry-run] [--no-ledger] [--selftest] [--help]
+#
+# Exit: 0 SWAPPED (full chain complete)
+#       2 usage
+#       3 dirty fork checkout (pre-flight)
+#       4 GATE-RED (oc-prchecks rc 3) or CARRIER-RED (ship wait verdict RED)
+#       5 NON-FF (branch not fast-forwardable onto fork main — lane rebases
+#         via oc-rebase-safety, then re-runs the chain)
+#       6 dispatch/poll infra failure (prchecks rc 4/5/7/8, ship rc other)
+#
+# Chain-id: every leg stamps the ledger under one id
+#   CHAIN-<shortsha>-<UTCstamp>  →  oc-ledger show | grep <id> = whole run.
+#
+# Env (selftest hooks — never needed in production):
+#   OC_PRCHECKS_BIN  default tools/oc-prchecks
+#   OC_DEPLOY_BIN    default tools/oc-deploy
+#   OC_ISSUELOG_BIN  default tools/oc-issue-log
+#   OC_FORK_REPO     default ~/opencrabs (the fork checkout)
+#   OC_SHIPCHAIN_LEDGER  path for chain journal lines (default: oc-ledger)
+#   OC_TOOLS_NOLOG=1     suppress ledger stamps (battery/selftest)
+
+set -e
+set -u
+
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+TOOLS_DIR="$(dirname "$SELF")"
+
+# selftest dispatch BEFORE arg parsing (avoids the unknown-arg gate)
+# impl re-entry is guarded by OC_SHIPCHAIN_IMPL to prevent exec-loop
+if [ "${OC_SHIPCHAIN_IMPL:-0}" = "1" ]; then
+  SELFTEST_MODE=2          # 2 = inside the impl itself, never re-exec
+elif [ "${1:-}" = "--selftest" ]; then
+  SELFTEST_MODE=1          # 1 = run was --selftest: exec into impl
+else
+  SELFTEST_MODE=0
+fi
+
+PRCHECKS_BIN="${OC_PRCHECKS_BIN:-$TOOLS_DIR/oc-prchecks}"
+DEPLOY_BIN="${OC_DEPLOY_BIN:-$TOOLS_DIR/oc-deploy}"
+ISSUELOG_BIN="${OC_ISSUELOG_BIN:-$TOOLS_DIR/oc-issue-log}"
+FORK_REPO="${OC_FORK_REPO:-$HOME/opencrabs}"
+
+usage() { sed -n '2,30p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0; }
+die() { printf 'oc-ship-chain: %s\n' "$1" >&2; exit "${2:-2}"; }
+
+SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0
+[ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 exec bash "$SELF"
+[ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sha)     SHA="${2:?}"; shift 2 ;;
+    --branch)  BRANCH="${2:?}"; shift 2 ;;
+    --issue)   ISSUE="${2:?}"; shift 2 ;;
+    --repo)    REPO="${2:?}"; shift 2 ;;
+    --wait)    WAIT="${2:?}"; shift 2 ;;
+    --dry-run) DRY=1; shift ;;
+    --no-ledger) NOLEDGER=1; shift ;;
+    --help|-h) usage ;;
+    *) die "unknown arg: $1 (see --help)" 2 ;;
+  esac
+done
+[ -n "$SHA" ]    || die "--sha required"
+[ -n "$BRANCH" ] || die "--branch required"
+
+# ---- chain id -------------------------------------------------------------
+SHORT="$(printf '%s' "$SHA" | cut -c1-8)"
+CHAIN="CHAIN-${SHORT}-$(date -u +%Y%m%dT%H%M%SZ)"
+
+# ---- journal --------------------------------------------------------------
+# One line per leg, all under the chain id. OC_TOOLS_NOLOG=1 or --no-ledger
+# (selftests/battery) writes to stderr instead of the ledger.
+journal() {
+  local line="[$CHAIN] $1"
+  if [ -n "${OC_SHIPCHAIN_LEDGER:-}" ]; then
+    printf '%s\n' "$line" >> "$OC_SHIPCHAIN_LEDGER"
+  elif [ "$NOLEDGER" = "1" ] || [ "${OC_TOOLS_NOLOG:-0}" = "1" ]; then
+    printf '%s\n' "$line" >&2
+  elif [ -n "${OC_SHIPCHAIN_LEDGER:-}" ]; then
+    printf '%s\n' "$line" >> "$OC_SHIPCHAIN_LEDGER"
+  else
+    "$TOOLS_DIR/oc-ledger" stamp shipchain "$line" >/dev/null 2>&1 || true
+  fi
+}
+
+# ---- pre-flight -----------------------------------------------------------
+[ -d "$FORK_REPO/.git" ] || die "fork checkout not found: $FORK_REPO" 3
+# resolve the worktree that actually holds main (this repo may be a secondary
+# worktree pinned to another branch — git forbids main twice)
+MAIN_WT="$(git -C "$FORK_REPO" worktree list --porcelain | awk '/^worktree /{wt=$2} /^branch refs\/heads\/main$/{print wt; exit}')"
+if [ -n "$MAIN_WT" ] && [ "$MAIN_WT" != "$FORK_REPO" ]; then
+  journal "fork repo $FORK_REPO is not the main worktree — using $MAIN_WT"
+  FORK_REPO="$MAIN_WT"
+fi
+DIRTY="$(git -C "$FORK_REPO" status --porcelain | head -5)"
+[ -z "$DIRTY" ] || die "fork checkout dirty — clean before chaining: $DIRTY" 3
+journal "START sha=$SHA branch=$BRANCH"
+
+if [ "$DRY" = "1" ]; then
+  echo "DRY-RUN $CHAIN: pre-flight ok (sha=$SHA branch=$BRANCH) — no legs executed"
+  exit 0
+fi
+
+# ---- leg 1: CI gate -------------------------------------------------------
+journal "LEG1 gate start (oc-prchecks $SHA)"
+set +e
+GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} 2>&1)"
+GATE_RC=$?
+set -e
+case "$GATE_RC" in
+  0) journal "LEG1 gate GREEN" ;;
+  3) journal "LEG1 gate RED";  printf '%s\n' "$GATE_OUT"; die "GATE-RED" 4 ;;
+  *) journal "LEG1 gate INFRA rc=$GATE_RC"; printf '%s\n' "$GATE_OUT"; die "gate infra rc=$GATE_RC" 6 ;;
+esac
+
+# ---- leg 2: issue-log (optional) ------------------------------------------
+if [ -n "$ISSUE" ]; then
+  set +e
+  "$ISSUELOG_BIN" "$ISSUE" "$SHA" >/dev/null 2>&1
+  IL_RC=$?
+  set -e
+  [ "$IL_RC" = "0" ] || journal "LEG2 issue-log rc=$IL_RC (non-fatal)"
+  journal "LEG2 issue-log done"
+else
+  journal "LEG2 issue-log skipped (--issue not given)"
+fi
+
+# ---- leg 3: ff-merge into fork main ----------------------------------------
+git -C "$FORK_REPO" fetch origin --quiet
+CUR="$(git -C "$FORK_REPO" rev-parse --abbrev-ref HEAD)"
+[ "$CUR" = "main" ] || die "fork checkout on '$CUR', not main — check out main first" 3
+set +e
+git -C "$FORK_REPO" merge --ff-only "$BRANCH" >/dev/null 2>&1
+FF_RC=$?
+set -e
+if [ "$FF_RC" != "0" ]; then
+  journal "LEG3 NON-FF — branch not fast-forwardable"
+  die "NON-FF: rebase $BRANCH onto fork main (oc-rebase-safety) and re-run" 5
+fi
+MERGED="$(git -C "$FORK_REPO" rev-parse --short HEAD)"
+journal "LEG3 ff-merge ok fork-main=$MERGED"
+
+# ---- no-self-ping guard ----------------------------------------------------
+# The calling lane invoked this tool and is awake — any session-notify fired by
+# a sub-tool would wake the SAME session mid-turn (self-ping). oc-deploy's wake
+# path is --notify-session (poll-mode, opt-in): never pass it. Enforce at env
+# level too so any inherited NOTIFY_SESSION cannot leak into children.
+unset NOTIFY_SESSION || true
+
+# ---- leg 4: ship -----------------------------------------------------------
+journal "LEG4 ship start (oc-deploy ship --execute --wait $WAIT)"
+set +e
+SHIP_OUT="$(cd "$FORK_REPO" && OC_TOOLS_NOLOG=1 NOTIFY_SESSION= "$DEPLOY_BIN" ship --sha "$SHA" --execute --wait "$WAIT" 2>&1)"
+SHIP_RC=$?
+set -e
+echo "$SHIP_OUT" | tail -5
+case "$SHIP_RC" in
+  0) journal "LEG4 ship GREEN" ;;
+  3) journal "LEG4 carrier RED"; die "CARRIER-RED" 4 ;;
+  *) journal "LEG4 ship INFRA rc=$SHIP_RC"; die "ship infra rc=$SHIP_RC" 6 ;;
+esac
+
+# ---- leg 5: swap poll ------------------------------------------------------
+journal "LEG5 swap poll start (oc-deploy poll --execute)"
+SWAPPED=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  set +e
+  POLL_OUT="$(cd "$FORK_REPO" && OC_TOOLS_NOLOG=1 NOTIFY_SESSION= "$DEPLOY_BIN" poll --execute 2>&1)"
+  POLL_RC=$?
+  set -e
+  case "$POLL_OUT" in
+    *SWAPPED*) SWAPPED=1; break ;;
+  esac
+  [ "$POLL_RC" = "0" ] || { journal "LEG5 poll rc=$POLL_RC"; die "swap poll rc=$POLL_RC" 6; }
+  sleep 10
+done
+if [ "$SWAPPED" != "1" ]; then
+  journal "LEG5 swap NOT confirmed after 12 polls"
+  die "swap not confirmed — check oc-deploy state" 6
+fi
+journal "DONE SWAPPED sha=$SHA"
+echo "SHIP-CHAIN $CHAIN: SWAPPED sha=$SHA"
+exit 0
+
+# ---- selftest --------------------------------------------------------------
+# Fixture-based: fake prchecks/deploy/issuelog + fixture fork repo (bare origin
+# + clone). Covers: full GREEN chain exit 0, gate RED exit 4, carrier RED exit
+# 4, NON-FF exit 5. Selftests never touch real CI or the real fork checkout.
+selftest_impl() {
+  set -u
+  T="$(mktemp -d)"
+  trap 'rm -rf "$T"' EXIT
+  PASS=0; FAIL=0
+  ok()   { PASS=$((PASS+1)); echo "ok $1"; }
+  bad()  { FAIL=$((FAIL+1)); echo "FAIL $1"; }
+  check_rc() { [ "$2" = "$3" ] && ok "$1 (rc=$2)" || bad "$1 (want rc=$3 got $2)"; }
+
+  # fixture fork repo: bare origin + clone with main
+  git init -q --bare "$T/origin.git"
+  git init -q "$T/clone"
+  git -C "$T/clone" config user.email t@t; git -C "$T/clone" config user.name t
+  echo base > "$T/clone/base.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm base
+  git -C "$T/clone" branch -M main
+  git -C "$T/clone" remote add origin "$T/origin.git"
+  git -C "$T/clone" push -q origin main
+  git -C "$T/clone" checkout -qb feat
+  echo feat > "$T/clone/feat.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm feat
+  FSHA="$(git -C "$T/clone" rev-parse HEAD)"
+  # fixture "fork checkout" = clone back on main
+  git -C "$T/clone" checkout -q main
+
+  # fake binaries
+  cat > "$T/fake-prchecks" <<'EOF'
+#!/usr/bin/env bash
+# green unless FAKE_GATE=red
+[ "${FAKE_GATE:-green}" = "red" ] && exit 3
+exit 0
+EOF
+  cat > "$T/fake-deploy" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  ship) [ "${FAKE_CARRIER:-green}" = "red" ] && exit 3
+        echo "carrier run GREEN (fake)"; exit 0 ;;
+  poll) if [ "${FAKE_POLL_ROUNDS:-0}" -gt 0 ]; then
+          export FAKE_POLL_ROUNDS=$((FAKE_POLL_ROUNDS-1))
+          echo "S2 pending (fake)"; exit 0
+        fi
+        echo "SWAPPED (fake)"; exit 0 ;;
+esac
+exit 9
+EOF
+  chmod +x "$T/fake-prchecks" "$T/fake-deploy"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$T/fake-issuelog"
+  chmod +x "$T/fake-issuelog"
+
+  run_chain() {
+    OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+      bash "$SELF" "$@"
+  }
+
+  # 1. full GREEN chain
+  OUT="$(run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 2>&1)"; RC=$?
+  check_rc "full-chain-green" "$RC" 0
+  case "$OUT" in *SWAPPED*) ok "swapped-marker" ;; *) bad "swapped-marker: $OUT" ;; esac
+  grep -q "LEG4 ship GREEN" "$T/journal.log" && ok "journal-ship-leg" || bad "journal-ship-leg"
+  grep -q "DONE SWAPPED" "$T/journal.log" && ok "journal-done" || bad "journal-done"
+
+  # 2. gate RED → exit 4, merge must NOT happen
+  rm -f "$T/journal.log"
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(FAKE_GATE=red run_chain --sha "$FSHA" --branch feat 2>&1)" || RC=$?
+  check_rc "gate-red" "$RC" 4
+  git -C "$T/clone" merge-base --is-ancestor "$FSHA" main 2>/dev/null \
+    && bad "gate-red-no-merge" || ok "gate-red-no-merge"
+
+  # 3. carrier RED → exit 4
+  RC=0; OUT="$(FAKE_CARRIER=red run_chain --sha "$FSHA" --branch feat 2>&1)" || RC=$?
+  check_rc "carrier-red" "$RC" 4
+
+  # 4. NON-FF: create divergent main, branch can't ff
+  rm -f "$T/journal.log"
+  git -C "$T/clone" reset -q --hard origin/main
+  git -C "$T/clone" checkout -qb diverge
+  echo diverge > "$T/clone/diverge.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm diverge
+  git -C "$T/clone" push -q origin diverge:main   # origin main now has diverge
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  git -C "$T/clone" checkout -q feat
+  echo more > "$T/clone/more.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm more
+  FSHA2="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main   # main = diverged tip; feat diverged from it → ff impossible
+  RC=0; OUT="$(run_chain --sha "$FSHA2" --branch feat 2>&1)" || RC=$?
+  check_rc "non-ff" "$RC" 5
+
+  echo "selftest: $PASS passed, $FAIL failed"
+  return $?
+}
+exit 0
