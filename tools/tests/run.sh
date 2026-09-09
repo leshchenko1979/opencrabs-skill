@@ -598,6 +598,32 @@ for t in "$TOOLS_DIR"/oc-*; do
   OC_TOOLS_NOLOG=1 timeout 20 "$t" --help >/dev/null 2>&1     && ok "$tn --help rc=0" || bad "$tn --help rc!=0 (RC-CONTRACT.md violated)"
 done
 
+# ---- 61. oc-notify-fanout: placeholder guard + target validation (HQ ASSIGN 2026-09-09)
+section "oc-notify-fanout guards (law1 placeholder + dead-target skip + --roles)"
+NF="$TOOLS_DIR/oc-notify-fanout"
+# 61a. placeholder law: dangling token -> every send ABORTed, rc!=0
+NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
+  --title "t-battery" --text "dangling {{NOSUCH}} token" --dry-run 2>&1)" \
+  && bad "fanout placeholder-guard: rc=0 on token leak" \
+  || { printf '%s' "$NFOUT" | grep -q "placeholder-token-survived" \
+       && ok "fanout placeholder-guard: dangling token -> send ABORTed (law1)" \
+       || bad "fanout placeholder-guard: aborted but no law1 receipt"; }
+# 61b. substitution: valid tokens -> DRY briefs, no ABORT, dead uuids skipped
+NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
+  --title "t-battery" --text "v{{VERSION}} u{{UUID}}" --dry-run 2>&1)"
+printf '%s' "$NFOUT" | grep -q "placeholder-token-survived" \
+  && bad "fanout substitution: valid tokens ABORTed (substitution broken)" \
+  || ok "fanout substitution: {{UUID}}/{{VERSION}} resolved, 0 ABORTs"
+printf '%s' "$NFOUT" | grep -qE "sent=[0-9]+ skipped=[0-9]+ failed=0" \
+  && ok "fanout dry-run summary clean (dead targets skipped, none failed)" \
+  || bad "fanout dry-run summary has failures"
+# 61c. roles filter: --roles toolsmith (self-excluded) -> sent=0
+NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
+  --title "t" --text "x" --dry-run --roles toolsmith 2>&1)"
+printf '%s' "$NFOUT" | grep -q "sent=0" \
+  && ok "fanout --roles filter respected" \
+  || bad "fanout --roles filter leaked sends"
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \
