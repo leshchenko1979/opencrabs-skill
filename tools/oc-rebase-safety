@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-rebase-safety — re-gate split rule tooling (owner GO 14:55Z, ledger n=2259).
+#
+# LAW (fleet-directives, v0.4.125): a rebase/merge onto a shifted main may skip
+# the full re-gate ONLY when (a) ZERO file overlap between the main shift
+# (old-main..new-main) and the merge-changed set, AND (b) a clean rebase-diff
+# audit. This tool computes both halves. READ-ONLY: git plumbing only — never
+# merges, rebases, or writes anything. Exit 1 is a VERDICT, not an error.
+#
+# Subcommands:
+#   oc-rebase-safety overlap --old-main X --new-main Y [--tree PATH]
+#       Intersection of `git diff --name-only X Y` with the merge-changed set.
+#       Merge-changed set (with --tree): files HEAD introduced over its first
+#       parent (2-parent merge => HEAD^1..HEAD; single-parent => conservative
+#       fallback: full X..Y set is treated as overlapping). Without --tree the
+#       merge-changed set is unknown => conservative: any X..Y change = overlap.
+#       Exit 0 = zero overlap (gate-skip permitted) / 1 = gate-required.
+#   oc-rebase-safety audit --old-tip A --new-tip B [--base C]
+#       Per-file patch-id compare of the branch's own changes (C..A) against
+#       the rebased result (C..B). C defaults to merge-base(A,B). Patch-ids are
+#       computed PER FILE (single diff per file — lesson n=1543: never
+#       range-concatenate, the delimiter lines garbage every match).
+#       SAME = survived intact (patch-id insensitive to position shifts).
+#       CHANGED = patch-id differs (main interleaved, or loss).
+#       DROPPED = file changed in C..A but has no change in C..B.
+#       Exit 0 = clean (no DROPPED, no CHANGED among A-side files) / 1 = losses.
+#
+# Output: TSV lines on stdout; human summary on stderr.
+# Exit: 0 clean / 1 verdict (overlap or losses) / 2 usage / 3 git failure
+# =============================================================================
+set -u
+set -o pipefail
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-rebase-safety" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="$(basename "$0")"
+die() { echo "$PROG: $2" >&2; exit "$1"; }
+usage() { [ $# -gt 0 ] && echo "$PROG: $1" >&2; sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+git_ok() { git -C "$1" rev-parse --verify --quiet "$2^{commit}" >/dev/null 2>&1; }
+
+# --- overlap -----------------------------------------------------------------
+cmd_overlap() {
+  local old_main="" new_main="" tree=""
+  while [ $# -gt 0 ]; do case "$1" in
+    --old-main) old_main="${2:-}"; shift 2;;
+    --new-main) new_main="${2:-}"; shift 2;;
+    --tree)     tree="${2:-}"; shift 2;;
+    *) usage "overlap: unknown arg $1";;
+  esac; done
+  [ -n "$old_main" ] && [ -n "$new_main" ] || usage "overlap: --old-main and --new-main required"
+  local repo="${tree:-.}"
+  [ -d "$repo/.git" ] || [ -f "$repo/.git" ] || die 3 "not a git repo: $repo"
+  git_ok "$repo" "$old_main" || die 3 "bad --old-main: $old_main"
+  git_ok "$repo" "$new_main" || die 3 "bad --new-main: $new_main"
+
+  # Main-shift changed set: what moved between the two mains.
+  git -C "$repo" diff --name-only "$old_main" "$new_main" | sort -u > /tmp/ors.main.$$ || die 3 "git diff failed"
+
+  # Merge-changed set.
+  if [ -z "$tree" ]; then
+    # No tree given: merge-changed set unknown -> conservative (any shift = overlap).
+    : > /tmp/ors.merge.$$
+    local conservative=1
+  else
+    local nparents tip
+    tip="$(git -C "$repo" rev-parse HEAD)" || die 3 "cannot resolve HEAD in $tree"
+    nparents="$(git -C "$repo" rev-list --parents -n 1 "$tip" | awk '{print NF-1}')"
+    if [ "$nparents" -ge 2 ]; then
+      # Second-parent diff = what the BRANCH side contributes over main
+      # (verified live: HEAD^1..HEAD is main-side ingress, HEAD^2..HEAD is
+      # the branch's own changed set — the one the re-gate law means).
+      git -C "$repo" diff --name-only "$tip^2" "$tip" | sort -u > /tmp/ors.merge.$$ || die 3 "git diff failed"
+      conservative=0
+    else
+      # Single-parent tip: cannot derive the branch-side set here; conservative.
+      : > /tmp/ors.merge.$$
+      conservative=1
+    fi
+  fi
+
+  local inter
+  inter="$(comm -12 /tmp/ors.main.$$ /tmp/ors.merge.$$ | grep -v '^$' || true)"
+  rm -f /tmp/ors.main.$$ /tmp/ors.merge.$$
+  if [ -n "$inter" ]; then
+    echo "$inter"
+    echo "OVERLAP: gate-required (conservative=$conservative)" >&2
+    exit 1
+  fi
+  echo "OVERLAP: zero — gate-skip permitted (conservative=$conservative)" >&2
+  exit 0
+}
+
+# --- audit --------------------------------------------------------------------
+cmd_audit() {
+  local old_tip="" new_tip="" base=""
+  while [ $# -gt 0 ]; do case "$1" in
+    --old-tip) old_tip="${2:-}"; shift 2;;
+    --new-tip) new_tip="${2:-}"; shift 2;;
+    --base)    base="${2:-}"; shift 2;;
+    *) usage "audit: unknown arg $1";;
+  esac; done
+  [ -n "$old_tip" ] && [ -n "$new_tip" ] || usage "audit: --old-tip and --new-tip required"
+  local repo="${OC_REBASE_SAFETY_REPO:-.}"
+  git_ok "$repo" "$old_tip" || die 3 "bad --old-tip: $old_tip"
+  git_ok "$repo" "$new_tip" || die 3 "bad --new-tip: $new_tip"
+  if [ -z "$base" ]; then
+    base="$(git -C "$repo" merge-base "$old_tip" "$new_tip")" || die 3 "merge-base failed"
+  else
+    git_ok "$repo" "$base" || die 3 "bad --base: $base"
+  fi
+
+  # Files the branch touched (C..A).
+  git -C "$repo" diff --name-only "$base" "$old_tip" | sort -u > /tmp/ora.a.$$ || die 3 "git diff failed"
+  # Files changed in the rebased result (C..B).
+  git -C "$repo" diff --name-only "$base" "$new_tip" | sort -u > /tmp/ora.b.$$ || die 3 "git diff failed"
+
+  local rc=0 f pa pb status
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    pa="$(git -C "$repo" diff "$base" "$old_tip" -- "$f" 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
+    if grep -qxF "$f" /tmp/ora.b.$$; then
+      pb="$(git -C "$repo" diff "$base" "$new_tip" -- "$f" 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
+      if [ -z "$pa" ] || [ -z "$pb" ]; then
+        echo -e "FILE\t$f\tERROR\tpatch-id uncomputable"; rc=1
+      elif [ "$pa" = "$pb" ]; then
+        echo -e "FILE\t$f\tSAME"
+      else
+        echo -e "FILE\t$f\tCHANGED\tpatch-id old=$pa new=$pb (main interleaved or loss)"; rc=1
+      fi
+    else
+      echo -e "FILE\t$f\tDROPPED\tchange absent from new tip"; rc=1
+    fi
+  done < /tmp/ora.a.$$
+  rm -f /tmp/ora.a.$$ /tmp/ora.b.$$
+
+  if [ "$rc" -eq 0 ]; then
+    echo "AUDIT: clean — no dropped or changed hunks" >&2
+  else
+    echo "AUDIT: LOSSES FOUND — full re-gate required" >&2
+  fi
+  exit "$rc"
+}
+
+# --- selftest -----------------------------------------------------------------
+cmd_selftest() {
+  local T; T="$(mktemp -d)"
+  trap 'rm -rf "$T"' EXIT
+  git -C "$T" init -q -b main repo && cd "$T/repo" || exit 3
+  git config user.email t@t; git config user.name t
+  echo base > f1.txt; echo base > f2.txt; git add .; git commit -qm base
+  local BASE; BASE="$(git rev-parse HEAD)"
+  # Branch changes f1 only.
+  git checkout -qb feat
+  echo feat >> f1.txt; git commit -qam feat1
+  local OLD_TIP; OLD_TIP="$(git rev-parse HEAD)"
+  # Main changes f2 (disjoint from branch -> zero overlap).
+  git checkout -q main
+  echo main >> f2.txt; git commit -qam main1
+  # Merge preserving topology (like n=2258 b0470589).
+  git checkout -q feat
+  git merge --no-edit -m merge main >/dev/null 2>&1
+  local MERGE_TIP; MERGE_TIP="$(git rev-parse HEAD)"
+
+  local rc=0 t
+  # 1. overlap disjoint -> 0
+  "$SELF" overlap --old-main "$BASE" --new-main main --tree "$T/repo" >/dev/null 2>&1
+  [ $? -eq 0 ] && t=OK || { t=FAIL; rc=1; }; echo "selftest overlap-disjoint: $t"
+  # 2. main also touches f1 -> overlap -> 1
+  git checkout -q main; echo clash >> f1.txt; git commit -q -a -m main2
+  git checkout -q feat; git merge --no-edit -m merge2 main >/dev/null 2>&1 || { echo -e "clash\nfeat" > f1.txt; git add f1.txt; git commit -q --no-edit -m merge2-resolved; }
+  "$SELF" overlap --old-main "$BASE" --new-main main --tree "$T/repo" >/dev/null 2>&1
+  [ $? -eq 1 ] && t=OK || { t=FAIL; rc=1; }; echo "selftest overlap-clash: $t"
+  # 3. audit clean: old tip changes survive the CLEAN merge intact
+  "$SELF" audit --old-tip "$OLD_TIP" --new-tip "$MERGE_TIP" --base "$BASE" >/dev/null 2>&1
+  [ $? -eq 0 ] && t=OK || { t=FAIL; rc=1; }; echo "selftest audit-clean: $t"
+  # 4. audit catches a drop: rebuild new tip WITHOUT the branch change
+  git checkout -q -B losser "$BASE"
+  echo main >> f2.txt; git commit -q -a -m main1b
+  "$SELF" audit --old-tip "$OLD_TIP" --new-tip "$(git rev-parse HEAD)" --base "$BASE" >/dev/null 2>&1
+  [ $? -eq 1 ] && t=OK || { t=FAIL; rc=1; }; echo "selftest audit-dropped: $t"
+  # 5. usage rc 2
+  "$SELF" >/dev/null 2>&1
+  [ $? -eq 2 ] && t=OK || { t=FAIL; rc=1; }; echo "selftest no-args-usage: $t"
+
+  [ "$rc" -eq 0 ] && echo "selftest: 5/5 OK" >&2 || echo "selftest: FAILURES" >&2
+  exit "$rc"
+}
+
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+case "${1:-}" in
+  overlap)  shift; cmd_overlap "$@";;
+  audit)    shift; cmd_audit "$@";;
+  --help|-h|help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+  --selftest) cmd_selftest;;
+  *) usage;;
+esac
