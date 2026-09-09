@@ -577,6 +577,14 @@ if tool oc-harvest-sweep; then
   "$TOOLS_DIR/oc-harvest-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
 fi
 
+section "oc-rebase-safety"
+run_selftest oc-rebase-safety
+if tool oc-rebase-safety; then
+  "$TOOLS_DIR/oc-rebase-safety" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/oc-rebase-safety" overlap >/dev/null 2>&1; [ $? -eq 2 ] && ok "overlap missing args -> 2" || bad "overlap missing args -> expected 2"
+  "$TOOLS_DIR/oc-rebase-safety" audit >/dev/null 2>&1; [ $? -eq 2 ] && ok "audit missing args -> 2" || bad "audit missing args -> expected 2"
+fi
+
 section "oc-waiter"
 run_selftest oc-waiter
 if tool oc-waiter; then
