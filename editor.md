@@ -11,9 +11,8 @@
 
 Scope: work from an issue filed on the FORK (`leshchenko1979/opencrabs` — the issues home;
 upstream receives PRs only), fix the code in a
-worktree, gate it via the CI gate (pr-checks),
-SIGN every commit with the session trailer, push, FAST-FORWARD fork `main` onto it,
-hand off branch + shas, then ship via `oc-deploy ship` (§Phase 6a — Ship — oc-deploy (S3 path), below).
+worktree, SIGN every commit with the session trailer, push the branch, then ship via
+`oc-ship-chain` (§Phase 5 — Ship (`oc-ship-chain`), below).
 After any
 swap containing your commits you TEST what shipped (test-on-notify loop,
 Phase 6b). The Editor NEVER dispatches BUILD runs (`quick-build-linux.yml`), NEVER
@@ -39,11 +38,11 @@ rustfmt wrapper), and its compile binaries were DISABLED 2026-08-28
 (`/root/toolchain-disabled-20260828/` — manifest + `restore.sh`). A local
 invocation that WORKS is still a ruling violation. Sanctioned local
 tools ONLY: `/usr/local/bin/rustfmt` wrapper (fmt only — `--edition 2024`
-+ entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, Phase 5 —
-the CI gate, §Glossary; Phase 7 step 2c reuses it on upstream PR heads).
++ entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, run in
+Phase 5 via `oc-ship-chain`; Phase 7 step 2c reuses it on upstream PR heads).
 Everything
-else — build, test, clippy — is CI dispatch: `pr-checks.yml` (Phase 5) or
-quick-build-linux dispatched via `oc-deploy ship`. Need
+else — build, test, clippy — is CI dispatch: `pr-checks.yml` or
+quick-build-linux dispatched via `oc-ship-chain`. Need
 `cargo test`? Dispatch CI.
 Iterating clippy fixes? Edit code, re-dispatch pr-checks, read the run log.
 Never compile locally.
@@ -289,7 +288,7 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 | `oc-index-worktree` | `tools/oc-index-worktree <worktree-path>` | codegraph index — un-skippable Phase 2 final leg (oc-wt chain) |
 | `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume |
 | `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) |
-| `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | Phase 6 per-commit implementation comment (body-file discipline inside) |
+| `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | per-commit implementation comment (body-file discipline inside; chained by oc-ship-chain Leg 2) |
 | `oc-commit` | `tools/oc-commit -m "<msg>" [--issue N] [--no-comment]` | gated SIGNED commit: Session-Id + Issue-Ref trailers derived from OC_ACTOR + ledger claim; implementation comment folded in (oc-issue-log leg) — Phase 6c step 2 default |
 | `oc-ledger` | `stamp claim --what "…"` (canonical: `--what`; bare positional also accepted) · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack |
 | `oc-drift-check` | `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` | §Mid-cycle skill drift step 1–2 |
@@ -408,7 +407,7 @@ validates on every add (lifecycle below).
 
 The worktree's job ends the moment your code is committed AND pushed — CI
 compiles on GitHub, not here. Proven fixes fast-forward into fork `main`
-(Phase 6), so fork main accumulates everything we ship; upstream receives
+(Phase 5 `oc-ship-chain`), so fork main accumulates everything we ship; upstream receives
 finished features only via the completion-time PR (Phase 7).
 
 DELETE immediately after a verified clean push:
@@ -499,153 +498,46 @@ pass, audit the diff before staging — rustfmt can reformat unrelated
 pre-existing lines (2026-09-01: flow.rs:418); revert out-of-scope hunks and
 keep the commit pure (atomicity law).
 
-## Phase 5 — CI gate before every commit (CI-only since v0.4.34)
+## Phase 5 — Ship (`oc-ship-chain`)
 
-No local lint tooling on this box. The lint/static-analysis
-evidence is the GREEN `pr-checks.yml` run on your branch: fmt + clippy +
-`cargo test --locked --profile ci --all-features` (flags VERBATIM from
-pr-checks.yml). Iterate on code locally, push the branch,
-re-dispatch pr-checks, read the run log — that loop replaces every local lint run.
-
-- **One command (v0.4.46; adoption fixed v0.4.48):** `tools/oc-prchecks <branch> [--repo SLUG-or-PATH]`
-  runs the whole ritual — FULL-sha shape gate, LOUD yml-on-carrier check,
-  dispatch under a state-dir lock, time-window run adoption
-  (`headSha==carrier head + createdAt>=dispatch_ts−5s`, LATEST-wins since
-  v0.4.53 — under the lock the newest carrier dispatch IS this lane's own run;
-  the old sha-bound filter could never match: workflow_dispatch headSha is the
-  carrier ref, not the `-f ref` input), watch, per-step report with the fmt
-  soft-fail EXPOSED. `--repo` accepts the slug OR a repo/worktree path
-  (resolved via its origin remote — no more slug/path confusion). Exit 0 GREEN /
-  3 RED / 5 still-in-flight (prints the run URL for resume). The manual form
-  survives as the SKILL.md tool-table fallback row.
-- Gate your BRANCH state, not the shared checkout: the run proves what CI saw on
-  your branch (your commits on top of the branch base).
-- Push after every fix-round; the NEWEST green run URL is the evidence
-  (`gh run view` / checks API). A run from before your last push proves nothing.
-- Classify every finding delta vs the parent sha: same count = pre-existing (line
-  shifts); any genuinely NEW finding must be named and justified or the commit does
-  not leave the editor. Zero errors required in YOUR changed lines; pre-existing
-  warnings in untouched files ≠ blocker.
-- **NEVER chain a gate/push onto another command with `;`** — one command per line,
-  verdict checked BEFORE the next command.
-- **Gate-idle question sweep:** a gate wait is idle time —
-  do not sit silent on open questions. Circle back to the user in your topic
-  with anything unresolved (scope doubts, naming, approach forks) while the
-  gate runs; waiting is never a reason to hold a question or to guess.
-
-## Phase 6 — Push, merge into fork main, hand off
+**`oc-ship-chain` IS the single, exclusive ship path from commit to swapped binary (v0.4.126; manual push-to-main, manual issue-log, and manual oc-deploy sediment retired v0.4.132).**
+The Editor runs `oc-ship-chain` in one detached invocation under one chain-id:
 
 ```bash
+# 1. Push your branch first
 git -C ~/oc-wt-<task> push -u origin <branch>
-# GATE (decision 2026-08-27, rewired 2026-08-28 per owner "1 ok"): the
-# CODE TESTS evidence is the GREEN `pr-checks.yml` CI run on the branch — it
-# runs `cargo test --locked --profile ci --all-features` (the CI gate is the
-# only test locus — the carrier ship path runs pure-git ORDER gates, no test
-# leg since 2026-08-31 `e71dba58`). NO local
-# test runs on this box (box law — §Box law, top of this file: cargo
-# forbidden in ANY form).
-# Read the conclusion via `gh run view` / checks API: GREEN → push to main;
-# RED → fix before merge. A gated change can still break other parts — CI is
-# where that surfaces now.
-git -C ~/oc-wt-<task> push origin <branch>:main   # fast-forward fork main — non-ff rejected
+
+# 2. Run the ship chain (runs in background; resumes session on finish)
+tools/oc-ship-chain --sha <commit-sha> --branch <branch> [--issue <issue-n>]
 ```
 
-EVERY commit's destination is fork `main`: the build (`oc-deploy ship`) compiles
-fork `main` — ALL editors' changes together
-— an unmerged branch silently
-never ships. **Implementation comment per commit:**
-after EACH editor commit, post a short summary + commit sha + verification
-state (tests/lint) as a gh comment on the tracked issue — one comment per
-commit, immediately, no batching. Mechanics: `tools/oc-issue-log <issue-n> <sha>`
-posts it (gh `--body-file` discipline + `--edit-last` pitfalls handled inside;
-SKILL.md tool table).
+`oc-ship-chain` executes the entire 5→swapped stretch mechanically:
+1. **Leg 1 (CI Gate):** Dispatches and watches `oc-prchecks` (`pr-checks.yml` on your branch: fmt + clippy + `cargo test --locked --profile ci --all-features`).
+2. **Leg 2 (Issue Log):** If `--issue <N>` is supplied, posts the per-commit implementation comment via `oc-issue-log` automatically.
+3. **Leg 3 (Fast-Forward Merge):** Fetches fork `main`, verifies fast-forwardability, and pushes `<branch>:main`.
+4. **Leg 4 (Carrier Ship):** Dispatches `oc-deploy ship --sha <sha> --execute` to build on `ci/quick-build-linux`.
+5. **Leg 5 (Swap & Seal):** Bounded-polls carrier execution (`oc-deploy poll --execute --wait <sec>`) until the binary is live and swapped.
 
-Non-ff rejection = another editor landed first; integrate and retry:
+There is NO legitimate manual exit point between gate verdict and swap. The #134 orphan class (stopping at GREEN without swapping) is structurally closed.
 
-```bash
-git -C ~/oc-wt-<task> fetch origin
-git -C ~/oc-wt-<task> rebase origin/main   # your commits only — safe to rebase
-git -C ~/oc-wt-<task> push --force-with-lease origin <branch>
-# gate re-applies after any rebase: re-dispatch pr-checks.yml on the rebased
-# branch (fmt/clippy/test); the green run URL is the evidence — never local cargo (Box law)
-git -C ~/oc-wt-<task> push origin <branch>:main
-```
+**Exit codes & Lane action:**
+- **Exit 0 — SWAPPED:** The new binary is running live on the host (`opencrabs-ops` user unit). Worktree can now be removed (`tools/oc-wt remove <task>`). Proceed immediately to Phase 6b (Smoke-test-on-notify).
+- **Exit 4 — GATE-RED / CARRIER-RED:** The CI gate failed or the carrier build failed. Start a fix round (Phase 6c): keep the same branch, fix in a new worktree, commit, push, and re-run `oc-ship-chain`. Triage heuristics live in `SKILL.md §Red-run triage heuristics`.
+- **Exit 5 — NON-FF:** Another editor merged to fork `main` first. Fast-forward push was refused. Lane rebases safely:
+  ```bash
+  tools/oc-rebase-safety run ~/oc-wt-<task> origin/main
+  git -C ~/oc-wt-<task> push --force-with-lease origin <branch>
+  ```
+  Then re-run `tools/oc-ship-chain --sha <new-sha> --branch <branch> [--issue <issue-n>]`.
+- **Exit 3 / 6 — Infra failure:** Dirty checkout or carrier dispatch timeout. Inspect error message, resolve local state, and retry.
 
-**Conflict-quality gate — MANDATORY before any push carrying hand-resolved code**
-*(a hand-resolved merge shipping a crate-alias mismatch is five E0308s and a
-red CI round-trip)*:
-
+**Conflict-quality gate — MANDATORY after any rebase with hand-resolved code:**
+*(A hand-resolved merge shipping a crate-alias mismatch is five E0308s and a red CI round-trip)*:
 1. Re-read every hand-merged function END-TO-END — not just the conflict hunk.
-2. Match crate-wide type aliases: open the alias definition; the error type is
-   usually locked by the alias.
-3. Grep the tree for duplicate imports and doubled tests the resolution may
-   have left behind.
-4. Phase 5 gate once MORE after the final resolution (re-dispatch pr-checks;
-   the green run URL is the evidence).
+2. Match crate-wide type aliases: open the alias definition; the error type is usually locked by the alias.
+3. Grep the tree for duplicate imports and doubled tests the resolution may have left behind.
 
-Report to the ops chat: branch name + pushed sha + post-merge `main` tip — code
-locations cited STRUCTURALLY (function name + matching pattern, e.g. "stash-empty
-warn in agent.rs handle_followup_callback"), never bare line numbers: main moves
-hourly under multi-editor concurrency and line anchors rot same-day. The hand-off ends the Editor's part — dispatching,
-watching, reading conclusions are automation territory (`oc-deploy ship/poll`;
-SKILL.md router).
-
-The hand-off is not silent (v0.4.3): after ff-merge + worktree removal the lane
-runs the S3 SHIP PATH below (`oc-deploy ship`) — one call carries BOTH dimensions
-(full-40 sha + `features=<comma-set>`; there is NO `--all-features` vocabulary in
-the carrier yml; a different-set build of the same sha is a DISTINCT build under
-single-flight).
-*(Pre-S3 ordering is archived — `oc-deploy ship` runs the gates itself and returns GREEN/RED.)*
-
-## Phase 6a — Ship — oc-deploy (S3 path)
-
-**S3 SHIP PATH — oc-deploy IS the ship path (S3 cutover, live 2026-08-28; compiler retired).**
-The lane runs its own ship as an agent-launched BACKGROUND task:
-
-```bash
-/root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-deploy ship \
-  --sha <full-40-sha> --features <comma-set> --execute
-```
-
-**Two-step truth (corrected v0.4.116, lens E-H1 — the ONE-command
-auto-swap promise was retired):** `oc-deploy ship --sha <40> --features
-<set> --execute --wait N` = ONE detached invocation that runs ORDER gates →
-carrier dispatch → bounded poll and EXITS GREEN when the run lands (rc 0 +
-run id; rc 5 timeout + run id; rc 6 RED). GREEN is a VERDICT, not a swap —
-the swap is a SEPARATE execute leg: `oc-deploy poll --execute --wait N`
-(re-run until it reports SWAPPED). Skipping the execute leg = the #134
-orphan class: build GREEN, deployed marker never moves. **PREFERRED PATH
-(v0.4.126): `oc-ship-chain --sha <40> --branch <lane-branch>` runs the
-whole 5→swapped stretch — CI gate → issue-log → ff-merge → ship → swap —
-in one invocation under one chain-id, with no legitimate exit point
-between gate verdict and swap (E-H1 and #134 classes structurally closed;
-RED exits structured rc 4/5, fix rounds stay with the lane).** Gates carry machine
-tokens (`OC_DEPLOY_GATE=<cause>` on rc 2; `wait-plan-mode` when --wait is
-used without --execute). Never report a ship as deployed off ship-wait GREEN
-alone.
-
-The script performs the chain Phase 6's push legs feed into (ORDER gates + carrier dispatch) beyond the hand-run fork-main fetch +
-fast-forward check → push → 4 ORDER gates (oc-order-validate) → carrier
-dispatch on `ci/quick-build-linux` — appends every verdict to the shadow
-journal (`oc-deploy-shadow.log` in the state dir), and exits 0 with the
-dispatch confirmation (poll discovers the run id) or exit 2 + failing
-gate to the invoking session. **Ship semantics: dispatch is real always; deploys are real — auto-swap on
-GREEN lives in the SWAP-EXECUTE leg (`poll --execute`), not in ship --wait
-(E-H1 v0.4.116: consent eliminated 2026-08-28; smoke-FAIL rollback = owner
-call; stage is S3 — no consent step, no sub-S2 exit path).** Plan-only
-default: omit `--execute` → full delta printed, nothing touched. Brake:
-`touch /root/.opencrabs/profiles/ops/opencrabs-dev/oc-deploy.kill` (or
-`/root/oc-work/oc-deploy.disabled`) aborts every invocation, exit 9. The
-compiler-era ORDER hand-off lifecycle (COALESCED / intake-verify) is superseded — QUEUED…VOID stays live in oc-seal-state order rows — the
-gates now run inside `oc-deploy ship` itself (tools/archive/compiler.md archived runbook).
-
-- Red run returned → start a fix round (Phase 6c): NEW worktree every time →
-  fix on the SAME branch → commit → push → report the NEW sha. Re-ship via
-  `oc-deploy ship --execute`; the RED run lives on until the new green.
-  Triage heuristics live in SKILL.md §Red-run triage heuristics (E0425-first,
-  brace-depth counting, match-arm narrowing).
-- Once the new run is green, post the fix evidence to the upstream
-  issue (the Editor owns the issue thread end to end).
+**Gate-idle question sweep:** CI gate and carrier build waits are idle time — do not sit silent on open questions. Circle back to the user in your topic with anything unresolved (scope doubts, naming, approach forks) while the chain runs; waiting is never a reason to hold a question or to guess.
 
 ## Phase 6b — Smoke-test-on-notify (your features, after any swap)
 
@@ -719,23 +611,21 @@ Your answer is always the SAME sequence:
 ```bash
 # 1. fresh worktree at the relevant sha (worktree lifecycle, Phase 2)
 tools/oc-wt add <task> <branch>
-# 2. reproduce → fix → Phase 5 CI gate → SIGNED commit (E1, v0.4.78)
+# 2. reproduce → fix → SIGNED commit (E1, v0.4.78)
 tools/oc-commit -m "<msg>"   # gated wrapper: Session-Id from OC_ACTOR, Issue-Ref
 #    derived from your latest ledger claim, implementation comment folded in
 #    (oc-issue-log leg). RAW FALLBACK — rebase/cherry-pick/harvest contexts only:
 #    git -C ~/oc-wt-<task> commit --trailer "Session-Id: <full session uuid>" --trailer "Issue-Ref: #<issue-n>"
 #    (Session-Id = you; Issue-Ref = the ONE issue this change fixes — atomicity,
 #     v0.4.15: every commit links to exactly one issue, matching the PR that will carry it)
-# 3. push branch, then fast-forward fork main onto it (non-ff rejected)
+# 3. push branch, then re-run oc-ship-chain (Leg 1 CI gate -> Leg 2 comment -> Leg 3 ff-merge -> Leg 4 carrier build -> Leg 5 swap)
 git -C ~/oc-wt-<task> push origin <branch>
-git -C ~/oc-wt-<task> push origin <branch>:main
-# 4. remove the worktree — job done
+tools/oc-ship-chain --sha <NEW-head-sha> --branch <branch> [--issue <issue-n>]
+# 4. on exit 0 SWAPPED, remove the worktree — job done
 tools/oc-wt remove <task>
 ```
 
 **Per-commit laws live in their phases:** branch-attached HEAD + signing → §Phase 4; worktree-writer exclusivity → §Phase 2. They bind EVERY commit in ANY phase — read them there.
-
-5. Re-ship fork `main` via oc-deploy: `oc-deploy ship --sha <NEW-head-sha> --features <comma-set> --execute` (S3 — the compiler role is retired; shipping is the editor's own background task, it dispatches fork `main`, which now carries your fix alongside every other editor's merged work).
 ## Phase 7 + 7b — upstream PR → `editor-upstream-pr.md`
 
 Feature-complete → upstream PR filing (Phase 7) and PR lifecycle / blocker

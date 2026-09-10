@@ -8,7 +8,7 @@ description: >
   TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.131
+version: 0.4.132
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -351,7 +351,7 @@ uses them as a licence to fix outside its scope.
 - Branch NAMESPACES are reserved so any role can tell development from upstream
   PR heads at a glance (decision 2026-08-25): `<type>/<slug>` with type ∈
   `feat|fix|ci|chore` = DEVELOPMENT — fork-only, ff-merged into fork `main`
-  (editor Phase 6), archived after merge · `leshchenko1979/<slug>` = UPSTREAM PR HEADS ONLY (renamed from `up/*`, decision 2026-08-27)
+  (editor Phase 5 `oc-ship-chain`), archived after merge · `leshchenko1979/<slug>` = UPSTREAM PR HEADS ONLY (renamed from `up/*`, decision 2026-08-27)
   — created solely in editor Phase 7 off `adolfousier/main`, never merged into
   fork `main`, never a dispatch source. Any lane reads the prefix and knows
   what it is looking at.

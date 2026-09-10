@@ -39,7 +39,7 @@ No single role "owns ports" alone — the law names the chain explicitly (owner 
 
 **OpenCrabs source work** (`~/opencrabs`): any code edit, CI build, or binary swap follows the **`/opencrabs-dev`** skill (`skills/opencrabs-dev/SKILL.md`) — fresh-base fetch, fork issue claim via `Issue-Ref` trailer + `oc-ledger claim` row (NO tackling comments on fork issues — owner ban 2026-08-27), per-task worktree, CI lint gate (pr-checks), CI-only evidence gates, sha-verified run, backup + atomic swap, ops-only user-unit restart. Upstream stays PRs-only; this section is just the pointer (procedure canonical in the skill).
 
-**Implementation comment per commit (owner 2026-08-28 22:54Z)** — canonical procedure: editor.md Phase 6 comment bullet (per-commit gh comment); tooling: `oc-commit` folds it in via `oc-issue-log` (SKILL.md §Canonical tooling). Rule: one comment per editor commit, immediately — no batching at the end.
+**Implementation comment per commit (owner 2026-08-28 22:54Z)** — canonical procedure: per-commit gh comment (chained automatically in `oc-ship-chain` Leg 2, or folded into `oc-commit` via `oc-issue-log`; SKILL.md §Canonical tooling). Rule: one comment per editor commit, immediately — no batching at the end.
 
 
 <!-- source: AGENTS block2 (build lane/cargo/surface/logging/gates/editors/cadence) -->
