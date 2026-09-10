@@ -656,16 +656,6 @@ if tool oc-ship-chain; then
   "$TOOLS_DIR/oc-ship-chain" --no-such-arg >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2" || bad "unknown arg -> expected 2"
 fi
 
-section "oc-waiter"
-run_selftest oc-waiter
-if tool oc-waiter; then
-  "$TOOLS_DIR/oc-waiter" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
-  "$TOOLS_DIR/oc-waiter" --no-such-verb >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown verb -> 2 (usage)" || bad "unknown verb -> expected 2"
-  d="$(mktemp -d)"; mkdir -p "$d/waiters/journal"
-  OC_WAITER_STATE_DIR="$d" OC_TOOLS_NOLOG=1 "$TOOLS_DIR/oc-waiter" list >/dev/null 2>&1
-  [ $? -eq 0 ] && ok "list on empty state dir -> 0" || bad "list on empty state dir -> expected 0"
-  rm -rf "$d"
-fi
 
 # ---- battery receipt (oc-ledger sync gate reads this; the file itself rides --
 # ---- the skill repo via commit-pending --bundle) ------------------------------

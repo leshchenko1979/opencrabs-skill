@@ -36,8 +36,8 @@ EDITOR territory — this lane touches neither.
 
 **Standing duties (owner 2026-09-08 "Go then duty 4+6", v0.4.108):**
 
-- **Cron liveness audit ownership:** the three law-carrying crons
-  (harvest-patrol-daily, upstream-shift-watch, oc-waiter-sweep) plus any
+- **Cron liveness audit ownership:** law-carrying crons
+  (such as harvest-watch-4h) plus any
   future law-carrying cron are TOOLSMITH's to keep alive — the lane audits
   cron health on its own cadence and repairs/re-arms a dead one with a
   ledger stamp. Triage's daily liveness patrol (Duty T4) is the check;

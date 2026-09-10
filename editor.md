@@ -83,15 +83,11 @@ work orders go sender → resource-owner directly — never through an intermedi
 lane. Address by full uuid from a same-turn roster read; stamp the dispatch +
 receipt id via oc-ledger.**
 
-1. **One watcher law (v0.4.120, owner-ordered — supersedes all prior watcher
-   text):** CI verdict waits use exactly ONE of two official surfaces —
-   (a) `oc-waiter arm` (preferred: journal verdict, notify wake, survives
-   audit) or (b) one-shot `gh run view` polls on wake. Raw `gh run watch` /
-   `gh watch` / hand-rolled `nohup` pollers / `oc-prchecks --wait` used as a
-   verdict waiter (double-duty) are ALL BANNED, no sanctioned pattern
-   exception — detached watchers die silently on daemon restarts (five-zero-
-   result precedent, aaa8d8ae) and a dead watcher looks like a slow run.
-   Carrier waits remain SUPERVISOR-owned via `oc-deploy watch`/`poll`.
+1. **Detached command execution (`background: true` — THE standard):** Long-running
+   operations (>60s, CI waits, test batteries, multi-step chains) run detached via the
+   bash tool parameter `background: true`. Hand-rolled `nohup` scripts, sleep loops,
+   and custom background daemons are FORBIDDEN. The daemon harness natively tracks
+   detached execution and auto-resumes your session with the result upon exit.
 2. **`OC_ACTOR=<session-uuid>` MUST be exported on every `oc-*` tool
    invocation** — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
    making floods and behavior attributable after the fact and feeding the
@@ -101,86 +97,32 @@ receipt id via oc-ledger.**
    lane that cannot recall its own uuid reads it from its Session-Id trailer /
    the supervisor roster before running any tool.
 3. Re-running the same CI because the head moved is inherent to a fix loop, but
-   only via oc-prchecks re-dispatch (never a second raw watcher) — pr-checks.yml
-   now carries a concurrency group (`cancel-in-progress: true`, owner fix) so
-   the superseded run is auto-cancelled and minutes stop burning.
-4. **Hand-rolled gate watchers must gate the wake on TERMINAL state** (v0.4.71,
-   Duty-4 P1): a watcher that
-   fires on elapsed time alone reports `status=in_progress` runs as verdicts.
-   Gate on `gh run view --json status` == `completed` (then read
-   `conclusion`), or use `oc-waiter arm` (the ONE watcher law, v0.4.120 —
-   `oc-prchecks --wait` as a verdict waiter is BANNED by that law; verdict
-   fidelity v0.4.56 covers oc-prchecks only — hand-rolled wrappers do not
-   inherit it).
-5. **Read detached-waiter rc at TOP level** (v0.4.71, Duty-4 P12): in a pipe,
-   (`tail`/`head`), not the tool's. Capture the tool's rc before piping
-   (`rc=$?` on the bare invocation, then pipe its output), or use
-   `PIPESTATUS`.
-6. **Waiter self-check includes pattern-vs-format** (v0.4.71, Duty-4 P7): before ending the turn, confirm the
-   waiter's grep/jq pattern matches the tool's ACTUAL journal format
-   (oc-prchecks writes `run=<id>`, not `run <id>`) by reading one real log
-   line back.
-7. **oc-prchecks is invoke-once** (v0.4.71, Duty-4 P11): never re-invoke oc-prchecks in a loop. Exit 5 = in-flight; resume
-   per item 10 (`oc-prchecks resume <run-id>` — not a re-invoke; skips dispatch/adoption), `gh run view <id>` as the
-   read-only check only, `gh run rerun <id>` for a
-   dead run. A looping re-invoke is a self-inflicted dispatch storm.
-8. **Checkout-ref is terminal truth (Duty-4 P2, v0.4.77):** the job NAME only
+   only via oc-prchecks re-dispatch — pr-checks.yml carries a concurrency group
+   (`cancel-in-progress: true`, owner fix) so the superseded run is auto-cancelled.
+4. **Checkout-ref is terminal truth (Duty-4 P2, v0.4.77):** the job NAME only
    identifies the DISPATCH; the run's checkout log line identifies the TESTED
    TREE — only the checkout-ref is terminal truth for code-level verdicts.
    Verify the run checked out your head sha before reading any verdict as lane
    evidence; a mismatch is a carrier bug against the dispatch path — come
    straight to the supervisor with run id + checkout-ref + ledger incident
    stamp (suspect the single-flight dispatch lock adoption).
-9. **Dispatch identity check (Duty-4 P3, v0.4.77):** after dispatching, verify
+5. **Dispatch identity check (Duty-4 P3, v0.4.77):** after dispatching, verify
    the run actually carries your head (job name embeds the head sha) before
    waiting on it — a dispatch that fired on the wrong ref wastes the whole
    wait. oc-prchecks headSha adoption enforces this for its own runs; the
    check covers hand-dispatched `gh workflow run` uses.
-10. **Dispatch-receipt gate (Duty-4 proposal d5863180, owner "All 4 go"
+6. **Dispatch-receipt gate (Duty-4 proposal d5863180, owner "All 4 go"
    2026-09-07, semantic):** a dispatch is NOT dispatchable-upon until its
    receipt is IN HAND — the dispatch command returned rc==0 AND an adopted
    run id is witnessed (API run-search/job-name decode for a recovered
-   mid-flight invocation). Arming a waiter or wiring notify on an
-   un-receipted dispatch creates an orphan-class wait: the waiter rules
-   (items 4/11 + supervisor W-rules) validate the WAITER, this gate validates the DISPATCH
-   first. Evidence: the 2026-09-07 `--notify-session` invented-flag
-   near-miss — the flag sailed through waiter arming because nothing
-   asserted the dispatch itself had landed.
-11. **Detached waiters are `oc-waiter` — THE standard (H1+H3+H4, v0.4.83,
-   supersedes the P1 payload-validation wording):** detached gate waiters MUST
-   be `oc-waiter arm --ref <sha|branch> --notify <session-uuid>`; hand-rolled
-   pollers whose notify text interpolates shell variables are FORBIDDEN —
-   oc-waiter validates the verdict payload BEFORE notify, retries refused
-   wakes with `--interrupt` (rc-3-only), and exits 4 NOTIFY-FAILED when
-   delivery cannot be proven — a false receipt is structurally impossible.
-   Re-attach to a witnessed run with `oc-prchecks resume <run-id>` (never
-   re-invoke oc-prchecks on a timed-out wait — that re-dispatches and the
-   concurrency group cancels the run being resumed). Sweep/watchdog =
-   `oc-waiter sweep` (cron-callable; ORPHANED wakes owner + HQ). Env knobs
-   (`OC_WAITER_*`): defaults live in the tool's own `Env:` header
-   (`tools/oc-waiter`) — the single register; rc contract row in
-   `tools/RC-CONTRACT.md`. The
-   journal-start check proves the waiter LAUNCHED; it does not prove its
-   payload — with oc-waiter both are enforced in-tool; if you must hand-roll
-   anyway, check both.
-12. **oc-prchecks detaches or fails fast (Duty-4 P2, v0.4.80):** never run
-   oc-prchecks INLINE inside a bounded bash tool call — an orphaned inline
-   poll keeps polling after the caller moves on and can adopt a peer run by
-   time-window (false RED, journal-corrected 2026-09-01, ledger n=1366). Run
-   it detached with journal-start verify, or bound it to the tool budget and
-   treat a timeout as an ERROR, never a verdict.
-13. **Per-run-id journal filenames (Duty-4 P5, v0.4.80):** waiter/driver
-   journal files embed the run id (the `/tmp/swap-<sha>-*.log` pattern) — two
-   waiters sharing one journal path nearly read an old run's verdict as the
-   new one (2026-09-01). New file or append-only per run; never append a
-   second wait to a finished run's journal.
-14. **Full shas from rev-parse only (Duty-4 P8, v0.4.80):** any 40-char sha in
+   mid-flight invocation).
+7. **Full shas from rev-parse only (Duty-4 P8, v0.4.80):** any 40-char sha in
    a command or report is copied from SAME-TURN `git rev-parse` / `gh api`
    output — never completed from a remembered prefix (2026-09-01 incident
    n=1452: a fabricated tail burned two gh dispatches; the first hypothesis
    after a lookup failure following a from-memory sha is SELF-FABRICATION —
    re-derive before blaming GitHub).
-15. **Solo-surface rule (Duty-4 proposal d5863180, owner "All 4 go"
+8. **Solo-surface rule (Duty-4 proposal d5863180, owner "All 4 go"
    2026-09-07, semantic):** a SIDE-EFFECT command whose output is the only
    receipt of the action it took (`gh pr create`, `gh issue create`, dispatch
    verbs, anything minting an identifier) runs SOLO in its tool call so its
@@ -190,14 +132,14 @@ receipt id via oc-ledger.**
    of the #1272 phantom-PR report (2026-09-07) — a `gh pr create` whose
    output the lane never saw got reported as filed; third phantom-family
    instance for that lane.
-16. **PR-state claims need a same-turn `gh pr view` receipt (Duty-6/#1431
+9. **PR-state claims need a same-turn `gh pr view` receipt (Duty-6/#1431
    lesson, v0.4.91):** any claim that a PR was created, updated, re-pointed,
    or "auto-updated" by a push is UNVERIFIED until `gh pr view <n> --json
    headRefOid,headRefName,state` names the EXPECTED head sha and repo — a
    force-push to a fork branch does NOT move a PR whose head branch lives on
    another repo (#1431, 2026-09-07: "PR head auto-updated" claim dissolved on
    first-hand check; headRefOid was still the old rider sha). Check event +
-   branch + head sha ALL match before arming a waiter on a run.
+   branch + head sha ALL match before concluding PR state.
 ## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52)
 
 Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep

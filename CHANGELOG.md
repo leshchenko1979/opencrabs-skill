@@ -1,3 +1,11 @@
+## v0.4.135 (2026-09-10, detached command execution standard & waiter retirement)
+- RETIREMENT: decommissioned `tools/oc-waiter` in favor of native detached bash execution (`background: true`).
+- CRONS: unscheduled and dismantled `oc-waiter-sweep` cron job (`b0d7e0d3-1270-4fb5-8cb8-6c7161e90c34`).
+- WORKFLOWS: updated `tools/oc-ship-chain` CLI docs and contracts for native `background: true` execution across Legs 1-3 sequentially.
+- DOCS: purged 16-item CI-wait bureaucracy and One-Watcher law from `editor.md` and `supervisor.md`; added canonical `background: true` guidelines to `editor.md`, `supervisor.md`, `fleet-directives.md`, and `TOOLS.md`.
+- GOVERNANCE: updated Toolsmith Duty S1 (`toolsmith.md`) and Triage Duty T4 (`triage.md`) checklists to remove `oc-waiter-sweep`.
+- BATTERY: 154 PASS / 0 FAIL.
+
 ## v0.4.134 (2026-09-10, owner-approved front matter globs)
 - METADATA: added `globs` coverage for the OpenCrabs source checkout, editor worktrees, and profile-scoped opencrabs-dev skill/state/project paths.
 - Battery before bump: 158 PASS / 0 FAIL.

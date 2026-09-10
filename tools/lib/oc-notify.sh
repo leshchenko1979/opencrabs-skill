@@ -1,8 +1,11 @@
+#!/usr/bin/env bash
 # lib/oc-notify.sh — shared session-wake contract (E-F4, v0.4.97)
 #
 # Single owner of the session-notify wake logic previously duplicated between
 # oc-deploy (notify_session, fanout path) and oc-waiter (resolve_notify_bin +
 # notify_lane). Both consumers now source this file and delegate.
+# Also serves as an executable CLI wrapper for cross-session task chaining:
+#   cmd && tools/lib/oc-notify.sh <target-uuid> <text> [title]
 #
 # Exit-code contract enforced here (src/cli/session_notify.rs):
 #   0 delivered / 2 no_route (dead uuid, permanent) /
@@ -34,3 +37,52 @@ oc_notify_session() { # $1=bin $2=profile $3=sender $4=uuid $5=title $6=text
   fi
   return "$nrc"
 }
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    -h|--help)
+      cat <<'EOH'
+Usage: oc-notify.sh <target-uuid> <text> [title]
+       oc-notify.sh -h | --help
+
+Dispatches a session notification directly to an OpenCrabs session.
+Enforces the session-notify exit contract (auto-retries with --interrupt on rc 3).
+
+Arguments:
+  target-uuid   Full session UUID to receive notification
+  text          Notification message body
+  title         Optional notification title (defaults to "Task Complete")
+
+Exit:
+  0 delivered / 2 no_route (dead uuid) / 3 refused / 4 transport
+EOH
+      exit 0
+      ;;
+  esac
+
+  TARGET_UUID="${1:-}"
+  TEXT="${2:-}"
+  TITLE="${3:-Task Complete}"
+  SENDER="${OC_ACTOR:-${SESSION_ID:-opencrabs-dev}}"
+  PROFILE="${OC_NOTIFY_PROFILE:-ops}"
+
+  if [ -z "$TARGET_UUID" ] || [ -z "$TEXT" ]; then
+    echo "Usage: oc-notify.sh <target-uuid> <text> [title]" >&2
+    exit 2
+  fi
+
+  case "$TARGET_UUID" in
+    *[!0-9a-f-]*)
+      echo "oc-notify: invalid target uuid '$TARGET_UUID'" >&2
+      exit 2
+      ;;
+  esac
+
+  BIN="$(oc_notify_resolve_bin)" || {
+    echo "oc-notify: opencrabs binary not found" >&2
+    exit 4
+  }
+
+  oc_notify_session "$BIN" "$PROFILE" "$SENDER" "$TARGET_UUID" "$TITLE" "$TEXT"
+  exit $?
+fi

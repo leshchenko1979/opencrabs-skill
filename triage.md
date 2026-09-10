@@ -131,10 +131,9 @@ per that section. Owner veto overrides retroactively, as with rulings.
   against (Triage lesson, ledger n=2083).
 - **Cron liveness patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** verify the law-carrying
-  crons are enabled and have recent last-run rows (harvest-patrol-daily,
-  upstream-shift-watch, oc-waiter-sweep — via the cron tool, fresh
-  receipt); a dead patrol cron posts no census and trips no alarm, so the
-  liveness check IS the heartbeat for the heartbeat.
+  crons are enabled and have recent last-run rows (e.g. harvest-watch-4h —
+  via the cron tool, fresh receipt); a dead patrol cron posts no census and
+  trips no alarm, so the liveness check IS the heartbeat for the heartbeat.
 
 ## Duty T5 — Post-compaction + daily issue sweep (owner order 2026-09-07
 17:23Z, v0.4.92; daily cadence added owner order 2026-09-08 20:0xZ, v0.4.112)

@@ -302,38 +302,11 @@ carrier branch is the sole build lane). oc-ci-parity RETIRED v0.4.117
 (owner "3 - ok": zero live use in 12 days, C-H2; the runbook's diff check
 supersedes it).
 
-## CI-wait & waiter discipline (supervisor-scoped items; local numbering W1-W6)
+## Detached command execution (background: true)
 
-Moved from editor.md §CI-wait — these bind SUPERVISOR waiters and any detached
-lane polling. The editor carries its OWN full set in editor.md §CI-wait
-(items 1–16 since v0.4.91 — 10th = dispatch-receipt gate, 15th = solo-surface
-rule, 16th = PR-state receipt law; lens B F10, v0.4.79: the "editor keeps items 1–3"
-partition is retired; count re-verified lens A18 v0.4.89). Cross-references to these items use the W-prefix to
-avoid collision with the editor's local numbering.
+Long-running commands (>60s, test batteries, carrier/CI waits, heavy audits) MUST run detached via the bash tool parameter `background: true`.
 
-- **W1. Poll floor — EVERY detached gh poller ≥60s.** Waiter, watchdog,
-  courtesy loop: no exceptions by mechanism.
-- **W2. `--wait` must fit the ~120s tool-runner ceiling (≤90s).** Longer
-  waits = exit 5 + resume-by-run-id or a detached poller. The FIRST dispatch
-  call carries an explicit ≥600s tool timeout; a mid-flight dead invocation
-  (no exit code, no run URL) is recovered by API run-search and ADOPTED —
-  never a blind re-dispatch.
-- **W3. Waiter legs verify invocations before launch.** Each leg of a
-  detached chain checks its exact tool invocation against `--help`/tools.log
-  BEFORE the chain launches (same trust level as the claim read-back,
-  editor.md Phase 1 step 4), and a mid-chain rc≠0 session-notifies the
-  owning session IMMEDIATELY, not only at chain end. Operational wakes carry
-  `interrupt=true` (mid-turn failsafe delivery).
-- **W4. Detached waits go through `oc-waiter arm` (v0.4.83), notify wiring
-  NEVER as raw oc-prchecks flags** — the tool has no notify options. A
-  detached waiter with NO notify path gets a one-shot cron courier armed
-  before end of turn. Hand-rolled poller scripts are forbidden when
-  `oc-waiter arm --ref <sha|branch> --notify <session-uuid>` covers the wait
-  (verified delivery, rc-3 --interrupt retry, ORPHANED sweep wake).
-- **W5. Log-window verification uses line-number cutoffs or full timestamps**
-  — `grep -n marker` → `tail -n +N`, or full-timestamp compare; never
-  prefix/field heuristics (log continuation lines carry no leading timestamp
-  and leak debris into the window).
-- **W6. `gh api` REST v3 keys are snake_case.** In `--jq` filters
-  `run_started_at`/`updated_at` work; camelCase (`runStartedAt`) silently
-  evaluates to null.
+- **Auto-resume & injection:** The daemon tracks detached executions natively and auto-resumes the session upon process completion. Do NOT hand-roll polling loops or detached background daemons.
+- **Terminal state:** CI waits must gate completion on terminal state (`completed` status; `success`/`failure` conclusion).
+- **Checkout-ref verification:** Checkout log lines identify the tested tree; verify checkout-ref matches the expected head SHA before treating a verdict as final evidence.
+- **REST v3 keys are snake_case:** In `gh api` `--jq` filters, `run_started_at`/`updated_at` work; camelCase (`runStartedAt`) silently evaluates to null.

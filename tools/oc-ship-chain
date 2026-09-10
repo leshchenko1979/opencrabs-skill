@@ -17,6 +17,10 @@
 #                 [--gated-sha <sha>] [--gated-run <id>] [--wait <sec>] [--dry-run]
 #                 [--no-ledger] [--selftest] [--help]
 #
+# Background execution:
+#   Runs across Legs 1-3 sequentially. Call with bash tool parameter background: true.
+#   The daemon auto-resumes the session when SWAPPED (rc 0) or on structured exit.
+#
 # Exit: 0 SWAPPED (full chain complete)
 #       2 usage
 #       3 dirty fork checkout (pre-flight)
@@ -67,7 +71,7 @@ ISSUELOG_BIN="${OC_ISSUELOG_BIN:-$TOOLS_DIR/oc-issue-log}"
 FORK_REPO="${OC_FORK_REPO:-$HOME/opencrabs}"
 GH_BIN="${OC_GH:-gh}"
 
-usage() { sed -n '2,30p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0; }
+usage() { sed -n '2,34p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0; }
 die() { printf 'oc-ship-chain: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0; GATED_SHA=""; GATED_RUN=""

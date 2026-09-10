@@ -116,11 +116,9 @@ usage() { # [reason] — C-#1: prints WHY before the usage block. A repeat of th
   printf '%s %s %s\n' "$_now" "$_h" "$_cnt" > "$_cf" 2>/dev/null || :
   [ "$_cnt" -gt 1 ] && sleep $(( _cnt * 2 < 10 ? _cnt * 2 : 10 ))
   cat >&2 <<EOS
-Usage: $PROG [<branch-or-sha> | resume <run-id> [--notify <session-uuid>] [--timeout N]] [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
+Usage: $PROG [<branch-or-sha> | resume <run-id>] [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
   resume <run-id>  re-attach to a run this lane WITNESSED (rc-5 stdout / journal extra.run_id);
                    skips shape gate / yml check / dispatch / lock / adoption, goes straight to watch+verdict
-  resume --notify  C-A1: hand the wait to oc-waiter (wakes <session-uuid> on TERMINAL verdict;
-                   one-shot arming, foreground exits immediately). Kills the manual resume-retry loop.
 Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable / 8 AMBIGUOUS-same-ref-witness-unverifiable (fail-closed, dispatch refused, #115B)
 EOS
   exit 2
@@ -290,7 +288,7 @@ do_selftest() {
     t_ok "adoption pin: adopted run on foreign branch -> rc 4, never watched (extra.adoption_pin=mismatch)"
   else t_bad "adoption pin mismatch (rc=$T_RC out=$T_OUT)"; fi
   # C-A1 (lens C2 A1): the mismatch rc-4 carries a machine-readable SUPERSEDED
-  # token so oc-waiter (and humans) never retry this id — 35-row retry storm
+  # token so callers (and humans) never retry this id — 35-row retry storm
   # evidence, tools.log 2026-09-07. Retry cannot fix an identity mismatch.
   run_t adopt_mismatch "$SHA"
   if [ "$T_RC" -eq 4 ] && case "$T_OUT" in *"OC_PR_SUPERSEDED"*"do NOT resume"*) true ;; *) false ;; esac; then
@@ -331,20 +329,8 @@ do_selftest() {
   [ "$T_RC" -eq 4 ] && t_ok "resume: unknown run -> 4 (not-found)" || t_bad "resume unknown (rc=$T_RC out=$T_OUT)"
   run_t none resume abc123
   [ "$T_RC" -eq 2 ] && t_ok "resume: non-numeric run id -> 2 (usage)" || t_bad "resume non-numeric (rc=$T_RC out=$T_OUT)"
-  # C-A1: resume <id> --notify <uuid> hands the wait to oc-waiter (exec arm);
-  # --notify WITHOUT resume is refused (dispatch stays foreground, #C-A1).
   run_t none "$SHA" --notify 11111111-2222-3333-4444-555555555555
-  if [ "$T_RC" -eq 2 ] && case "$T_OUT" in *"--notify is resume-only"*) true ;; *) false ;; esac; then
-    t_ok "C-A1: --notify without resume -> 2 usage (dispatch stays foreground)"
-  else t_bad "C-A1 --notify-no-resume (rc=$T_RC out=$T_OUT)"; fi
-  printf '#!/usr/bin/env bash\necho "WAITER-SHIM armed id=ca1shim" >> "$CA1_LOG"\nexit 0\n' > "$D/waiter"; chmod +x "$D/waiter"
-  CA1_LOG="$D/ca1.log" OC_PRCHECKS_WAITER="$D/waiter" OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" \
-    OC_PRCHECKS_LOCK_WAIT=5 OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
-    OC_TOOLS_NOLOG=1 "$SELF" resume 222 --notify 11111111-2222-3333-4444-555555555555 >/dev/null 2>&1
-  T_RC=0 || T_RC=$?
-  [ "$T_RC" -eq 0 ] && grep -q "armed id=" "$D/ca1.log" 2>/dev/null \
-    && t_ok "C-A1: resume --notify delegates to oc-waiter arm (exec, waiter shim invoked)" \
-    || t_bad "C-A1 resume --notify delegation (rc=$T_RC log=$(cat "$D/ca1.log" 2>/dev/null))"
+  [ "$T_RC" -eq 2 ] && t_ok "--notify retired -> 2 (usage)" || t_bad "--notify retired (rc=$T_RC out=$T_OUT)"
   mk_shim "$D/gh" none
   OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
     OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
@@ -437,16 +423,15 @@ CALL_ARGS="$*"   # C-#1: backoff identity — same args dying rc=2 repeatedly
 REF=""
 FAULT_PR=""
 RESUME_MODE=0
-NOTIFY_TO=""; RESUME_TMO=""; RESUME_LABEL=""   # C-A1 (set -u: defaults before parse)
 while [ $# -gt 0 ]; do
   case "$1" in
     --wait)    shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage "--wait needs an integer (got '$WAIT_SECS')" ;; esac ;;
     --repo)    shift; REPO="${1:-}"; [ -n "$REPO" ] || usage "--repo needs a value" ;;
     --carrier) shift; CARRIER="${1:-}"; [ -n "$CARRIER" ] || usage "--carrier needs a value" ;;
     --fault-scope) shift; FAULT_PR="${1:-}"; [ -n "$FAULT_PR" ] || usage "--fault-scope needs a PR number" ;;   # E5 (v0.4.78)
-    --notify)  shift; NOTIFY_TO="${1:-}"; [ -n "$NOTIFY_TO" ] || usage "--notify needs a session uuid" ;;   # C-A1: resume-only; hands the watch to oc-waiter
-    --timeout) shift; RESUME_TMO="${1:-}"; [ -n "$RESUME_TMO" ] || usage "--timeout needs N|Ns|Nm|Nh" ;;   # C-A1: passthru to oc-waiter arm
-    --label)   shift; RESUME_LABEL="${1:-}" ;;   # C-A1: passthru to oc-waiter arm
+    --notify)  usage "--notify retired; run with background: true and chain 'cmd && tools/lib/oc-notify.sh <uuid> <msg>'" ;;
+    --timeout) usage "--timeout retired; use --wait N for bounded watch or run with background: true" ;;
+    --label)   shift ;; # legacy no-op
     --no-log)  : ;;
     resume)    [ "$RESUME_MODE" -eq 0 ] || usage "repeat 'resume'"; RESUME_MODE=1 ;;   # #74 H2: re-attach to a witnessed run
     -*)        usage "unknown flag '$1'" ;;
@@ -457,20 +442,6 @@ done
 [ -n "$REF" ] || usage "missing <branch-or-sha> argument"
 if [ "$RESUME_MODE" -eq 1 ]; then   # #74 H2: positional is a NUMERIC run id, not a sha/branch
   case "$REF" in ''|*[!0-9]*) usage "resume needs a numeric run id (got '$REF')" ;; esac
-fi
-# C-A1 (lens C2 A1, tools.log: 9-15 identical rc-4 resume retries per run): a
-# dispatch+watch invocation with --notify DELEGATES the wait to oc-waiter arm —
-# one bounded foreground check, then the waiter wakes the session on TERMINAL.
-# This kills the manual resume-retry loop the waiter was built to replace.
-# --notify without resume is refused: dispatching into a background waiter from
-# a fresh ref hides the dispatch decision from the operator.
-if [ -n "$NOTIFY_TO" ]; then
-  [ "$RESUME_MODE" -eq 1 ] || usage "--notify is resume-only: oc-prchecks resume <run-id> --notify <session-uuid> [--timeout N] — dispatch is always foreground"
-  case "$NOTIFY_TO" in *[!0-9a-f-]*) usage "--notify must be a session uuid (got '$NOTIFY_TO')" ;; esac
-  WAITER="${OC_PRCHECKS_WAITER:-$(cd "$(dirname "$0")" && pwd)/oc-waiter}"
-  [ -x "$WAITER" ] || { echo "$PROG: oc-waiter not found next to gate ($WAITER) — cannot arm the backend watcher" >&2; exit 4; }
-  echo "$PROG: arming oc-waiter backend for run $REF -> notify $NOTIFY_TO (foreground release; poll this resume id for a bounded check)"
-  exec "$WAITER" arm --run "$REF" --notify "$NOTIFY_TO" ${RESUME_TMO:+--timeout "$RESUME_TMO"} ${RESUME_LABEL:+--label "$RESUME_LABEL"}
 fi
 
 # ---------- step 0: --repo SLUG-or-PATH (v0.4.48 Duty-7 fix) -----------------

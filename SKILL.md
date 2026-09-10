@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.134
+version: 0.4.135
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -88,7 +88,6 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ship-chain --sha S --branch B` | CI gate → issue-log → ff-merge → ship → swap in ONE invocation; no-self-ping |
 | `./tools/oc-notify-fanout --title T` | per-lane skill-change brief generator; DB-validated forum-scoped targets, receipts + ledger stamp |
 | `./tools/oc-rebase-safety overlap\|audit` | re-gate split rule arithmetic |
-| `./tools/oc-waiter arm\|quick\|list\|sweep` | lane wake service (arm/quick background CI watcher; sweep reaps orphans) |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (the
 SELFTEST BATTERY — tool selftests, distinct from the CI-gate CODE TESTS
