@@ -98,7 +98,7 @@ def resolve_issue_commits(issue_num, repo_path):
     # Find commits on fork referencing this issue
     pattern = f"#{issue_num}"
     rc, out, _ = run_cmd([
-        "git", "-C", repo_path, "log", "adolfousier/main..origin/main",
+        "git", "-C", repo_path, "log", "--reverse", "adolfousier/main..origin/main",
         "--format=%H%x09%h%x09%s%x09%(trailers:key=Issue-Ref,valueonly)"
     ])
     if rc != 0 or not out.strip():
