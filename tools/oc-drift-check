@@ -19,22 +19,39 @@ _OC_LIB="$_OC_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-drift-check" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
-SKILL_DIR="${OC_SKILL_DIR:-$(cd "$_OC_DIR/.." && pwd)}"
+SKILL_DIR=""   # resolved in cmd_drift (v0.4.130 canonical-resolve, below)
 LEDGER="${OC_LEDGER:-/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
+# v0.4.130 (ruling n=2369): canonical skill dir. Worktree copies of the skill
+# repo (oc-wt checkouts) self-resolving from their own tree produced
+# contradicting drift verdicts same-day (2026-09-10) — the default is now the
+# CANONICAL profile copy, never the invoking script's location. Explicit
+# override wins: --skill-dir flag / OC_SKILL_DIR env (selftests, sandboxes).
+CANONICAL_SKILL="$HOME/.opencrabs/profiles/ops/skills/opencrabs-dev"
 
 die() { echo "oc-drift-check: $2" >&2; exit "$1"; }
 
 cmd_drift() {
-  local uuid="" claimed="" ack=0
+  local uuid="" claimed="" ack=0 skill_dir_flag=""
   while [ $# -gt 0 ]; do case "$1" in
     --ack) ack=1; shift ;;
-    --skill-dir) SKILL_DIR="${2:-}"; shift 2 ;;
+    --skill-dir) skill_dir_flag="${2:-}"; shift 2 ;;
     -h|--help) echo "usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]"; echo "Exit: 0 no-drift / 1 DRIFT / 2 usage / 3 ledger-or-skilldir-fail"; exit 0 ;;  # C-#3: help=0
     --*) die 2 "unknown flag '$1'" ;;
     *) if [ -z "$uuid" ]; then uuid="$1"; elif [ -z "$claimed" ]; then claimed="$1"; fi; shift ;;
   esac; done
   [ -n "$uuid" ] && [ -n "$claimed" ] || die 2 "usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]"
   printf '%s' "$claimed" | grep -Eq '^v?0\.[0-9]+\.[0-9]+$' || die 2 "claimed-version must be [v]0.N.N, got '$claimed'"
+  # v0.4.130 canonical-resolve (ruling n=2369): precedence = --skill-dir flag >
+  # OC_SKILL_DIR env > CANONICAL profile copy. The invoking script's own location
+  # is NEVER used — a worktree copy must not self-resolve (contradicting
+  # same-day drift verdicts, 2026-09-10).
+  if [ -n "$skill_dir_flag" ]; then
+    SKILL_DIR="$skill_dir_flag"
+  elif [ -n "${OC_SKILL_DIR:-}" ]; then
+    SKILL_DIR="$OC_SKILL_DIR"
+  else
+    SKILL_DIR="$CANONICAL_SKILL"
+  fi
   local cur
   cur="$(grep -E '^version:' "$SKILL_DIR/SKILL.md" 2>/dev/null | head -1 | awk '{print $2}')"
   [ -n "$cur" ] || die 3 "cannot read version from $SKILL_DIR/SKILL.md"
