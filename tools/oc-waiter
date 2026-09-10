@@ -676,7 +676,7 @@ GSTUB
   ARM_ID="$(printf '%s' "$ARM_OUT" | grep -oE 'id=[^ ]+' | head -1 | cut -d= -f2)"
   DET=0
   if [ "$RC8" -eq 0 ] && [ -n "$ARM_ID" ]; then
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    for _ in $(seq 1 40); do
       [ "$(jq -r '.verdict // ""' "$D/waiters/$ARM_ID.json" 2>/dev/null)" = "GREEN" ] && DET=1 && break
       sleep 0.5
     done
