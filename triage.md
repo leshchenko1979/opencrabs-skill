@@ -82,6 +82,12 @@ per that section. Owner veto overrides retroactively, as with rulings.
 
 ## Duty T4 — Enforcement patrols
 
+- **Parallel Harvest Orchestration Patrol (PHOP) & Pre-Dispatch Vetting (v0.4.136, 2026-09-10):**
+  When orchestrating harvest work, Triage MUST mechanically vet candidate packages before creating worktrees or notifying editor lanes:
+  1. Run `tools/oc-harvest-dispatch vet <issue-or-commits>` to verify upstream absence (tree-diff non-empty, patch-id unmerged, not already merged upstream, not superseded).
+  2. Verify target editor lane availability using `tools/oc-harvest-dispatch dispatch <issue> <commits> [--to <uuid>]`. If target lane is busy with an active claim, the tool refuses dispatch (rc 4); Triage must select an idle editor or commission a dedicated harvest worker.
+  3. Never dispatch unvetted candidates or busy editors.
+
 - **Stale-branch sweep patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** run
   `./tools/oc-branch-sweep` (fresh receipt) against the fork; the sweep

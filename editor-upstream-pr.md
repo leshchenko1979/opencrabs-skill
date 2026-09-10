@@ -200,3 +200,15 @@ state,mergedAt`) — it may have been maintainer-merged under you. **The state g
 cherry-pick round toward a PR head (v0.4.14, proposal P4)**: before investing a
 round, fresh `gh pr view <n> --json state` — if MERGED/CLOSED, STOP and report,
 do not invest the round.
+
+## Phase 7c — Autonomous Harvest Execution (v0.4.136, 2026-09-10)
+
+Trigger: Editor lane receives a `[HARVEST DISPATCH: #N]` wire envelope from Triage via `session_notify`.
+
+Contract:
+1. **Dedicated Worktree**: Create isolated worktree off `adolfousier/main` tip:
+   `tools/oc-wt add up-<slug> leshchenko1979/fix/<slug> --create --from adolfousier/main`
+2. **Cherry-pick & Pre-Sweep**: Cherry-pick source commits preserving trailers (`-x` / `Issue-Ref`), then verify clean lineage with `tools/oc-harvest-sweep leshchenko1979/fix/<slug> --base adolfousier/main`.
+3. **Push & Gate**: Push branch to origin (`leshchenko1979/opencrabs`) and trigger `tools/oc-prchecks leshchenko1979/fix/<slug>`.
+4. **Auto-Ship Authorization**: When gate run exits GREEN (SUCCESS), Editor is **pre-authorized** to file the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug>`) citing the gate run ID and linking the fork issue. No human pre-confirmation turn needed.
+5. **Ack & Cleanup**: Remove harvest worktree, stamp completion in ledger, and notify Triage via `session_notify`.

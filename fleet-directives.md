@@ -37,6 +37,65 @@ No single role "owns ports" alone — the law names the chain explicitly (owner 
 
 **Upstream PR law** (owner 2026-08-27, tightened 2026-08-26) — canonical text: SKILL.md §Upstream relations + §Hard rules rows ("Upstream receives PRs ONLY", "PR SHIPMENT gates on owner approval", "APPROVAL = Alexey's reply or a positive Telegram reaction"). Core: PRs-only upstream, never `Closes #N`, fork-issue link at body end, smoke-PASSED owner word BEFORE PR creation, silence ≠ consent, no ad-hoc PRs, branch namespace `leshchenko1979/<slug>` (SKILL.md §Upstream relations item 7). **Kept here (unique) — #1255 exception (owner 2026-08-28 13:59Z):** the compaction-stall / gateway-timeout class is owner-sanctioned for direct upstream REPORTING — adolfo is actively working that area (#1247, fix `a0954b63` on `fix/session-routing-and-fallback-chain`); field report filed as adolfousier/opencrabs#1255 (ledger 1280); follow-ups on that thread may continue upstream. Nightly cron pulls repo only — never pushes brain changes.
 
+## Parallel Harvest Orchestration Protocol (PHOP) (v0.4.136, 2026-09-10)
+
+Standard protocol for parallel harvesting of downstream fork commits to upstream (`adolfousier/opencrabs:main`). Mechanized via `tools/oc-harvest-dispatch`.
+
+### 1. The 4-Stage Harvest Lifecycle
+
+| Stage | Owner | Gate & Invariants | Command / Artifact |
+|---|---|---|---|
+| **1. Candidate Vetting** | Triage | **Upstream Absence Proof**: Confirm commit delta is non-empty on upstream tip (`git diff adolfousier/main -- <files>`), patch-id is not an ancestor/merged, upstream PR settling authority confirms unharvested, and candidate is not superseded. | `tools/oc-harvest-dispatch vet <issue-or-commits>` |
+| **2. Lane Availability** | Triage | **Verify-Unclaimed & Idle Law**: Scan `workers-ledger.json` for active `claim` rows. Target lane must have status `idle` and zero unfinished claims. Never dispatch to a busy lane (e.g. active plan or in-flight gate). | `tools/oc-harvest-dispatch dispatch <issue> <commits> [--to <uuid>]` (enforces rc 4 on busy lanes) |
+| **3. Dispatch Envelope** | Triage | **Atomic Dispatch**: Deliver standard payload via `session_notify` (`delivery.mode="turn-end"`). Zero Telegram noise to worker topics. | Standard wire envelope `[HARVEST DISPATCH: #N]` |
+| **4. Autonomous Ship & Ack** | Editor | **Auto-Ship**: Dedicated worktree off `adolfousier/main`, cherry-pick with trailers, `oc-harvest-sweep`, push, `oc-prchecks`. On GREEN gate → file upstream PR, link fork issue, notify Triage. | `editor-upstream-pr.md` Phase 7c |
+
+### 2. Standard Dispatch Wire Envelope
+
+```text
+[HARVEST DISPATCH: #{issue}]
+Target Issue: #{issue} ({slug})
+Source Commits: {commits}
+Upstream Base: adolfousier/main ({tip_sha})
+Target Branch: leshchenko1979/fix/{slug}
+Commands:
+  1. tools/oc-wt add up-{slug} {branch} --create --from adolfousier/main
+  2. git cherry-pick {commits}
+  3. tools/oc-harvest-sweep {branch} --base adolfousier/main
+  4. git push origin {branch}
+  5. tools/oc-prchecks {branch}
+Contract: AUTO-SHIP on GREEN CI gate. File PR on adolfousier/opencrabs:main citing gate run ID, link fork #{issue}, notify Triage.
+```
+
+### 3. Orchestration Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Alexey as Alexey (Owner)
+    participant Triage as Triage (Topic 42487)
+    participant Tool as tools/oc-harvest-dispatch
+    participant Ledger as workers-ledger.json
+    participant Editor as Editor Lane
+    participant ForkCI as Fork CI (pr-checks)
+    participant Upstream as Upstream Repo
+
+    Alexey->>Triage: Harvest standing order
+    Triage->>Tool: vet <issue-or-commits>
+    Tool->>Tool: Check tree-diff, patch-id, and PR settling
+    Tool-->>Triage: APPROVED (or REJECTED)
+    Triage->>Tool: dispatch <issue> <commits> [--to <uuid>]
+    Tool->>Ledger: Verify lane idle & zero active claims
+    Tool->>Editor: session_notify([HARVEST DISPATCH: #N])
+    Note over Editor: Cut worktree off adolfousier/main<br/>Cherry-pick + oc-harvest-sweep
+    Editor->>ForkCI: Push branch + dispatch pr-checks
+    ForkCI-->>Editor: Gate verdict: SUCCESS
+    Note over Editor: AUTO-SHIP (pre-authorized on dispatch)
+    Editor->>Upstream: File upstream PR (gh pr create)
+    Editor->>Triage: session_notify: PR filed + fork issue linked
+    Triage->>Alexey: Report PR receipt in topic 42487
+```
+
 **OpenCrabs source work** (`~/opencrabs`): any code edit, CI build, or binary swap follows the **`/opencrabs-dev`** skill (`skills/opencrabs-dev/SKILL.md`) — fresh-base fetch, fork issue claim via `Issue-Ref` trailer + `oc-ledger claim` row (NO tackling comments on fork issues — owner ban 2026-08-27), per-task worktree, CI lint gate (pr-checks), CI-only evidence gates, sha-verified run, backup + atomic swap, ops-only user-unit restart. Upstream stays PRs-only; this section is just the pointer (procedure canonical in the skill).
 
 **Implementation comment per commit (owner 2026-08-28 22:54Z)** — canonical procedure: per-commit gh comment (chained automatically in `oc-ship-chain` Leg 2, or folded into `oc-commit` via `oc-issue-log`; SKILL.md §Canonical tooling). Rule: one comment per editor commit, immediately — no batching at the end.

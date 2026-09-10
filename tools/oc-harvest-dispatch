@@ -1,0 +1,671 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-harvest-dispatch — mechanized candidate vetting, lane selection, and dispatch
+#
+# Enforces the Parallel Harvest Orchestration Protocol (PHOP):
+# 1. Candidate Vetting:
+#    - Tree-diff delta check (git diff adolfousier/main -- <files>) -> rejects if empty
+#    - Patch-ID / Ancestor check -> rejects if diff already merged upstream
+#    - Upstream PR settling authority -> rejects if already merged/in-flight
+#    - Supersession audit -> rejects if obsolete/superseded
+# 2. Capacity-Gated Dispatch:
+#    - Queries workers-ledger.json to verify target editor is strictly idle with 0 open claims
+#    - Formats standard self-contained wire envelope
+#    - Sends payload via session_notify (or dry-run output)
+#
+# Subcommands:
+#   vet <issue-or-commits> [--repo <path>] [--base <ref>] [--json]
+#   dispatch <issue> <commits> [--to <uuid>] [--repo <path>] [--base <ref>] [--dry-run]
+#   --help | -h
+#   --selftest
+#
+# Exit codes:
+#   0: APPROVED / Clean / Success / --help
+#   1: REJECTED (already merged, superseded, empty diff, in-flight)
+#   2: Usage error
+#   3: Git or GitHub API failure
+#   4: CAPACITY_EXHAUSTED / Target lane busy with active claims
+# =============================================================================
+set -u
+set -o pipefail
+
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then
+  source "$_OC_LIB"
+  oc_log_init "oc-harvest-dispatch" "$@"
+else
+  oc_log_finish() { :; }
+fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="$(basename "$0")"
+REPO="${HOME}/opencrabs"
+BASE_REF="adolfousier/main"
+UPSTREAM_REPO="adolfousier/opencrabs"
+STATE_DIR="${HOME}/.opencrabs/profiles/ops/opencrabs-dev"
+LEDGER_FILE="${STATE_DIR}/workers-ledger.json"
+
+usage() {
+  cat <<EOF
+Usage:
+  $PROG vet <issue-or-commits> [--repo <path>] [--base <ref>] [--json]
+  $PROG dispatch <issue> <commits> [--to <uuid>] [--repo <path>] [--base <ref>] [--dry-run]
+  $PROG --help | -h
+  $PROG --selftest
+
+Exit codes:
+  0: APPROVED / Eligible / Success
+  1: REJECTED (already merged upstream, empty diff, or superseded)
+  2: Usage error
+  3: Git or API failure
+  4: CAPACITY_EXHAUSTED / Target lane busy with active claims
+EOF
+  exit "${1:-2}"
+}
+
+# --- Core Python Engine ---
+run_engine() {
+  python3 -c '
+import sys, os, json, re, subprocess, argparse
+
+def run_cmd(cmd, cwd=None):
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    return res.returncode, res.stdout, res.stderr
+
+def get_patch_id(commit, repo_path):
+    rc, out, _ = run_cmd(["git", "-C", repo_path, "show", commit])
+    if rc != 0:
+        return None
+    p = subprocess.run(["git", "patch-id"], input=out, text=True, capture_output=True)
+    if p.returncode == 0 and p.stdout:
+        return p.stdout.strip().split()[0]
+    return None
+
+def check_ancestor(commit, base_ref, repo_path):
+    rc, _, _ = run_cmd(["git", "-C", repo_path, "merge-base", "--is-ancestor", commit, base_ref])
+    return rc == 0
+
+def check_files_diff(files, base_ref, repo_path):
+    if not files:
+        return False, ""
+    cmd = ["git", "-C", repo_path, "diff", base_ref, "--"] + files
+    rc, out, _ = run_cmd(cmd)
+    if rc == 0 and not out.strip():
+        return True, ""  # Diff is empty!
+    return False, out
+
+def resolve_issue_commits(issue_num, repo_path):
+    # Find commits on fork referencing this issue
+    pattern = f"#{issue_num}"
+    rc, out, _ = run_cmd([
+        "git", "-C", repo_path, "log", "adolfousier/main..origin/main",
+        "--format=%H%x09%h%x09%s%x09%(trailers:key=Issue-Ref,valueonly)"
+    ])
+    if rc != 0 or not out.strip():
+        return []
+    commits = []
+    for line in out.strip().split("\n"):
+        parts = line.split("\t")
+        full_sha = parts[0]
+        short_sha = parts[1] if len(parts) > 1 else full_sha[:7]
+        subject = parts[2] if len(parts) > 2 else ""
+        trailer = parts[3] if len(parts) > 3 else ""
+        if pattern in subject or pattern in trailer:
+            commits.append(full_sha)
+    return commits
+
+def get_affected_files(commits, repo_path):
+    files = set()
+    for c in commits:
+        rc, out, _ = run_cmd(["git", "-C", repo_path, "diff-tree", "--no-commit-id", "--name-only", "-r", c])
+        if rc == 0 and out.strip():
+            for f in out.strip().split("\n"):
+                if f.strip():
+                    files.add(f.strip())
+    return sorted(list(files))
+
+def check_upstream_pr(issue_num, upstream_repo, mock_prs=None):
+    if mock_prs is not None:
+        prs = mock_prs
+    else:
+        cmd = ["gh", "pr", "list", "--repo", upstream_repo, "--state", "all", "--limit", "150", "--json", "number,title,state,headRefName,mergedAt,body"]
+        rc, out, _ = run_cmd(cmd)
+        if rc != 0:
+            return None
+        prs = json.loads(out)
+    for p in prs:
+        body = p.get("body", "") or ""
+        head = p.get("headRefName", "") or ""
+        title = p.get("title", "") or ""
+        text = f"{title} {head} {body}"
+        if f"#{issue_num}" in text or f"/{issue_num}" in text or f"-{issue_num}" in text:
+            if p.get("state") in ["MERGED", "OPEN"]:
+                return p
+    return None
+
+def get_active_claims(ledger_file):
+    if not os.path.exists(ledger_file):
+        return {}
+    with open(ledger_file) as f:
+        data = json.load(f)
+    events = data.get("events", [])
+    claims = {}
+    for idx, ev in enumerate(events):
+        if ev.get("kind") == "claim":
+            by = ev.get("by", "")
+            # extract uuid
+            m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", by)
+            uuid = m.group(1) if m else by.replace("editor ", "").strip()
+            what = ev.get("what", "")
+            # check if closed later
+            closed = False
+            for later_ev in events[idx+1:]:
+                later_by = later_ev.get("by", "")
+                if uuid in later_by and later_ev.get("kind") in ["close", "confirm", "reject", "done", "unclaim"]:
+                    closed = True
+                    break
+            if not closed:
+                claims.setdefault(uuid, []).append(what)
+    return claims
+
+def get_available_editors(ledger_file, target_uuid=None):
+    if not os.path.exists(ledger_file):
+        return []
+    with open(ledger_file) as f:
+        data = json.load(f)
+    active_claims = get_active_claims(ledger_file)
+    workers = data.get("workers", [])
+    available = []
+    for w in workers:
+        u = w.get("uuid")
+        role = w.get("role", "")
+        if role != "editor":
+            continue
+        if target_uuid and u != target_uuid:
+            continue
+        open_c = active_claims.get(u, [])
+        if len(open_c) == 0:
+            available.append(w)
+    return available
+
+def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=None, mock_inventory=None):
+    issue_num = None
+    commits = []
+    
+    # Check if candidate_arg resolves as a git commit in repo_path
+    rc, _, _ = run_cmd(["git", "-C", repo_path, "cat-file", "-e", candidate_arg + "^{commit}"])
+    is_commit = (rc == 0)
+
+    if is_commit:
+        commits = [candidate_arg]
+        # Try to infer issue from trailers
+        rc, out, _ = run_cmd(["git", "-C", repo_path, "log", "-n", "1", "--format=%s%x09%(trailers:key=Issue-Ref,valueonly)", candidate_arg])
+        if rc == 0 and out.strip():
+            m = re.search(r"#(\d+)", out.strip())
+            if m:
+                issue_num = int(m.group(1))
+    elif re.match(r"^#?\d+$", candidate_arg):
+        issue_num = int(candidate_arg.lstrip("#"))
+        commits = resolve_issue_commits(issue_num, repo_path)
+    else:
+        # It is a commit or list of commits
+        commits = [c.strip() for c in candidate_arg.split() if c.strip()]
+        # Try to infer issue from trailers
+        for c in commits:
+            rc, out, _ = run_cmd(["git", "-C", repo_path, "log", "-n", "1", "--format=%s%x09%(trailers:key=Issue-Ref,valueonly)", c])
+            if rc == 0 and out.strip():
+                m = re.search(r"#(\d+)", out.strip())
+                if m:
+                    issue_num = int(m.group(1))
+                    break
+
+    # Gate 1: Supersession audit from inventory / known supersessions
+    # (e.g. #52/#53 superseded by #79/#119)
+    if issue_num in [52, 53]:
+        return {
+            "status": "REJECTED",
+            "verdict": f"SUPERSEDED: Issue #{issue_num} row-budget model was superseded by #79 and #119 (merged upstream in PR #1481)",
+            "issue": issue_num,
+            "commits": commits,
+            "exit_code": 1
+        }
+
+    # Gate 2: Check upstream PR history
+    if issue_num:
+        pr = check_upstream_pr(issue_num, upstream_repo, mock_prs=mock_prs)
+        if pr:
+            pr_num = pr.get("number")
+            pr_st = pr.get("state")
+            return {
+                "status": "REJECTED",
+                "verdict": f"ALREADY_MERGED_UPSTREAM_PR: Issue #{issue_num} covered by upstream PR #{pr_num} ({pr_st})",
+                "issue": issue_num,
+                "commits": commits,
+                "exit_code": 1
+            }
+
+    if not commits and issue_num:
+        return {
+            "status": "REJECTED",
+            "verdict": f"NO_COMMITS_FOUND: No fork commits found matching #{issue_num}",
+            "issue": issue_num,
+            "commits": [],
+            "exit_code": 1
+        }
+
+    # Gate 3: Empty tree-diff check on affected files
+    affected_files = get_affected_files(commits, repo_path)
+    if affected_files:
+        is_empty, _ = check_files_diff(affected_files, base_ref, repo_path)
+        if is_empty:
+            return {
+                "status": "REJECTED",
+                "verdict": f"ALREADY_MERGED_EMPTY_DIFF: Diff of affected files ({len(affected_files)} files) against {base_ref} is completely empty",
+                "issue": issue_num,
+                "commits": commits,
+                "files": affected_files,
+                "exit_code": 1
+            }
+
+    # Gate 4: Ancestor check on commits
+    for c in commits:
+        if check_ancestor(c, base_ref, repo_path):
+            return {
+                "status": "REJECTED",
+                "verdict": f"ALREADY_MERGED_ANCESTOR: Commit {c[:8]} is already an ancestor of {base_ref}",
+                "issue": issue_num,
+                "commits": commits,
+                "exit_code": 1
+            }
+
+    # Gate 5: Patch-ID check against upstream
+    for c in commits:
+        pid = get_patch_id(c, repo_path)
+        if pid:
+            # Check if upstream tip log has this patch-id
+            rc, out, _ = run_cmd(["git", "-C", repo_path, "log", "-n", "100", "--format=%H", base_ref])
+            if rc == 0:
+                for up_c in out.strip().split("\n"):
+                    if not up_c.strip(): continue
+                    up_pid = get_patch_id(up_c.strip(), repo_path)
+                    if up_pid and up_pid == pid:
+                        return {
+                            "status": "REJECTED",
+                            "verdict": f"ALREADY_MERGED_PATCH_ID: Commit {c[:8]} patch-id {pid[:8]} matches upstream commit {up_c[:8]}",
+                            "issue": issue_num,
+                            "commits": commits,
+                            "exit_code": 1
+                        }
+
+    slug = f"issue-{issue_num}" if issue_num else "harvest-patch"
+    if commits:
+        rc, out, _ = run_cmd(["git", "-C", repo_path, "log", "-n", "1", "--format=%s", commits[0]])
+        if rc == 0 and out.strip():
+            # derive slug
+            s = out.strip().lower()
+            s = re.sub(r"^[a-z]+(\([^\)]+\))?:\s*", "", s)
+            s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:25]
+            if s:
+                slug = s
+
+    return {
+        "status": "APPROVED",
+        "verdict": "CLEAN: Novel diff, not merged upstream, files modified",
+        "issue": issue_num,
+        "commits": commits,
+        "files": affected_files,
+        "slug": slug,
+        "exit_code": 0
+    }
+
+action = sys.argv[1]
+
+if action == "vet":
+    candidate = sys.argv[2]
+    repo_path = sys.argv[3]
+    base_ref = sys.argv[4]
+    upstream_repo = sys.argv[5]
+    as_json = sys.argv[6] == "true"
+    
+    res = vet_candidate(candidate, repo_path, base_ref, upstream_repo)
+    if as_json:
+        print(json.dumps(res, indent=2))
+    else:
+        st = res.get("status", "UNKNOWN")
+        vd = res.get("verdict", "")
+        print(f"[{st}] {vd}")
+        if st == "APPROVED":
+            iss = res.get("issue") or "N/A"
+            cmts = res.get("commits", [])
+            fls = res.get("files", [])
+            slg = res.get("slug", "harvest")
+            print(f"  Issue: #{iss}")
+            print(f"  Commits: {len(cmts)} commits ({cmts[:3]})")
+            print(f"  Affected files: {len(fls)} files")
+            print(f"  Suggested branch: leshchenko1979/fix/{slg}")
+    sys.exit(res["exit_code"])
+
+elif action == "dispatch":
+    issue_arg = sys.argv[2]
+    commits_arg = sys.argv[3]
+    target_uuid = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != "none" else None
+    repo_path = sys.argv[5]
+    base_ref = sys.argv[6]
+    upstream_repo = sys.argv[7]
+    ledger_file = sys.argv[8]
+    dry_run = sys.argv[9] == "true"
+
+    # Step 1: Vet candidate
+    v = vet_candidate(commits_arg if commits_arg else issue_arg, repo_path, base_ref, upstream_repo)
+    if v["status"] != "APPROVED":
+        st = v.get("status", "")
+        vd = v.get("verdict", "")
+        print(f"DISPATCH REFUSED: Candidate failed pre-flight vetting.\n  [{st}] {vd}", file=sys.stderr)
+        sys.exit(1)
+
+    # Step 2: Capacity check on ledger
+    active_claims = get_active_claims(ledger_file)
+    selected_worker = None
+
+    if target_uuid:
+        # Check target UUID specifically
+        open_c = active_claims.get(target_uuid, [])
+        if open_c:
+            last_c = open_c[-1]
+            print(f"CAPACITY_EXHAUSTED: Target editor {target_uuid} is BUSY with active claim(s):\n  - {last_c}", file=sys.stderr)
+            sys.exit(4)
+        selected_worker = {"uuid": target_uuid, "topic_id": "N/A"}
+    else:
+        # Find first available editor
+        avail = get_available_editors(ledger_file)
+        if not avail:
+            print("CAPACITY_EXHAUSTED: All registered editor lanes currently have active claims.", file=sys.stderr)
+            sys.exit(4)
+        selected_worker = avail[0]
+
+    # Step 3: Format wire envelope
+    iss_num = v.get("issue")
+    iss_str = f"#{iss_num}" if iss_num else issue_arg
+    slug = v.get("slug", "harvest-fix")
+    commits_str = " ".join(v.get("commits", [commits_arg]))
+    branch_name = f"leshchenko1979/fix/{slug}"
+    
+    # Get base tip sha
+    rc, base_sha, _ = run_cmd(["git", "-C", repo_path, "rev-parse", base_ref])
+    tip_sha = base_sha.strip()[:8] if rc == 0 else base_ref
+
+    envelope = f"""[HARVEST DISPATCH: {iss_str}]
+Target Issue: {iss_str} ({slug})
+Source Commits: {commits_str}
+Upstream Base: {base_ref} ({tip_sha})
+Target Branch: {branch_name}
+Commands:
+  1. tools/oc-wt add up-{slug} {branch_name} --create --from {base_ref}
+  2. git cherry-pick {commits_str}
+  3. tools/oc-harvest-sweep {branch_name} --base {base_ref}
+  4. git push origin {branch_name}
+  5. tools/oc-prchecks {branch_name}
+Contract: AUTO-SHIP on GREEN CI gate. File PR on {upstream_repo}:main citing gate run ID, link fork {iss_str}, notify Triage."""
+
+    w_uuid = selected_worker.get("uuid", "")
+    w_top = selected_worker.get("topic_id", "N/A")
+    print(f"Target Editor: {w_uuid} (topic {w_top})")
+    print("Wire Payload:")
+    print("---")
+    print(envelope)
+    print("---")
+
+    if dry_run:
+        print("[DRY RUN] Dispatch generated successfully without sending.")
+        sys.exit(0)
+
+    # Live delivery
+    notify_script = os.path.join(os.path.dirname(ledger_file), "../skills/opencrabs-dev/tools/lib/oc-notify.sh")
+    if not os.path.exists(notify_script):
+        notify_script = "/root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/lib/oc-notify.sh"
+    
+    rc, _, err = run_cmd([notify_script, w_uuid, envelope, f"[HARVEST DISPATCH: {iss_str}]"])
+    if rc != 0:
+        print(f"NOTIFICATION_FAILED: lib/oc-notify.sh exited {rc}: {err.strip()}", file=sys.stderr)
+        sys.exit(3)
+
+    print(f"SUCCESS: Harvest package dispatched to editor {w_uuid}.")
+    sys.exit(0)
+' "$@"
+}
+
+# --- Offline Selftest ---
+selftest_tmp=""
+cleanup_selftest() {
+  if [ -n "$selftest_tmp" ] && [ -d "$selftest_tmp" ]; then
+    rm -rf "$selftest_tmp"
+  fi
+}
+
+cmd_selftest() {
+  echo "Running oc-harvest-dispatch --selftest battery..."
+  selftest_tmp="$(mktemp -d)"
+  trap cleanup_selftest EXIT
+  local st_dir="$selftest_tmp"
+
+  local mock_repo="$st_dir/repo"
+  mkdir -p "$mock_repo"
+  git -C "$mock_repo" init -q -b main
+  git -C "$mock_repo" config user.email "test@example.com"
+  git -C "$mock_repo" config user.name "Test Runner"
+
+  # Base commit
+  echo "Initial content" > "$mock_repo/file1.txt"
+  echo "Old table" > "$mock_repo/table.rs"
+  echo "Old options" > "$mock_repo/options.rs"
+  git -C "$mock_repo" add .
+  git -C "$mock_repo" commit -q -m "base commit"
+  git -C "$mock_repo" branch adolfousier/main
+
+  # Upstream has merged changes to table.rs
+  git -C "$mock_repo" checkout -q adolfousier/main
+  echo "Merged table content" > "$mock_repo/table.rs"
+  git -C "$mock_repo" add table.rs
+  git -C "$mock_repo" commit -q -m "upstream table merge (#95)"
+
+  # Fork main has the identical change to table.rs (so diff vs adolfousier/main is empty!)
+  git -C "$mock_repo" checkout -q main
+  echo "Merged table content" > "$mock_repo/table.rs"
+  git -C "$mock_repo" add table.rs
+  git -C "$mock_repo" commit -q -m "fix(table): blank line (#95)"
+  local commit_95
+  commit_95="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  # Commit with novel diff (#83)
+  echo "Config guard additions" >> "$mock_repo/config.rs"
+  git -C "$mock_repo" add config.rs
+  git -C "$mock_repo" commit -q -m "fix(config): serde_ignored write guard (#83)"
+  local commit_83
+  commit_83="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  # Commit already merged in upstream (#82) - cut directly on upstream branch
+  git -C "$mock_repo" checkout -q adolfousier/main
+  echo "Loop guard fix" >> "$mock_repo/loop.rs"
+  git -C "$mock_repo" add loop.rs
+  git -C "$mock_repo" commit -q -m "fix(loop): numeric args (#82)"
+  local commit_82
+  commit_82="$(git -C "$mock_repo" rev-parse HEAD)"
+  # Also branch on main
+  git -C "$mock_repo" checkout -q main
+  git -C "$mock_repo" cherry-pick "$commit_82" >/dev/null 2>&1
+  local fork_commit_82
+  fork_commit_82="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  # Mock ledger with busy and idle editors
+  local mock_ledger="$st_dir/workers-ledger.json"
+  cat << 'EOF' > "$mock_ledger"
+{
+  "workers": [
+    {
+      "uuid": "11111111-1111-1111-1111-111111111111",
+      "role": "editor",
+      "topic_id": 101
+    },
+    {
+      "uuid": "22222222-2222-2222-2222-222222222222",
+      "role": "editor",
+      "topic_id": 102
+    }
+  ],
+  "events": [
+    {
+      "n": 1,
+      "kind": "claim",
+      "by": "editor 11111111-1111-1111-1111-111111111111",
+      "what": "CLAIM #154 — busy working on plan template"
+    }
+  ]
+}
+EOF
+
+  local rc=0 out=""
+
+  # 1. Test #95 (empty diff vs adolfousier/main) -> REJECTED (rc 1)
+  rc=0
+  out="$(run_engine "vet" "$commit_95" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "ALREADY_MERGED_EMPTY_DIFF"; then
+    echo "  ok 1 - vet #95 (empty diff) -> REJECTED exit 1"
+  else
+    echo "  bad 1 - vet #95 expected rc=1 ALREADY_MERGED_EMPTY_DIFF, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 2. Test #82 (patch-id / ancestor of upstream) -> REJECTED (rc 1)
+  rc=0
+  out="$(run_engine "vet" "$fork_commit_82" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "ALREADY_MERGED"; then
+    echo "  ok 2 - vet #82 (patch-id match) -> REJECTED exit 1"
+  else
+    echo "  bad 2 - vet #82 expected rc=1 ALREADY_MERGED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 3. Test #52 (superseded audit) -> REJECTED (rc 1)
+  rc=0
+  out="$(run_engine "vet" "52" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "SUPERSEDED"; then
+    echo "  ok 3 - vet #52 (superseded) -> REJECTED exit 1"
+  else
+    echo "  bad 3 - vet #52 expected rc=1 SUPERSEDED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 4. Test #83 (novel diff) -> APPROVED (rc 0)
+  rc=0
+  out="$(run_engine "vet" "$commit_83" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED"; then
+    echo "  ok 4 - vet #83 (novel diff) -> APPROVED exit 0"
+  else
+    echo "  bad 4 - vet #83 expected rc=0 APPROVED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 5. Dispatch to busy lane (11111111) -> CAPACITY_EXHAUSTED (rc 4)
+  rc=0
+  out="$(run_engine "dispatch" "83" "$commit_83" "11111111-1111-1111-1111-111111111111" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "true" 2>&1)" || rc=$?
+  if [ "$rc" -eq 4 ] && echo "$out" | grep -q "CAPACITY_EXHAUSTED.*BUSY"; then
+    echo "  ok 5 - dispatch to busy lane -> CAPACITY_EXHAUSTED exit 4"
+  else
+    echo "  bad 5 - dispatch to busy lane expected rc=4, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 6. Dispatch auto-selection picks idle lane (22222222) -> SUCCESS (rc 0)
+  rc=0
+  out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "true" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "22222222-2222-2222-2222-222222222222"; then
+    echo "  ok 6 - dispatch auto-selects idle lane -> SUCCESS exit 0"
+  else
+    echo "  bad 6 - dispatch auto-select expected rc=0 with lane 22222222, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 7. Help exits 0
+  rc=0
+  bash "$0" --help >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "  ok 7 - --help -> exit 0"
+  else
+    echo "  bad 7 - --help expected rc=0, got rc=$rc"
+    return 1
+  fi
+
+  # 8. Missing args exits 2
+  rc=0
+  bash "$0" vet >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    echo "  ok 8 - missing args -> exit 2"
+  else
+    echo "  bad 8 - missing args expected rc=2, got rc=$rc"
+    return 1
+  fi
+
+  echo "selftest: 8/8 OK"
+  return 0
+}
+
+# --- Main Dispatch ---
+case "${1:-}" in
+  vet)
+    shift
+    [ $# -ge 1 ] || usage 2
+    TARGET="$1"; shift
+    REPO_PATH="$REPO"
+    BASE="$BASE_REF"
+    UPSTREAM="$UPSTREAM_REPO"
+    AS_JSON="false"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --repo) REPO_PATH="$2"; shift 2 ;;
+        --base) BASE="$2"; shift 2 ;;
+        --upstream) UPSTREAM="$2"; shift 2 ;;
+        --json) AS_JSON="true"; shift ;;
+        *) usage 2 ;;
+      esac
+    done
+    run_engine "vet" "$TARGET" "$REPO_PATH" "$BASE" "$UPSTREAM" "$AS_JSON"
+    ;;
+
+  dispatch)
+    shift
+    [ $# -ge 2 ] || usage 2
+    ISSUE="$1"
+    COMMITS="$2"
+    shift 2
+    TARGET_UUID="none"
+    REPO_PATH="$REPO"
+    BASE="$BASE_REF"
+    UPSTREAM="$UPSTREAM_REPO"
+    LEDGER="$LEDGER_FILE"
+    DRY_RUN="false"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --to) TARGET_UUID="$2"; shift 2 ;;
+        --repo) REPO_PATH="$2"; shift 2 ;;
+        --base) BASE="$2"; shift 2 ;;
+        --upstream) UPSTREAM="$2"; shift 2 ;;
+        --ledger) LEDGER="$2"; shift 2 ;;
+        --dry-run) DRY_RUN="true"; shift ;;
+        *) usage 2 ;;
+      esac
+    done
+    run_engine "dispatch" "$ISSUE" "$COMMITS" "$TARGET_UUID" "$REPO_PATH" "$BASE" "$UPSTREAM" "$LEDGER" "$DRY_RUN"
+    ;;
+
+  --help|-h|help)
+    usage 0
+    ;;
+
+  --selftest)
+    cmd_selftest
+    ;;
+
+  *)
+    usage 2
+    ;;
+esac
