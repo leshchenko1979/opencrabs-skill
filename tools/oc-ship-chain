@@ -14,7 +14,8 @@
 #
 # Usage:
 #   oc-ship-chain --sha <sha> --branch <branch> [--issue <n>] [--repo <fork-slug>]
-#                 [--gated-sha <sha>] [--wait <sec>] [--dry-run] [--no-ledger] [--selftest] [--help]
+#                 [--gated-sha <sha>] [--gated-run <id>] [--wait <sec>] [--dry-run]
+#                 [--no-ledger] [--selftest] [--help]
 #
 # Exit: 0 SWAPPED (full chain complete)
 #       2 usage
@@ -64,11 +65,12 @@ PRCHECKS_BIN="${OC_PRCHECKS_BIN:-$TOOLS_DIR/oc-prchecks}"
 DEPLOY_BIN="${OC_DEPLOY_BIN:-$TOOLS_DIR/oc-deploy}"
 ISSUELOG_BIN="${OC_ISSUELOG_BIN:-$TOOLS_DIR/oc-issue-log}"
 FORK_REPO="${OC_FORK_REPO:-$HOME/opencrabs}"
+GH_BIN="${OC_GH:-gh}"
 
 usage() { sed -n '2,30p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0; }
 die() { printf 'oc-ship-chain: %s\n' "$1" >&2; exit "${2:-2}"; }
 
-SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0; GATED_SHA=""
+SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0; GATED_SHA=""; GATED_RUN=""
 [ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 exec bash "$SELF"
 [ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
 
@@ -80,6 +82,7 @@ while [ $# -gt 0 ]; do
     --repo)      REPO="${2:?}"; shift 2 ;;
     --wait)      WAIT="${2:?}"; shift 2 ;;
     --gated-sha) GATED_SHA="${2:?}"; shift 2 ;;
+    --gated-run) GATED_RUN="${2:?}"; shift 2 ;;
     --dry-run)   DRY=1; shift ;;
     --no-ledger) NOLEDGER=1; shift ;;
     --help|-h)   usage ;;
@@ -128,21 +131,43 @@ if [ "$DRY" = "1" ]; then
 fi
 
 # ---- leg 1: CI gate -------------------------------------------------------
-if [ -n "$GATED_SHA" ]; then
+if [ -n "$GATED_RUN" ]; then
+  # Verify specific run ID passed explicitly
+  journal "LEG1 gate resume: verifying run $GATED_RUN for $SHA"
+  RUN_INFO="$("$GH_BIN" run view "$GATED_RUN" -R "${REPO:-leshchenko1979/opencrabs}" --json status,conclusion,jobs -q '[.status, .conclusion, ([.jobs[]? | select(.name | contains("'"$SHA"'")) | .conclusion] | first // "no-job")] | join(" ")' 2>/dev/null || true)"
+  case "$RUN_INFO" in
+    "completed success success")
+      journal "LEG1 gate pre-verified GREEN (gh run: $GATED_RUN completed success on $SHA)"
+      ;;
+    *)
+      journal "LEG1 gate resume rejected: run $GATED_RUN status is '$RUN_INFO'"
+      die "gated-run verification failed: run status '$RUN_INFO' != 'completed success success'" 4
+      ;;
+  esac
+elif [ -n "$GATED_SHA" ]; then
   # Duty-4 P-03 (v0.4.133): resume with already-verified green gate sha.
   # Verification guard: gated-sha must match SHA and have a real completed success run.
   [ "$GATED_SHA" = "$SHA" ] || die "--gated-sha ($GATED_SHA) does not match --sha ($SHA)" 2
   journal "LEG1 gate resume: verifying pre-existing CI run on $SHA"
-  RUN_STATUS="$(gh run list -R "${REPO:-leshchenko1979/opencrabs}" --commit "$SHA" --json conclusion,status -q '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)"
-  case "$RUN_STATUS" in
-    "completed success")
-      journal "LEG1 gate pre-verified GREEN (gh run: completed success on $SHA)"
-      ;;
-    *)
-      journal "LEG1 gate resume rejected: run status is '$RUN_STATUS'"
-      die "gated-sha verification failed: run status '$RUN_STATUS' != 'completed success'" 4
-      ;;
-  esac
+  
+  # On carrier dispatches, headSha is the carrier branch commit, NOT $SHA (v0.4.48 lesson).
+  # Scan recent completed runs of pr-checks.yml matching job name 'PR-lane gates ($SHA)'.
+  MATCHED_RUN=""
+  RUNS_LIST="$("$GH_BIN" run list -R "${REPO:-leshchenko1979/opencrabs}" -w pr-checks.yml -L 20 --json databaseId,status,conclusion -q '.[] | select(.status=="completed" and .conclusion=="success") | .databaseId' 2>/dev/null || true)"
+  for RID in $RUNS_LIST; do
+    JOB_MATCH="$("$GH_BIN" run view "$RID" -R "${REPO:-leshchenko1979/opencrabs}" --json jobs -q '[.jobs[]? | select(.name | contains("'"$SHA"'")) | .conclusion] | first // empty' 2>/dev/null || true)"
+    if [ "$JOB_MATCH" = "success" ]; then
+      MATCHED_RUN="$RID"
+      break
+    fi
+  done
+
+  if [ -n "$MATCHED_RUN" ]; then
+    journal "LEG1 gate pre-verified GREEN (gh run $MATCHED_RUN: completed success on $SHA)"
+  else
+    journal "LEG1 gate resume rejected: no completed success run found for $SHA"
+    die "gated-sha verification failed: no completed success run found for $SHA" 4
+  fi
 else
   journal "LEG1 gate start (oc-prchecks $SHA)"
   set +e
@@ -321,6 +346,53 @@ EOF
   git -C "$T/clone" reset -q --hard origin/main   # main = diverged tip; feat diverged from it → ff impossible
   RC=0; OUT="$(run_chain --sha "$FSHA2" --branch feat 2>&1)" || RC=$?
   check_rc "non-ff" "$RC" 5
+
+  # 5. gated-sha with fake gh shim
+  cat > "$T/fake-gh" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *"run list"*)
+    echo "11111"
+    echo "22222"
+    ;;
+  *"run view 11111"*)
+    echo "success"
+    ;;
+  *"run view 22222"*)
+    echo "failure"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$T/fake-gh"
+
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  # reset origin/main back to the commit before diverge so feat is fast-forwardable
+  git -C "$T/clone" push -q -f origin "$FSHA:main"
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_GH="$T/fake-gh" run_chain --sha "$FSHA" --branch feat --gated-sha "$FSHA" 2>&1)" || RC=$?
+  check_rc "gated-sha-green" "$RC" 0
+  grep -q "LEG1 gate pre-verified GREEN (gh run 11111" "$T/journal.log" && ok "journal-gated-sha" || bad "journal-gated-sha"
+
+  # 6. gated-run with fake gh shim
+  cat > "$T/fake-gh-run" <<'EOF'
+#!/usr/bin/env bash
+echo "completed success success"
+exit 0
+EOF
+  chmod +x "$T/fake-gh-run"
+
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_GH="$T/fake-gh-run" run_chain --sha "$FSHA" --branch feat --gated-run 11111 2>&1)" || RC=$?
+  check_rc "gated-run-green" "$RC" 0
+  grep -q "LEG1 gate pre-verified GREEN (gh run: 11111 completed success" "$T/journal.log" && ok "journal-gated-run" || bad "journal-gated-run"
 
   echo "selftest: $PASS passed, $FAIL failed"
   return $?
