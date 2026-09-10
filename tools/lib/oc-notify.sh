@@ -35,6 +35,53 @@ oc_notify_session() { # $1=bin $2=profile $3=sender $4=uuid $5=title $6=text
       --title "$title" --text "$text" --interrupt "$uuid" >/dev/null 2>&1 || rrc=$?
     nrc=$rrc
   fi
+  # Fallback to direct daemon A2A JSON-RPC if CLI resolution or CLI invocation failed
+  if [ "$nrc" -ne 0 ] && [ "$nrc" -ne 2 ] && [ "$nrc" -ne 3 ]; then
+    local a2a_rc=0
+    python3 -c "
+import sys, json, os, urllib.request
+try:
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    p = os.path.expanduser('~/.opencrabs/profiles/' + sys.argv[2] + '/config.toml')
+    port = 18791
+    if os.path.exists(p):
+        with open(p, 'rb') as f:
+            port = tomllib.load(f).get('a2a', {}).get('port', 18791)
+    url = f'http://127.0.0.1:{port}/a2a/v1'
+    data = {
+        'jsonrpc': '2.0',
+        'id': 1,
+        'method': 'session/notify',
+        'params': {
+            'session_id': sys.argv[4],
+            'message': sys.argv[6],
+            'title': sys.argv[5],
+            'sender': sys.argv[3]
+        }
+    }
+    req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        res = json.loads(resp.read().decode('utf-8'))
+        result = res.get('result', {})
+        outcome = result.get('outcome', '')
+        if outcome in ('delivered', 'injected', 'redirected', 'queued'):
+            sys.exit(0)
+        elif outcome == 'no_route':
+            sys.exit(2)
+        elif outcome in ('refused', 'refused_in_flight'):
+            sys.exit(3)
+        else:
+            sys.exit(4)
+except Exception:
+    sys.exit(4)
+" "$bin" "$profile" "$sender" "$uuid" "$title" "$text" 2>/dev/null || a2a_rc=$?
+    if [ "$a2a_rc" -eq 0 ] || [ "$a2a_rc" -eq 2 ] || [ "$a2a_rc" -eq 3 ]; then
+      nrc=$a2a_rc
+    fi
+  fi
   return "$nrc"
 }
 

@@ -472,7 +472,7 @@ cmd_selftest() {
   git -C "$mock_repo" checkout -q main
   echo "Merged table content" > "$mock_repo/table.rs"
   git -C "$mock_repo" add table.rs
-  git -C "$mock_repo" commit -q -m "fix(table): blank line (#95)"
+  git -C "$mock_repo" commit -q -m "fix(table): blank line"
   local commit_95
   commit_95="$(git -C "$mock_repo" rev-parse HEAD)"
 
