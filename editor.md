@@ -91,6 +91,11 @@ editor-facing duties:
 verify, notify wiring, log-window cuts, REST casing — are SUPERVISOR-scoped:
 supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
 
+**Direct dispatch (owner order 2026-09-10, fleet-directives §Direct dispatch):
+work orders go sender → resource-owner directly — never through an intermediary
+lane. Address by full uuid from a same-turn roster read; stamp the dispatch +
+receipt id via oc-ledger.**
+
 1. **One watcher law (v0.4.120, owner-ordered — supersedes all prior watcher
    text):** CI verdict waits use exactly ONE of two official surfaces —
    (a) `oc-waiter arm` (preferred: journal verdict, notify wake, survives

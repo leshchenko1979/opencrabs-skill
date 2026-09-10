@@ -62,6 +62,11 @@ waiting for a poll.
 
 ## Duty T2 — QUIRK intake + fix routing (historical origin: ex supervisor.md Duty 7, second half — migrated v0.4.86; supervisor Duty 7 no longer carries numbered items)
 
+**Scope note (owner order 2026-09-10, fleet-directives §Direct dispatch):** Triage
+is an AUDITOR, not a relay hub — it does not forward work orders between lanes.
+QUIRK intake, verify-unclaimed, and orphan escalation are audits and stay here;
+work dispatch goes sender → resource-owner directly per that law.
+
 Any worker that hits a tool FAILURE, INCONSISTENCY, or QUIRK — non-zero rc out
 of documented register (see tools/RC-CONTRACT.md), hang/timeout, corrupt or
 empty output, flag that silently no-ops, log/journal gap, doc that contradicts
