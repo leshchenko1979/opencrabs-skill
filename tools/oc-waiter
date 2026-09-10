@@ -46,8 +46,18 @@
 #
 # Verdicts (record .verdict + journal terminal line):
 #   GREEN | RED | TIMEOUT | ESCALATED (stall) | ESCALATED-CHURN (superseded x3)
-#   | FAILED-TOOL (oc-prchecks usage/transport failure)
+#   | FAILED-TOOL (oc-prchecks repeated failure, k=3 CONSECUTIVE tool errors —
+#     env OC_WAITER_TOOLERR_CAP; a healthy poll resets the streak)
 #   | AMBIGUOUS (gate rc 8, #115 B — dispatch refused fail-closed; NON-retryable)
+#
+# Verdict-mapping law (v0.4.130, ruling n=2369): ONLY run-state conclusions
+# produce terminal verdicts. GREEN/RED require the gate's terminal marker
+# (`VERDICT GREEN`/`VERDICT RED` on stdout) — rc alone never verdicts (false-
+# RED-on-GREEN class, run 34409434135: stale/garbled gate rc 3 mapped straight
+# to RED). Tool-error rcs (2/4/7, and 0/3 without the marker) retry with the
+# poll-floor backoff; FAILED-TOOL fires only after k=3 CONSECUTIVE errors.
+# Non-retryable exceptions unchanged: rc 8 AMBIGUOUS (#115 B); rc-4 carrying
+# OC_PR_SUPERSEDED = SUPERSEDED identity mismatch (C-A1).
 #
 # Env: OC_WAITER_STATE_DIR (default $OC_DEPLOY_STATE_DIR or the profile state
 # dir), OC_WAITER_NOTIFY (notify shim; default /usr/local/bin/opencrabs, then
@@ -89,7 +99,7 @@ dur_secs() {
   esac
 }
 CHURN_CAP=3          # superseded cycles before ESCALATED-CHURN
-RC4_CAP=5            # consecutive gate-tool infra failures before FAILED-TOOL
+TOOLERR_CAP_DEFAULT=3 # v0.4.130 (ruling n=2369): FAILED-TOOL only after k=3 CONSECUTIVE tool errors (env OC_WAITER_TOOLERR_CAP); a healthy poll resets the streak
 HQ_SESSION="${OC_WAITER_HQ:-}"
 
 usage() { [ $# -gt 0 ] && echo "$PROG: $1" >&2
@@ -296,7 +306,8 @@ cmd_run() {
   NBIN="$(resolve_notify_bin)" || { jline "$JOURNAL" notify-failed '{"reason":"binary-unresolvable"}'
     rec_upd "$REC" "\"status\":\"notify-failed\",\"verdict\":\"NOTIFY-FAILED\""; exit 4; }
 
-  local RUN_ID STALL=0 LAST_RC="" LAST5=0 CHURN=0 RC4=0 POLLS=0
+  local RUN_ID STALL=0 LAST_RC="" LAST5=0 CHURN=0 POLLS=0 TOOLERR=0
+  local TOOLERR_CAP="${OC_WAITER_TOOLERR_CAP:-$TOOLERR_CAP_DEFAULT}"   # v0.4.130 (ruling n=2369): FAILED-TOOL only after k=3 CONSECUTIVE tool errors; a healthy poll resets the streak
   local REPO; REPO="$(jq -r '.repo // ""' "$REC")"   # n=1800: cross-repo watch (arm-recorded; empty = oc-prchecks fork default)
   RUN_ID="$(jq -r '.run_id // ""' "$REC")"   # #115 A: --run seed — first poll takes the resume path; legacy records without the field -> ""
   local DEADLINE=$(( $(date +%s) + TMO ))
@@ -329,31 +340,52 @@ cmd_run() {
     POLLS=$((POLLS+1))
     jline "$JOURNAL" poll "{\"poll\":$POLLS,\"rc\":$RC}"
     case "$RC" in
-      0) VERDICT="GREEN"
-         RUN_ID="${RUN_ID:-$(printf '%s' "$OUT" | grep -oE '(RUN|run)[= ][^ ]*/?[0-9]+' | grep -oE '[0-9]+$' | head -1)}" ;;
-      3) VERDICT="RED"
-         RUN_ID="${RUN_ID:-$(printf '%s' "$OUT" | grep -oE '(RUN|run)[= ][^ ]*/?[0-9]+' | grep -oE '[0-9]+$' | head -1)}" ;;
+      0|3) # v0.4.130 verdict-mapping law (ruling n=2369; false-RED-on-GREEN class,
+           # run 34409434135): a terminal verdict fires ONLY on a RUN-STATE
+           # CONCLUSION — rc 0/3 whose output carries the gate's terminal marker
+           # (VERDICT GREEN / VERDICT RED). rc 0/3 WITHOUT the marker is a gate
+           # tool error (stale/garbled gate, mid-write output) — retried with
+           # backoff like any error rc, NEVER mapped to GREEN/RED on rc alone.
+           if printf '%s' "$OUT" | grep -qE 'VERDICT (GREEN|RED)([^A-Z]|$)'; then
+             VERDICT="GREEN"; [ "$RC" = 3 ] && VERDICT="RED"
+             TOOLERR=0   # a real run-state conclusion resets the error streak
+             RUN_ID="${RUN_ID:-$(printf '%s' "$OUT" | grep -oE '(RUN|run)[= ][^ ]*/?[0-9]+' | grep -oE '[0-9]+$' | head -1)}"
+           else
+             jline "$JOURNAL" toolerr "{\"poll\":$POLLS,\"rc\":$RC,\"state\":\"verdict-rc-without-run-conclusion\"}"
+             TOOLERR=$((TOOLERR+1))
+             [ "$TOOLERR" -ge "$TOOLERR_CAP" ] && VERDICT="FAILED-TOOL"
+             [ -n "$VERDICT" ] || { sleep "$POLL_SLEEP"; continue; }
+           fi ;;
       6) CHURN=$((CHURN+1))
          if [ "$CHURN" -ge "$CHURN_CAP" ]; then VERDICT="ESCALATED-CHURN"; else
-           RUN_ID=""; STALL=0; LAST_RC=""; continue   # P4: re-arm on the superseding run
+           RUN_ID=""; STALL=0; LAST_RC=""; TOOLERR=0; continue   # P4: re-arm on the superseding run
          fi ;;
       5) # in-flight after the window — parse run=<id> for re-attach (witnessed here)
          RUN_ID="${RUN_ID:-$(printf '%s' "$OUT" | grep -oE 'run=[0-9]+' | head -1 | cut -d= -f2)}"
          if [ "$LAST_RC" = 5 ]; then LAST5=$((LAST5+1)); else LAST5=1; fi
+         TOOLERR=0   # a live run view is a healthy poll — resets the error streak
          if [ "$LAST5" -ge "$SK" ]; then VERDICT="ESCALATED"; RC=5; fi ;;
       8) VERDICT="AMBIGUOUS" ;;   # #115 B: gate refused dispatch (same-ref candidate run unverifiable) — NON-RETRYABLE (n=1674): resolve by hand
-      2|4|7) RC4=$((RC4+1))
-         [ "$RC" = 2 ] && VERDICT="FAILED-TOOL"        # usage = waiter bug, not transient
-         # C-A1 (lens C2 A1): an rc-4 whose output carries the SUPERSEDED token
-         # is NON-retryable — the gate verified the run's identity and it is not
-         # ours (adoption_pin=mismatch). Retrying cannot fix an identity
-         # mismatch (35-row retry storm evidence, tools.log 2026-09-07).
-         if [ "$RC" = 4 ] && printf '%s' "$OUT" | grep -q "OC_PR_SUPERSEDED"; then
-           VERDICT="SUPERSEDED"
-         fi
-         [ "$RC4" -ge "$RC4_CAP" ] && [ -z "$VERDICT" ] && VERDICT="FAILED-TOOL"
+      2|4|7) # tool-error rcs: retry with backoff (poll-floor sleep); FAILED-TOOL
+             # only after TOOLERR_CAP CONSECUTIVE errors (v0.4.130, ruling n=2369:
+             # rc 2 usage no longer instant-FAILED-TOOL; cap was 5 across ANY
+             # polls — a single healthy poll now resets the streak).
+             # C-A1 (lens C2 A1) FIRST: an rc-4 whose output carries the SUPERSEDED
+             # token is NON-retryable — the gate verified the run's identity and it
+             # is not ours (adoption_pin=mismatch). Retrying cannot fix an identity
+             # mismatch (35-row retry storm evidence, tools.log 2026-09-07).
+             if [ "$RC" = 4 ] && printf '%s' "$OUT" | grep -q "OC_PR_SUPERSEDED"; then
+               VERDICT="SUPERSEDED"
+             else
+               jline "$JOURNAL" toolerr "{\"poll\":$POLLS,\"rc\":$RC,\"state\":\"gate-tool-error\"}"
+               TOOLERR=$((TOOLERR+1))
+               [ "$TOOLERR" -ge "$TOOLERR_CAP" ] && VERDICT="FAILED-TOOL"
+               [ -n "$VERDICT" ] || { sleep "$POLL_SLEEP"; continue; }
+             fi ;;
+      *) jline "$JOURNAL" toolerr "{\"poll\":$POLLS,\"rc\":$RC,\"state\":\"unknown-rc\"}"
+         TOOLERR=$((TOOLERR+1))
+         [ "$TOOLERR" -ge "$TOOLERR_CAP" ] && VERDICT="FAILED-TOOL"
          [ -n "$VERDICT" ] || { sleep "$POLL_SLEEP"; continue; } ;;
-      *) VERDICT="FAILED-TOOL" ;;
     esac
     [ -n "$VERDICT" ] && break
     [ "$(date +%s)" -ge "$DEADLINE" ] && { VERDICT="TIMEOUT"; break; }
@@ -731,6 +763,100 @@ GSTUB2
       && grep -q 'SUPERSEDED' "$D/notify.log" && grep -q 'do NOT resume' "$D/notify.log"; } \
     && t_ok "C-A1: rc-4 with OC_PR_SUPERSEDED -> SUPERSEDED after ONE poll (non-retryable), lane notified" \
     || t_bad "C-A1 superseded rc=$RUN_RC verdict=$(jq -r .verdict "$D/waiters/t0.json" 2>/dev/null) polls=$(jq -r .polls "$D/waiters/t0.json")"
+
+  # 22. verdict-mapping law (v0.4.130, ruling n=2369): ONLY run-state
+  #     conclusions verdict — GREEN/RED require the gate's `VERDICT GREEN/RED`
+  #     stdout marker; rc alone never verdicts. (Standard shim prints markers,
+  #     so these use a markerless stub — the exact 34409434135 class: gate rc
+  #     3 whose output carried no terminal conclusion.)
+  cat > "$D/gate" <<'GSTUB3'
+#!/usr/bin/env bash
+SEQ_FILE="${SEQ_FILE:?}"
+N=0; [ -f "$SEQ_FILE.count" ] && N="$(cat "$SEQ_FILE.count")"
+RC="$(cut -d, -f$((N+1)) "$SEQ_FILE" 2>/dev/null)"; [ -z "$RC" ] && RC=0
+printf '%s' "$((N+1))" > "$SEQ_FILE.count"
+printf '%s\n' "$*" >> "$SEQ_FILE.args"
+case "$RC" in
+  0) echo "gate: internal inconsistency, no conclusion" ; exit 0 ;;   # rc0, NO VERDICT marker
+  3) echo "gate: stale read, run fff... tail" >&2 ; exit 3 ;;          # rc3, NO VERDICT marker (34409434135 shape)
+  2) echo "usage: bad ref" >&2 ; exit 2 ;;
+  *) exit "$RC" ;;
+esac
+GSTUB3
+  chmod +x "$D/gate"
+  # 22a. markerless rc3 then MARKED GREEN (standard shim restored): false-RED
+  #      class killed — toolerr journaled, retried, GREEN next poll, delivered.
+  cat > "$D/gate" <<'GSTUB4'
+#!/usr/bin/env bash
+SEQ_FILE="${SEQ_FILE:?}"
+N=0; [ -f "$SEQ_FILE.count" ] && N="$(cat "$SEQ_FILE.count")"
+RC="$(cut -d, -f$((N+1)) "$SEQ_FILE" 2>/dev/null)"; [ -z "$RC" ] && RC=0
+printf '%s' "$((N+1))" > "$SEQ_FILE.count"
+printf '%s\n' "$*" >> "$SEQ_FILE.args"
+case "$RC" in
+  3) echo "gate: stale read, run fff... tail" >&2 ; exit 3 ;;          # NO marker
+  *) echo "VERDICT GREEN"; echo "RUN https://github.com/x/y/actions/runs/222"; exit 0 ;;
+esac
+GSTUB4
+  chmod +x "$D/gate"
+  run_case deliver "3,0"
+  { [ "$RUN_RC" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t0.json")" = "GREEN" ] \
+      && [ "$(jq -r '.polls' "$D/waiters/t0.json")" = "2" ] \
+      && grep -q '"event":"toolerr"' "$D/waiters/journal/t0.jsonl"; } \
+    && t_ok "22a markerless rc3 -> toolerr, retried, GREEN next poll (no false RED)" \
+    || t_bad "22a rc=$RUN_RC verdict=$(jq -r .verdict "$D/waiters/t0.json") polls=$(jq -r .polls "$D/waiters/t0.json")"
+  # 22b. markerless rc0 (no false GREEN) then marked RED.
+  cat > "$D/gate" <<'GSTUB5'
+#!/usr/bin/env bash
+SEQ_FILE="${SEQ_FILE:?}"
+N=0; [ -f "$SEQ_FILE.count" ] && N="$(cat "$SEQ_FILE.count")"
+RC="$(cut -d, -f$((N+1)) "$SEQ_FILE" 2>/dev/null)"; [ -z "$RC" ] && RC=0
+printf '%s' "$((N+1))" > "$SEQ_FILE.count"
+printf '%s\n' "$*" >> "$SEQ_FILE.args"
+case "$RC" in
+  0) echo "gate: empty output" ; exit 0 ;;                              # NO marker
+  *) echo "VERDICT RED (reason: run-failure)"; echo "RUN https://github.com/x/y/actions/runs/222"; exit 3 ;;
+esac
+GSTUB5
+  chmod +x "$D/gate"
+  run_case deliver "0,3"
+  { [ "$RUN_RC" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t0.json")" = "RED" ] \
+      && [ "$(jq -r '.polls' "$D/waiters/t0.json")" = "2" ]; } \
+    && t_ok "22b markerless rc0 -> toolerr, retried, RED on marked poll (no false GREEN)" \
+    || t_bad "22b rc=$RUN_RC verdict=$(jq -r .verdict "$D/waiters/t0.json") polls=$(jq -r .polls "$D/waiters/t0.json")"
+  # 22c. FAILED-TOOL only after k=3 CONSECUTIVE tool errors (rc2 usage included)
+  cat > "$D/gate" <<'GSTUB7'
+#!/usr/bin/env bash
+echo "usage: bad ref" >&2
+exit 2
+GSTUB7
+  chmod +x "$D/gate"
+  run_case deliver "2,2,2"
+  { [ "$RUN_RC" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t0.json")" = "FAILED-TOOL" ] \
+      && [ "$(jq -r '.polls' "$D/waiters/t0.json")" = "3" ]; } \
+    && t_ok "22c k=3 consecutive tool errors (rc2 x3) -> FAILED-TOOL (no instant-fail)" \
+    || t_bad "22c rc=$RUN_RC verdict=$(jq -r .verdict "$D/waiters/t0.json") polls=$(jq -r .polls "$D/waiters/t0.json")"
+  # 22d. healthy poll RESETS the streak: cap raised to 4; 3 errors + healthy rc5
+  #      x4 cycles never reach 4 consecutive; settles marked GREEN.
+  cat > "$D/gate" <<'GSTUB6'
+#!/usr/bin/env bash
+SEQ_FILE="${SEQ_FILE:?}"
+N=0; [ -f "$SEQ_FILE.count" ] && N="$(cat "$SEQ_FILE.count")"
+RC="$(cut -d, -f$((N+1)) "$SEQ_FILE" 2>/dev/null)"; [ -z "$RC" ] && RC=0
+printf '%s' "$((N+1))" > "$SEQ_FILE.count"
+printf '%s\n' "$*" >> "$SEQ_FILE.args"
+case "$RC" in
+  2) echo "usage: bad ref" >&2 ; exit 2 ;;
+  5) echo "IN-FLIGHT run=222 https://github.com/x/y/actions/runs/222 (still in_progress)"; exit 5 ;;
+  *) echo "VERDICT GREEN"; echo "RUN https://github.com/x/y/actions/runs/222"; exit 0 ;;
+esac
+GSTUB6
+  chmod +x "$D/gate"
+  OC_WAITER_TOOLERR_CAP=4 run_case deliver "2,2,2,5,2,2,2,5,2,2,2,5,0"
+  { [ "$RUN_RC" -eq 0 ] && [ "$(jq -r '.verdict' "$D/waiters/t0.json")" = "GREEN" ] \
+      && [ "$(jq -r '.polls' "$D/waiters/t0.json")" = "13" ]; } \
+    && t_ok "22d healthy poll resets toolerr streak (cumulative would FAIL-TOOL at poll 5)" \
+    || t_bad "22d rc=$RUN_RC verdict=$(jq -r .verdict "$D/waiters/t0.json") polls=$(jq -r .polls "$D/waiters/t0.json")"
 
   echo "selftest: $pass/$((pass+fail)) passed"
   rm -rf "$D"
