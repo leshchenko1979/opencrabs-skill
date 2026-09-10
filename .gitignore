@@ -1,2 +1,3 @@
 oc-deploy-shadow.log
 *.lock
+run/

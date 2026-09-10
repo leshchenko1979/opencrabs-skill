@@ -69,7 +69,7 @@ LEDGER=""
 SELFTEST=0
 # confirm + swap-result: tool-written mechanical kinds (cmd_confirm, oc-deploy
 # ledger_stamp) admitted v0.4.77 — the enum is closed to EVERY writer now.
-KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident lesson note ack roster-enroll claim confirm swap-result "
+KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident lesson note ack roster-enroll claim confirm swap-result notify-fanout "
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 die() { echo "oc-ledger: $2" >&2; exit "$1"; }
@@ -759,6 +759,11 @@ EOF
   [ -s "$T/lessons-ir.out" ] && bad "lessons-invalidregex-empty" || ok
   bash "$ME" lessons --class "GATE-BYPASS" > "$T/lessons-ci.out" 2>/dev/null
   grep -q "LESSON-FIXTURE" "$T/lessons-ci.out" && ok || bad "lessons-case-insensitive"
+  # 55 (v0.4.131, WAVE-GROUP-B B3): notify-fanout kind acceptance — wave
+  # completions stamp natively, ending the note-row workaround.
+  OC_ACTOR="$W4" bash "$ME" stamp notify-fanout "fanout 'T': sent=1 skipped=0 failed=0 ids: 99999999" >/dev/null 2>&1
+  chk "notify-fanout-kind-accepted" 0 $?
+  jq -e --arg u "$W4" '[.events[] | select(.kind=="notify-fanout")] | length > 0' "$OC_LEDGER" >/dev/null 2>&1 && ok || bad "notify-fanout-row-on-ledger"
   rm -rf "$T"
   echo "oc-ledger selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]

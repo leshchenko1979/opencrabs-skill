@@ -30,6 +30,17 @@
 #      elsewhere or unbound are skipped with a `SKIP <uuid> <role> SCOPE(...)`
 #      receipt BEFORE any send. Override for drills: --forum-chat <chat_id>
 #      (or OC_FANOUT_FORUM_CHAT). Default: -1003936827469.
+#   7. WAVE-ID LOCK (v0.4.131, WAVE-GROUP-B B1): wave-id = sha256(title+brief)
+#      first 12 hex. A lockfile run/wave-<id>.lock (flock + pid + ts) guards
+#      against CONCURRENT re-runs of the same wave: a live lock (pid alive,
+#      <15 min old) refuses with rc=7 naming the holder pid/ts; a stale lock
+#      (pid dead OR >15 min) is auto-cleared with a receipt line. Locks live
+#      in <skill-repo>/run/ (created on demand, gitignored).
+#   8. PER-LANE IDEMPOTENCY (v0.4.131, WAVE-GROUP-B B2): run/wave-<id>.sent
+#      appends one uuid per successful send. A target already in .sent is
+#      skipped with `SKIP <uuid> <role> DUPLICATE` — a re-run of the same wave
+#      completes only the remaining lanes (resume semantics), never double-
+#      notifies.
 #
 # Usage:
 #   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
@@ -45,6 +56,7 @@
 #
 # Exit codes: 0 all sent/skipped-clean · 2 usage/roster error · 3 ledger ·
 #             4 partial send failures (receipts say which) · 5 abort (placeholder leak guard)
+#             7 concurrent wave in progress (live lock held by another pid)
 set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 # shellcheck source=lib/oc-notify.sh
@@ -98,10 +110,12 @@ JSON
   run_fanout() { # args passed through; asserts rc 0 and returns receipts
     OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
     OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 \
+    OC_FANOUT_RUN_DIR="${OC_FANOUT_RUN_DIR:-$T/run-default}" FAKE_NOTIFY_LOG="$T/fake-notify-log" \
       bash "$0" --title "T" --text "brief {{UUID}}" --no-stamp "$@" 2>&1
   }
   F=0; P=0
   chk() { if [ "$1" = 0 ]; then P=$((P+1)); else F=$((F+1)); echo "FAIL: $2"; fi }
+  mkdir -p "$T/run-default"
 
   # 1. Default roster (all 4 non-self workers): ONLY L1 sendable.
   out="$(run_fanout)"
@@ -126,6 +140,31 @@ JSON
   echo "$out" | grep -q "DRY $L1" && chk 0 dry-in-scope || chk 1 dry-in-scope
   echo "$out" | grep -q "SKIP $L3 .*SCOPE" && chk 0 dry-scope-skip || chk 1 dry-scope-skip
   [ -s "$T/fake-notify-log" ] && chk 1 dry-no-send || chk 0 dry-no-send
+
+  # 4. WAVE-GROUP-B: wave lock + idempotency (isolated run dir).
+  RD="$T/run"; mkdir -p "$RD"
+  # 4a. resume: run 1 sends L1 and records it in .sent; run 2 must SKIP DUPLICATE.
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
+  echo "$out" | grep -q "SENT $L1" && chk 0 wave1-sent || chk 1 wave1-sent
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
+  echo "$out" | grep -q "SKIP $L1 .*DUPLICATE" && chk 0 resume-duplicate-skip || chk 1 resume-duplicate-skip
+  n_sends=$(grep -cF "$L1" "$T/fake-notify-log" || true)
+  [ "$n_sends" = "1" ] && chk 0 exactly-one-send || chk 1 "exactly-one-send (got $n_sends)"
+  # 4b. concurrent-refuse: a live lock (our own pid, fresh ts) refuses rc=7.
+  WID="$(printf '%s' "T|brief {{UUID}}" | sha256sum | cut -c1-12)"
+  printf '%s %s %s\n' "$$" "$(date +%s)" "$WID" > "$RD/wave-${WID}.lock"
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)" && rc7=0 || rc7=$?
+  [ "$rc7" = "7" ] && chk 0 concurrent-refuse-rc7 || chk 1 "concurrent-refuse-rc7 (got rc=$rc7)"
+  echo "$out" | grep -q "already in progress" && chk 0 concurrent-refuse-names-holder || chk 1 concurrent-refuse-names-holder
+  # 4c. stale-clear: dead pid in the lockfile -> run proceeds, lock cleared.
+  printf '999999 1 %s\n' "$WID" > "$RD/wave-${WID}.lock"
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)" && rcst=0 || rcst=$?
+  [ "$rcst" = "0" ] && chk 0 stale-lock-cleared || chk 1 "stale-lock-cleared (got rc=$rcst)"
+  echo "$out" | grep -q "DUPLICATE" && chk 0 stale-run-still-idempotent || chk 1 stale-run-still-idempotent
+  rm -f "$RD/wave-${WID}.sent"
+  # 4d. fresh .sent after clear: run sends again (lock was the only blocker).
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
+  echo "$out" | grep -q "SENT $L1" && chk 0 post-clear-send || chk 1 post-clear-send
 
   echo "oc-notify-fanout selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
@@ -153,6 +192,52 @@ version="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL_DIR/SKILL.md" | head -1)"
 [ -n "$title" ] || die "usage: --title required"
 [ -f "$LEDGER" ] || die 3 "roster missing: $LEDGER"
 bin="$(oc_notify_resolve_bin)" || die "notify binary unresolvable (set OC_NOTIFY_BIN)"
+
+# LAW 7/8 — wave-id + lock + sent-ledger. wave-id derives from title+brief so
+# the same wave re-run (retry, resume) hashes identically while any content
+# change forks a new wave. Locks/receipts live in <skill-repo>/run/ (gitignored).
+RUN_DIR="${OC_FANOUT_RUN_DIR:-$SKILL_DIR/run}"
+mkdir -p "$RUN_DIR" 2>/dev/null || die 3 "cannot create run dir: $RUN_DIR"
+if [ -n "$text_file" ]; then [ -f "$text_file" ] || die "--text-file missing: $text_file"; fi
+wave_text="${title}|$( [ -n "$text_file" ] && cat "$text_file" || echo "${text:-}" )"
+wave_id="$(printf '%s' "$wave_text" | sha256sum | cut -c1-12)"
+LOCK_FILE="$RUN_DIR/wave-${wave_id}.lock"
+SENT_FILE="$RUN_DIR/wave-${wave_id}.sent"
+
+# Live = holder pid alive AND lock < 900s old. Stale = cleared with receipt.
+lock_live() { # $1=lockfile -> 0 if live
+  local pid ts age
+  read -r pid ts _ < "$1" 2>/dev/null || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  age=$(( $(date +%s) - ${ts:-0} ))
+  [ "$age" -lt 900 ]
+}
+if [ "$dry" = 0 ]; then
+  exec 9>>"$LOCK_FILE"
+  if ! flock -n 9; then
+    if lock_live "$LOCK_FILE"; then
+      read -r LPID LTS _ < "$LOCK_FILE"
+      die "wave ${wave_id} already in progress (holder pid ${LPID:-?} since ${LTS:-?} epoch); concurrent run refused (law 7)" 7
+    fi
+    printf 'LOCK clear stale wave-%s lock (pid dead or >15min)\n' "$wave_id" >&2
+    rm -f "$LOCK_FILE"
+    exec 9>>"$LOCK_FILE"
+    flock -n 9 || die "wave ${wave_id} lock contention unresolved" 7
+  fi
+  # flock acquired — but a live holder may have stamped the lockfile in the
+  # race window before its own flock (or be holding it via another fd). The
+  # lockfile CONTENT is the authority for the refuse verdict (law 7).
+  if [ -s "$LOCK_FILE" ]; then
+    read -r LPID LTS _ < "$LOCK_FILE" || true
+    if [ "${LPID:-}" != "$$" ] && lock_live "$LOCK_FILE"; then
+      die "wave ${wave_id} already in progress (holder pid ${LPID:-?} since ${LTS:-?} epoch); concurrent run refused (law 7)" 7
+    fi
+    printf 'LOCK clear stale wave-%s lock (pid dead or >15min)\n' "$wave_id" >&2
+  fi
+  printf '%s %s %s\n' "$$" "$(date +%s)" "$wave_id" > "$LOCK_FILE"
+fi
+
 LIVE_SESSIONS="$(mktemp /tmp/fanout-sessions.XXXXXX)"
 IN_SCOPE_SESSIONS="$(mktemp /tmp/fanout-scope.XXXXXX)"
 # FULL-ID roster from the profile session DB (READ-ONLY, ~0s) — v0.4.129:
@@ -170,10 +255,6 @@ sqlite3 "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}
    WHERE s.archived_at IS NULL AND b.chat_id = '$forum_chat';" \
   > "$IN_SCOPE_SESSIONS" 2>/dev/null || die 3 "session DB unreadable — cannot resolve forum scope"
 
-if [ -n "$text_file" ]; then
-  [ -f "$text_file" ] || die "--text-file missing: $text_file"
-  text="$(cat "$text_file")"
-fi
 [ -n "$text" ] || text="(see title)"
 
 want_role() { # $1=role -> 0 if selected by --roles filter
@@ -228,6 +309,10 @@ while IFS=$'\t' read -r uuid role topic; do
   if ! grep -qxF "$uuid" "$IN_SCOPE_SESSIONS" 2>/dev/null; then
     receipts+="SKIP ${uuid} ${role} SCOPE(not-bound-to-forum-${forum_chat})"$'\n'; skipped=$((skipped+1)); continue
   fi
+  # LAW 8 — per-lane idempotency: already-sent lanes never re-notify.
+  if [ "$dry" = 0 ] && grep -qxF "$uuid" "$SENT_FILE" 2>/dev/null; then
+    receipts+="SKIP ${uuid} ${role} DUPLICATE(already-sent-wave-${wave_id})"$'\n'; skipped=$((skipped+1)); continue
+  fi
   brief="${text}"
   brief="${brief//\{\{UUID\}\}/${uuid}}"
   brief="${brief//\{\{VERSION\}\}/${version}}"
@@ -263,6 +348,7 @@ while IFS=$'\t' read -r uuid role topic; do
   if [ "$rc" = 0 ]; then
     receipts+="SENT ${uuid} ${role} ${nid:-rc0-no-id} ${LAT_MS}ms"$'\n'
     ids+="${nid:-rc0} " ; sent=$((sent+1))
+    printf '%s\n' "$uuid" >> "$SENT_FILE"   # law 8: append-one-per-send idempotency receipt
   else
     receipts+="FAIL ${uuid} ${role} rc=${rc} ${LAT_MS}ms"$'\n'; failed=$((failed+1))
   fi
