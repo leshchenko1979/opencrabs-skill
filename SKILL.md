@@ -8,7 +8,7 @@ description: >
   TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.132
+version: 0.4.133
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -104,7 +104,7 @@ Ask the operator which role this session employs before doing anything:
 
 | Role | Owns | Procedure file |
 |------|------|----------------|
-| **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR AUTO-FILED on smoke PASS (AUTO-SHIP law; procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
+| **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR filed on smoke PASS (procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
 | **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + supervisor watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
 | **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub = TEN reviewers, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `supervisor.md` |
 | **TRIAGE** | Interrupt lane (carved out of SUPERVISOR at v0.4.86, owner "Go with Option A"): idea-box + `QUIRK:` tool-problem intake (same-turn ACK, ledger stamps), evidence verification, fix routing to owning editor, new-editor creation, TOOL_ACCUM / cadence enforcement; escalates semantic/KERNEL to the Supervisor — NEVER edits skill files | `triage.md` |
@@ -511,7 +511,7 @@ Supervisor-only). Skill markdown + fleet-directives stay Supervisor-only.
 | Upstream receives PRs ONLY — body = detailed description ending `Original issue: <full fork URL>`; NEVER `Closes #N` (wrong issue space) | `adolfousier/opencrabs` PR bodies | owner 2026-08-27 |
 | Fork issue closed by US right after the PR is filed | fork issue tracker | — |
 | Fork issues NEVER claimed on GitHub: no tackling comments, assignment, labels/reactions by any lane — claiming = `Issue-Ref` trailer + workers-ledger `claim` row (kind `claim`, v1.1 vocabulary since v0.4.48); uniqueness sweeps stay read-only search | ledger | owner 2026-08-27 17:07Z |
-| PR SHIPMENT — **AUTO-SHIP LAW (single home; owner order 2026-09-09 ~10:4xZ "the owner should not approve shipping, it should be automatic"): feature COMPLETE + smoke PASS (v0.4.104 four-leg rubric) → Editor harvests fork-only commits, files the upstream PR — NO owner word needed; the owner is notified AFTER the act. Supersedes the 2026-08-25 owner-approval gate and the 2026-09-08 "my go before pr" gate. All other references to this law are pointers to THIS row — procedure: `editor-upstream-pr.md` Phase 7; fleet-directives §Upstream-merge cadence (harvest census); triage.md T4.** | mechanical gates | 2026-09-09 owner order |
+| PR SHIPMENT — **PR SHIPMENT LAW (single home): feature COMPLETE + smoke PASS (v0.4.104 four-leg rubric) → Editor harvests fork-only commits, posts smoke evidence to forum topic, and files the upstream PR. All other references to this law are pointers to THIS row — procedure: `editor-upstream-pr.md` Phase 7; fleet-directives §Upstream-merge cadence (harvest census); triage.md T4.** | mechanical gates | standing process |
 | APPROVAL = Alexey's reply or a positive Telegram reaction to the explicit request in the forum topic; silence is NOT consent; spontaneous / ad-hoc PRs remain forbidden | owner word | v0.4.1 |
 
 *Pre-2026-08-27 upstream issues stay readable for uniqueness sweeps and legacy
@@ -520,8 +520,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
 - CONSENT REGISTER — **Never rule from codified memory — grep the live record
   (chat / ledger) before denying any permission** (v0.4.17 lesson, 2026-08-26).
   Deploy consent RETIRED 2026-08-28 (owner 18:50Z): GREEN carrier run + artifact
-  verify IS the authorization. Upstream-PR owner-word gate — retired under the
-  AUTO-SHIP law (PR SHIPMENT row, §ISSUE ROUTING above). APPROVAL
+  verify IS the authorization. Upstream-PR filing follows the PR SHIPMENT law (PR SHIPMENT row, §ISSUE ROUTING above). APPROVAL
   definition above still governs anything that REMAINS owner-gated
   (post-swap rollback-is-owner's-call; silence is NOT consent).
   (Deleted-tool history: CHANGELOG.md.)

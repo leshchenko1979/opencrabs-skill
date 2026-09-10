@@ -14,7 +14,7 @@
 #
 # Usage:
 #   oc-ship-chain --sha <sha> --branch <branch> [--issue <n>] [--repo <fork-slug>]
-#                 [--wait <sec>] [--dry-run] [--no-ledger] [--selftest] [--help]
+#                 [--gated-sha <sha>] [--wait <sec>] [--dry-run] [--no-ledger] [--selftest] [--help]
 #
 # Exit: 0 SWAPPED (full chain complete)
 #       2 usage
@@ -41,6 +41,15 @@ set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOOLS_DIR="$(dirname "$SELF")"
 
+_OC_LIB="$TOOLS_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then
+  source "$_OC_LIB"
+  oc_log_init "oc-ship-chain" "$@"
+else
+  oc_log_finish() { :; }
+fi
+trap 'oc_log_finish $?' EXIT
+
 # selftest dispatch BEFORE arg parsing (avoids the unknown-arg gate)
 # impl re-entry is guarded by OC_SHIPCHAIN_IMPL to prevent exec-loop
 if [ "${OC_SHIPCHAIN_IMPL:-0}" = "1" ]; then
@@ -59,20 +68,21 @@ FORK_REPO="${OC_FORK_REPO:-$HOME/opencrabs}"
 usage() { sed -n '2,30p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0; }
 die() { printf 'oc-ship-chain: %s\n' "$1" >&2; exit "${2:-2}"; }
 
-SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0
+SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0; GATED_SHA=""
 [ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 exec bash "$SELF"
 [ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --sha)     SHA="${2:?}"; shift 2 ;;
-    --branch)  BRANCH="${2:?}"; shift 2 ;;
-    --issue)   ISSUE="${2:?}"; shift 2 ;;
-    --repo)    REPO="${2:?}"; shift 2 ;;
-    --wait)    WAIT="${2:?}"; shift 2 ;;
-    --dry-run) DRY=1; shift ;;
+    --sha)       SHA="${2:?}"; shift 2 ;;
+    --branch)    BRANCH="${2:?}"; shift 2 ;;
+    --issue)     ISSUE="${2:?}"; shift 2 ;;
+    --repo)      REPO="${2:?}"; shift 2 ;;
+    --wait)      WAIT="${2:?}"; shift 2 ;;
+    --gated-sha) GATED_SHA="${2:?}"; shift 2 ;;
+    --dry-run)   DRY=1; shift ;;
     --no-ledger) NOLEDGER=1; shift ;;
-    --help|-h) usage ;;
+    --help|-h)   usage ;;
     *) die "unknown arg: $1 (see --help)" 2 ;;
   esac
 done
@@ -118,16 +128,33 @@ if [ "$DRY" = "1" ]; then
 fi
 
 # ---- leg 1: CI gate -------------------------------------------------------
-journal "LEG1 gate start (oc-prchecks $SHA)"
-set +e
-GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} 2>&1)"
-GATE_RC=$?
-set -e
-case "$GATE_RC" in
-  0) journal "LEG1 gate GREEN" ;;
-  3) journal "LEG1 gate RED";  printf '%s\n' "$GATE_OUT"; die "GATE-RED" 4 ;;
-  *) journal "LEG1 gate INFRA rc=$GATE_RC"; printf '%s\n' "$GATE_OUT"; die "gate infra rc=$GATE_RC" 6 ;;
-esac
+if [ -n "$GATED_SHA" ]; then
+  # Duty-4 P-03 (v0.4.133): resume with already-verified green gate sha.
+  # Verification guard: gated-sha must match SHA and have a real completed success run.
+  [ "$GATED_SHA" = "$SHA" ] || die "--gated-sha ($GATED_SHA) does not match --sha ($SHA)" 2
+  journal "LEG1 gate resume: verifying pre-existing CI run on $SHA"
+  RUN_STATUS="$(gh run list -R "${REPO:-leshchenko1979/opencrabs}" --commit "$SHA" --json conclusion,status -q '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)"
+  case "$RUN_STATUS" in
+    "completed success")
+      journal "LEG1 gate pre-verified GREEN (gh run: completed success on $SHA)"
+      ;;
+    *)
+      journal "LEG1 gate resume rejected: run status is '$RUN_STATUS'"
+      die "gated-sha verification failed: run status '$RUN_STATUS' != 'completed success'" 4
+      ;;
+  esac
+else
+  journal "LEG1 gate start (oc-prchecks $SHA)"
+  set +e
+  GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} 2>&1)"
+  GATE_RC=$?
+  set -e
+  case "$GATE_RC" in
+    0) journal "LEG1 gate GREEN" ;;
+    3) journal "LEG1 gate RED";  printf '%s\n' "$GATE_OUT"; die "GATE-RED" 4 ;;
+    *) journal "LEG1 gate INFRA rc=$GATE_RC"; printf '%s\n' "$GATE_OUT"; die "gate infra rc=$GATE_RC" 6 ;;
+  esac
+fi
 
 # ---- leg 2: issue-log (optional) ------------------------------------------
 if [ -n "$ISSUE" ]; then

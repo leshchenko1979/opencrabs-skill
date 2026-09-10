@@ -635,6 +635,12 @@ if tool oc-harvest-sweep; then
   "$TOOLS_DIR/oc-harvest-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
 fi
 
+section "oc-harvest-census"
+run_selftest oc-harvest-census
+if tool oc-harvest-census; then
+  "$TOOLS_DIR/oc-harvest-census" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+fi
+
 section "oc-rebase-safety"
 run_selftest oc-rebase-safety
 if tool oc-rebase-safety; then

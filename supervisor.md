@@ -252,16 +252,11 @@ What stays HERE (Supervisor side):
   (convergence beats volume); duplicate ideas stamp ONE event, not N.
 
 Cross-references saying "supervisor.md Duty 7" resolve to `triage.md` T1/T2
-for operations and HERE for batch/verdict ownership. Backlog assignment is
-also a Triage duty: **Duty T5 (v0.4.92)** — post-compaction sweep of OPEN
-fork issues against ledger claim-refs; unclaimed → route (T2) or surface
-here for dispatch.
+for operations and HERE for batch/verdict ownership.
 
-**Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12)**: OPERATES in the
-TRIAGE lane since v0.4.86 — full procedure = `triage.md` §Duty T4 (NO
-procedure copy here, lens B-F11 v0.4.96). Repeat offenders escalate HERE for
-the review-toggle decision (sanctioned-sender judgment stays
-Supervisor-owned).
+### Related Triage operations (ownership pointers)
+- **Backlog assignment (Duty T5, v0.4.92):** post-compaction sweep of OPEN fork issues against ledger claim-refs; unclaimed → route (T2) or surface here for dispatch.
+- **Telegram-law TOOL_ACCUM enforcement (Duty T4, v0.4.43):** OPERATES in the TRIAGE lane since v0.4.86 — full procedure in `triage.md` §Duty T4. Repeat offenders escalate HERE for review-toggle decisions.
 
 **Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) and
 fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —

@@ -56,13 +56,19 @@ cmd_overlap() {
   git_ok "$repo" "$old_main" || die 3 "bad --old-main: $old_main"
   git_ok "$repo" "$new_main" || die 3 "bad --new-main: $new_main"
 
+  local tmp_main tmp_merge
+  tmp_main="$(mktemp -t ors.main.XXXXXX)" || die 3 "mktemp failed"
+  tmp_merge="$(mktemp -t ors.merge.XXXXXX)" || { rm -f "$tmp_main"; die 3 "mktemp failed"; }
+  cleanup_tmp() { rm -f "$tmp_main" "$tmp_merge"; }
+  trap cleanup_tmp EXIT INT TERM
+
   # Main-shift changed set: what moved between the two mains.
-  git -C "$repo" diff --name-only "$old_main" "$new_main" | sort -u > /tmp/ors.main.$$ || die 3 "git diff failed"
+  git -C "$repo" diff --name-only "$old_main" "$new_main" | sort -u > "$tmp_main" || die 3 "git diff failed"
 
   # Merge-changed set.
   if [ -z "$tree" ]; then
     # No tree given: merge-changed set unknown -> conservative (any shift = overlap).
-    : > /tmp/ors.merge.$$
+    : > "$tmp_merge"
     local conservative=1
   else
     local nparents tip
@@ -72,18 +78,20 @@ cmd_overlap() {
       # Second-parent diff = what the BRANCH side contributes over main
       # (verified live: HEAD^1..HEAD is main-side ingress, HEAD^2..HEAD is
       # the branch's own changed set — the one the re-gate law means).
-      git -C "$repo" diff --name-only "$tip^2" "$tip" | sort -u > /tmp/ors.merge.$$ || die 3 "git diff failed"
+      git -C "$repo" diff --name-only "$tip^2" "$tip" | sort -u > "$tmp_merge" || die 3 "git diff failed"
       conservative=0
     else
       # Single-parent tip: cannot derive the branch-side set here; conservative.
-      : > /tmp/ors.merge.$$
+      : > "$tmp_merge"
       conservative=1
     fi
   fi
 
   local inter
-  inter="$(comm -12 /tmp/ors.main.$$ /tmp/ors.merge.$$ | grep -v '^$' || true)"
-  rm -f /tmp/ors.main.$$ /tmp/ors.merge.$$
+  inter="$(comm -12 "$tmp_main" "$tmp_merge" | grep -v '^$' || true)"
+  cleanup_tmp
+  trap - EXIT INT TERM
+  trap 'oc_log_finish $?' EXIT
   if [ -n "$inter" ]; then
     echo "$inter"
     echo "OVERLAP: gate-required (conservative=$conservative)" >&2

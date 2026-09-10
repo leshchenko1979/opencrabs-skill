@@ -639,3 +639,11 @@ Owner ruling was a suggest_options button pick (option 0: "Agreed - codify the s
 - Cross-references updated: editor.md, SKILL.md, and fleet-directives.md re-anchored to Phase 5 `oc-ship-chain`. Phase 6b (Smoke-test-on-notify) and Phase 6c (Fix requests) retained cleanly with streamlined `oc-ship-chain` execution.
 - Battery: 155 PASS / 0 FAIL.
 
+## v0.4.133 (2026-09-10, owner "Approve plan and execute Batch 1" 14:48Z — Duty 4+6 Cycle 5 Implementation, HQ executed)
+- TEST HARNESS: `tools/oc-review-persist` selftest bug fixed — runs inside isolated `mktemp -d` mock repo, eliminating self-deletion risk to live cycle reports.
+- ATTRIBUTION & FANOUT: `tools/oc-attrib` gains `--first-parent` option; wired into `tools/oc-deploy` post-swap contributor sweep. Prevents traversing into foreign upstream merge ancestry (e.g. merge commit `8870bd40`) and waking historical lanes on sync merges (Duty-4 P-01).
+- HARNESS HARDENING & TELEMETRY: `tools/oc-rebase-safety` tempfiles upgraded to `mktemp -t ors.*.XXXXXX` with cleanup traps (Lens F); `tools/oc-ship-chain` gains `lib/oc-log.sh` telemetry, exit traps, and verified `--gated-sha <sha>` resume capability (Lens F & Duty-4 P-03); `tools/oc-notify-fanout` wired with `lib/oc-log.sh` telemetry and exit logging.
+- DIRECT DISPATCH & ONTOLOGY: Tool anomaly routing codified per Direct Dispatch Law (owner order 14:3xZ & Finding BS-01) — tool problems in `tools/oc-*` route directly to the active TOOLSMITH role dynamically (`oc-ledger roster`), bypassing Triage relay hops; core daemon issues file directly to GitHub fork issues. Triage role refined to AUDITOR. Dev crons strictly restricted to topic 30220 (Duty-4 P-02).
+- DOCS CLEANUP: Struck `AUTO-SHIP` phrasing across all skill files (SKILL.md, editor.md, editor-upstream-pr.md, fleet-directives.md, triage.md); removed unpurged split draft notes; streamlined supervisor.md Duty 7.
+- Battery: 158 PASS / 0 FAIL across all tool suites.
+

@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-harvest-census — mechanized harvest inventory, gate verification, and settling
+#
+# Settling authority is the upstream GitHub PR API (adolfousier/opencrabs),
+# cross-referenced with fork commit trailers (Issue-Ref: leshchenko1979/opencrabs#N)
+# and branch names.
+#
+# Subcommands:
+#   scan [--repo <path>] [--upstream <repo>] [--json]
+#       Scans upstream PRs and local ahead commits, outputting classified census.
+#   check <issue-or-slug> [--repo <path>]
+#       Pre-flight gate:
+#       - Exits 1 (REFUSED) if matching unit is already MERGED or IN_FLIGHT.
+#       - Exits 0 (ELIGIBLE) if unit is confirmed UNHARVESTED.
+#       - Exits 2 on usage / bad arguments.
+#       - Exits 3 on API/git failure.
+#   record --unit <slug> --pr <number> [--issue <N>] [--repo <path>]
+#       Records a newly filed PR in the harvest registry.
+#   sync [--repo <path>] [--state-file <path>]
+#       Fetches live upstream PRs, resolves against git DAG, updates harvest-registry.json.
+#   --help | -h
+#       Prints usage and exits 0 (RC-CONTRACT rule).
+#   --selftest
+#       Offline unit test battery (mock git/data, no network).
+# =============================================================================
+set -u
+set -o pipefail
+
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then
+  source "$_OC_LIB"
+  oc_log_init "oc-harvest-census" "$@"
+else
+  oc_log_finish() { :; }
+fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="$(basename "$0")"
+REPO="${HOME}/opencrabs"
+UPSTREAM_REPO="adolfousier/opencrabs"
+STATE_DIR="${HOME}/.opencrabs/profiles/ops/opencrabs-dev"
+REGISTRY_FILE="${STATE_DIR}/harvest-registry.json"
+
+usage() {
+  cat <<EOF
+Usage:
+  $PROG scan [--repo <path>] [--upstream <owner/repo>] [--json]
+  $PROG check <issue-number-or-slug> [--repo <path>]
+  $PROG record --unit <slug> --pr <number> [--issue <N>]
+  $PROG sync [--repo <path>] [--state-file <path>]
+  $PROG --help | -h
+  $PROG --selftest
+
+Exit codes:
+  0: ELIGIBLE / Clean / Success / --help
+  1: REFUSED (already MERGED or IN_FLIGHT upstream) / Finding
+  2: Usage error
+  3: Git or GitHub API failure
+EOF
+  exit "${1:-2}"
+}
+
+# --- Core Python Engine (Deterministic Parsing & Matching) ---
+run_engine() {
+  python3 -c '
+import sys, os, json, re, subprocess, argparse
+
+def get_prs(upstream_repo, mock_prs_file=None):
+    if mock_prs_file and os.path.exists(mock_prs_file):
+        with open(mock_prs_file) as f:
+            return json.load(f)
+    cmd = [
+        "gh", "pr", "list", "--repo", upstream_repo,
+        "--state", "all", "--limit", "150",
+        "--json", "number,title,state,headRefName,mergedAt,body"
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"gh pr list failed: {res.stderr.strip()}")
+    return json.loads(res.stdout)
+
+def get_ahead_commits(repo_path, mock_commits_file=None):
+    if mock_commits_file and os.path.exists(mock_commits_file):
+        with open(mock_commits_file) as f:
+            return json.load(f)
+    if not os.path.isdir(repo_path):
+        return []
+    cmd = [
+        "git", "-C", repo_path, "log", "adolfousier/main..origin/main",
+        "--format=%H%x09%h%x09%s%x09%(trailers:key=Issue-Ref,valueonly)"
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        return []
+    commits = []
+    for line in res.stdout.strip().split("\n"):
+        if not line: continue
+        parts = line.split("\t")
+        full_sha = parts[0]
+        short_sha = parts[1] if len(parts) > 1 else full_sha[:7]
+        subject = parts[2] if len(parts) > 2 else ""
+        trailer = parts[3] if len(parts) > 3 else ""
+        commits.append({
+            "sha": full_sha, "short_sha": short_sha,
+            "subject": subject, "trailer": trailer
+        })
+    return commits
+
+def parse_issue_map(prs):
+    issue_map = {}
+    pr_entries = []
+    for p in prs:
+        num = p["number"]
+        state = p["state"]
+        title = p.get("title", "")
+        body = p.get("body", "") or ""
+        head = p.get("headRefName", "") or ""
+        merged_at = p.get("mergedAt")
+        
+        issues = set()
+        for m in re.finditer(r"leshchenko1979/opencrabs#(?:issues/)?(\d+)", body):
+            issues.add(int(m.group(1)))
+        for m in re.finditer(r"leshchenko1979/opencrabs/issues/(\d+)", body):
+            issues.add(int(m.group(1)))
+        for m in re.finditer(r"(?:fix|feat|up|harvest)[/-](\d+)", head):
+            issues.add(int(m.group(1)))
+        for m in re.finditer(r"/(\d+)-", head):
+            issues.add(int(m.group(1)))
+        for m in re.finditer(r"\(#(\d{1,3})\)", title):
+            # Only treat as fork issue if title or body carries fork context
+            if "leshchenko1979" in body or "leshchenko1979" in head:
+                issues.add(int(m.group(1)))
+        for m in re.finditer(r"leshchenko1979/opencrabs#(\d+)", title):
+            issues.add(int(m.group(1)))
+        
+        entry = {
+            "pr": num,
+            "state": state,
+            "title": title,
+            "head": head,
+            "merged_at": merged_at,
+            "issues": sorted(list(issues))
+        }
+        pr_entries.append(entry)
+        
+        for iss in issues:
+            cur = issue_map.get(iss)
+            if not cur:
+                issue_map[iss] = entry
+            elif state == "MERGED":
+                issue_map[iss] = entry
+            elif state == "OPEN" and cur["state"] == "CLOSED":
+                issue_map[iss] = entry
+
+    return issue_map, pr_entries
+
+action = sys.argv[1]
+upstream_repo = sys.argv[2]
+repo_path = sys.argv[3]
+registry_file = sys.argv[4]
+target = sys.argv[5] if len(sys.argv) > 5 else ""
+mock_prs = os.environ.get("OC_HARVEST_MOCK_PRS")
+mock_commits = os.environ.get("OC_HARVEST_MOCK_COMMITS")
+
+try:
+    prs = get_prs(upstream_repo, mock_prs)
+except Exception as e:
+    # Try reading from registry file if GH is unreachable
+    if os.path.exists(registry_file) and action == "check":
+        with open(registry_file) as f:
+            cached = json.load(f)
+        prs = cached.get("prs", [])
+    else:
+        sys.stderr.write(f"oc-harvest-census error: {e}\n")
+        sys.exit(3)
+
+issue_map, pr_entries = parse_issue_map(prs)
+
+if action == "check":
+    # Target can be issue number (e.g. 144 or #144) or slug
+    m = re.search(r"(\d+)", target)
+    target_iss = int(m.group(1)) if m else None
+    
+    match = None
+    if target_iss and target_iss in issue_map:
+        match = issue_map[target_iss]
+    elif not target_iss:
+        # Search by head branch slug or title keyword only if target is not a pure issue number
+        for p in pr_entries:
+            if target.lower() in p["head"].lower() or target.lower() in p["title"].lower():
+                match = p
+                break
+
+    if match:
+        st = match["state"]
+        num = match["pr"]
+        ti = match["title"]
+        if st == "MERGED":
+            print(f"REFUSED: Target {target} is already MERGED upstream in PR #{num}: {ti}")
+            sys.exit(1)
+        elif st == "OPEN":
+            print(f"REFUSED: Target {target} is currently IN_FLIGHT upstream in PR #{num}: {ti}")
+            sys.exit(1)
+        elif st == "CLOSED":
+            print(f"ELIGIBLE_REWORK: Target {target} had PR #{num} CLOSED without merge: {ti}")
+            sys.exit(0)
+    
+    print(f"ELIGIBLE: Target {target} is confirmed UNHARVESTED (clean to branch and gate)")
+    sys.exit(0)
+
+elif action in ("scan", "sync"):
+    as_json = "--json" in sys.argv
+    commits = get_ahead_commits(repo_path, mock_commits)
+    
+    # Classify commits ahead
+    unharvested = []
+    covered = []
+    for c in commits:
+        tr = c["trailer"]
+        m = re.search(r"#?(\d+)", tr)
+        iss = int(m.group(1)) if m else None
+        if not iss:
+            m = re.search(r"#?(\d+)", c["subject"])
+            iss = int(m.group(1)) if m else None
+        
+        pr_info = issue_map.get(iss) if iss else None
+        if pr_info:
+            c["upstream_pr"] = pr_info["pr"]
+            c["upstream_state"] = pr_info["state"]
+            covered.append(c)
+        else:
+            unharvested.append(c)
+            
+    summary = {
+        "upstream_open_prs": [p for p in pr_entries if p["state"] == "OPEN"],
+        "upstream_merged_prs": [p for p in pr_entries if p["state"] == "MERGED"],
+        "unharvested_commits": unharvested,
+        "covered_commits": covered,
+        "mapped_issues": len(issue_map)
+    }
+
+    if action == "sync" or (action == "scan" and registry_file):
+        os.makedirs(os.path.dirname(os.path.abspath(registry_file)), exist_ok=True)
+        with open(registry_file, "w") as f:
+            json.dump({"prs": prs, "summary": summary}, f, indent=2)
+
+    if as_json:
+        print(json.dumps(summary, indent=2))
+    else:
+        open_prs = summary["upstream_open_prs"]
+        print(f"=== Upstream In-Flight PRs ({len(open_prs)} open) ===")
+        for p in open_prs:
+            iss_first = p["issues"][0] if p["issues"] else None
+            issues_str = f" [#{iss_first}]" if iss_first is not None else ""
+            pr_num = p["pr"]
+            head_ref = p["head"]
+            title_part = p["title"][:50]
+            print(f"  PR #{pr_num:<4d} {head_ref:<40s}{issues_str} - {title_part}")
+        
+        print(f"\n=== Ahead Commits Classification ===")
+        print(f"  Total Ahead: {len(commits)} commits")
+        print(f"  Covered by PRs: {len(covered)} commits")
+        print(f"  Unharvested: {len(unharvested)} commits")
+        
+        if unharvested:
+            print("\n=== Unharvested Ahead Candidates (sample) ===")
+            for c in unharvested[:10]:
+                c_sha = c["short_sha"]
+                c_sub = c["subject"][:65]
+                print(f"  {c_sha} {c_sub}")
+    sys.exit(0)
+' "$@"
+}
+
+# --- Subcommand Handlers ---
+
+cmd_scan() {
+  local json_flag=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) REPO="$2"; shift 2 ;;
+      --upstream) UPSTREAM_REPO="$2"; shift 2 ;;
+      --json) json_flag="--json"; shift ;;
+      *) usage ;;
+    esac
+  done
+  run_engine "scan" "$UPSTREAM_REPO" "$REPO" "$REGISTRY_FILE" "" $json_flag
+}
+
+cmd_check() {
+  local target=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) REPO="$2"; shift 2 ;;
+      --upstream) UPSTREAM_REPO="$2"; shift 2 ;;
+      -*) usage ;;
+      *)
+        if [ -z "$target" ]; then target="$1"; shift; else usage; fi
+        ;;
+    esac
+  done
+  [ -n "$target" ] || usage
+  run_engine "check" "$UPSTREAM_REPO" "$REPO" "$REGISTRY_FILE" "$target"
+}
+
+cmd_record() {
+  local unit="" pr="" issue=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --unit) unit="$2"; shift 2 ;;
+      --pr) pr="$2"; shift 2 ;;
+      --issue) issue="$2"; shift 2 ;;
+      --repo) REPO="$2"; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ -n "$unit" ] && [ -n "$pr" ] || usage
+
+  # Append record to registry if present
+  if [ -f "$REGISTRY_FILE" ]; then
+    python3 -c '
+import json, sys, os, datetime
+reg_file, unit, pr, issue = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    with open(reg_file) as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+records = data.setdefault("manual_records", [])
+records.append({
+    "unit": unit,
+    "pr": int(pr),
+    "issue": int(issue) if issue else None,
+    "recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+})
+with open(reg_file, "w") as f:
+    json.dump(data, f, indent=2)
+print(f"Recorded Unit {unit} -> PR #{pr} in {reg_file}")
+' "$REGISTRY_FILE" "$unit" "$pr" "$issue"
+  else
+    echo "Recorded Unit $unit -> PR #$pr (registry uninitialized)"
+  fi
+  exit 0
+}
+
+cmd_sync() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) REPO="$2"; shift 2 ;;
+      --upstream) UPSTREAM_REPO="$2"; shift 2 ;;
+      --state-file) REGISTRY_FILE="$2"; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  run_engine "sync" "$UPSTREAM_REPO" "$REPO" "$REGISTRY_FILE" ""
+}
+
+# --- Offline Selftest ---
+selftest_tmp=""
+cleanup_selftest() {
+  if [ -n "$selftest_tmp" ] && [ -d "$selftest_tmp" ]; then
+    rm -rf "$selftest_tmp"
+  fi
+}
+
+cmd_selftest() {
+  selftest_tmp="$(mktemp -d)"
+  trap cleanup_selftest EXIT
+
+  local mock_prs="$selftest_tmp/mock_prs.json"
+  local mock_commits="$selftest_tmp/mock_commits.json"
+  local mock_reg="$selftest_tmp/mock_reg.json"
+
+  cat << 'EOF' > "$mock_prs"
+[
+  {
+    "number": 1494,
+    "title": "feat(cron): session deliver_to target",
+    "state": "OPEN",
+    "headRefName": "leshchenko1979/feat/cron-session-target",
+    "mergedAt": null,
+    "body": "Resolves leshchenko1979/opencrabs#144"
+  },
+  {
+    "number": 1470,
+    "title": "fix(telegram): normalize collapsed tables on rich plane (#132)",
+    "state": "MERGED",
+    "headRefName": "leshchenko1979/fix/collapsed-table-reflow",
+    "mergedAt": "2026-09-09T21:07:38Z",
+    "body": "Fixes fork issue #132"
+  },
+  {
+    "number": 1456,
+    "title": "Durable notify queue: redeliver undelivered messages (#111)",
+    "state": "CLOSED",
+    "headRefName": "port/111-notify-queue",
+    "mergedAt": null,
+    "body": "Fixes #111"
+  }
+]
+EOF
+
+  cat << 'EOF' > "$mock_commits"
+[
+  {
+    "sha": "15ebd17cb0000000000000000000000000000000",
+    "short_sha": "15ebd17",
+    "subject": "feat(cron): session deliver_to target (#144)",
+    "trailer": "leshchenko1979/opencrabs#144"
+  },
+  {
+    "sha": "9999999cb0000000000000000000000000000000",
+    "short_sha": "9999999",
+    "subject": "feat(unharvested): some new feature (#200)",
+    "trailer": "leshchenko1979/opencrabs#200"
+  }
+]
+EOF
+
+  export OC_HARVEST_MOCK_PRS="$mock_prs"
+  export OC_HARVEST_MOCK_COMMITS="$mock_commits"
+
+  local rc=0 out=""
+
+  # 1. Check on MERGED issue (#132) -> exits 1 REFUSED
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "132" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "REFUSED.*MERGED"; then
+    echo "  ok   - check merged unit -> REFUSED exit 1"
+  else
+    echo "  bad  - check merged unit expected rc=1, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 2. Check on IN_FLIGHT issue (#144) -> exits 1 REFUSED
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "144" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "REFUSED.*IN_FLIGHT"; then
+    echo "  ok   - check in_flight unit -> REFUSED exit 1"
+  else
+    echo "  bad  - check in_flight unit expected rc=1, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 3. Check on UNHARVESTED issue (#200) -> exits 0 ELIGIBLE
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "200" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    echo "  ok   - check unharvested unit -> ELIGIBLE exit 0"
+  else
+    echo "  bad  - check unharvested unit expected rc=0, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 4. Check on CLOSED issue (#111) -> exits 0 ELIGIBLE_REWORK
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "111" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE_REWORK"; then
+    echo "  ok   - check closed unit -> ELIGIBLE_REWORK exit 0"
+  else
+    echo "  bad  - check closed unit expected rc=0, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 5. Usage error on missing target -> exits 2
+  rc=0
+  bash "$0" check >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    echo "  ok   - check without args -> usage exit 2"
+  else
+    echo "  bad  - check without args expected rc=2, got rc=$rc"
+    return 1
+  fi
+
+  # 6. Scan outputs classified summary
+  rc=0
+  out="$(run_engine "scan" "mock/repo" "$selftest_tmp" "$mock_reg" "" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Upstream In-Flight PRs (1 open)"; then
+    echo "  ok   - scan classified output clean"
+  else
+    echo "  bad  - scan failed ($out)"
+    return 1
+  fi
+
+  echo "selftest: 6/6 OK"
+  return 0
+}
+
+# --- Main Dispatch ---
+case "${1:-}" in
+  scan)
+    shift; cmd_scan "$@"
+    ;;
+  check)
+    shift; cmd_check "$@"
+    ;;
+  record)
+    shift; cmd_record "$@"
+    ;;
+  sync)
+    shift; cmd_sync "$@"
+    ;;
+  --help|-h|help)
+    usage 0
+    ;;
+  --selftest)
+    cmd_selftest
+    ;;
+  *)
+    usage
+    ;;
+esac

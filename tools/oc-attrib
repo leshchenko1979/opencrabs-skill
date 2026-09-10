@@ -31,16 +31,17 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-attrib" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT   # early exits (usage/git-fail) — cleanup traps below supersede but also log
 
-usage() { [ -n "${1:-}" ] && echo "oc-attrib: $1" >&2; echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--json] | --trailers-only --range <A..B> | --contributors | --selftest" >&2; exit 2; }   # lens C MED-2/MED-4 (v0.4.79)
-help()   { echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--json] | --trailers-only --range <A..B> | --contributors | --selftest"; echo "Exit: 0 ok / 2 usage / 3 git failure / 4 empty range / 5 deployed-markers-missing"; }  # C-#3: help=0
+usage() { [ -n "${1:-}" ] && echo "oc-attrib: $1" >&2; echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--first-parent] [--json] | --trailers-only --range <A..B> | --contributors | --selftest" >&2; exit 2; }   # lens C MED-2/MED-4 (v0.4.79)
+help()   { echo "usage: $0 --repo <path> --range <A..B> | --deployed [--ledger <file>] [--first-parent] [--json] | --trailers-only --range <A..B> | --contributors | --selftest"; echo "Exit: 0 ok / 2 usage / 3 git failure / 4 empty range / 5 deployed-markers-missing"; }  # C-#3: help=0
 
-SELFTEST=0; JSON=0; REPO="."; RANGE=""; LEDGER=""; DEPLOYED=0; TRAILERS_ONLY=0; CONTRIB=0
+SELFTEST=0; JSON=0; REPO="."; RANGE=""; LEDGER=""; DEPLOYED=0; TRAILERS_ONLY=0; CONTRIB=0; FIRST_PARENT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) [ -n "${2:-}" ] || usage "--repo needs a path"; REPO="${2:-}"; shift ;;
     --range) RANGE="${2:-}"; shift ;;
     --deployed) DEPLOYED=1 ;;
     --trailers-only) TRAILERS_ONLY=1 ;;
+    --first-parent) FIRST_PARENT=1 ;;
     --contributors) CONTRIB=1 ;;
     --ledger) LEDGER="${2:-}"; shift ;;
     --json) JSON=1 ;;
@@ -79,6 +80,18 @@ Issue-Ref: #1239'
   OUT_D="$(OC_DEPLOY_STATE_DIR="$d" "$0" --repo "$d" --deployed --ledger "$d/wl.json")" || { echo "selftest: --deployed nonzero exit" >&2; exit 1; }
   OUT_R="$("$0" --repo "$d" --range "$R_FROM..$R_TO" --ledger "$d/wl.json")"
   [ "$OUT_D" = "$OUT_R" ] || { echo "selftest: --deployed range != explicit range" >&2; exit 1; }
+
+  # Duty-4 P-01: --first-parent selftest
+  git -C "$d" checkout -q -b side
+  M3='foreign branch commit
+
+Session-Id: ffffffff-4444-5555-6666-777777777777'
+  mk a3 "$M3"
+  git -C "$d" checkout -q main
+  git -C "$d" merge -q side -m "merge side" --no-ff
+  R_MERGE="$(git -C "$d" rev-parse HEAD~1)..$(git -C "$d" rev-parse HEAD)"
+  OUT_FP="$("$0" --repo "$d" --range "$R_MERGE" --first-parent --ledger "$d/wl.json")"
+  echo "$OUT_FP" | grep -q "ffffffff-4444-5555-6666-777777777777" && { echo "selftest: --first-parent leaked foreign trailer" >&2; exit 1; }
   mkdir -p "$d/nostate"
   OC_DEPLOY_STATE_DIR="$d/nostate" OC_TOOLS_NOLOG=1 "$0" --repo "$d" --deployed >/dev/null 2>&1; rc=$?
   [ $rc -eq 5 ] || { echo "selftest: --deployed missing markers rc=$rc want=5" >&2; exit 1; }
@@ -108,9 +121,12 @@ fi
 [ -n "$RANGE" ] || usage
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repo: $REPO" >&2; exit 3; }
 
+FP_FLAG=""
+[ "$FIRST_PARENT" -eq 1 ] && FP_FLAG="--first-parent"
+
 # --trailers-only (E2 finding 5, v0.4.72): raw sha<TAB>session backend — no ledger join.
 if [ "$TRAILERS_ONLY" -eq 1 ]; then
-  for sha in $(git -C "$REPO" rev-list --reverse "$RANGE"); do
+  for sha in $(git -C "$REPO" rev-list --reverse $FP_FLAG "$RANGE"); do
     body="$(git -C "$REPO" show -s --format=%B "$sha")" || exit 3
     sess="$(oc_session_trailer "$body" | tr -d '[:space:]')"   # one-convention helper (Duty-6 lens F task 2)
     [ -n "$sess" ] || sess="(unsigned)"
@@ -119,14 +135,14 @@ if [ "$TRAILERS_ONLY" -eq 1 ]; then
   exit 0
 fi
 
-N=$(git -C "$REPO" rev-list --count "$RANGE" 2>/dev/null)
+N=$(git -C "$REPO" rev-list --count $FP_FLAG "$RANGE" 2>/dev/null)
 rc=$?
 [ $rc -eq 0 ] || { echo "bad range: $RANGE" >&2; exit 2; }   # lens C MED-4 (v0.4.79): header promises rc 2 for bad range syntax — code now honors it
 [ "$N" -gt 0 ] || { echo "empty range: $RANGE" >&2; exit 4; }
 
 TMP="$(mktemp)" || exit 3
 trap '_rc=$?; rm -f "$TMP"; oc_log_finish "$_rc"' EXIT
-for sha in $(git -C "$REPO" rev-list --reverse "$RANGE"); do
+for sha in $(git -C "$REPO" rev-list --reverse $FP_FLAG "$RANGE"); do
   body="$(git -C "$REPO" show -s --format=%B "$sha")" || exit 3
   sess="$(oc_session_trailer "$body" | tr -d '[:space:]')"   # one-convention helper (Duty-6 lens F task 2)
   [ -n "$sess" ] || sess="(unsigned)"

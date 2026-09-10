@@ -60,11 +60,16 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   okf "grep -q 'report two' '$T/skill-review-A-$day.md' && grep -q 'same-day overwrite' '$T/skill-review-A-$day.md'" "overwrite-noted"
   # I-5.1 CORPUS default (v0.4.127): unset OC_REVIEW_DIR must land in
   # reviews/<cycle>/reports/ under the skill repo, NOT /tmp root.
-  OC_REVIEW_DIR= bash "$ME" C "corpus-default probe" >/dev/null 2>&1; chk "corpus-default-rc" 0 $?
-  CORPUS_DIR="$(realpath "$_OC_DIR/..")/reviews/$(date -u +%Y%m%d)-cycle/reports"
-  [ -f "$CORPUS_DIR/skill-review-C-$day.md" ] && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - corpus-default-file" >&2; }
-  grep -qF "|C|$CORPUS_DIR/skill-review-C-$day.md|" "$CORPUS_DIR/skill-review-index.log" 2>/dev/null && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - corpus-default-index" >&2; }
-  rm -rf "$CORPUS_DIR"
+  # For selftest: run inside an isolated mock skill root to protect live reports.
+  MOCK_SKILL="$(mktemp -d -t oc-skill-mock.XXXXXX)"
+  mkdir -p "$MOCK_SKILL/tools" "$MOCK_SKILL/reviews/$(date -u +%Y%m%d)-cycle/reports"
+  cp "$ME" "$MOCK_SKILL/tools/oc-review-persist"
+  chmod +x "$MOCK_SKILL/tools/oc-review-persist"
+  OC_REVIEW_DIR= bash "$MOCK_SKILL/tools/oc-review-persist" C "corpus-default probe" >/dev/null 2>&1; chk "corpus-default-rc" 0 $?
+  MOCK_CORPUS="$MOCK_SKILL/reviews/$(date -u +%Y%m%d)-cycle/reports"
+  [ -f "$MOCK_CORPUS/skill-review-C-$day.md" ] && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - corpus-default-file" >&2; }
+  grep -qF "|C|$MOCK_CORPUS/skill-review-C-$day.md|" "$MOCK_CORPUS/skill-review-index.log" 2>/dev/null && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - corpus-default-index" >&2; }
+  rm -rf "$MOCK_SKILL"
   rm -rf "$T"
   echo "oc-review-persist selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]; exit $?

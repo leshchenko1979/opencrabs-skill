@@ -1115,8 +1115,10 @@ green_leg() { # $1=run id $2=built sha — one notify per contributing session
   range="${prev:-?}..${bsha}"
   local ATTRIB_RC=0 ATTRIB_OUT=""
   # E-F3 (v0.4.96, lens E): single projection shape — call oc-attrib --contributors directly,
-  # no private awk copy of the TSV projection (column drift in oc-attrib used to re-break fanout)
-  ATTRIB_OUT="$("$ATTRIB" --repo "$REPO_DIR" --deployed --ledger "$LEDGER" --contributors 2>/dev/null)" || ATTRIB_RC=$?
+  # no private awk copy of the TSV projection (column drift in oc-attrib used to re-break fanout).
+  # Duty-4 P-01 (v0.4.133): pass --first-parent so upstream merge ancestry is NOT traversed into
+  # historical foreign trailers (prevents falsely waking completed lanes on merge syncs).
+  ATTRIB_OUT="$("$ATTRIB" --repo "$REPO_DIR" --deployed --ledger "$LEDGER" --contributors --first-parent 2>/dev/null)" || ATTRIB_RC=$?
   rows="$ATTRIB_OUT"
   [ -n "$rows" ] || { jline contributors 3 "{\"range\":\"$range\",\"error\":\"attrib-fail-or-empty\"}"; die 3 "fanout: oc-attrib returned nothing for deployed range $range"; }
   sessions="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$/ {print $1}' | LC_ALL=C sort -u)"

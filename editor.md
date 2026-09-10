@@ -21,8 +21,7 @@ watches build runs, and NEVER touches binaries — all automation territory via
 The Editor also owns CI/workflow config on the fork: changing the shipped feature
 set = one-line commit to `quick-build-linux.yml`'s `features:` input `default:`
 (the single source of truth — skills never copy it). When a feature is COMPLETE
-(merged to fork `main`, shipped green, smoke test PASS — filing itself is
-AUTO-SHIP: law home SKILL.md §ISSUE ROUTING, PR SHIPMENT row), the Editor
+(merged to fork `main`, shipped green, smoke test PASS — filing procedure: `editor-upstream-pr.md`), the Editor
 additionally
 owns its upstream contribution — Phase 7: harvest fork-only commits → upstream
 PR → close the tracked FORK issues (procedure: `editor-upstream-pr.md`).
@@ -64,12 +63,12 @@ editor-facing duties:
 - Process/tooling ideas (IDEA:) → the TRIAGE lane's IDEA BOX intake —
   `session_notify` to the Triage session, strict format canonical at
   triage.md §Duty T1. You propose; Triage ACKs, stamps the ledger, and routes.
-- Tool PROBLEMS (QUIRK:) → the TRIAGE lane the SAME TURN it bites you:
-  `session_notify`, format `QUIRK: <tool> <observed behavior> BECAUSE <what
-  you expected>` + evidence (triage.md §Duty T2). Never retry-around silently,
-  never self-patch — Triage verifies and routes (CLI code → TOOLSMITH;
-  everything else → the owning editor). Fallback target if Triage is
-  unreachable: the supervisor lane (OC DEV HQ); never sit on a broken tool.
+- Tool PROBLEMS (QUIRK:) → the active **TOOLSMITH** lane directly (v0.4.130 Direct Dispatch Law; v0.4.133):
+  `session_notify` (target dynamically resolved via `oc-ledger roster` — never uuid from memory),
+  format `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>` + evidence.
+  Never retry-around silently, never self-patch — Toolsmith owns `tools/oc-*` tool code.
+  Core daemon bugs go directly to GitHub fork issues. Fallback target if Toolsmith
+  is unreachable: the supervisor lane (OC DEV HQ); never sit on a broken tool.
 - Reads: `tg_get_messages` in your own topic only; no `tg_search_global`, no
   cross-chat/list probing. Reactions allowed (owner consent signal).
 
@@ -566,8 +565,8 @@ right here (`opencrabs-ops` user unit).
    header): feature OK + one line of evidence + the oc-smoke-evidence
    IDENTITY-MATCH receipt. If the feature is COMPLETE,
    this same evidence goes to your forum topic as the filing notification —
-   under the AUTO-SHIP law (SKILL.md §ISSUE ROUTING, PR SHIPMENT row) smoke PASS itself files
-   the upstream PR; no owner wait.
+   under the PR SHIPMENT law (SKILL.md §ISSUE ROUTING, PR SHIPMENT row) smoke PASS
+   proceeds to upstream PR preparation; no owner wait.
 5. FAIL → FILE THE ISSUE FIRST (Phase 1 procedure: symptom + evidence — you
    found it, you file it). Then send raw evidence + the issue link to the
    supervisor lane (`session_notify`) — do NOT attribute, do NOT fix another
@@ -631,5 +630,5 @@ tools/oc-wt remove <task>
 Feature-complete → upstream PR filing (Phase 7) and PR lifecycle / blocker
 routing (Phase 7b) are split out of this file — single home:
 **`editor-upstream-pr.md`** (loaded on demand at the Phase 7 trigger, not on
-every reload). Triggers unchanged; the AUTO-SHIP law's procedure reference
+every reload). Triggers unchanged; the PR SHIPMENT law's procedure reference
 resolves there (law home: SKILL.md §ISSUE ROUTING, PR SHIPMENT row).

@@ -60,38 +60,17 @@ waiting for a poll.
 4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
    (convergence beats volume); duplicate ideas stamp ONE event, not N.
 
-## Duty T2 — QUIRK intake + fix routing (historical origin: ex supervisor.md Duty 7, second half — migrated v0.4.86; supervisor Duty 7 no longer carries numbered items)
+## Duty T2 — Tool anomaly audit & orphan check (updated v0.4.133 per Direct Dispatch Law)
 
-**Scope note (owner order 2026-09-10, fleet-directives §Direct dispatch):** Triage
-is an AUDITOR, not a relay hub — it does not forward work orders between lanes.
-QUIRK intake, verify-unclaimed, and orphan escalation are audits and stay here;
-work dispatch goes sender → resource-owner directly per that law.
+**Scope note (owner order 2026-09-10 ~02:4xZ & 14:3xZ, fleet-directives §Direct dispatch):** Triage
+is an AUDITOR, not a relay hub. Direct dispatch mandates that workers report tool anomalies directly
+to the active **TOOLSMITH** lane (`session_notify`; resolved dynamically via `oc-ledger roster`),
+while core anomalies are filed directly as GitHub fork issues. Triage does NOT relay quirk tickets.
 
-Any worker that hits a tool FAILURE, INCONSISTENCY, or QUIRK — non-zero rc out
-of documented register (see tools/RC-CONTRACT.md), hang/timeout, corrupt or
-empty output, flag that silently no-ops, log/journal gap, doc that contradicts
-tool behavior — MUST report it to THIS lane the same turn (`session_notify`;
-format `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>` +
-evidence: rc, log rows, journal lines). Do NOT silently retry around a broken
-tool and move on; do NOT self-patch skill tools — not even your own area's
-tool (cross-lane blast radius beats local convenience).
-
-On receipt:
-1. Same-turn ACK, then stamp the ledger (`idea` event — prefix distinguishes
-   idea/quirk/fail).
-2. VERIFY the evidence (poll triple-check: disk truth / live-log evidence /
-   coherence with the register). A claim resting on truncated output gets a
-   fresh targeted check BEFORE any routing decision.
-3. ROUTE the fix to the right executor — skill `tools/` CLI code goes to the
-   TOOLSMITH lane (OC DEV TOOLSMITH, v0.4.87 carve-out); every other area to
-   the editor lane that owns it (by TOPIC name, never uuid-from-memory; find
-   either via `session_search`), briefed via `session_notify` with the quirk
-   report + evidence attached.
-4. NO existing lane covers the area → create a NEW editor (Duty T3).
-5. Routing verdict stamps `idea-verdict` ROUTED (target topic named); the fix
-   itself ships through the normal editor flow (worktree, CI gate, ledger
-   discipline) — this lane documents the report, it does not bypass Phase-7.
-   REJECT stays possible: reason journaled.
+Triage's responsibility under T2 is AUDITING:
+1. Periodic ledger sweeps for open/unclaimed tool quirks or orphaned dispatches.
+2. Escalating stale unhandled quirks directly to the active Toolsmith or owning editor.
+3. Verify-unclaimed checks before new editor assignment (audit role, not relay).
 
 ## Duty T3 — Create a new editor (standing authority, transferred from HQ at v0.4.86)
 
@@ -128,7 +107,7 @@ per that section. Owner veto overrides retroactively, as with rulings.
   to board topic 30220 — one line even on zero-change days (heartbeat).
   Standing order (fleet-directives.md §Upstream-merge cadence, HARVEST LAW):
   when census shows ≥3 Tier-1 candidates with green tests, commission probes
-  and present ready PRs on PASS for automatic filing under the AUTO-SHIP law
+  and present ready PRs on PASS for filing under the PR SHIPMENT law
   (SKILL.md §ISSUE ROUTING, PR SHIPMENT row — single home) —
   several open upstream PRs may run concurrently
   (fleet-directives.md §Upstream-merge cadence is canonical; PR-freeze law
@@ -139,7 +118,7 @@ per that section. Owner veto overrides retroactively, as with rulings.
   law). FILING: file as soon as tests are green AND the
   behavioral smoke PASSES — parallel PRs allowed; NO holding state exists.
   On probe commission the editor fires the smoke immediately; probe PASS
-  files the ready PR — NO owner word needed (AUTO-SHIP law).
+  files the ready PR — NO owner wait needed (PR SHIPMENT law).
   PR filing follows the full Upstream PR law.
 - **Upstream PR-state patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** on each harvest census,

@@ -61,6 +61,14 @@ set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 # shellcheck source=lib/oc-notify.sh
 source "$SKILL_DIR/tools/lib/oc-notify.sh"
+_OC_LIB="$SKILL_DIR/tools/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then
+  source "$_OC_LIB"
+  oc_log_init "oc-notify-fanout" "$@"
+else
+  oc_log_finish() { :; }
+fi
+trap 'oc_log_finish $?' EXIT
 LEDGER="${OC_FANOUT_LEDGER:-$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
 PROFILE="${OC_NOTIFY_PROFILE:-ops}"
 SENDER="oc-notify-fanout"
@@ -72,7 +80,7 @@ if [ "${1:-}" = "--selftest" ]; then
   # notify binary that records sends; OC_FANOUT_LEDGER at a temp ledger).
   # No real DB, no real sends, no real ledger touched.
   T="$(mktemp -d /tmp/fanout-selftest.XXXXXX)"
-  trap 'rm -rf "$T"' EXIT
+  trap 'rm -rf "$T"; oc_log_finish $?' EXIT
   L1="11111111-1111-4111-8111-111111111111"  # live + bound to forum chat
   L2="22222222-2222-4222-8222-222222222222"  # live + bound ELSEWHERE (leak path)
   L3="33333333-3333-4333-8333-333333333333"  # live + UNBOUND (leak path)

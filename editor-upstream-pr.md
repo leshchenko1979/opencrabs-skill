@@ -7,16 +7,14 @@
 ## Phase 7 — Feature complete → upstream PR
 
 Trigger: the feature is COMPLETE — merged into fork `main`, shipped inside a
-green swapped build, smoke test PASS (v0.4.104 four-leg rubric). Under the
-AUTO-SHIP law (SKILL.md §ISSUE ROUTING, PR SHIPMENT row) smoke PASS itself
-files the PR — owner approval is not a gate; the owner is notified
-AFTER filing in the forum topic. Development-time contact stays issues-only;
+green swapped build, smoke test PASS (v0.4.104 four-leg rubric). With tests green
+and smoke confirmed, Editor prepares the harvested PR branch, posts the smoke
+evidence, and files the upstream PR. Development-time contact stays issues-only;
 this PR is the ONE sanctioned exception (completed features only).
 
 ```bash
-# 0. FILING NOTICE (AUTO-SHIP law, SKILL.md §ISSUE ROUTING): post the smoke-test EVIDENCE +
-#    the filing report in YOUR forum topic (what you drove, what you saw,
-#    run id + built sha + PR URL) — AFTER the PR is filed, not before.
+# 0. FILING NOTICE: post the smoke-test EVIDENCE + the filing report in
+#    YOUR forum topic (what you drove, what you saw, run id + built sha + PR URL).
 
 # 1. list fork-only commits, pick THIS feature's (trailers + touched files)
 #    — mechanized: `tools/oc-attrib --range <old>..<new> --contributors` (3-col TSV:
@@ -178,12 +176,6 @@ Rules:
   head alive).
 
 ## Phase 7b — PR lifecycle (monitor & unblock, v0.4.0)
-
-> **SPLIT NOTE (lens B-16, v0.4.90):** Phase 7 + 7b (~30% of this file) are
-> the designated split candidate → `editor-upstream-pr.md` when the next
-> major reorganization runs; the split is DISCLOSED here, not executed
-> (split-cost judgment = lens G: phase ordering still coherent, no forced
-> mid-procedure loads). Standing law stays in this file.
 
 Every OPEN upstream PR has an owning editor: the Session-Id trailers of its
 harvested commits. When a PR is not mergeable, route by BLOCKER CLASS:
