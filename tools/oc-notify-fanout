@@ -23,12 +23,19 @@
 #      `session notify` CLI has no quiet/mode flag (verified 2026-09-09) —
 #      sends are immediate with the standard interrupt-retry (lib contract).
 #      Flagged to HQ as binary gap (upstream-harvest candidate).
+#   6. FORUM-SCOPE GUARD (owner order 2026-09-10 03:16Z): ALL opencrabs-dev
+#      work — including skill-change fanout — happens ONLY in the opencrabs-dev
+#      forum chat. A target session is sendable only when the profile session
+#      DB binds it (session_bindings.chat_id) to the forum chat. Targets bound
+#      elsewhere or unbound are skipped with a `SKIP <uuid> <role> SCOPE(...)`
+#      receipt BEFORE any send. Override for drills: --forum-chat <chat_id>
+#      (or OC_FANOUT_FORUM_CHAT). Default: -1003936827469.
 #
 # Usage:
 #   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
 #     [--text "what changed ..."] [--text-file /path/brief.md] \
 #     [--roles editor,hq-supervisor] [--exclude "40695,uuid8char"] \
-#     [--dry-run] [--no-stamp] [--include-self]
+#     [--forum-chat <chat_id>] [--dry-run] [--no-stamp] [--include-self]
 #
 #   Default brief (when --text/--text-file omitted) is the canonical
 #   skill-change template with what="" — pass --text for the body.
@@ -47,15 +54,93 @@ PROFILE="${OC_NOTIFY_PROFILE:-ops}"
 SENDER="oc-notify-fanout"
 
 die() { echo "oc-notify-fanout: $*" >&2; exit "${2:-2}"; }
-[ "${1:-}" != "--selftest" ] || { exec bash "$0"; } # selftest handled below
+if [ "${1:-}" = "--selftest" ]; then
+  # SELFTEST — forum-scope guard + law-1 placeholder guard, fully fixture-based
+  # (OC_NOTIFY_DB points at a throwaway sqlite DB; OC_NOTIFY_BIN at a fake
+  # notify binary that records sends; OC_FANOUT_LEDGER at a temp ledger).
+  # No real DB, no real sends, no real ledger touched.
+  T="$(mktemp -d /tmp/fanout-selftest.XXXXXX)"
+  trap 'rm -rf "$T"' EXIT
+  L1="11111111-1111-4111-8111-111111111111"  # live + bound to forum chat
+  L2="22222222-2222-4222-8222-222222222222"  # live + bound ELSEWHERE (leak path)
+  L3="33333333-3333-4333-8333-333333333333"  # live + UNBOUND (leak path)
+  L4="44444444-4444-4444-8444-444444444444"  # malformed shape
+  L5="00000000-0000-0000-0000-000000000000"  # all-zero (n=2167 class)
+  FORUM="-1999999999"
+  sqlite3 "$T/db.sqlite" <<SQL
+CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, archived_at INTEGER);
+CREATE TABLE session_bindings (session_id TEXT PRIMARY KEY, channel TEXT, chat_id TEXT, thread_id INTEGER, updated_at INTEGER DEFAULT 0);
+INSERT INTO sessions VALUES ('$L1','lane1',NULL),('$L2','outside',NULL),('$L3','unbound',NULL),('$L4','bad',NULL),('$L5','zero',NULL);
+INSERT INTO session_bindings VALUES ('$L1','telegram','$FORUM',123,0);
+INSERT INTO session_bindings VALUES ('$L2','telegram','-1000000000',1,0);
+SQL
+  cat > "$T/fake-notify" <<'EOF'
+#!/usr/bin/env bash
+echo "sent: $*" >> "$FAKE_NOTIFY_LOG"
+echo "notification id 99999999-9999-4999-8999-999999999999"
+exit 0
+EOF
+  chmod +x "$T/fake-notify"
+  touch "$T/fake-notify-log"
+  LEDG="$T/ledger.json"
+  # Fixture roster: 5 workers, one per defect class (L2/L3 are the leak paths
+  # the guard exists to close). Roles/topics are irrelevant to the guard.
+  cat > "$LEDG" <<JSON
+{"workers": [
+  {"uuid": "$L1", "role": "editor", "topic_id": 1},
+  {"uuid": "$L2", "role": "editor", "topic_id": 2},
+  {"uuid": "$L3", "role": "editor", "topic_id": 3},
+  {"uuid": "$L4", "role": "editor", "topic_id": 4},
+  {"uuid": "$L5", "role": "editor", "topic_id": 5}
+], "events": []}
+JSON
+
+  run_fanout() { # args passed through; asserts rc 0 and returns receipts
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 \
+      bash "$0" --title "T" --text "brief {{UUID}}" --no-stamp "$@" 2>&1
+  }
+  F=0; P=0
+  chk() { if [ "$1" = 0 ]; then P=$((P+1)); else F=$((F+1)); echo "FAIL: $2"; fi }
+
+  # 1. Default roster (all 4 non-self workers): ONLY L1 sendable.
+  out="$(run_fanout)"
+  echo "$out" | grep -q "SENT $L1" && chk 0 sent-in-scope || chk 1 sent-in-scope
+  echo "$out" | grep -q "SKIP $L2 .*SCOPE" && chk 0 skip-bound-elsewhere || chk 1 skip-bound-elsewhere
+  echo "$out" | grep -q "SKIP $L3 .*SCOPE" && chk 0 skip-unbound || chk 1 skip-unbound
+  echo "$out" | grep -q "SKIP $L4" && chk 0 skip-malformed || chk 1 skip-malformed
+  echo "$out" | grep -q "SKIP $L5" && chk 0 skip-zero-seg || chk 1 skip-zero-seg
+  grep -qF "$L2" "$T/fake-notify-log" && chk 1 leak-bound-elsewhere || chk 0 leak-bound-elsewhere
+  grep -qF "$L3" "$T/fake-notify-log" && chk 1 leak-unbound || chk 0 leak-unbound
+
+  # 2. Law-1 guard still fires: a brief with an unresolvable token aborts.
+  out="$(OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$LEDG" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 \
+    bash "$0" --title T --text "broken {{NOPE}} token" --no-stamp 2>&1)" || true
+  echo "$out" | grep -q "ABORT.*placeholder" && chk 0 law1-placeholder-abort || chk 1 law1-placeholder-abort
+
+  # 3. Dry-run behaves identically for scope (no send attempted).
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  out="$(run_fanout --dry-run)"
+  echo "$out" | grep -q "DRY $L1" && chk 0 dry-in-scope || chk 1 dry-in-scope
+  echo "$out" | grep -q "SKIP $L3 .*SCOPE" && chk 0 dry-scope-skip || chk 1 dry-scope-skip
+  [ -s "$T/fake-notify-log" ] && chk 1 dry-no-send || chk 0 dry-no-send
+
+  echo "oc-notify-fanout selftest: PASS=$P FAIL=$F"
+  [ "$F" -eq 0 ]
+  exit $?
+fi
 
 title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0
+forum_chat="${OC_FANOUT_FORUM_CHAT:--1003936827469}"
 while [ $# -gt 0 ]; do case "$1" in
   --title) title="${2:-}"; shift 2 ;;
   --text) text="${2:-}"; shift 2 ;;
   --text-file) text_file="${2:-}"; shift 2 ;;
   --roles) roles="${2:-}"; shift 2 ;;
   --exclude) excludes="${2:-}"; shift 2 ;;
+  --forum-chat) forum_chat="${2:-}"; shift 2 ;;
   --dry-run) dry=1; shift ;;
   --no-stamp) stamp=0; shift ;;
   --include-self) include_self=1; shift ;;
@@ -69,6 +154,7 @@ version="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL_DIR/SKILL.md" | head -1)"
 [ -f "$LEDGER" ] || die 3 "roster missing: $LEDGER"
 bin="$(oc_notify_resolve_bin)" || die "notify binary unresolvable (set OC_NOTIFY_BIN)"
 LIVE_SESSIONS="$(mktemp /tmp/fanout-sessions.XXXXXX)"
+IN_SCOPE_SESSIONS="$(mktemp /tmp/fanout-scope.XXXXXX)"
 # FULL-ID roster from the profile session DB (READ-ONLY, ~0s) — v0.4.129:
 # session list prints only 8-char prefixes and session get costs ~37s/call;
 # the DB is the canonical full-id source (CLI list ≡ archived_at IS NULL AND
@@ -77,6 +163,12 @@ LIVE_SESSIONS="$(mktemp /tmp/fanout-sessions.XXXXXX)"
 sqlite3 "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
   "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
   > "$LIVE_SESSIONS" 2>/dev/null || die 3 "session DB unreadable — cannot validate targets"
+# FORUM-SCOPE roster (law 6): sessions bound to the opencrabs-dev forum chat.
+# One query, same read-only DB; empty roster = nothing is sendable (safe).
+sqlite3 "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
+  "SELECT b.session_id FROM session_bindings b JOIN sessions s ON s.id = b.session_id
+   WHERE s.archived_at IS NULL AND b.chat_id = '$forum_chat';" \
+  > "$IN_SCOPE_SESSIONS" 2>/dev/null || die 3 "session DB unreadable — cannot resolve forum scope"
 
 if [ -n "$text_file" ]; then
   [ -f "$text_file" ] || die "--text-file missing: $text_file"
@@ -128,6 +220,13 @@ while IFS=$'\t' read -r uuid role topic; do
   fi
   if reason="$(validate_target "$uuid")"; then :; else
     receipts+="SKIP ${uuid} ${role} ${reason}"$'\n'; skipped=$((skipped+1)); continue
+  fi
+  # LAW 6 — forum-scope guard: the session must be bound to the opencrabs-dev
+  # forum chat. Unbound or bound-elsewhere targets are never woken (an unbound
+  # session's notify lands wherever its default route points — a DM, another
+  # group — which is exactly the leak this guard closes).
+  if ! grep -qxF "$uuid" "$IN_SCOPE_SESSIONS" 2>/dev/null; then
+    receipts+="SKIP ${uuid} ${role} SCOPE(not-bound-to-forum-${forum_chat})"$'\n'; skipped=$((skipped+1)); continue
   fi
   brief="${text}"
   brief="${brief//\{\{UUID\}\}/${uuid}}"
