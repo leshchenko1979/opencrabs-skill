@@ -22,7 +22,7 @@ on census evidence + owner word (supervisor.md step 7).
      first finder gets attribution); SEDIMENT — stale layers
      that survive because adding feels safe and removing feels risky
      (docs-lens vocabulary reference:
-     `skills/writing-great-skills/SKILL.md`). PLUS the churn-drift checklist, EVERY
+     `skills/writing-for-agents/SKILL.md`). PLUS the churn-drift checklist, EVERY
      lens-A pass: (a) ONE CONCEPT = ONE NAME — sweep for synonyms of the same
      gate/tool/artifact; (b) GLOSSARY CONFORMANCE — every load-bearing term
      in a rule must resolve in SKILL.md §Glossary or §Test ontology;
@@ -44,7 +44,7 @@ on census evidence + owner word (supervisor.md step 7).
      procedures), prose that should be tables, dead references, duties
      migrating across Supervisor/Editor scope lines (Compiler archived).
      PLUS the NO-OP TEST sentence by sentence (docs-lens vocabulary
-     reference: `skills/writing-great-skills/SKILL.md`) — a line the model
+     reference: `skills/writing-for-agents/SKILL.md`) — a line the model
      already obeys by default is load paid for nothing (does it change
      behavior vs the default? the fix is a stronger term, not a longer
      sentence); reference that belongs behind a context pointer to a linked
@@ -53,6 +53,24 @@ on census evidence + owner word (supervisor.md step 7).
      reference, external reference); and SPRAWL — a file too long even when
      every line is live and unique (cure: disclose reference, then split by
      branch — not word-trimming).
+     PLUS the CACHE test (vocabulary refresh 2026-09-10, upstream
+     writing-for-agents f054def): the environment is a source of truth too
+     (config files, scripts, directory layout, --help) and a document that
+     restates it is a cache — a copy of a lookup earning its load only when
+     the lookup is expensive; cache what the agent cannot find by looking
+     (the unwritten convention, the reason behind a choice, the gotcha no
+     config confesses), leave one-file/one-command lookups to the
+     environment where they cannot go stale.
+     PLUS the NEGATION test (vocabulary refresh 2026-09-10): steering by
+     prohibition drags the forbidden behaviour into context and makes it
+     more available (the ban half-reads as an instruction to do the thing);
+     flag prohibitions that restate a positive target already present, and
+     require the positive phrasing ("write one-line comments", not "don't
+     write essays") — a prohibition earns its place only as a hard
+     guardrail phrased positively alongside.
+     PLUS the ONE-TRIGGER-PER-BRANCH pointer test: a context pointer's
+     branches are the distinct cases that reach the material; synonyms
+     renaming one branch are one branch written twice — collapse them.
    - **Reviewer G — ROLE-FILE STRUCTURE:** the ORGANIZATION of EACH role file
      — the role files (re-derived from `ls *.md` at spawn time; count not
      hardcoded — lens G-F8 v0.4.89) plus every
