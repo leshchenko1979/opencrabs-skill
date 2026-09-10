@@ -54,3 +54,25 @@ Fleet conventions:
 | oc-wt | 0 | 2 | 0 ok / 3 path-exists-dirty / 4 index-failed / 5 repo-branch-missing / 6 behind-base |
 | oc-rebase-safety | 0 | 2 | overlap: 0 zero-overlap (gate-skip permitted per re-gate split law n=2259) / 1 overlap-found (gate-required, intersection on stdout) / 3 git-fail. audit: 0 clean / 1 losses (DROPPED or CHANGED rows on stdout) / 3 git-fail. Read-only plumbing; exit 1 is a VERDICT (house rule, oc-upstream-delta class) |
 | oc-ship-chain | 0 | 4 | 0 SWAPPED (chain complete: gate→issue-log→ff-merge→ship→swap, one chain-id) / 3 pre-flight (dirty or missing fork checkout) / 4 GATE-RED or CARRIER-RED (structured verdict; lane owns the fix round) / 5 NON-FF (lane rebases via oc-rebase-safety then re-runs) / 6 dispatch/poll infra. Scope ends at SWAPPED — smoke + owner approval stay outside. Never fires session notifies (no-self-ping law v0.4.126) |
+
+## Unified tools log (moved from SKILL.md v0.4.131)
+
+Every tool in `tools/` sources `tools/lib/oc-log.sh` and appends ONE JSONL line
+on exit — the fleet-analysis aggregate (per-tool journals remain the per-run
+record).
+
+- **Path:** `/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log` (override with `OC_TOOLS_LOG`).
+- **Schema:** `{"ts":"…Z","tool":"oc-…","args":"…","exit":N,"secs":N.N,"extra":{}}` — tools add fields via `oc_log_extra key value`.
+- **Suppression:** `--selftest` in argv or `OC_TOOLS_NOLOG=1` (the battery exports it — synthetic runs never pollute the log). Missing `jq` → no write; logging NEVER changes the host tool's exit code.
+
+Recipes (verified live):
+
+```bash
+# failing invocations (note: rc≠0 is often a VERDICT, not a crash —
+# oc-skew-scan 1 = skew found, oc-ping-proof 1 = SILENT; filter .tool first)
+jq -r 'select(.exit!=0) | [.ts,.tool,.exit,.args] | @tsv' tools.log
+# usage per tool
+jq -r '.tool' tools.log | sort | uniq -c | sort -rn
+# newest line
+tail -1 tools.log | jq -c .
+```
