@@ -5,12 +5,18 @@
 #
 # Usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]
 #   Compares the version a lane claimed at task-claim time against the LIVE
-#   SKILL.md on disk (editor.md §Mid-cycle skill drift step 1-2). On drift,
+#   SKILL.md (editor.md §Mid-cycle skill drift step 1-2). On drift,
 #   --ack delegates the oc-ledger ack so the re-read is mechanically recorded.
+#
+# Skill-dir resolution (v0.4.130, ruling n=2369): --skill-dir flag >
+# OC_SKILL_DIR env > CANONICAL profile copy
+# ($HOME/.opencrabs/profiles/ops/skills/opencrabs-dev). The invoking script's
+# own location is NEVER resolved — worktree copies of the skill repo must not
+# self-resolve (produced contradicting drift verdicts same-day, 2026-09-10).
 #
 # Exit: 0 no-drift (proceed under current rules) · 1 DRIFT (re-read required;
 #       ack stamped when --ack) · 2 usage · 3 ledger/skill-dir failure.
-# Env:  OC_ACTOR, OC_LEDGER, OC_SKILL_DIR (default: this skill).
+# Env:  OC_ACTOR, OC_LEDGER, OC_SKILL_DIR (overrides canonical default).
 # =============================================================================
 set -u
 set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
@@ -88,6 +94,21 @@ EOF
   bash "$ME" u1 0.4.57 --skill-dir "$T/skill" >/dev/null 2>&1; chk "drift-rc1" 1 $?
   bash "$ME" u1 0.4 --skill-dir "$T/skill" >/dev/null 2>&1; chk "bad-shape-rc2" 2 $?
   bash "$ME" u1 --skill-dir "$T/skill" >/dev/null 2>&1; chk "usage-rc2" 2 $?
+  # v0.4.130 canonical-resolve (ruling n=2369): explicit overrides still win.
+  chk "env-override-respected" 0 "$(OC_SKILL_DIR="$T/skill" bash "$ME" u1 0.4.58 >/dev/null 2>&1; echo $?)"
+  chk "env-override-drift-rc1" 1 "$(OC_SKILL_DIR="$T/skill" bash "$ME" u1 0.4.57 >/dev/null 2>&1; echo $?)"
+  # canonical default (NO --skill-dir, NO env): resolves the CANONICAL profile
+  # copy, never the invoking script's location. Invoking the FIXTURE copy with
+  # no overrides must read the canonical SKILL.md version, not the fixture's.
+  CANON_VER="$(grep -E '^version:' "$HOME/.opencrabs/profiles/ops/skills/opencrabs-dev/SKILL.md" 2>/dev/null | head -1 | awk '{print $2}')"
+  if [ -n "$CANON_VER" ]; then
+    # fixture claims 0.4.57 — vs canonical (0.4.129+) that is DRIFT rc1;
+    # canonical-resolve proven by the verdict depending on $CANON_VER, not the
+    # fixture's own 0.4.58 (self-resolve would return rc0 here).
+    chk "canonical-default-not-self-resolved" 1 "$(bash "$ME" u1 0.4.57 >/dev/null 2>&1; echo $?)"
+  else
+    bad "canonical-default: cannot read canonical SKILL.md (skipped live check)"
+  fi
   # --ack: drift case delegates to oc-ledger ack against fixture ledger
   OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.57 --ack --skill-dir "$T/skill" >/dev/null 2>&1
   chk "drift-ack-stamped" "0.4.58" "$(jq -r '.workers[] | select(.uuid=="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") | .last_acked.version // "none"' "$T/state-ledger.json")"
