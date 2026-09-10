@@ -1,3 +1,7 @@
+## v0.4.134 (2026-09-10, owner-approved front matter globs)
+- METADATA: added `globs` coverage for the OpenCrabs source checkout, editor worktrees, and profile-scoped opencrabs-dev skill/state/project paths.
+- Battery before bump: 158 PASS / 0 FAIL.
+
 # opencrabs-dev — release history (provenance)
 
 ## Imported pre-v0.4.60 dump — one-line provenance records
@@ -646,4 +650,3 @@ Owner ruling was a suggest_options button pick (option 0: "Agreed - codify the s
 - DIRECT DISPATCH & ONTOLOGY: Tool anomaly routing codified per Direct Dispatch Law (owner order 14:3xZ & Finding BS-01) — tool problems in `tools/oc-*` route directly to the active TOOLSMITH role dynamically (`oc-ledger roster`), bypassing Triage relay hops; core daemon issues file directly to GitHub fork issues. Triage role refined to AUDITOR. Dev crons strictly restricted to topic 30220 (Duty-4 P-02).
 - DOCS CLEANUP: Struck `AUTO-SHIP` phrasing across all skill files (SKILL.md, editor.md, editor-upstream-pr.md, fleet-directives.md, triage.md); removed unpurged split draft notes; streamlined supervisor.md Duty 7.
 - Battery: 158 PASS / 0 FAIL across all tool suites.
-

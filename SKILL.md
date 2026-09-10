@@ -8,7 +8,13 @@ description: >
   TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
-version: 0.4.133
+globs:
+  - ~/opencrabs/**
+  - ~/oc-wt-*/**
+  - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
+  - ~/.opencrabs/profiles/*/opencrabs-dev/**
+  - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
+version: 0.4.134
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
