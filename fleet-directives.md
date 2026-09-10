@@ -3,7 +3,7 @@
 **Owns:** binding owner directives for opencrabs-dev work (sync policy, upstream PR law, builds/carriers, cargo prohibition, telegram surface law, tool logging, gates, editors, triage, cadence). Re-homed here from ops AGENTS.md/MEMORY.md per owner order 2026-09-02. Where a ruling's full text already lives canonically in another skill file, this file carries only a pointer — one concept, one home.
 
 **Thematic index** (lens B-17/G-F9 v0.4.90 — file is flat; jump via section name). **[LANE] tag (v0.4.95):** sections every worker MUST read in full at spawn/compaction reload (editor.md/triage.md/toolsmith.md/supervisor.md RELOAD LAW v0.4.95). EXCEPTION (v0.4.96, lens B-F1): the SUPERVISOR re-reads THIS ENTIRE FILE IN FULL (~54 kB and growing — exact size varies per cycle; it owns and rules on the directives; the other three roles may use the thematic-index minimum for non-[LANE] sections):
-**Remotes & sync** (remotes, sync policy) · **Merge-resolution shape** (upstream-wins-wholesale, overlay disposition) · **Upstream-merge cadence · HARVEST LAW · NO-HOLD** (daily patrol, filing gate, port-work ownership) · **Upstream** (issue filings, PR base-Lint, cross-fork PR, PR naming) · **Builds & ships** (S3/oc-deploy, swap-head signature, swap-sha coverage, features-compat gate, hotfix REDs, no auto-rollback) · **Process & verification** (stage-entry consent, attribution guard, inherited-claim pillars, truncated-output rule, post-compaction reload, what-now/next) · **Channels** (telegram surface law, telegram_send addressing/TO-BE, post-swap notify, cross-lane delivery cadence, tool logging) · **Lanes** (creating new editors, tool-problem reports/Triage, cadence boundary, parked issues, brain-scrub, discussion links, every-turn verdicts, rule-text provenance, daemon no-reap).
+**Remotes & sync** (remotes, sync policy) · **Merge-resolution shape** (upstream-wins-wholesale, overlay disposition) · **Upstream-merge cadence · HARVEST LAW · NO-HOLD** (daily patrol, filing gate, port-work ownership) · **Upstream** (issue filings, PR base-Lint, cross-fork PR, PR naming) · **Builds & ships** (S3/oc-deploy, swap-head signature, swap-sha coverage, features-compat gate, hotfix REDs, no auto-rollback) · **Process & verification** (stage-entry consent, attribution guard, inherited-claim pillars, truncated-output rule, post-compaction reload, what-now/next) · **Channels** (telegram surface law, telegram_send addressing law + TO-BE appendix (outside reload path), post-swap notify, cross-lane delivery cadence, tool logging) · **Lanes** (creating new editors, tool-problem reports/Triage, cadence boundary, parked issues, brain-scrub, discussion links, every-turn verdicts, rule-text provenance, daemon no-reap).
 
 <!-- source: AGENTS block1 (remotes/upstream/source-work/impl-comment) -->
 ## Remotes & sync
@@ -16,7 +16,7 @@
 
 ## Upstream-merge cadence · HARVEST LAW · NO-HOLD
 
-(owner 2026-09-02, "yes, add this rule"): two tiers on top of the fork-main sync policy above — (1) **Pre-PR merge is MANDATORY**: any long-lived branch (merge branches, PR chains) merges `adolfousier/main` immediately before opening a PR, so upstream review sees only our delta, never stale-base noise; (2) **Event-driven merges**: same-day or next-day merge when upstream lands commits touching files that carry fork `port(fork→merge)` deltas (watch `channels/`, `brain/agent/service/` first). NOT "before every push" — each merge still costs a fidelity pass + disposition + its own CI. Rationale: round 2 of the 2026-09-02 merge went RED with 29 errors, all seams where big-bang fork-era resolution fought upstream-new files — error count scales with diff size, so frequent small merges keep the diff readable. Drift detection stays with cron `upstream-shift-watch` (4h `ls-remote`; same-day drift is real: `8846de72` → `72b11629` within the merge day). **HARVEST LAW (owner 2026-09-08, “Go” on daily enforcement, v0.4.97):** the patrol is DAILY — cron `harvest-patrol-daily` (03:00Z) runs `oc-upstream-delta`, posts the tiered backlog census (Tier-1/2/3 + counter line: fork-only commit count + open upstream PR count) to board topic 30220; the counter line is also appended to every `upstream-shift-watch` report. Standing order (owner override 2026-09-08 13:51Z): file PRs AS SOON AS tests are green AND smokes are confirmed (v0.4.104 behavioral rubric) — no serial-PR waiting; the previous one-PR-at-a-time rule is RETIRED (owner: “this law is incorrect, Adolfo never told this”). NO-HOLD law (owner override 2026-09-08 15:2xZ, topic 42487: “Amend your rules - no holding, just instruct the editor to fire smoke”; AMENDED same day 21:44Z owner: “1 - no, my go before pr”): there is NO holding STATE — no waiting-period, no serial-PR queue, no parked batch. Editor fires the behavioral smoke (v0.4.104 rubric) IMMEDIATELY on probe commission. **PR filing is AUTOMATIC (owner order 2026-09-09 ~10:4xZ "the owner should not approve shipping, it should be automatic") — the previous owner-go-before-filing gate ("my go before pr", 2026-09-08 21:44Z) is RETIRED for BOTH fork ship chains and upstream PR filing.** Smoke PASS (v0.4.104 rubric, four legs) → file/ship immediately, no owner word needed; the owner is notified AFTER the act. Gates that survive: all mechanical CI/gate legs, the v0.4.104 smoke rubric, post-swap rollback-is-owner's-call. The smoke-readiness hold is dead; the filing hold is now dead too. Standing autonomous trigger: census shows ≥3 Tier-1 candidates with green tests → Triage commissions probes, **FILES ready PRs automatically on PASS (AUTO-SHIP law, smoke-PASS = file; batch filing acceptable; several open upstream PRs concurrently once filed). Zero-change days still post a one-line census (heartbeat = patrol alive).
+(owner 2026-09-02, "yes, add this rule"): two tiers on top of the fork-main sync policy above — (1) **Pre-PR merge is MANDATORY**: any long-lived branch (merge branches, PR chains) merges `adolfousier/main` immediately before opening a PR, so upstream review sees only our delta, never stale-base noise; (2) **Event-driven merges**: same-day or next-day merge when upstream lands commits touching files that carry fork `port(fork→merge)` deltas (watch `channels/`, `brain/agent/service/` first). NOT "before every push" — each merge still costs a fidelity pass + disposition + its own CI. Rationale: round 2 of the 2026-09-02 merge went RED with 29 errors, all seams where big-bang fork-era resolution fought upstream-new files — error count scales with diff size, so frequent small merges keep the diff readable. Drift detection stays with cron `upstream-shift-watch` (4h `ls-remote`; same-day drift is real: `8846de72` → `72b11629` within the merge day). **HARVEST LAW (owner 2026-09-08, “Go” on daily enforcement, v0.4.97):** the patrol is DAILY — cron `harvest-patrol-daily` (03:00Z) runs `oc-upstream-delta`, posts the tiered backlog census (Tier-1/2/3 + counter line: fork-only commit count + open upstream PR count) to board topic 30220; the counter line is also appended to every `upstream-shift-watch` report. Standing order (owner override 2026-09-08 13:51Z): file PRs AS SOON AS tests are green AND smokes are confirmed (v0.4.104 behavioral rubric) — no serial-PR waiting; the previous one-PR-at-a-time rule is RETIRED (owner: “this law is incorrect, Adolfo never told this”). NO-HOLD law (owner override 2026-09-08 15:2xZ, topic 42487): there is NO holding STATE — no waiting-period, no serial-PR queue, no parked batch. Editor fires the behavioral smoke (v0.4.104 rubric) IMMEDIATELY on probe commission. **PR filing is AUTOMATIC — AUTO-SHIP law, single home SKILL.md §ISSUE ROUTING (PR SHIPMENT row); the previous owner-go-before-filing gate is RETIRED for BOTH fork ship chains and upstream PR filing.** Smoke PASS (v0.4.104 rubric, four legs) → file/ship immediately, no owner word needed; the owner is notified AFTER the act. Gates that survive: all mechanical CI/gate legs, the v0.4.104 smoke rubric, post-swap rollback-is-owner's-call. Standing autonomous trigger: census shows ≥3 Tier-1 candidates with green tests → Triage commissions probes, **FILES ready PRs automatically on PASS (AUTO-SHIP law; batch filing acceptable; several open upstream PRs concurrently once filed). Zero-change days still post a one-line census (heartbeat = patrol alive).
 
 **Ledger hygiene laws (lens-H cycle-2 codifications, v0.4.127):**
 - **H-3 fork-skill push remote:** the skill repo's canonical push remote is `mirror2` (git@github.com:leshchenko1979/opencrabs-skill.git). A push naming bare `leshchenko1979` (no remote of that name) fails - n=2125 class. SKILL.md's mirror sentence is descriptive; this row is the operational name.
@@ -104,7 +104,7 @@ Every PR this fleet opens carries a type prefix in the title so upstream release
 - `fix:` (or `fix(scope):`) — bug fix; corrects broken behavior
 - `feat:` (or `feat(scope):`) — new capability or behavior change
 - `chore:` — tooling/CI/docs/deps; zero user-visible behavior change
-Applies to upstream (adolfousier/opencrabs) AND fork PRs. New branches mirror the type in the slug: `leshchenko1979/fix/<slug>` / `feat/<slug>` / `chore/<slug>` (existing branches untouched). Retro-check 2026-08-30: upstream PR #1265 already conforms (`fix(plan): …`). Procedure detail: `/opencrabs-dev` skill, editor.md Phase 7.
+Applies to upstream (adolfousier/opencrabs) AND fork PRs. New branches mirror the type in the slug: `leshchenko1979/fix/<slug>` / `feat/<slug>` / `chore/<slug>` (existing branches untouched). Retro-check 2026-08-30: upstream PR #1265 already conforms (`fix(plan): …`). Procedure detail: `/opencrabs-dev` skill, editor-upstream-pr.md Phase 7.
 ## CI-wait discipline + actor attribution (owner 2026-08-30 — fix batch)
 
 Canonical: editor.md §CI-wait discipline & actor attribution (items 1–16: gh-watch ban → oc-prchecks, `OC_ACTOR` export on every oc-* call, pr-checks concurrency group, terminal-state gating, rc-at-top-level, waiter self-checks, checkout-ref-is-terminal-truth … 10th = dispatch-receipt gate, 15th = solo-surface rule, 16th = PR-state receipt law) + supervisor.md §CI-wait & waiter discipline (W1–W6, oc-waiter arm standard) + SKILL.md §session_notify DELIVERY MODES (notify form, `--interrupt` for mid-turn operational wakes). Fleet-directives carries no extra text.
@@ -114,9 +114,11 @@ Canonical: editor.md §CI-wait discipline & actor attribution (items 1–16: gh-
 Trigger: a NEW area is discussed and a research/code task needs doing, and NO existing editor lane has done anything in that area. Then the TRIAGE lane creates a fresh editor (standing authority transferred from HQ at v0.4.86, owner "Go with Option A" 2026-09-06; HQ retains roster/registry ownership — supervisor.md Duty 2):
 
 1. `tool_search("tg_mtproto")` (dynamic tool; schema dies at compaction — re-search first).
-2. Create the topic (MTProto, methods verified live 2026-09-01): forum methods live under `messages.*`, NOT `channels.*`; pass `resolve: true`; peer = forum chat id.
-   - `tg_mtproto` method_full_name=`messages.CreateForumTopic` params_json=`{"peer": -1003936827469, "title": "<Area>", "random_id": <random long>}` → parse envelope (`content[0].text` is escaped JSON, needs second `json.loads`), read the new topic's root message id from the Updates.
-   - Read-only probe that works: `messages.GetForumTopicsRequest` {peer, offset_date:0, offset_id:0, offset_topic:0, limit}.
+2. Create the topic (MTProto): forum methods live under `messages.*`, NOT
+   `channels.*` (the durable gotcha); pass `resolve: true`; peer = forum chat
+   id. The exact method incantation + envelope-parse recipe are one
+   `session_search` away (topic-creation receipts in the ledger) — not cached
+   here.
 3. Brief the lane ONLY via `session_notify` to its session id (owner order 2026-09-03 19:28Z — supersedes the former tg_send_message-into-topic briefing). The spawn prompt carries only the task seed; the full brief, corrections, and un-park orders go through `session_notify`. A topic post is allowed for OWNER VISIBILITY only — labeled as such, never the briefing channel.
    - **Injection verification REQUIRED (owner order 2026-09-07 + auditor finding, n=1803 verify):** a `session_notify` "delivered" receipt ≠ injected. Before stamping any ack ("brief delivered", "lane briefed"), verify injection from the daemon log: a delivery to a spawned-and-dormant session logs `parking until its channel claims it` (restart_recovery.rs) — that line means NOT delivered. Grep the log for the target session id after the send; stamp ack only on a real injection (or queue redelivery). Origin: auditor lane a65e7ab6 — Triage stamped "re-brief delivered" (n=1803) while both sends sat parked (log 05:30:21Z + 05:33:35Z); seed brief survived only because the spawn prompt carried it.
    - **Liveness check + no_route accounting (auditor finding #2, verified 2026-09-07):** before `session_notify` to any session not heard from this turn, verify the target is live — `session_search` with `updated_since` (or a same-turn log grep for the session id; a session silent since a prior day is DEAD, e.g. c10cd97b last seen 09-05 10:56Z, notified 09-06 23:00Z → no_route). A `no_route`/rc2 outcome is UNHANDLED until the intended content is re-routed to a live surface (successor session or HQ) and the miss is ledger-noted — silent no_route = content unaccounted for.
@@ -216,7 +218,10 @@ and Duty-4 (skill input). When the owner says **"run a Decision Rollcall"**:
    topic.
 3. **Triage role — coverage + stamp, nothing more.** Triage triggers the
    Rollcall on owner word, verifies every holding lane actually posted (or is
-   legitimately silent-by-zero), and stamps completion in the ledger.
+   sanctioned-silent: a same-turn lane-targeted chase receipt, or the lane's
+   own zero-decision statement on the ledger — a bare non-post is neither),
+   and stamps completion in the ledger. (This criterion is the single home;
+   triage.md T7 points here.)
 4. **Trigger — on demand** ("run a Decision Rollcall"). A cron or post-ship-chain
    hook is possible later; the owner has not ordered one. Do not self-schedule.
 
@@ -305,31 +310,15 @@ AND explicit `thread_id` (for forum-enabled chats). Never omit either.
 - `thread_id: null` (explicit General) is the only sanctioned way to target
   General; blind omission is not.
 
-## telegram_send origin-default + landing echo — TO-BE target states (owner rulings 2026-09-07; tool changes, NOT lane law — the [LANE] AS-IS rules above govern until these ship)
+## telegram_send TO-BE target states — NOT LAW YET (owner rulings 2026-09-07; tool changes, NOT lane law)
 
-Target state for opencrabs-dev (tool change, NOT process law — the AS-IS rule
-above governs until this ships): omitted `chat_id` + `thread_id` = send goes
-to the same topic the tool call originated from. Omission becomes a
-same-topic reply primitive; it is never a route to the owner's DM (owner chat
-133526395 requires explicit `chat_id`). Origin must be tracked per-turn from
-the incoming channel wrapper and survive compaction, so cron/restarted
-sessions resolve origin correctly instead of falling back to stale
-last-seen-topic memory.
-
-## telegram_send landing echo — TO-BE target (owner ruling 2026-09-07, adopted)
-
-Target state for opencrabs-dev (tool change): a successful `telegram_send`
-must echo where the message actually landed — resolved `chat_id` and
-`thread_id` (topic name when resolvable) in the success output. Purpose:
-close the feedback loop that made misdelivery invisible — the success output
-currently names the landing chat only when the caller passed an id, and says
-nothing about the topic when auto-routing picks one. With a landing echo, a
-stale-topic route or session-origin fallback is immediately visible to the
-calling model, enabling self-correction without a human complaint.
-
-Complements the omission-semantics target above: omission semantics make the
-route deterministic; landing echo makes the outcome observable.
-
+Two adopted-but-unshipped tool changes live OUTSIDE the reload path (this
+appendix) until they ship: (1) origin-default omission semantics — omitted
+chat_id/thread_id sends to the originating topic, never the owner DM;
+(2) landing echo — success output names the resolved chat_id + thread_id so
+misdelivery becomes visible. Full text of both targets: git history (v0.4.130,
+fleet-directives.md) and the ledger ruling trail. The [LANE] AS-IS addressing
+rule above governs until these ship.
 
 ## Deployed-state markers and state-repo hygiene (owner incident #2066, ruled 2026-09-08 ~16:4xZ)
 
@@ -354,6 +343,6 @@ route deterministic; landing echo makes the outcome observable.
 - **Fork-issue lookup conflicts settle via REST** (1a63f103, #119: `gh issue view` stale vs search; HQ-verified via gh api): when two receipts for issue N contradict, settle with `gh api repos/OWNER/REPO/issues/N` before citing the number.
 - **Worktree path resolved before any cd/git -C** (lane 61161247, 4 wrong-path hits 09-02→09-08): `ls /root | grep oc-wt` (or the owning tool's state) BEFORE first git op in any turn touching a worktree.
 - **Research Telegram API semantics before rate-limit/transport designs** (61161247, 429-pause narrowed on owner-ordered research): design against sourced provider behavior, never assumed behavior; per-surface enforcement is documented reality.
-- **Post-swap live-box proof = /proc/<pid>/exe** (editor facd50af, swap 1593ea5e 07:48Z): deployed.meta.json is INTENT; forward-looking post-swap verification step in editor.md Phase 7/7b mandates the /proc cross-check (sharpens the n=2066 mismatch law from after-the-fact to at-swap-time).
+- **Post-swap live-box proof = /proc/<pid>/exe** (editor facd50af, swap 1593ea5e 07:48Z): deployed.meta.json is INTENT; forward-looking post-swap verification step in editor-upstream-pr.md Phase 7/7b mandates the /proc cross-check (sharpens the n=2066 mismatch law from after-the-fact to at-swap-time).
 - **oc-deploy poll target-run pinning** (facd50af, stale GREEN surfaced for 1593ea5e): poll must require the surfaced run's job-name to pin the TARGET sha before GREEN surfaces, else emit "target in-flight, no matching terminal run" — a swap bridged outside the journal path is forbidden.
 - **Deployed-state dir is profile-scoped, not repo-scoped** (editor c78e78e0, two failed path guesses): resolve the state dir via the owning tool's source (oc-attrib) before reading deployed.meta.json — never assume/guess; a guessed read = a fabricated identity receipt.

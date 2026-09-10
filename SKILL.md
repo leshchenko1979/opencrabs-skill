@@ -47,42 +47,42 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | Tool | Slot |
 |---|---|
 | `./tools/oc-order-validate <sha>` | ORDER gates inside `oc-deploy ship` |
-| `./tools/oc-job-verify <run-id> <source-ref> [--features] [--identity-only]` | standalone run-identity gate — oc-deploy poll inlines its own job-name decode; `--identity-only` skips outcome gates (provenance of RED runs; embed decode via shared `lib/oc-embed.sh`, E2 #3) |
+| `./tools/oc-job-verify <run-id> <source-ref> [--features] [--identity-only]` | standalone run-identity gate (provenance of RED runs) |
 | `./tools/oc-artifact-verify <artifact-path> [--source <sha>] [--run-id <id>] [--markers m1,m2] [--expect-sha <sha256>] [--expect-version <v>] [--repo R] [--json]` | EXECUTION SANITY SIGNAL + FEATURE-PRESENCE CHECK |
-| `./tools/oc-seal-state [--sha S] [...]` | baseline/orders seal (flag-based interface — no positional `<sha>`); order vocabulary QUEUED…VOID, per-row `--order-evidence`, `--purge-order`; matches legacy `order_sha` rows |
-| `./tools/archive/oc-post-receipts ...` | **INTERNAL/ARCHIVED** (E2 #7, v0.4.72 — was compiler-era manual fallback): zero live consumers, raw-bot posting violates the Telegram surface law; kept for archaeology only, do NOT call |
-| `./tools/oc-index-worktree <path>` | INTERNAL since v0.4.47 — chained automatically by `oc-wt add` (worktrees inherit NO index; standalone call = legacy fallback) |
-| `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>] [--contributors]` | commit-range → worker-lane attribution via Session-Id join against roster (`(unsigned)`/`(unmapped)` rows never dropped); `--contributors` (E6, v0.4.78) projects the 3-col TSV (session/issues/shas) — SINGLE SHAPE (lens E-2, v0.4.90: the `oc-deploy contributors` wrapper is retired; use `oc-attrib --contributors` directly); `--deployed` composes the range from `deployed.sha` + `deployed.meta.json` `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) |
-| `./tools/oc-deploy <mode>` | the ship path itself — `ship` (fetch/push + 4 ORDER gates + carrier dispatch; `--wait N` bounded in-process poll of the dispatched run — GREEN rc 0 / timeout rc 5 / RED rc 6, verdict only, swap is the separate `poll --execute` leg, v0.4.100/116), `poll` (watch + RED scan + swap chain; `--wait N` bounded wait — timeout dies rc 5 + optional `--notify-session <uuid>` wake, `--wait 0` = classic single pass; v0.4.78), `swap-execute` (Phase B swap), `watch [--with-delta]` (stray-commit tripwire; `--with-delta` appends the `oc-upstream-delta` advisory rows — merge B, v0.4.48), `fanout` (row below); `contributors` RETIRED v0.4.90 (lens E-2 — use `oc-attrib --contributors`); the editor's S3 ship path: `editor.md` §Ship — oc-deploy (S3 path) |
-| `./tools/oc-deploy fanout --run <id> [--dry-run]` | mechanical notify fan-out for one carrier run ([#24](https://github.com/leshchenko1979/opencrabs/issues/24) LIVE since v0.4.37): GREEN → contributor notify, RED → blame notify; auto-fired at `swap_execute` tail + on `poll` RED-scan; `OC_DEPLOY_NOFANOUT=1` suppresses — mechanics + journal vocabulary in `s2-swap-journal-spec.md` §Fan-out legs |
-| `./tools/oc-carrier-features [--fetch] [--repo <path>] [--ref <branch>]` | reads the `workflow_dispatch` `features` default from `.github/workflows/quick-build-linux.yml` at `origin/<ref>` (default `ci/quick-build-linux`); `oc-deploy ship/poll` resolves EMPTY `--features` through this — carrier read failure aborts the ship loudly, no silent fallback |
-| `./tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | closed-issue hygiene sweep: fork open + fork closed + upstream closed, harvests `close-reason:` lines from comments (falls back to state_reason); pure TSV, no header, deduped by repo#num (supervisor duty) |
-| `./tools/oc-skew-scan [--ledger f] [--current v]` | ledger worker-version skew vs current skill version (default: frontmatter `version:`); buckets CHASE (>3 behind) / GRACE (>1) / OK, `-` marks a missing ack field; summary line to stderr (supervisor roster review) |
-| `./tools/oc-ping-proof <uuid> <ping-ts> [--ledger f]` | post-swap notify proof: WOKEN / SILENT / UNREACHABLE verdict from ledger `last_acked` + `events[]` stamps (`last_notified` excluded by design — broadcast, not worker activity); evidence stamp to stderr; accepts ISO and bare `HH:MMZ` stamps |
+| `./tools/oc-seal-state [--sha S] [...]` | baseline/orders seal (flag-based interface — no positional `<sha>`) |
+| `./tools/archive/oc-post-receipts ...` | **INTERNAL/ARCHIVED** (E2 #7) — zero live consumers, do NOT call |
+| `./tools/oc-index-worktree <path>` | INTERNAL — chained automatically by `oc-wt add` (standalone call = legacy fallback) |
+| `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>] [--contributors]` | commit-range → worker-lane attribution; `--contributors` projects the 3-col TSV (SINGLE SHAPE); `--deployed` composes the range from `deployed.sha` + `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) |
+| `./tools/oc-deploy <mode>` | the ship path itself — `ship` / `poll` / `swap-execute` / `watch [--with-delta]` / `fanout` / `contributors` RETIRED (use `oc-attrib --contributors`). Editor S3 path: `editor.md` §Ship. Verdict codes + wait semantics: RC-CONTRACT.md |
+| `./tools/oc-deploy fanout --run <id> [--dry-run]` | mechanical notify fan-out for one carrier run ([#24](https://github.com/leshchenko1979/opencrabs/issues/24)); auto-fired at `swap_execute` tail + on `poll` RED-scan; `OC_DEPLOY_NOFANOUT=1` suppresses — mechanics + journal vocabulary in `s2-swap-journal-spec.md` §Fan-out legs |
+| `./tools/oc-carrier-features [--fetch] [--repo <path>] [--ref <branch>]` | reads the carrier-yml `features` default at `origin/<ref>`; `oc-deploy ship/poll` resolves EMPTY `--features` through this — carrier read failure aborts the ship loudly |
+| `./tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | closed-issue hygiene sweep (supervisor duty) |
+| `./tools/oc-skew-scan [--ledger f] [--current v]` | ledger worker-version skew vs current skill version (supervisor roster review) |
+| `./tools/oc-ping-proof <uuid> <ping-ts> [--ledger f]` | post-swap notify proof: WOKEN / SILENT / UNREACHABLE verdict |
 | `./tools/oc-pr-atomicity <pr-number>` | atomicity gate (editor Phase 7 / issue triage) |
-| `./tools/oc-ledger <verb>` | workers-ledger: stamp (ruling/note/ack/claim/... v1.1 vocabulary), sync (version-bump: battery-gated, commits+tags+mirrors), check-version, cadence, ack, enroll, commit-pending, claim-ref, confirm. register: RC-CONTRACT.md + selftest |
-| `./tools/oc-shadow-rotate [--dry-run]` | INTERNAL tail step of `oc-ledger sync` since v0.4.48 (merge A) — appends the live (gitignored) `oc-deploy-shadow.log` to the git-tracked `oc-deploy-shadow.archive.log`, then truncates the live file; bump cadence IS the rotation cadence now. Standalone invocation = manual fallback |
-| `./tools/oc-review-persist <lens> <text\|@file\|-> [--dir DIR]` | persist a Duty-6 review report: re-read sha256-verified write + ONE index line in `skill-review-index.log` — that line IS the "persisted" receipt (no receipt, no "persisted" claim); lens whitelist includes the standing `brain-scrub` (fleet-directives §Review lens brain-scrub) |
-| `./tools/oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2] [--negative-control <bin>]` | mechanical identity + presence evidence for a Phase 6b smoke verdict: MainPID + exe path + sha256 of the RUNNING daemon vs deployed.meta.json artifact sha + deployed.sha marker; optional strings markers; negative control must hash differently (lens C1, v0.4.64 — replaces hand-assembled smoke-verdicts.log boilerplate). Behavioral judgment stays human |
-| `./tools/oc-issue-log <issue-n> <sha> [--state <text>] [--repo <slug>] [--dry-run]` | per-commit implementation comment (owner 2026-08-28 22:54Z) composed from git metadata and posted via gh `--body-file` ONLY — the inline-heredoc substitution class is impossible through this tool (lens C3, v0.4.64) |
-| `./tools/oc-commit -m <msg> [--issue N] [--no-comment] [--state <dir>] [--repo <path>]` | gated commit wrapper (lens C5, v0.4.65): refuses detached HEAD, refuses unset `OC_ACTOR`, refuses empty index (NEVER stages anything), derives `Issue-Ref` from the actor's latest ledger claim via `oc-ledger claim-ref` (override `--issue`); adds `Session-Id` + `Issue-Ref` trailers; post-commit implementation comment folded in (E2 #2, v0.4.72) via `oc-issue-log` — `--no-comment`/`OC_COMMIT_COMMENT=0` skips, comment-fail-after-commit = loud rc 5 |
-| `./tools/oc-ship-audit [--hours N] [--log f] [--journal-dir d] [--grace min]` | dispatch-WITHOUT-swap alarm (lens C6, v0.4.65): pairs every successful `ship --sha … --execute` tools.log row against swap-journal evidence; dispatches under `--grace` (default 120 min) read IN-FLIGHT; rogue non-JSON log lines are skipped LOUDLY, never truncated into a false clean |
-| `./tools/oc-tg-audit <uuid> [--date D] [--days N] [--log-dir P]` | Telegram surface-law evidence scan (lens C7, v0.4.65): TOOL_ACCUM rows by the accused session carrying a banned telegram surface tool (send/edit set, triage.md Duty T4); falls back to Executing-tool rows; sanctioned senders remain supervisor judgment |
-| `./tools/oc-ledger sync` CHANGELOG gate | sync refuses a version bump whose `## v<v>` CHANGELOG entry is missing (lens C8, v0.4.65, kills the v0.4.54 backfill class) — same rc 6 register as the frontmatter gate |
-| `./tools/oc-harvest-sweep <pr-branch> [--base adolfousier/main] [--repo P] [--port-of sha1,sha2]` | pre-gate harvest verification (editor Phase 7 sweep, mechanical legs): Session-Id trailer sweep over base..branch, empty-diff probe, patch-id match per ported sha (lens C4, v0.4.64 — replaces the 3-gate-rounds-burned hand sweep). Leg (c) behavioral judgment stays human |
-| `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5): shape gate → carrier-yml check → dispatch under single-flight lock → time-window run adoption (LATEST-wins; v0.4.48/0.4.53) → watch → per-job report with fmt soft-fail exposed; `--fault-scope PR` auto-runs oc-pr-fault-scope on RED (rc stays 3); rc=2 repeats back off within 120s. Adoption/lock/fmt-soft-fail lore: RC-CONTRACT.md + tools/tests/run.sh selftests (lens B-15, v0.4.90: full mechanics trimmed from this row — single register rule) |
-| `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic for §Upstream relations item 1: fetch + merge-base + `AHEAD`/`BEHIND` TSV + patch-id `ABSORBED-CANDIDATE` rows; READ-ONLY (never merges/pushes/rebases) — PROPOSE/WAIT judgment stays human |
-| `./tools/oc-wt add\|remove\|--force` | editor worktree manager: `add` chains prune → fetch → worktree add → oc-index-worktree (index step UN-SKIPPABLE), refuses `--create` on an existing branch; `remove` gated on clean tree — `--force` journals the destroyed listing BEFORE removal (lens-D posture) |
-| `./tools/oc-drift-check <uuid> <claimed-ver> [--ack]` | editor §Mid-cycle skill drift step 1-2, mechanical: claimed vs live SKILL.md version; `--ack` delegates oc-ledger ack on drift |
-| `./tools/oc-branch-sweep --repo <p> [--dry-run]` | branch-death proof (MERGED/ABSORBED/STALE/ACTIVE) + archive-then-delete for MERGED only; protected: base/HEAD/--keep regex |
-| `./tools/oc-pr-fault-scope <pr#> --run <id>` | failing-files ∩ PR-files = IN-SCOPE/BASE-FAULT (2026-08-26 clippy-wall misattribution lesson, mechanical) |
-| `./tools/oc-ledger confirm <uuid>` | lens C #5: verifies the worker's latest claim (#N ref resolvable on the live fork) then flips workers[].confirmed=true — first verb to flip it (was unsanctioned hand-edit) |
-| `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | **manual fallback — prefer `./tools/oc-prchecks`** (row above). PR-lane gates before an upstream PR (v0.4.28): fmt soft-fail + clippy `-D warnings` + all-features test, flags verbatim from upstream ci.yml; yml lives only on the carrier branch; green run URL = v0.4.22 PR-body citation (editor.md Phase 7 2c) |
-| `./tools/oc-log-search <pattern> [--log <f>] [--since <ts>] [--module <re>] [--tail N]` | telemetry-only daemon-log search (owner-ordered via lane 1a63f103, 2026-09-01): filters provider stream-echo (`[TEXT_ACCUM]`/`[TOOL_*]` tags) and DEBUG noise by default; HARD FENCE — a line whose source module is `brain::provider` can never match; `--selftest` built in |
-| `./tools/oc-ship-chain --sha S --branch B` | CI gate → issue-log → ff-merge → ship → swap in ONE invocation (E-H1/#134 classes closed); no exit between gate and swap; no-self-ping. register: RC-CONTRACT.md |
-| `./tools/oc-notify-fanout --title T` | per-lane skill-change brief generator: self-uuid substitution, placeholder-leak abort, DB-validated targets, receipts + ledger stamp. register: RC-CONTRACT.md |
-| `./tools/oc-rebase-safety overlap\|audit` | re-gate split rule arithmetic: overlap = file intersection pre/post-rebase mains; audit = patch-id losses (DROPPED/CHANGED). register: RC-CONTRACT.md |
-| `./tools/oc-waiter arm\|quick\|list\|sweep` | lane wake service (lens C-A1 family): arm/quick a background CI watcher, sweep reaps orphans + wakes owners, list prints live waiters. register: RC-CONTRACT.md |
+| `./tools/oc-ledger <verb>` | workers-ledger: stamp/sync/check-version/cadence/ack/enroll/commit-pending/claim-ref/confirm |
+| `./tools/oc-shadow-rotate [--dry-run]` | INTERNAL tail step of `oc-ledger sync` (standalone = manual fallback) |
+| `./tools/oc-review-persist <lens> <text\|@file\|-> [--dir DIR]` | persist a Duty-6 review report — the index line IS the "persisted" receipt |
+| `./tools/oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2] [--negative-control <bin>]` | mechanical identity + presence evidence for a Phase 6b smoke verdict; behavioral judgment stays human |
+| `./tools/oc-issue-log <issue-n> <sha> [--state <text>] [--repo <slug>] [--dry-run]` | per-commit implementation comment via gh `--body-file` ONLY |
+| `./tools/oc-commit -m <msg> [--issue N] [--no-comment] [--state <dir>] [--repo <path>]` | gated commit wrapper: derives `Issue-Ref` from the actor's latest ledger claim, adds Session-Id + Issue-Ref trailers, folds in the post-commit comment |
+| `./tools/oc-ship-audit [--hours N] [--log f] [--journal-dir d] [--grace min]` | dispatch-WITHOUT-swap alarm |
+| `./tools/oc-tg-audit <uuid> [--date D] [--days N] [--log-dir P]` | Telegram surface-law evidence scan |
+| `./tools/oc-ledger sync` CHANGELOG gate | sync refuses a version bump whose CHANGELOG entry is missing |
+| `./tools/oc-harvest-sweep <pr-branch> [--base adolfousier/main] [--repo P] [--port-of sha1,sha2]` | pre-gate harvest verification (editor Phase 7 sweep, mechanical legs); behavioral judgment stays human |
+| `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5). Full rc/adoption/lock/fmt-soft-fail register: RC-CONTRACT.md |
+| `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic; READ-ONLY — PROPOSE/WAIT judgment stays human |
+| `./tools/oc-wt add\|remove\|--force` | editor worktree manager (index step UN-SKIPPABLE; `--force` journals before removal) |
+| `./tools/oc-drift-check <uuid> <claimed-ver> [--ack]` | editor §Mid-cycle skill drift step 1-2, mechanical |
+| `./tools/oc-branch-sweep --repo <p> [--dry-run]` | branch-death proof + archive-then-delete for MERGED only |
+| `./tools/oc-pr-fault-scope <pr#> --run <id>` | failing-files ∩ PR-files = IN-SCOPE/BASE-FAULT |
+| `./tools/oc-ledger confirm <uuid>` | verifies the worker's latest claim then flips workers[].confirmed=true |
+| `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | **manual fallback — prefer `./tools/oc-prchecks`** (row above). PR-lane CI gates before an upstream PR; yml lives only on the carrier branch |
+| `./tools/oc-log-search <pattern> [--log <f>] [--since <ts>] [--module <re>] [--tail N]` | telemetry-only daemon-log search; HARD FENCE: `brain::provider` lines never match |
+| `./tools/oc-ship-chain --sha S --branch B` | CI gate → issue-log → ff-merge → ship → swap in ONE invocation; no-self-ping |
+| `./tools/oc-notify-fanout --title T` | per-lane skill-change brief generator; DB-validated forum-scoped targets, receipts + ledger stamp |
+| `./tools/oc-rebase-safety overlap\|audit` | re-gate split rule arithmetic |
+| `./tools/oc-waiter arm\|quick\|list\|sweep` | lane wake service (arm/quick background CI watcher; sweep reaps orphans) |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (the
 SELFTEST BATTERY — tool selftests, distinct from the CI-gate CODE TESTS
@@ -90,27 +90,11 @@ cargo triad; the `oc-seal-state` IFS-join case is one guard inside it).
 Must stay green before any version
 bump; tools are never edited without re-running it.
 
-### Unified tools log (v0.4.36)
+### Unified tools log
 
-Every tool in `tools/` sources `tools/lib/oc-log.sh` and appends ONE JSONL line
-on exit — the fleet-analysis aggregate (per-tool journals remain the per-run
-record).
-
-- **Path:** `/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log` (override with `OC_TOOLS_LOG`).
-- **Schema:** `{"ts":"…Z","tool":"oc-…","args":"…","exit":N,"secs":N.N,"extra":{}}` — tools add fields via `oc_log_extra key value`.
-- **Suppression:** `--selftest` in argv or `OC_TOOLS_NOLOG=1` (the battery exports it — synthetic runs never pollute the log). Missing `jq` → no write; logging NEVER changes the host tool's exit code.
-
-Recipes (verified live):
-
-```bash
-# failing invocations (note: rc≠0 is often a VERDICT, not a crash —
-# oc-skew-scan 1 = skew found, oc-ping-proof 1 = SILENT; filter .tool first)
-jq -r 'select(.exit!=0) | [.ts,.tool,.exit,.args] | @tsv' tools.log
-# usage per tool
-jq -r '.tool' tools.log | sort | uniq -c | sort -rn
-# newest line
-tail -1 tools.log | jq -c .
-```
+Every tool in `tools/` appends ONE JSONL line on exit (aggregate; per-run
+journals stay per-run). Path, schema, suppression rules, and verified jq
+recipes: `tools/RC-CONTRACT.md` §Unified tools log.
 
 ## STEP ZERO — establish the role (mandatory on every load)
 
@@ -120,7 +104,7 @@ Ask the operator which role this session employs before doing anything:
 
 | Role | Owns | Procedure file |
 |------|------|----------------|
-| **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE + owner-approved → upstream PR (`editor.md` Phase 7) | `editor.md` |
+| **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR AUTO-FILED on smoke PASS (AUTO-SHIP law; procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
 | **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + supervisor watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
 | **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub = TEN reviewers, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `supervisor.md` |
 | **TRIAGE** | Interrupt lane (carved out of SUPERVISOR at v0.4.86, owner "Go with Option A"): idea-box + `QUIRK:` tool-problem intake (same-turn ACK, ledger stamps), evidence verification, fix routing to owning editor, new-editor creation, TOOL_ACCUM / cadence enforcement; escalates semantic/KERNEL to the Supervisor — NEVER edits skill files | `triage.md` |
@@ -243,7 +227,7 @@ General area, an unrelated chat, or the owner DM.
 The table above carries the content; what remains prose:
 
 - **SMOKE TEST** is the ONLY evidence that may back an upstream PR approval
-  request (hard rule + `editor.md` Phase 7 step 0).
+  request (hard rule + `editor-upstream-pr.md` Phase 7 step 0).
 - **EXECUTION SANITY SIGNAL** — the swap-path `--version` run (`oc-deploy` swap
   path; archived anchor: `tools/archive/compiler.md` Step 3) — is NONE of the three kinds: it proves only "this file is a
   runnable opencrabs binary". Not behavioral, not analytical, not presence
@@ -394,8 +378,7 @@ codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing 
   CARRIER branch `ci/quick-build-linux` is the SINGLE SOURCE OF TRUTH** for what we
   ship — these skill files NEVER copy the set (drift killed 2026-08-25). Read it
   live with `tools/oc-carrier-features` (the reader oc-deploy itself resolves
-  through; raw form:
-  `git -C ~/opencrabs show origin/ci/quick-build-linux:.github/workflows/quick-build-linux.yml | grep -A2 'features:'`)
+  through).
   Changing the pick later = one-line Editor commit to that yml's `default:` —
   skills untouched.
 - Dispatch ALWAYS passes the set explicitly: `-f features=<set>` (decision
@@ -442,7 +425,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    gets a "SHIPPED UPSTREAM" notice — fork-side maintenance ends.
 4. **PR lifecycle**: every open upstream PR has an owning editor (the
    Session-Id trailers of its harvested commits). PR not mergeable → route by
-   blocker class (`editor.md` Phase 7b): our files broken → owning editor;
+   blocker class (`editor-upstream-pr.md` Phase 7b): our files broken → owning editor;
    conflicts → maintainer-side at merge time (v0.4.93 PR-freeze law — the
    filed PR is frozen; editors never rebase or force-push a filed PR);
    PRE-EXISTING
@@ -528,7 +511,7 @@ Supervisor-only). Skill markdown + fleet-directives stay Supervisor-only.
 | Upstream receives PRs ONLY — body = detailed description ending `Original issue: <full fork URL>`; NEVER `Closes #N` (wrong issue space) | `adolfousier/opencrabs` PR bodies | owner 2026-08-27 |
 | Fork issue closed by US right after the PR is filed | fork issue tracker | — |
 | Fork issues NEVER claimed on GitHub: no tackling comments, assignment, labels/reactions by any lane — claiming = `Issue-Ref` trailer + workers-ledger `claim` row (kind `claim`, v1.1 vocabulary since v0.4.48); uniqueness sweeps stay read-only search | ledger | owner 2026-08-27 17:07Z |
-| PR SHIPMENT (AUTO-SHIP law, owner 2026-09-09 ~10:4xZ "the owner should not approve shipping, it should be automatic"): feature COMPLETE + smoke PASS (v0.4.104 four-leg rubric) → Editor harvests fork-only commits, files the upstream PR — NO owner word needed; the owner is notified AFTER the act (procedure: `editor.md` Phase 7; supersedes the 2026-08-25 owner-approval gate, retired v0.4.122) | mechanical gates | 2026-09-09 owner order |
+| PR SHIPMENT — **AUTO-SHIP LAW (single home; owner order 2026-09-09 ~10:4xZ "the owner should not approve shipping, it should be automatic"): feature COMPLETE + smoke PASS (v0.4.104 four-leg rubric) → Editor harvests fork-only commits, files the upstream PR — NO owner word needed; the owner is notified AFTER the act. Supersedes the 2026-08-25 owner-approval gate and the 2026-09-08 "my go before pr" gate. All other references to this law are pointers to THIS row — procedure: `editor-upstream-pr.md` Phase 7; fleet-directives §Upstream-merge cadence (harvest census); triage.md T4.** | mechanical gates | 2026-09-09 owner order |
 | APPROVAL = Alexey's reply or a positive Telegram reaction to the explicit request in the forum topic; silence is NOT consent; spontaneous / ad-hoc PRs remain forbidden | owner word | v0.4.1 |
 
 *Pre-2026-08-27 upstream issues stay readable for uniqueness sweeps and legacy
@@ -537,10 +520,8 @@ links; development-time upstream contact is PR-comments only (supersedes the
 - CONSENT REGISTER — **Never rule from codified memory — grep the live record
   (chat / ledger) before denying any permission** (v0.4.17 lesson, 2026-08-26).
   Deploy consent RETIRED 2026-08-28 (owner 18:50Z): GREEN carrier run + artifact
-  verify IS the authorization. Upstream-PR owner-word gate RETIRED 2026-09-09
-  (AUTO-SHIP law, owner ~10:4xZ "the owner should not approve shipping, it
-  should be automatic"; the 2026-09-08 21:44Z "my go before pr" restatement is
-  superseded) — smoke PASS files the PR, owner notified after the act. APPROVAL
+  verify IS the authorization. Upstream-PR owner-word gate — retired under the
+  AUTO-SHIP law (PR SHIPMENT row, §ISSUE ROUTING above). APPROVAL
   definition above still governs anything that REMAINS owner-gated
   (post-swap rollback-is-owner's-call; silence is NOT consent).
   (Deleted-tool history: CHANGELOG.md.)
@@ -564,7 +545,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
   evidence is the GREEN `pr-checks.yml` run on the PR head branch (fmt/clippy/
   `cargo test --locked --profile ci --all-features` — flags VERBATIM from
   pr-checks.yml) — canonical procedure:
-  editor.md §Phase 7 step 2c. One red = fix cycle, not a filed
+  editor-upstream-pr.md §Phase 7 step 2c. One red = fix cycle, not a filed
   PR ("PRs that fail CI will not be reviewed" — their words). Receipts ride
   the PR prep beside smoke evidence. Gate covers shipworthiness only;
   owner approval + SMOKE pass remain separate required conditions.

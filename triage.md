@@ -113,11 +113,9 @@ per that section. Owner veto overrides retroactively, as with rulings.
   queued a full day.
 - **Telegram-law TOOL_ACCUM enforcement (v0.4.43, A12):** the violation
   pattern is caught from evidence, not intuition. On suspicion run
-  `./tools/oc-tg-audit <session-uuid> [--days N]` (replaces the hand grep;
-  raw fallback: `grep -a "TOOL_ACCUM"
-  ~/.opencrabs/profiles/ops/logs/opencrabs.<date>` filtered by the accused
-  session id + telegram tool name — telegram_send / tg_send_message /
-  tg_edit_message / telegram_edit). A matching row → notify the rule
+  `./tools/oc-tg-audit <session-uuid> [--days N]` — the only sanctioned
+  scanner (raw log grep is retired; the tool embodies the log format and the
+  banned-tool list). A matching row → notify the rule
   (SKILL.md §Telegram surface law); repeat → escalate to the Supervisor for a
   review-toggle decision (sanctioned-sender judgment stays HIS).
 - **Delivery-cadence patrol (2026-09-04 law):** lanes defaulting to
@@ -130,24 +128,18 @@ per that section. Owner veto overrides retroactively, as with rulings.
   to board topic 30220 — one line even on zero-change days (heartbeat).
   Standing order (fleet-directives.md §Upstream-merge cadence, HARVEST LAW):
   when census shows ≥3 Tier-1 candidates with green tests, commission probes
-  and present ready PRs on PASS for AUTOMATIC FILING (AUTO-SHIP law, owner
-  2026-09-09 ~10:4xZ: "the owner should not approve shipping, it should be
-  automatic"; supersedes the 2026-09-08 21:44Z "my go before pr" gate) —
+  and present ready PRs on PASS for automatic filing under the AUTO-SHIP law
+  (SKILL.md §ISSUE ROUTING, PR SHIPMENT row — single home) —
   several open upstream PRs may run concurrently
   (fleet-directives.md §Upstream-merge cadence is canonical; PR-freeze law
   governs filed PRs after filing). Port WORK (cherry onto upstream base,
   4-leg verify, build) is commissioned to an editor lane per PORT-WORK
   OWNERSHIP (Triage queues, editors build); on the lane's GREEN + smoke-PASS
-  receipt the ready PR is FILED automatically (AUTO-SHIP law) — frozen at
-  filing (PR-freeze law). FILING (owner
-  override 2026-09-08 13:51Z, amended 15:2xZ “no holding, just instruct
-  the editor to fire smoke”): file as soon as tests are green AND the
+  receipt the ready PR is FILED automatically — frozen at filing (PR-freeze
+  law). FILING: file as soon as tests are green AND the
   behavioral smoke PASSES — parallel PRs allowed; NO holding state exists.
   On probe commission the editor fires the smoke immediately; probe PASS
-  files the ready PR — NO owner word needed (AUTO-SHIP law, owner
-  2026-09-09 ~10:4xZ "the owner should not approve shipping, it should be
-  automatic"; the 2026-09-08 21:44Z "my go before pr" gate is RETIRED).
-  The smoke-readiness hold is dead, and so is the filing hold.
+  files the ready PR — NO owner word needed (AUTO-SHIP law).
   PR filing follows the full Upstream PR law.
 - **Upstream PR-state patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** on each harvest census,
@@ -239,9 +231,11 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
    delivery): "Decision Rollcall — post outstanding owner decisions in your
    own topic, direct to the owner."
 2. Verify coverage: every holding lane either posted its list in its own
-   topic or is legitimately silent (zero owner decisions = sanctioned
-   silence). A lane missing without the zero-decision state gets one
-   targeted chase — to the lane, not a board complaint.
+   topic or is sanctioned-silent — the checkable criterion (single home:
+   fleet-directives.md §Decision Rollcall item 3) is a same-turn
+   lane-targeted chase receipt, or the lane's own zero-decision statement on
+   the ledger; a bare non-post is neither. A lane failing that criterion gets
+   one targeted chase — to the lane, not a board complaint.
 3. Stamp completion in the ledger (`oc-ledger stamp note "Decision Rollcall
    complete — N lanes posted, M silent-by-zero"`).
 4. NEVER relay, aggregate, summarize, or edit lane lists. The old model
