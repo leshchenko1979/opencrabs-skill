@@ -238,6 +238,14 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
    selftest owner). Before hand-rolling any check (item 11), grep
    RC-CONTRACT.md for a purpose-built tool — verification, audit, smoke,
    artifact and log work especially: a tool likely already exists.
+6. **PATH anchoring (v0.4.130, ruling n=2369):** the oc-* tools are NOT on
+   the lane shell's PATH — never invoke them bare and never `which` them
+   (empty result ⇒ the rc=127 discovery class, first catalogued 2026-09-06).
+   They are path-invoked skill scripts. Canonical anchor:
+   `~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/<tool>` — relative
+   `tools/<tool>` forms in these docs assume the skill dir as cwd. In a
+   worktree, invoke via the WORKTREE's `tools/` copy; drift checks resolve
+   the canonical copy themselves (oc-drift-check §Skill-dir resolution).
 
 No reload volley is owed to you (v0.4.19 disk absorption stands) — the
 pull-check is YOUR duty; supervisor notifies stay targeted per Duty 3.
