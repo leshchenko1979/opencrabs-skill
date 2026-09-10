@@ -32,6 +32,64 @@ run_selftest() {
   if OC_DEPLOY_STATE_DIR="$(mktemp -d)" "$TOOLS_DIR/$t" --selftest >/dev/null 2>&1; then ok "$t --selftest"; else bad "$t --selftest"; fi
 }
 
+# ---- battery driver: --jobs N parallel mode + internal --chunk mode (v0.4.131)
+# Sections are fully isolated (each builds its own mktemp state, no shared
+# mutable state), so they run concurrently. --jobs N spawns one chunk per
+# section (default 1 = sequential, unchanged). Output is re-aggregated in
+# section order so the transcript matches a sequential run line-for-line.
+# Chunk mode re-extracts prelude+section from this file and sources it —
+# BATTERY_IN_CHUNK guards the re-entry so sourcing the extracted prelude
+# (which contains this driver) cannot recurse.
+BATTERY_MODE="sequential"
+extract_chunk() { # $1 = 1-based section chunk; prints prelude + that section
+  awk -v want="$1" '
+    /^# ---- [0-9]/ { n++; insec = (n == want); next }
+    /^verdict=PASS/ { exit }
+    n == 0 || insec { print }
+  ' "$0"
+}
+if [ "${1:-}" = "--chunk" ] && [ -n "${2:-}" ] && [ -z "${BATTERY_IN_CHUNK:-}" ]; then
+  export BATTERY_IN_CHUNK=1
+  C="$(mktemp)"; extract_chunk "$2" > "$C"
+  # shellcheck disable=SC1090
+  source "$C"; rm -f "$C"
+  exit $(( FAIL > 0 ? 1 : 0 ))
+fi
+JOBS="${OC_BATTERY_JOBS:-1}"
+if [ "${1:-}" = "--jobs" ] && [ -n "${2:-}" ]; then JOBS="$2"; shift 2; fi
+case "${1:-}" in --jobs=*) JOBS="${1#--jobs=}"; shift ;; esac
+emit_summary() {
+  local verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
+  printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s",\n  "mode": "%s"\n}\n' \
+    "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" "$BATTERY_MODE" \
+    > "$TOOLS_DIR/tests/battery-last.json"
+  note ""
+  note "=============================="
+  note "  PASS: $PASS   FAIL: $FAIL   (receipt: tools/tests/battery-last.json = $verdict, mode: $BATTERY_MODE)"
+  note "=============================="
+  [ "$FAIL" -eq 0 ] || note "tests FAILED (nonzero exit below)"
+  return $(( FAIL > 0 ? 1 : 0 ))
+}
+if [ "$JOBS" -gt 1 ]; then
+  BATTERY_MODE="parallel jobs=$JOBS"
+  NCH="$(grep -cE '^# ---- [0-9]' "$0")"
+  PT="$(mktemp -d)"
+  for k in $(seq 1 "$NCH"); do
+    ( bash "$0" --chunk "$k" > "$PT/$k.log" 2>&1 ) &
+    while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; done
+  done
+  wait
+  PASS=0; FAIL=0
+  for k in $(seq 1 "$NCH"); do
+    cat "$PT/$k.log"
+    o="$(grep -c '^  ok ' "$PT/$k.log" || true)"; f="$(grep -c '^  FAIL ' "$PT/$k.log" || true)"
+    PASS=$((PASS + o)); FAIL=$((FAIL + f))
+  done
+  rm -rf "$PT"
+  emit_summary
+  exit $?
+fi
+
 # ---- 00. lib/oc-log.sh (unified tools log, KERNEL batch D0) -----------------
 section "lib/oc-log.sh (unified tools log)"
 if [ -f "$TOOLS_DIR/lib/oc-log.sh" ]; then
