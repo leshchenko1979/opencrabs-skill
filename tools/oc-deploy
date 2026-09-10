@@ -505,6 +505,7 @@ NSTUB2
   out="$(OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_TARGET="$T/bin/oc-fake" \
     OC_SWAP_BACKUP_DIR="$SD/backups" OC_SWAP_RESTART_CMD=true \
     OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_A2A_URL="" \
+    OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
     OC_DEPLOY_NOTIFY="$SD/notify" \
     "$SELF_BIN" swap-execute --sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
     --run 111 --features telegram --drill 2>&1)"; rc=$?
@@ -529,7 +530,8 @@ NSTUB2
   out="$(OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_TARGET="$T/bin/oc-fake" \
     OC_SWAP_BACKUP_DIR="$SD/backups" OC_SWAP_RESTART_CMD=true \
     OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_A2A_URL="" \
-    OC_SWAP_ROLLBACK_FAIL=1 OC_DEPLOY_NOTIFY="$SD/notify" \
+    OC_SWAP_ROLLBACK_FAIL=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+    OC_DEPLOY_NOTIFY="$SD/notify" \
     "$SELF_BIN" swap-execute --sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
     --run 113 --features telegram --drill 2>&1)"; rc=$?
   check_rc "drill-rollbackfail-rc" $rc 0
