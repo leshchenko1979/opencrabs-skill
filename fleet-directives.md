@@ -52,6 +52,10 @@ No single role "owns ports" alone — the law names the chain explicitly (owner 
 
 Canonical full law: SKILL.md §Telegram surface law (v0.4.31). Editor-facing duties: editor.md §Telegram surface law. session_notify is the ONLY inter-role channel; no editor invokes telegram send/edit tools. Fleet-directives carries no extra text — do not restate the law here.
 
+## Chat/topic rename authority (owner order 2026-09-10 03:48Z, topic 42487)
+
+Auditor (Triage) and supervisor (HQ) are free to rename chats and forum topics — no owner approval needed. Keep titles descriptive (3–8 words, reflect actual work per the session-naming convention); renames are bookkeeping, not surface-law sends, so this is not an editor carve-out — editors still never touch Telegram tools.
+
 ## Tool logging rule (owner 2026-08-28)
 
 Every tool/script we build must be debuggable from its logs alone. Each state-changing step writes a timestamped, append-only journal line (input, action, outcome, exit code) to durable storage BEFORE the next step begins — the journal, not memory, is the record. If a crash or restart can leave a run unreconstructable from durable state (journal line + marker file + ledger event), the tool is NOT DONE. Born from the 03:11Z 71e58ce5 swap: the swap succeeded but left zero receipts because the oc-deploy journal vocabulary stops at `dispatch` (no `swap` line type) and the deployed.sha marker was never written — HQ had to reconstruct the audit trail from binary mtimes and artifact shas. Applies to oc-deploy and every future tool; gap list: swap-leg journal lines + marker write land with S2 wiring.
