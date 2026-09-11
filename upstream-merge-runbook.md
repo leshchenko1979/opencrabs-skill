@@ -24,7 +24,7 @@ commits, 133 fork-only, 68 overlapping files, merge-base `4776bee2`).
 | Actor | Job |
 |---|---|
 | **Triage** | freeze check, run the merge, arbitrate textual conflicts, ledger stamps, seam adaptation dispatch, consolidated report with the per-feature decisions table (delegated owner 2026-09-11) |
-| **HQ** | supervisory oversight, process/skill updates, review of owner-gated semantic overrides — HQ does NOT execute the merge |
+| **HQ** | HQ oversight, process/skill updates, review of owner-gated semantic overrides — HQ does NOT execute the merge |
 | **Review lens** (one spawn) | audits each semantic pair — diff fork behavior vs upstream's, flag anything upstream's version *loses* |
 | **Editor lane** (hosting editor; TOOLSMITH builds no trees per toolsmith.md law) | runs `oc-deploy ship` on the marker commit via the `oc-deploy` lane, runs the battery — HQ never hand-builds |
 | **Harvest lane** | unaffected for open PRs, but **pauses new branch creation** off fork main until the merge lands (stale bases). **v0.4.93:** filed upstream PRs stay FROZEN during the merge window — the merge does NOT trigger re-ports; conflicts on filed PRs are maintainer-side at merge time (editor.md Phase 7 PR-freeze law) |

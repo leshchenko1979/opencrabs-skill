@@ -1,16 +1,16 @@
 # review-lenses.md — Duty-6 reviewer lens catalog (B4+G-F4 split, v0.4.78)
 
-Full briefs for the ten Duty-6 review lenses (A–I + standing brain-scrub; regrouped v0.4.81 with C joining TOOLS and D sole in ARTIFACTS — H later joined D in ARTIFACTS, v0.4.113/115). supervisor.md §Duty 6 owns the
+Full briefs for the ten Duty-6 review lenses (A–I + standing brain-scrub; regrouped v0.4.81 with C joining TOOLS and D sole in ARTIFACTS — H later joined D in ARTIFACTS, v0.4.113/115). hq.md §Duty 6 owns the
 method (read-only sub-agents, verbatim-quote verification, oc-review-persist
 persistence, poll triple-check, verdict table) and keeps only the family map
 there; this file owns the per-lens scope briefs (brain-scrub brief lives at fleet-directives.md § Review lens brain-scrub). Letters keep chronological
 birth order (stable report/persist keys, not an ordering). Reviewer-performance
-loop lessons (supervisor.md step 7) fold INTO these briefs at ship time,
+loop lessons (hq.md step 7) fold INTO these briefs at ship time,
 attributed to the reviewer that produced the evidence. Family identity is the
 OBJECT under review, not the evidence flow between lenses (regrouped v0.4.81:
 C joined TOOLS — gaps/shape/implementation pipeline; D is sole in ARTIFACTS,
 the family IS the deletion owner gate). Membership and grouping change only
-on census evidence + owner word (supervisor.md step 7).
+on census evidence + owner word (hq.md step 7).
 
 #### FAMILY: DOCS — role files (wording / reading load / organization)
 
@@ -42,7 +42,7 @@ on census evidence + owner word (supervisor.md step 7).
    - **Reviewer B — LLM EFFICIENCY + RESPONSIBILITY CREEP:** token weight of
      each role's required reading (a worker must not need another role's
      procedures), prose that should be tables, dead references, duties
-     migrating across Supervisor/Editor scope lines (Compiler archived).
+     migrating across HQ/Editor scope lines (Compiler archived).
      PLUS the NO-OP TEST sentence by sentence (docs-lens vocabulary
      reference: `skills/writing-for-agents/SKILL.md`) — a line the model
      already obeys by default is load paid for nothing (does it change
@@ -92,7 +92,7 @@ on census evidence + owner word (supervisor.md step 7).
      loads) — and verify every moved section remains reachable on the paths
      its readers actually use: the anchor line still points at the new home,
      the post-compaction re-load hint still names a file that holds the rule,
-     and nothing a role loads by habit (supervisor duties, editor phases)
+     and nothing a role loads by habit (HQ duties, editor phases)
      lands only in a file that role never opens. A split that breaks the
      load path is a REGRESSION finding against itself, not a cleanup.
 
@@ -105,7 +105,7 @@ on census evidence + owner word (supervisor.md step 7).
      delivery). Each finding names the proposed tool + its single-command
      interface. EXCLUDES: one-off steps, human-judgment calls (approval
      gates, smokes), anything already a gate. Candidates feed the
-     Supervisor's process-tool ownership (scope above). PLUS USAGE-LOG
+     HQ's process-tool ownership (scope above). PLUS USAGE-LOG
      ANALYSIS: every C pass reads the actual tool records — state-dir
      `tools.log`, `oc-deploy/journal/*.jsonl`, `workers-ledger.json` events,
      smoke-verdicts — and derives ground truth no prose review can: which
@@ -163,7 +163,7 @@ on census evidence + owner word (supervisor.md step 7).
      a zero-hit claim from a |-pattern grep in literal mode is UNVERIFIED —
      quote the query + scope for every negative-existence claim) / ARCHIVE / KEEP with that reference list as the evidence.
      "Looks stale" is a hypothesis, never a verdict. Nothing deletes without
-     the Supervisor's poll triple-check + owner word.
+     HQ's poll triple-check + owner word.
    - **Reviewer H — LEDGER HEALTH (shipped v0.4.114, owner GO 2026-09-08 20:16Z):**
      the workers-ledger.json read AS A WHOLE, not per-slice — the slice tools
      (`oc-ledger claims`, `oc-ship-audit`, `oc-waiter-sweep`) each audit one
@@ -181,7 +181,7 @@ on census evidence + owner word (supervisor.md step 7).
      CHANGELOG monotonicity. Evidence format unchanged: every finding cites
      the ledger row n + the verifiable artifact (git/gh/log) that confirms or
      breaks it — quote-or-no-finding. H reviews the JOURNAL, never edits it;
-     corrections land as new rows or law edits via the Supervisor.
+     corrections land as new rows or law edits via HQ.
    - **Reviewer I — META-REVIEW (added v0.4.114, owner pick 2026-09-08 ~20:4xZ, recommended shape 1):**
      reviews the LENS CATALOG AND ITS OUTPUT — the only reviewer whose object
      is the review machinery itself. Scope: (1) BRIEF CORRECTNESS — each brief
@@ -189,7 +189,7 @@ on census evidence + owner word (supervisor.md step 7).
      the latest persisted report (scope drift, stale check classes), (2)
      OVERLAP — findings double-covered by two lenses, or coverage GAPS where
      no lens owns an artifact class, (3) FALSE-POSITIVE/NEGATIVE HISTORY —
-     per-lens accuracy record from the Supervisor's premise-verification
+     per-lens accuracy record from HQ's premise-verification
      history (precedents: brain-scrub "cargo ban homeless" overstatement, the
      B-8 misattribution — both rejected 2026-09-08), (4) EVIDENCE DISCIPLINE —
      quote-or-no-finding adherence rate in persisted reports (I-4.1
@@ -201,7 +201,7 @@ on census evidence + owner word (supervisor.md step 7).
      diverge, the CYCLE-LOCAL index wins over the root one. Severity scale:
      HIGH (load-bearing lie / stall class) · MED (real gap, bounded blast
      radius) · LOW (nit). I reads
-     persisted reports + this catalog + the Supervisor's validation notes; it
+     persisted reports + this catalog + HQ's validation notes; it
      does NOT re-litigate findings already triple-checked, it audits the
      PATTERN. Output feeds catalog brief edits and reviewer spawning. Same
      quote-or-no-finding evidence rule. Self-reference cap: I may flag its own

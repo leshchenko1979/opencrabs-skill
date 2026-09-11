@@ -193,7 +193,7 @@ cosmetic — NEVER ping for fmt alone. Absorption ends the lifecycle: if the
 maintainer merges/reimplements the feature, the PR story closes with a SHIPPED
 UPSTREAM notice (Phase 6b item 6), not more fork-side work.
 Two same-turn checks (v0.4.5): (1) BEFORE any push to a gated/frozen head branch,
-RE-READ live gate state — latest issue comments + supervisor notifies — session-start
+RE-READ live gate state — latest issue comments + HQ notifies — session-start
 knowledge structurally cannot know what changed mid-turn. (2) Before preparing ANY follow-up
 commit targeting an open PR, check its state via API (`gh pr view <n> --json
 state,mergedAt`) — it may have been maintainer-merged under you. **The state gate ALSO spans every port /

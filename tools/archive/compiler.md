@@ -1,6 +1,6 @@
 # COMPILER — get the new binary onto this box (ARCHIVED RUNBOOK)
 
-⛔ **ROLE RETIRED — S3 cutover 2026-08-28 (owner "let's go to S3", msgid 34717, consent registered).** The Compiler's duties are now automated into `oc-deploy` (ship / poll / swap-execute). This file survives as the RE-ENABLE runbook: to restore the role, follow the procedure and notify — one notify re-enables (target-process-20260827.md S3 row). Do NOT load this expecting an active role; the active surface is SKILL.md + editor.md + supervisor.md.
+⛔ **ROLE RETIRED — S3 cutover 2026-08-28 (owner "let's go to S3", msgid 34717, consent registered).** The Compiler's duties are now automated into `oc-deploy` (ship / poll / swap-execute). This file survives as the RE-ENABLE runbook: to restore the role, follow the procedure and notify — one notify re-enables (target-process-20260827.md S3 row). Do NOT load this expecting an active role; the active surface is SKILL.md + editor.md + hq.md.
 
 **Load only if re-enabling the role per the runbook heading above.**
 
@@ -339,7 +339,7 @@ bounds above).
 
 ## Step 7 — Upstream watch & rebase-port sync (v0.4.0, owner-approved 2026-08-26)
 
-> **RE-HOMED v0.4.80 (lens B F3):** the live procedure is `supervisor.md`
+> **RE-HOMED v0.4.80 (lens B F3):** the live procedure is `hq.md`
 > §Upstream sync — REBASE-PORT. This archived copy is re-enable context only.
 
 ### Watch — every build cycle, part of Step 1 pre-flight

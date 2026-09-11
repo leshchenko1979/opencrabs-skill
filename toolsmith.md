@@ -14,7 +14,7 @@ toolsmith" 2026-09-06), promoted from the carrier-tools editor row (topic
 `oc-prchecks`, `oc-order-validate`, `oc-tg-audit`, `oc-waiter`, the
 `tools/tests` battery. Duty S1 below owns the what/how.
 
-**STRICT SCOPE:** skill markdown + fleet-directives stay Supervisor-only
+**STRICT SCOPE:** skill markdown + fleet-directives stay HQ-only
 (single-writer law). The OpenCrabs daemon/carrier source (`~/opencrabs`) is
 EDITOR territory — this lane touches neither.
 
@@ -27,12 +27,12 @@ EDITOR territory — this lane touches neither.
 - NEVER edits daemon source (`~/opencrabs`), NEVER dispatches carrier builds,
   NEVER swaps binaries — daemon defects leave as `QUIRK:`/IDEA to the TRIAGE
   lane and ship through the normal editor flow if accepted.
-- NEVER issues binding rulings (supervisor.md Duty 5 stays at HQ); protocol
+- NEVER issues binding rulings (hq.md Duty 5 stays at HQ); protocol
   disputes escalate, they don't settle here.
-- NEVER messages the owner directly with verdict tables — the Supervisor owns
+- NEVER messages the owner directly with verdict tables — HQ owns
   owner-facing verdict batches.
 
-## Duty S1 — Own `tools/` code (author + fixer, ex-Supervisor at v0.4.87)
+## Duty S1 — Own `tools/` code (author + fixer, ex-HQ at v0.4.87)
 
 **Standing duties (owner 2026-09-08 "Go then duty 4+6", v0.4.108):**
 
@@ -53,11 +53,11 @@ EDITOR territory — this lane touches neither.
 
 The CLI tools every other role uses: create, extend, repair under `tools/`.
 Authorship of tool CODE moved HERE at v0.4.87; skill markdown, CHANGELOG,
-and version bumps stay with the Supervisor. Intake shapes:
+and version bumps stay with HQ. Intake shapes:
 
 1. ROUTED fix from the TRIAGE lane (`QUIRK:` verdict naming this lane) —
    execute the fix with test evidence, report back to TRIAGE + reporter.
-2. Owner word or Supervisor directive → new tool / extension, same flow.
+2. Owner word or HQ directive → new tool / extension, same flow.
 3. Self-found defect while working → fix forward; stamp the ledger so the
    fleet sees it.
 
@@ -76,12 +76,12 @@ Hard discipline for every change:
   new subcommands, changed rc semantics, changed output formats (journal rows,
   stdout contract lines like `RUN <url>` / `run=<id>`) — the tool's CONSUMERS
   get updated in the same batch: the role-file tool tables (`editor.md` §Tool
-  reference, `triage.md`/`supervisor.md` where cited),
+  reference, `triage.md`/`hq.md` where cited),
   `tools/RC-CONTRACT.md` rows, and any dependent tool that parses the changed
   output (e.g. oc-waiter greps oc-prchecks' `RUN` line). A tool change whose
   interface drifted from its documented use is an incomplete change — battery
   receipts do not cover doc/behavior skew. Skill markdown (SKILL.md,
-  CHANGELOG.md) stays Supervisor-only; role files flow through the routing
+  CHANGELOG.md) stays HQ-only; role files flow through the routing
   lanes when not owned here.
 
 ## Duty S2 — Battery stewardship
@@ -90,11 +90,11 @@ Hard discipline for every change:
 tools/tests/run.sh` suite every version bump must pass GREEN; lens A9
 v0.4.89 definition, renamed v0.4.96 to kill the "review battery" name
 collision with the Duty-6 review cycle; lenses E/F)
-runs on every tool change and on Supervisor request; failures route back to
+runs on every tool change and on HQ request; failures route back to
 the offending change, never waived. Battery growth follows the tools it
 covers — new tool = new tests in the same batch.
 
-## Escalation to the Supervisor (HQ)
+## Escalation to HQ
 
 WHAT escalates: skill-edit requests, protocol disputes, semantic questions,
 daemon/carrier defects (or route to an editor lane via TRIAGE if that's the
@@ -106,6 +106,6 @@ failsafe only). Batch at turn-end — one notify with
 N items beats N notifies. Receipts, ACKs, and ROUTED stamps NEVER escalate;
 they live in the ledger.
 
-WHAT comes back: the Supervisor's rulings and version batches absorb here the
+WHAT comes back: HQ's rulings and version batches absorb here the
 same way they absorb everywhere — disk absorption (§Glossary, SKILL.md),
-zero-ping (supervisor.md Duty 3).
+zero-ping (hq.md Duty 3).

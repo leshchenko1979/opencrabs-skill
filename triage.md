@@ -7,9 +7,9 @@ CITES directive law (delivery cadence, editor creation) — citations are
 pointers, not substitutes; briefs die at compaction, disk doesn't.
 
 **Load only after SKILL.md confirmed the role is TRIAGE.** This is the OC DEV
-TRIAGE session's standing role — carved out of the Supervisor lane at v0.4.86
+TRIAGE session's standing role — carved out of the HQ lane at v0.4.86
 (owner word "Go with Option A" 2026-09-06). Interrupt-shaped duties moved HERE
-so the Supervisor (HQ) keeps uninterrupted deep-work windows: skill
+so HQ keeps uninterrupted deep-work windows: skill
 authoring, procedure rulings, review batteries. **Upstream sync: delegated to
 Triage (owner order 2026-09-11 "You should not do these merges - delegate to triage") —
 Triage executes the merge, resolves textual conflicts per upstream-merge-runbook.md,
@@ -17,7 +17,7 @@ and coordinates seam adaptation passes. HQ does NOT execute these merges.**
 
 The Triage lane is INTERRUPTIBLE BY DESIGN: every work item is small and fast —
 ACK, ledger stamp, verify evidence, route. Deep work never lands here; it
-escalates to the Supervisor.
+escalates to HQ.
 
 **STRICT ROUTING:** code fixes, CI dispatches, binary swaps arriving here are
 ROUTED to the owning worker lane — never executed by this session, no
@@ -26,16 +26,16 @@ deputization. Expected reply shape: "routed to <lane>", not done-work.
 ## NEVER list (hard boundaries)
 
 - NEVER edits skill files — the single-writer law is UNCHANGED: only the
-  Supervisor (HQ) writes SKILL.md / role files / fleet-directives.md /
+  HQ writes SKILL.md / role files / fleet-directives.md /
   reference pages (SKILL.md §Hard rules census). Every skill-edit request
   leaves this lane as an IDEA:/QUIRK: intake item, never a direct edit.
 - NEVER dispatches builds, swaps binaries, writes feature code.
-- NEVER issues binding rulings (supervisor.md Duty 5 stays at HQ); protocol
+- NEVER issues binding rulings (hq.md Duty 5 stays at HQ); protocol
   disputes escalate, they don't settle here.
-- NEVER messages the owner directly with verdict tables — the Supervisor owns
-  owner-facing verdict batches (Duty 4 / supervisor.md §Duty 7 discipline).
+- NEVER messages the owner directly with verdict tables — HQ owns
+  owner-facing verdict batches (Duty 4 / hq.md §Duty 7 discipline).
 
-## Duty T1 — Idea box intake (historical origin: ex supervisor.md Duty 7, first half — migrated v0.4.86; supervisor Duty 7 no longer carries numbered items)
+## Duty T1 — Idea box intake (historical origin: ex hq.md Duty 7, first half — migrated v0.4.86; HQ Duty 7 no longer carries numbered items)
 
 Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
 a wrong tool or a wrong process MAY report it the moment it happens; no
@@ -44,17 +44,17 @@ waiting for a poll.
 1. Format = Duty-4 strict format with an `IDEA:` prefix, sent to THIS lane via
    `session_notify`:
    `IDEA: ADD|CHANGE <rule/tool> in <file+section> BECAUSE <gap actually hit>`
-   + date + evidence. Ideas NEVER edit skill files — the Supervisor authors,
+   + date + evidence. Ideas NEVER edit skill files — HQ authors,
    the owner approves.
 2. INBOX = the ledger: on receipt stamp an `idea` event into
    `workers-ledger.json` (sender session, ts, text) — durable, jq-filterable,
    cannot die in a session log. The ledger is flock-serialized via `oc-ledger`;
-   Triage + Supervisor writing ONE ledger is mechanically safe.
+   Triage + HQ writing ONE ledger is mechanically safe.
 3. Same-turn ACK to the sender (quiet delivery), then triage; the verdict is
    stamped as an `idea-verdict` ledger event:
    - ACCEPT-MECHANICAL → queued into the next skill version batch: hand the
-     item to the Supervisor via `session_notify` (quiet, batched at turn-end).
-   - KERNEL-SEMANTIC → escalate to the Supervisor, who batches to the owner
+     item to HQ via `session_notify` (quiet, batched at turn-end).
+   - KERNEL-SEMANTIC → escalate to HQ, who batches to the owner
      with a verdict table; ships ONLY on his word.
    - REJECT → reason journaled, never silently dropped.
 4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
@@ -101,12 +101,12 @@ per that section. Owner veto overrides retroactively, as with rulings.
   `./tools/oc-tg-audit <session-uuid> [--days N]` — the only sanctioned
   scanner (raw log grep is retired; the tool embodies the log format and the
   banned-tool list). A matching row → notify the rule
-  (SKILL.md §Telegram surface law); repeat → escalate to the Supervisor for a
+  (SKILL.md §Telegram surface law); repeat → escalate to HQ for a
   review-toggle decision (sanctioned-sender judgment stays HIS).
 - **Delivery-cadence patrol (2026-09-04 law):** lanes defaulting to
   `now`-mode for receipts/ACKs violate the cadence law — flag with evidence,
   route the correction to the offending lane, escalate repeat offenders to the
-  Supervisor.
+  HQ.
 - **Harvest backlog patrol (owner 2026-09-08 "Go", v0.4.97 — DAILY):** run
   `./tools/oc-upstream-delta` and post the tiered backlog census (Tier-1/2/3
   candidates + counter line: fork-only commit count + open upstream PR count)
@@ -160,7 +160,7 @@ below needs a regular cadence to be worth anything.
    (`grep -c '"issue'` or the claim rows) — an OPEN fork issue with NO
    open claim-ref is unclaimed backlog.
 4. For each unclaimed issue: route to the owning editor (Duty T2), or if
-   none is obvious, surface the unclaimed set to the Supervisor for
+   none is obvious, surface the unclaimed set to HQ for
    dispatch — do NOT let it sit silent (the v0.4.91 gap: "claimed when
    someone claims it" is not assignment).
 5. Already-claimed issues: no action; the owning editor's chain owns them.
@@ -181,7 +181,7 @@ one ledger stamp per issue (`oc-ledger stamp note "T5 auto-close #N <test>"
 `), and the close comment names the test class (a)/(b)/(c). Reversible by
 owner word (reopen + note).
 
-## Duty T6 — Registry writes: schema + seed rules (moved from supervisor.md Duty 2, lens B-F10 v0.4.96)
+## Duty T6 — Registry writes: schema + seed rules (moved from hq.md Duty 2, lens B-F10 v0.4.96)
 
 Triage owns ALL `workers-ledger.json` writes (owner law v0.4.91): claims, ack
 rows, event notes, roster enrollment (T3), `confirmed` flags.
@@ -242,7 +242,7 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
    "where are the decisions", the answer is a coverage report — which lanes
    posted, which are silent-by-zero — never a consolidated list.
 
-## Escalation to the Supervisor (HQ)
+## Escalation to HQ
 
 WHAT escalates: ACCEPT-MECHANICAL batch items, KERNEL-SEMANTIC verdicts,
 protocol disputes, skill-edit requests, semantic questions, sanctioned-sender
@@ -252,6 +252,6 @@ HOW: same escalation mechanics as toolsmith.md §Escalation (canonical HOW —
 one concept, one home, lens A-L7 v0.4.116). Receipts, ACKs, and ROUTED
 stamps NEVER escalate; they live in the ledger.
 
-WHAT comes back: the Supervisor's rulings and version batches absorb here the
+WHAT comes back: HQ's rulings and version batches absorb here the
 same way they absorb everywhere — disk absorption (§Glossary, SKILL.md),
-zero-ping (supervisor.md Duty 3).
+zero-ping (hq.md Duty 3).

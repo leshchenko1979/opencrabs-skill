@@ -3,8 +3,8 @@ name: opencrabs-dev
 description: >
   OpenCrabs source ops (~/opencrabs): roles EDITOR (fork issues, per-task
   worktrees, CI gate (pr-checks), signed commits, push + sha hand-off, oc-deploy ship,
-  smoke-test-on-notify, upstream PR), SUPERVISOR (skill set + worker ledger),
-  TRIAGE (interrupt lane: idea/QUIRK intake, fix routing, enforcement — carved out of SUPERVISOR at v0.4.86),
+  smoke-test-on-notify, upstream PR), HQ (skill set + worker ledger),
+  TRIAGE (interrupt lane: idea/QUIRK intake, fix routing, enforcement — carved out of HQ at v0.4.86),
   TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
@@ -29,7 +29,7 @@ metadata:
 
 **Owns:** everything touching `~/opencrabs` source, its GitHub Actions runs, or the
 installed `opencrabs` binary. This file = shared facts + role router only. Actual
-procedures live in FOUR role files (`editor.md` / `supervisor.md` / `triage.md` / `toolsmith.md`) + one
+procedures live in FOUR role files (`editor.md` / `hq.md` / `triage.md` / `toolsmith.md`) + one
 ARCHIVED runbook (`tools/archive/compiler.md` — retired at S3 cutover 2026-08-28, re-enable
 = one notify);
 load ONLY the one matching the session's role.
@@ -62,8 +62,8 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-deploy <mode>` | the ship path itself — `ship` / `poll` / `swap-execute` / `watch [--with-delta]` / `fanout` / `contributors` RETIRED (use `oc-attrib --contributors`). Editor S3 path: `editor.md` §Ship. Verdict codes + wait semantics: RC-CONTRACT.md |
 | `./tools/oc-deploy fanout --run <id> [--dry-run]` | mechanical notify fan-out for one carrier run ([#24](https://github.com/leshchenko1979/opencrabs/issues/24)); auto-fired at `swap_execute` tail + on `poll` RED-scan; `OC_DEPLOY_NOFANOUT=1` suppresses — mechanics + journal vocabulary in `s2-swap-journal-spec.md` §Fan-out legs |
 | `./tools/oc-carrier-features [--fetch] [--repo <path>] [--ref <branch>]` | reads the carrier-yml `features` default at `origin/<ref>`; `oc-deploy ship/poll` resolves EMPTY `--features` through this — carrier read failure aborts the ship loudly |
-| `./tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | closed-issue hygiene sweep (supervisor duty) |
-| `./tools/oc-skew-scan [--ledger f] [--current v]` | ledger worker-version skew vs current skill version (supervisor roster review) |
+| `./tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | closed-issue hygiene sweep (HQ duty) |
+| `./tools/oc-skew-scan [--ledger f] [--current v]` | ledger worker-version skew vs current skill version (HQ roster review) |
 | `./tools/oc-ping-proof <uuid> <ping-ts> [--ledger f]` | post-swap notify proof: WOKEN / SILENT / UNREACHABLE verdict |
 | `./tools/oc-pr-atomicity <pr-number>` | atomicity gate (editor Phase 7 / issue triage) |
 | `./tools/oc-ledger <verb>` | workers-ledger: stamp/sync/check-version/cadence/ack/enroll/commit-pending/claim-ref/confirm |
@@ -105,15 +105,15 @@ recipes: `tools/RC-CONTRACT.md` §Unified tools log.
 
 Ask the operator which role this session employs before doing anything:
 
-> **Editor, Supervisor, Triage, or Toolsmith?** (Compiler: archived — say "re-enable compiler" to load `tools/archive/compiler.md`.)
+> **Editor, HQ, Triage, or Toolsmith?** (Compiler: archived — say "re-enable compiler" to load `tools/archive/compiler.md`.)
 
 | Role | Owns | Procedure file |
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR filed on smoke PASS (procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
-| **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + supervisor watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
-| **SUPERVISOR** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub = TEN reviewers, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `supervisor.md` |
-| **TRIAGE** | Interrupt lane (carved out of SUPERVISOR at v0.4.86, owner "Go with Option A"): idea-box + `QUIRK:` tool-problem intake (same-turn ACK, ledger stamps), evidence verification, fix routing to owning editor, new-editor creation, TOOL_ACCUM / cadence enforcement; escalates semantic/KERNEL to the Supervisor — NEVER edits skill files | `triage.md` |
-| **TOOLSMITH** | CLI tool lane (carved out at v0.4.87, owner "Go toolsmith" 2026-09-06; promoted from the carrier-tools editor row): owns `tools/` CODE — makes and fixes the CLI tools every other role uses (`oc-ledger`, `oc-deploy`, `oc-prchecks`, `oc-tg-audit`, battery); daemon/carrier source stays EDITOR territory, skill markdown stays Supervisor-only — NEVER edits skill files | `toolsmith.md` |
+| **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + HQ watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
+| **HQ** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub = TEN reviewers, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `hq.md` |
+| **TRIAGE** | Interrupt lane (carved out of HQ at v0.4.86, owner "Go with Option A"): idea-box + `QUIRK:` tool-problem intake (same-turn ACK, ledger stamps), evidence verification, fix routing to owning editor, new-editor creation, TOOL_ACCUM / cadence enforcement; escalates semantic/KERNEL to HQ — NEVER edits skill files | `triage.md` |
+| **TOOLSMITH** | CLI tool lane (carved out at v0.4.87, owner "Go toolsmith" 2026-09-06; promoted from the carrier-tools editor row): owns `tools/` CODE — makes and fixes the CLI tools every other role uses (`oc-ledger`, `oc-deploy`, `oc-prchecks`, `oc-tg-audit`, battery); daemon/carrier source stays EDITOR territory, skill markdown stays HQ-only — NEVER edits skill files | `toolsmith.md` |
 
 Roles **DO NOT intersect**:
 
@@ -126,11 +126,11 @@ Roles **DO NOT intersect**:
   → swap-execute, consent eliminated 2026-08-28). If the run is RED, `oc-deploy`
   reports evidence and stops — fixing code is always Editor work.
 - The TRIAGE lane NEVER edits skill files (single-writer law unchanged — the
-  Supervisor is the sole author), NEVER settles protocol disputes (rulings =
-  Supervisor Duty 5), NEVER executes builds/swaps (strict routing, triage.md).
+  HQ is the sole author), NEVER settles protocol disputes (rulings =
+  HQ Duty 5), NEVER executes builds/swaps (strict routing, triage.md).
 - The TOOLSMITH lane owns `tools/` CODE only (v0.4.87 carve-out) — skill markdown +
-  fleet-directives stay Supervisor-only, daemon/carrier source stays Editor territory,
-  NEVER settles protocol disputes (rulings = Supervisor Duty 5).
+  fleet-directives stay HQ-only, daemon/carrier source stays Editor territory,
+  NEVER settles protocol disputes (rulings = HQ Duty 5).
 
 If the request mixes roles (e.g. "fix X and deploy it"), split into separate
 role loads — do not fuse the roles in one pass without Alexey saying so explicitly.
@@ -211,8 +211,8 @@ General area, an unrelated chat, or the owner DM.
 - Sanctioned senders (NOT editors — none of this is lane-to-lane): the
   task-queue skill's documented `/tq-approve` topic-creation + invitation flow;
   alerting lanes reporting to the owner DM per the ops runbook; the
-  supervisor's own session text.
-- Violation pattern for the supervisor: a TOOL_ACCUM row showing an editor
+  HQ's own session text.
+- Violation pattern for HQ: a TOOL_ACCUM row showing an editor
   lane calling a telegram send/edit tool → session_notify the rule; second
   offense → review toggled.
 
@@ -227,7 +227,7 @@ General area, an unrelated chat, or the owner DM.
 | Who | owning Editor | Editor dispatches the gate and reads conclusions; `oc-deploy` reads build conclusions | `oc-deploy` swap path (pre-S3: Compiler alone) |
 | Toolchain | none — local cargo FORBIDDEN in any form (binaries disabled 2026-08-28; editor.md §Box law — canonical, other files reference "(box law)") | CI's own — never local | `strings`, `sha256sum`, `git grep` — none compile anything |
 | Evidence | one line: drove X, observed Y (+ run id / sha) | job/step conclusions read via API | marker found/not-found + checksum line in baseline.json |
-| On FAIL | issue FIRST, then evidence to the supervisor lane (`session_notify`) | fix before merge / PR | NO swap — feature missing from build; regression stated plainly |
+| On FAIL | issue FIRST, then evidence to the HQ lane (`session_notify`) | fix before merge / PR | NO swap — feature missing from build; regression stated plainly |
 
 The table above carries the content; what remains prose:
 
@@ -292,13 +292,13 @@ Origin: the ship-38585459 smoke (n=2036) passed all bookkeeping legs while its
   GREEN; S3 = live cutover 2026-08-28 (swap chain mechanical, consent
   eliminated). Rules saying "below S2"/"S3" mean the stage gate.
 - **Lane** — one editor session (worker) owning one fork issue + its topic.
-  (v0.4.89, lens A7: extended to any role session — Triage/TOOLSMITH/Supervisor
+  (v0.4.89, lens A7: extended to any role session — Triage/TOOLSMITH/HQ
   lanes exist too; "lane" ≠ editor-only.)
 - **disk absorption** — the v0.4.19 worker-update model: skill files are plain
   disk; workers absorb re-reads at their own boundaries (turn start, role-file
   load), no reload pings are owed or sent (defined here lens A16 v0.4.89;
   used in editor.md/triage.md/toolsmith.md).
-- **Triage lane** — the interrupt lane carved out of the Supervisor at v0.4.86
+- **Triage lane** — the interrupt lane carved out of HQ at v0.4.86
   (idea/QUIRK intake, fix routing, enforcement patrols — `triage.md`); never
   edits skill files. Discover its session via `session_search`, never
   uuid-from-memory.
@@ -309,10 +309,11 @@ Origin: the ship-38585459 smoke (n=2036) passed all bookkeeping legs while its
 - **Roster** — the worker registry in `workers-ledger.json` (enroll / claim /
   ack rows); `oc-attrib` joins Session-Id trailers against it.
 - **Lens (Reviewer A–I)** — one Duty-6 read-only review perspective
-  (supervisor.md §Duty 6; full briefs: `review-lenses.md`).
-- **Supervisor (HQ)** — the canonical name for the supervisor lane; unofficial
-  variants ("Author lane", "Carrier") seen in lane files are retired — lens
-  A-L3 v0.4.116.
+  (hq.md §Duty 6; full briefs: `review-lenses.md`).
+- **HQ** — the skill-owning lane. The former name *Supervisor* is RETIRED
+  (owner order 2026-09-11 folded the term into HQ — one role, one term);
+  unofficial variants ("Author lane", "Carrier") seen in lane files are also
+  retired — lens A-L3 v0.4.116.
 - **Selftest** — a tool's built-in test mode (`oc-deploy --selftest` etc.);
   **battery** — `tools/tests/run.sh` across all tools. Both green before
   ANY version bump.
@@ -320,12 +321,12 @@ Origin: the ship-38585459 smoke (n=2036) passed all bookkeeping legs while its
   (`gh run view --json conclusion`), never exit-code inference.
 - **TOOL_ACCUM** — the per-session tool-usage rows accumulated in the unified
   tools log; evidence base for Telegram surface-law audits (triage.md Duty T4
-  — ex supervisor.md Duty 7).
+  — ex hq.md Duty 7).
 
 ## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
 
 ONE location: red-run diagnosis reads these (pre-S3: Compiler Step 2; now:
-`oc-deploy` RED reports + supervisor triage); the
+`oc-deploy` RED reports + HQ triage); the
 Editor applies the same ones in its fix round (editor.md Phase 6c). No lane
 uses them as a licence to fix outside its scope.
 
@@ -413,11 +414,11 @@ codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing 
 
 Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
 
-1. **Watch = supervisor duty, every build cycle**: `./tools/oc-upstream-delta`
+1. **Watch = HQ duty, every build cycle**: `./tools/oc-upstream-delta`
    (base/ahead/behind TSV + patch-id ABSORBED-CANDIDATE rows; exit 0 clean,
    1 delta = verdict consumed here). Small clean delta → propose the sync
    (owner word gates it); mass absorption or non-trivial conflicts → notify
-   Alexey with the delta and WAIT. Procedure: `supervisor.md` §Upstream sync.
+   Alexey with the delta and WAIT. Procedure: `hq.md` §Upstream sync.
 2. **Sync model = MERGE-ON-ARRIVAL** (owner 2026-09-02 "Land it"; supersedes the
    2026-08-26 REBASE-PORT, which is RETIRED — historical, PR chains only):
    fork main **merges** `adolfousier/main` when upstream shifts. Merge execution
@@ -451,8 +452,8 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    `.github/workflows/` on main rides the next PR diff toward upstream.
    Dispatch via `gh workflow run --ref ci/<name>`. After every upstream
    merge/port verify parity mechanically (three-way-diff workflow check —
-   procedure: `supervisor.md` §Parity; the runbook §Port carries the port-side
-   mechanics, the three-way parity check itself lives in supervisor.md).
+   procedure: `hq.md` §Parity; the runbook §Port carries the port-side
+   mechanics, the three-way parity check itself lives in hq.md).
    **DRIFT PERMANENT (owner
    ruling):** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6);
    the carrier branch is the sole build lane. oc-ci-parity RETIRED v0.4.117
@@ -484,20 +485,20 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
 - Stick to the OFFICIAL ONTOLOGY (owner 2026-08-31): all roles use the
   vocabulary this SKILL defines — test ontology (§Test ontology: SMOKE TEST /
   CODE TESTS / FEATURE-PRESENCE CHECK), infra terms (§Glossary: selftest /
-  battery / CI gate), roles (Editor / Supervisor / Reviewer lenses),
+  battery / CI gate), roles (Editor / HQ / Reviewer lenses),
   gate colors (GREEN/RED with run receipt), phases, tool names. No ad-hoc
   synonyms for existing concepts; a NEW concept gets proposed via the poll
   format and named on owner word — never improvised mid-report. Reviewer A
   (REDUNDANCY + ONTOLOGY) enforces this lens-side.
-- ONLY the Supervisor edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9): `SKILL.md` /
-  `editor.md` / `supervisor.md` / `triage.md` / `toolsmith.md` / `review-lenses.md` / `fleet-directives.md` /
+- ONLY HQ edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9): `SKILL.md` /
+  `editor.md` / `hq.md` / `triage.md` / `toolsmith.md` / `review-lenses.md` / `fleet-directives.md` /
   `upstream-merge-runbook.md` / `editor-phase7-rules.md` / `war-stories.md` /
   `s2-swap-journal-spec.md` / `README.md` / `CHANGELOG.md` / `tools/RC-CONTRACT.md` — including all worker lanes AND the TRIAGE lane AND the TOOLSMITH lane (decision 7,
   2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
   write. ONE exception: `tools/**` CODE is owned by the TOOLSMITH lane (v0.4.87 carve-out) — every change ships
   with battery receipts (README.md's tool-fleet section and `tools/RC-CONTRACT.md`
 count as tools/ surface — toolsmith-writable; the rest of README.md stays
-Supervisor-only). Skill markdown + fleet-directives stay Supervisor-only.
+HQ-only). Skill markdown + fleet-directives stay HQ-only.
 - Relay only PREDICATED claims (v0.4.6, from fabrication deviation #3): any
   build/deploy/artifact claim you pass onward must carry evidence YOU verified
   same-turn — run id against the API, sha against `ls-remote`/job-name embed,
@@ -566,7 +567,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
   smoke tests, defects in another editor's feature.
 - Restart scope: **`opencrabs-ops` ONLY.** The `family` and default-profile daemons
   require Alexey's explicit approval EVERY time. Exception (v0.4.71, lens B2 #3;
-  sanctioned v0.4.59 #47): the supervisor may mechanically restart the
+  sanctioned v0.4.59 #47): HQ may mechanically restart the
   `opencrabs-family.service` SIDECAR (journal-sequence verified) — never the
   default-profile daemon.
 - Never trust watcher exit codes alone — read the run's own `conclusion` via API.

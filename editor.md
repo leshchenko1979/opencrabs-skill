@@ -56,7 +56,7 @@ editor-facing duties:
   replies auto-route to YOUR topic as session text; that is your one sanctioned
   telegram surface. Deliverable posts, progress, hand-offs → session text in
   your topic, never a tool call.
-- Talking to another session (supervisor, other editors, any lane) =
+- Talking to another session (HQ, other editors, any lane) =
   `session_notify` with `target_session` taken from the mechanical
   `[session-notify from=<uuid>]` header or `session_search` — never a telegram
   tool aimed at their topic/thread or at the owner DM.
@@ -68,15 +68,15 @@ editor-facing duties:
   format `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>` + evidence.
   Never retry-around silently, never self-patch — Toolsmith owns `tools/oc-*` tool code.
   Core daemon bugs go directly to GitHub fork issues. Fallback target if Toolsmith
-  is unreachable: the supervisor lane (OC DEV HQ); never sit on a broken tool.
+  is unreachable: the HQ lane; never sit on a broken tool.
 - Reads: `tg_get_messages` in your own topic only; no `tg_search_global`, no
   cross-chat/list probing. Reactions allowed (owner consent signal).
 
 ## CI-wait discipline & actor attribution
 
 *(Waiter-discipline items — poll floor, --wait ceiling, invocation
-verify, notify wiring, log-window cuts, REST casing — are SUPERVISOR-scoped:
-supervisor.md §CI-wait & waiter discipline, items W1–W6.)*
+verify, notify wiring, log-window cuts, REST casing — are HQ-scoped:
+hq.md §CI-wait & waiter discipline, items W1–W6.)*
 
 **Direct dispatch (owner order 2026-09-10, fleet-directives §Direct dispatch):
 work orders go sender → resource-owner directly — never through an intermediary
@@ -95,7 +95,7 @@ receipt id via oc-ledger.**
    beats memory when they disagree). This session's uuid comes from the runtime
    prompt/session context; a
    lane that cannot recall its own uuid reads it from its Session-Id trailer /
-   the supervisor roster before running any tool.
+   the HQ roster before running any tool.
 3. Re-running the same CI because the head moved is inherent to a fix loop, but
    only via oc-prchecks re-dispatch — pr-checks.yml carries a concurrency group
    (`cancel-in-progress: true`, owner fix) so the superseded run is auto-cancelled.
@@ -104,7 +104,7 @@ receipt id via oc-ledger.**
    TREE — only the checkout-ref is terminal truth for code-level verdicts.
    Verify the run checked out your head sha before reading any verdict as lane
    evidence; a mismatch is a carrier bug against the dispatch path — come
-   straight to the supervisor with run id + checkout-ref + ledger incident
+   straight to HQ with run id + checkout-ref + ledger incident
    stamp (suspect the single-flight dispatch lock adoption).
 5. **Dispatch identity check (Duty-4 P3, v0.4.77):** after dispatching, verify
    the run actually carries your head (job name embeds the head sha) before
@@ -155,7 +155,7 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
    `oc-ledger ack <your-roster-uuid> <new-version>` (shape `0.N.N`, `v`
    prefix tolerated — v0.4.55 fixed the N.N-only regex that made every real
    version un-ackable) — the ack row is the
-   mechanical adoption record (supervisor Duty 3 reads it for skew-chase).
+   mechanical adoption record (HQ Duty 3 reads it for skew-chase).
 3. Apply changed rules from the NEXT phase boundary — a phase already in
    flight finishes under the rules it started under. Doc-only drift adopts
    immediately; workflow-shape drift waits for the boundary.
@@ -178,7 +178,7 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
    the canonical copy themselves (oc-drift-check §Skill-dir resolution).
 
 No reload volley is owed to you (v0.4.19 disk absorption stands) — the
-pull-check is YOUR duty; supervisor notifies stay targeted per Duty 3.
+pull-check is YOUR duty; HQ notifies stay targeted per Duty 3.
 
 ## Decision Rollcall duty — owner decisions post direct, in YOUR topic (owner order 2026-09-08, topic 42487, ruling n=1994)
 
@@ -243,7 +243,7 @@ Per-tool rc registers: `tools/RC-CONTRACT.md` (sole register; rows above carry p
 
 Rules that outlive any table: journal read-back after every `oc-ledger`
 claim/stamp (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
-a tool's exit code alone; the ≥60s detached-poll floor (supervisor.md §CI-wait & waiter discipline, item W1).
+a tool's exit code alone; the ≥60s detached-poll floor (hq.md §CI-wait & waiter discipline, item W1).
 
 ## Phase 0 — Fresh base
 
@@ -291,7 +291,7 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
 3. **NO CLAIMING ON THE FORK** (SKILL.md §ISSUE ROUTING): no tackling comments, self-assignment, labels/reactions
    on fork issues — the owner's notification surface stays clean. Claim
    record = `Issue-Ref: #N` trailer on commits/PR + your feature row in
-   `workers-ledger.json` (first ledger timestamp wins; conflicts are supervisor
+   `workers-ledger.json` (first ledger timestamp wins; conflicts are HQ
    rulings, never GitHub chatter). The uniqueness sweep in step 1 stays
    read-only search.
 4. **Claim read-back (Duty-4, v0.4.71):** after EVERY
@@ -511,10 +511,10 @@ right here (`opencrabs-ops` user unit).
    proceeds to upstream PR preparation; no owner wait.
 5. FAIL → FILE THE ISSUE FIRST (Phase 1 procedure: symptom + evidence — you
    found it, you file it). Then send raw evidence + the issue link to the
-   supervisor lane (`session_notify`) — do NOT attribute, do NOT fix another
+   HQ lane (`session_notify`) — do NOT attribute, do NOT fix another
    editor's feature; attribution via Session-Id trailers is MECHANICAL
    (`oc-attrib`; decision 2026-08-25 2a, mechanical fan-out above).
-6. SHIPPED UPSTREAM notice (v0.4.0): if the supervisor (or the post-swap
+6. SHIPPED UPSTREAM notice (v0.4.0): if HQ (or the post-swap
    fan-out) reports your feature was
    absorbed by upstream (maintainer merged or reimplemented it), your fork-side
    duty for it ENDS — no further fork maintenance, no fix rounds. Future work

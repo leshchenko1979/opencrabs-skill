@@ -13,8 +13,8 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 |---|---|
 | `SKILL.md` | Main entry: roles, hard rules, tool register, ship path, glossary |
 | `editor.md` | EDITOR role procedure — Phases 0–7b (issue claim → worktree → edit → gate → commit → ship → upstream PR) |
-| `supervisor.md` | SUPERVISOR role — worker roster, duty cadence, CI-wait & waiter discipline, review lenses |
-| `review-lenses.md` | Full Duty-6 lens briefs (A–I) — split from supervisor.md v0.4.78 |
+| `hq.md` | HQ role — worker roster, duty cadence, CI-wait & waiter discipline, review lenses |
+| `review-lenses.md` | Full Duty-6 lens briefs (A–I) — split from hq.md v0.4.78 |
 | `editor-phase7-rules.md` | Phase-7 reference rules disclosed from editor.md (v0.4.78) |
 | `war-stories.md` | Incident histories behind the hard rules (disclosed from SKILL.md, v0.4.80) |
 | `fleet-directives.md` | Binding owner directives (sync policy, PR law, builds, gates, triage) — re-homed from ops AGENTS.md/MEMORY.md, 2026-09-02 |
@@ -32,7 +32,7 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | Role | State | Runs |
 |---|---|---|
 | **EDITOR** | live | Fork issues, per-task worktrees, CI gates, signed commits, `oc-deploy ship`, upstream PRs |
-| **SUPERVISOR** | live | Worker ledger, duty cadence, multi-lens code/structure reviews |
+| **HQ** | live | Worker ledger, duty cadence, multi-lens code/structure reviews |
 | **TRIAGE** | live (v0.4.86 carve-out) | Idea-box + QUIRK intake, evidence verification, fix routing, new-editor creation |
 | **TOOLSMITH** | live (v0.4.87 carve-out) | Owns `tools/` CODE — makes and fixes the CLI tools every other role uses |
 | **COMPILER** | **RETIRED 2026-08-28** (S3 cutover) | duties absorbed by `tools/oc-deploy` (ship / poll / swap-execute) |

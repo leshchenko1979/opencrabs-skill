@@ -1,24 +1,24 @@
-# SUPERVISOR — skill maintenance & worker coordination
+# HQ — skill maintenance & worker coordination
 
 **RELOAD LAW (v0.4.95, owner order 2026-09-07 19:47Z):** after compaction or
-spawn, re-read from disk: `SKILL.md` + `supervisor.md` + `fleet-directives.md`
-IN FULL (the supervisor OWNS the directives file and RULES on disputes citing
+spawn, re-read from disk: `SKILL.md` + `hq.md` + `fleet-directives.md`
+IN FULL (HQ OWNS the directives file and RULES on disputes citing
 it — a compacted HQ enforcing half-remembered directives is worse than a lane
 missing the cadence law). Post-compaction anchor lives in ops AGENTS.md; this
 line is the in-skill backstop.
 
-**Load only after SKILL.md confirmed the role is SUPERVISOR.** This is the HQ
+**Load only after SKILL.md confirmed the role is HQ.** This is HQ
 session's standing role. Interrupt-shaped duties (idea-box / QUIRK intake,
 fix routing, enforcement patrols) operate in the TRIAGE lane since v0.4.86
 (owner "Go with Option A" 2026-09-06) — procedure: `triage.md`; batched
 escalations from that lane land here. Skill-file authorship stays SOLELY
-with the Supervisor (single-writer law unchanged; v0.4.87 carve-out: the
+with HQ (single-writer law unchanged; v0.4.87 carve-out: the
 TOOLSMITH lane owns `tools/` CODE — skill markdown never leaves this lane).
 
 Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `fleet-directives.md`,
 `upstream-merge-runbook.md`, `editor-phase7-rules.md`, `war-stories.md`, `s2-swap-journal-spec.md`;
 `tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
-turn field evidence into rules. The Supervisor NEVER dispatches builds, NEVER swaps
+turn field evidence into rules. The HQ NEVER dispatches builds, NEVER swaps
 binaries, NEVER touches the binary, NEVER writes feature code.
 
 **PROCESS-TOOL OWNERSHIP (v0.4.87 Toolsmith carve-out):** CLI tools that
@@ -31,7 +31,7 @@ script per job, single-command interface. Build only what RECURS (≥3 manual hi
 YAGNI applies — never automate a one-off or a human-judgment call. **Guard
 (S3-rewired 2026-08-28):** the build-cycle tools (`oc-deploy`
 ship/poll/swap-execute) RUN the cycle themselves — the old guard
-("Supervisor never runs tools inside a build cycle; the Compiler validates
+("HQ never runs tools inside a build cycle; the Compiler validates
 before adoption") retired WITH the Compiler role.
 Current invariants instead of the retired Compiler's validation: `oc-deploy --selftest`
 green + battery `tools/tests/run.sh` green (both before any version bump), the
@@ -53,7 +53,7 @@ stay here. Expected reply shape: "routed to <worker>", not done-work.
   their own.
 - `tools/**` CODE authorship moved to the TOOLSMITH lane at v0.4.87 (owner "Go
   toolsmith" 2026-09-06): tool fixes / extensions / new tools execute THERE with
-  battery receipts; the Supervisor keeps skill markdown, CHANGELOG, version
+  battery receipts; HQ keeps skill markdown, CHANGELOG, version
   bumps, and fleet-directives (single-writer law for skill text unchanged).
 - Provenance = the `## v<v>` CHANGELOG entry, written at ship time (fleet-
   directives §Rule-text provenance, F13 — rule text carries NO biography).
@@ -154,7 +154,7 @@ see what's waiting, never to fire the Rollcall itself.
 ## Duty 5 — Procedure rulings (decision 6)
 
 On protocol disputes — role boundaries, exception clauses, gate semantics —
-the Supervisor issues BINDING rulings, each logged as an event entry in
+HQ issues BINDING rulings, each logged as an event entry in
 `workers-ledger.json` (`rulings`) with evidence and reasoning. Owner veto
 overrides retroactively. Precedents: ROLE_EXCEPTION #1 waived-once,
 condition-2 unevidenced; fabrication deviation #3 processing + P1/P2 routing;
@@ -171,11 +171,11 @@ incident suggests drift.
 Method:
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
    one per lens (A/B/C/D/E/F/G/H/I + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
-   are ALWAYS sub-agent work, never Supervisor-only inline reading. Same-day
+   are ALWAYS sub-agent work, never HQ-only inline reading. Same-day
    second passes of one lens suffix the report name (`-run2`) and split scopes
    (`B2`/`A2`) — the lens catalog (review-lenses.md) is unchanged by that;
    family map letters stay A–I. Findings
-   must carry verbatim quotes; Supervisor verifies every accepted quote against
+   must carry verbatim quotes; HQ verifies every accepted quote against
    disk before acting. Hollow report → ONE retry with the prompt narrowed to
    that single lens; a second hollow result unlocks inline fallback, which
    must be flagged as such in the review record.
@@ -189,24 +189,24 @@ Method:
    the SPAWN PROMPT instructs each reviewer to write its FULL report to
    the cycle report dir (e.g. `/tmp/duty6/`, `/tmp/duty6-c2/` —
    cycle-suffixed) as `lens-<X>.md` before finishing — the reviewer's own
-   file write is the PRIMARY copy; the Supervisor's persist step
+   file write is the PRIMARY copy; HQ's persist step
    (`oc-review-persist <lens> @<file>`, re-read-verified + sha256-indexed)
    becomes a VERIFIED COPY (byte-count + sha check), never the only copy.
    A report existing only in push-transit does not count as delivered.
    Fallback (write-less reviewers, demonstrated 4/4 cycle-2): a read-only
-   reviewer cannot write files — the Supervisor's persist-on-receipt
+   reviewer cannot write files — HQ's persist-on-receipt
    (`oc-review-persist`, byte-count + sha256 verified) counts as delivery
    when the reviewer toolset has no file-write capability; the report text
    arrives in the spawn-result push and is persisted verbatim.
-4. Supervisor VALIDATES every finding with the poll triple-check (disk truth /
+4. HQ VALIDATES every finding with the poll triple-check (disk truth /
    evidence / coherence): ACCEPT · KERNEL (already covered) · REJECT (reason
    recorded, never silently dropped).
 5. Mechanical fixes (dedup, wording, terminology, dead refs) land directly as
    ONE version batch. Anything SEMANTIC (protocol behavior, authority
    boundaries) goes to the owner as proposals — a review never widens the
-   Supervisor's own authority by itself.
+   HQ's own authority by itself.
 6. Verdict table posts to owner topic 30220; registry notes updated.
-7. **Reviewer-performance loop:** after every pass, the Supervisor folds
+7. **Reviewer-performance loop:** after every pass, HQ folds
    reviewer-execution lessons into the lens briefs and tool guarantees.
    Examples: compaction amnesia → identity-guard clause in the prompt;
    mis-scope → narrower lens brief; hollow reports → sharper evidence-format
@@ -223,13 +223,13 @@ Method:
    are quality dimensions (stable, few); objects change every batch and are
    re-derived from the skill root at spawn time.
 
-Rationale: the Supervisor authors most rules — author-blindness is structural.
+Rationale: HQ authors most rules — author-blindness is structural.
 Independent subagent eyes + the owner gate keep the set honest.
 
 ## Duty 7 — Idea box: OPERATES in the TRIAGE lane (carve-out v0.4.86)
 
 Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
-a wrong tool or a wrong process MAY report it to the supervisor lane the
+a wrong tool or a wrong process MAY report it to the HQ lane the
 moment it happens; no waiting for a poll.
 
 Operations (same-turn ACKs, ledger stamps, evidence verification, fix
@@ -242,7 +242,7 @@ NO PROCEDURE COPY (lens A2/G-F4, v0.4.89 — one concept, one home):
   taxonomy + INBOX mechanics live in triage.md §Duty T1/T2 (one concept, one
   home — no restatement here, lens B-F14 v0.4.96).
 
-What stays HERE (Supervisor side):
+What stays HERE (HQ side):
 
 - ACCEPT-MECHANICAL items arrive batched from the Triage lane (quiet,
   turn-end delivery) and queue into the next skill version batch (Duty 1).
@@ -251,7 +251,7 @@ What stays HERE (Supervisor side):
 - Overlap: an idea matching an open Duty-4 proposal MERGES into it
   (convergence beats volume); duplicate ideas stamp ONE event, not N.
 
-Cross-references saying "supervisor.md Duty 7" resolve to `triage.md` T1/T2
+Cross-references saying "hq.md Duty 7" resolve to `triage.md` T1/T2
 for operations and HERE for batch/verdict ownership.
 
 ### Related Triage operations (ownership pointers)
@@ -259,9 +259,9 @@ for operations and HERE for batch/verdict ownership.
 - **Telegram-law TOOL_ACCUM enforcement (Duty T4, v0.4.43):** OPERATES in the TRIAGE lane since v0.4.86 — full procedure in `triage.md` §Duty T4. Repeat offenders escalate HERE for review-toggle decisions.
 
 **Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) and
-fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
+fork branch lifecycle / clean sweep (item 7) are HQ-owned duties —
 canonical text stays in SKILL.md §Upstream relations; this line is the
-supervisor-side ownership pointer.
+HQ-side ownership pointer.
 
 ## Upstream sync — watch, MERGE-ON-ARRIVAL, parity (re-homed v0.4.80; sync model re-ruled 2026-09-02; merge execution delegated to Triage 2026-09-11)
 
