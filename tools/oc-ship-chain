@@ -29,7 +29,10 @@
 #
 # Exit: 0 SWAPPED (full chain complete)
 #       2 usage
-#       3 dirty fork checkout (pre-flight)
+#       3 precondition not met — pre-flight: dirty fork checkout, or $BRANCH
+#         absent from the fork remote (push it); or the LEG1 gate returned
+#         oc-prchecks rc 2 (its usage/sha-shape/unknown-ref class). A
+#         precondition is the LANE's to fix — it is never an infra fault.
 #       4 GATE-RED (oc-prchecks rc 3) or CARRIER-RED (ship wait verdict RED)
 #       5 NON-FF (branch not fast-forwardable onto fork main — lane rebases
 #         via oc-rebase-safety, then re-runs the chain)
@@ -195,6 +198,23 @@ if [ -n "$MAIN_WT" ] && [ "$MAIN_WT" != "$FORK_REPO" ]; then
 fi
 DIRTY="$(git -C "$FORK_REPO" status --porcelain | head -5)"
 [ -z "$DIRTY" ] || die "fork checkout dirty — clean before chaining: $DIRTY" 3
+# REMOTE-BRANCH PRE-FLIGHT (defect fix 2026-09-11, lane facd50af report).
+# LEG1 dispatches a gate that needs the branch ON THE FORK REMOTE, but nothing
+# checked that before dispatching. A locally-committed, never-pushed branch
+# therefore burned a dispatch and came back "sha ... not found on
+# leshchenko1979/opencrabs", which the gate arm below classifies as INFRA rc=6
+# ("gate infra") — sending the lane hunting a phantom infrastructure fault when
+# the real cause was a missing precondition. One ls-remote fails fast in the
+# SAME rc-3 class as the dirty check and costs no dispatch. The remote is
+# resolved from the fork checkout's OWN `origin`, so the check cannot drift
+# from the repo the ff-merge in LEG3 actually targets. `ls-remote --exit-code`
+# returns 2 when the pattern matches nothing; any non-zero is treated as
+# absent, and an unresolvable remote is itself rc 3 rather than a silent pass.
+FORK_REMOTE="$(git -C "$FORK_REPO" remote get-url origin 2>/dev/null || true)"
+[ -n "$FORK_REMOTE" ] || die "fork checkout has no 'origin' remote — cannot verify branch '$BRANCH' is pushed" 3
+git -C "$FORK_REPO" ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1 \
+  || die "branch '$BRANCH' not on the fork remote ($FORK_REMOTE) — push it before chaining (LEG1's gate needs it there)" 3
+journal "pre-flight ok: branch $BRANCH present on fork remote"
 journal "START sha=$SHA branch=$BRANCH"
 
 if [ "$DRY" = "1" ]; then
@@ -278,6 +298,20 @@ else
   case "$GATE_RC" in
     0) journal "LEG1 gate GREEN" ;;
     3) journal "LEG1 gate RED";  printf '%s\n' "$GATE_OUT"; die "GATE-RED" 4 ;;
+    # rc 2 is prchecks' USAGE/PRECONDITION class ("usage / sha-shape / unknown
+    # ref / repo-path-no-origin"), NOT infra — and the rc-6 contract above lists
+    # only prchecks 4/7/8 as infra. Funnelling 2 into the `*)` infra arm (defect
+    # fix 2026-09-11, lane facd50af report) sent lanes hunting a phantom
+    # infrastructure fault for a missing precondition: the reporter spent time
+    # on gateway health, freeze markers and the fork checkout before the real
+    # cause surfaced. Now dies rc 3 — the same precondition class as the
+    # pre-flight checks above — with the prchecks message left intact. The new
+    # remote-branch pre-flight catches the common cause earlier still; this arm
+    # covers the residual (sha pushed to a different remote, a force-push moved
+    # it, a short-sha refusal). prchecks rc 6 CANCELLED-superseded stays in the
+    # infra arm below — pre-existing, out of scope for this report.
+    2) journal "LEG1 gate PRECONDITION rc=2 (not infra)"; printf '%s\n' "$GATE_OUT"
+       die "gate precondition failed rc=2 — the branch/sha is not usable on the fork remote (see the oc-prchecks line above); push it and re-run. This is NOT an infrastructure fault." 3 ;;
     *) journal "LEG1 gate INFRA rc=$GATE_RC"; printf '%s\n' "$GATE_OUT"; die "gate infra rc=$GATE_RC" 6 ;;
   esac
 fi
@@ -379,6 +413,20 @@ selftest_impl() {
   echo feat > "$T/clone/feat.txt"
   git -C "$T/clone" add -A && git -C "$T/clone" commit -qm feat
   FSHA="$(git -C "$T/clone" rev-parse HEAD)"
+  # The remote-branch pre-flight (defect fix 2026-09-11) requires $BRANCH to
+  # exist on the fork remote, because LEG1's gate needs it there. Every test
+  # below chains --branch feat, so feat MUST be pushed or they all die rc 3 at
+  # pre-flight. Without this push the pre-flight had no fixture and test 1's
+  # unguarded `OUT="$(run_chain ...)"` made `set -e` abort the entire selftest
+  # silently — rc 3, ZERO output, not one assertion printed. Fixture push and
+  # the pre-flight assertions at the end of this function land together for
+  # exactly that reason.
+  git -C "$T/clone" push -q origin feat
+  # A deliberately UNPUSHED branch: the pre-flight's own fixture.
+  git -C "$T/clone" checkout -qb unpushed-fixture
+  echo u > "$T/clone/u.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm u
+  USHA="$(git -C "$T/clone" rev-parse HEAD)"
   # fixture "fork checkout" = clone back on main
   git -C "$T/clone" checkout -q main
 
@@ -622,6 +670,55 @@ EOF
       OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
       bash "$SELF" --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
   check_rc "freeze-override-lifts-block" "$RC" 0
+
+  # Remote-branch pre-flight + the rc-2 precondition split (defect fix
+  # 2026-09-11, lane facd50af report). An unpushed branch used to clear
+  # pre-flight, burn a gate dispatch and come back "sha not found", which the
+  # gate arm then classified INFRA rc=6 — a phantom infra hunt for a missing
+  # precondition. The fixture carries a deliberately unpushed branch
+  # (`unpushed-fixture`) so both halves are testable.
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  RC=0; OUT="$(run_chain --sha "$USHA" --branch unpushed-fixture --dry-run 2>&1)" || RC=$?
+  check_rc "branch-preflight-unpushed-rc3" "$RC" 3
+  case "$OUT" in
+    *unpushed-fixture*) ok "branch-preflight-names-branch" ;;
+    *) bad "branch-preflight-names-branch: $OUT" ;;
+  esac
+  # The pre-flight must fire BEFORE the DRY-RUN success line. Pre-fix this
+  # emitted "pre-flight ok ... branch=unpushed-fixture" and exited 0, so
+  # asserting the absence of that line is what makes this non-vacuous: the rc
+  # assertion alone would pass on any unrelated rc-3 death.
+  case "$OUT" in
+    *"pre-flight ok"*) bad "branch-preflight-blocks-dispatch: emitted pre-flight ok" ;;
+    *) ok "branch-preflight-blocks-dispatch" ;;
+  esac
+  # The pushed branch must still pass — the pre-flight is not a blanket block.
+  RC=0; OUT="$(run_chain --sha "$FSHA" --branch feat --dry-run 2>&1)" || RC=$?
+  check_rc "branch-preflight-pushed-passes" "$RC" 0
+  # oc-prchecks rc 2 is its documented USAGE/PRECONDITION class ("usage /
+  # sha-shape / unknown ref / repo-path-no-origin"), never infra — the rc-6
+  # contract lists only prchecks 4/7/8 as infra. It must not be funnelled into
+  # "gate infra" rc 6 (the reporter's second finding).
+  cat > "$T/fake-prchecks-rc2" <<'EOF2'
+#!/usr/bin/env bash
+echo "oc-prchecks: sha deadbeef not found on leshchenko1979/opencrabs" >&2
+exit 2
+EOF2
+  chmod +x "$T/fake-prchecks-rc2"
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks-rc2" OC_DEPLOY_BIN="$T/fake-deploy" \
+      OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" OC_TOOLS_NOLOG=1 \
+      OC_SHIPCHAIN_LEDGER="$T/journal.log" OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
+      bash "$SELF" --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  check_rc "gate-precondition-rc2-not-infra" "$RC" 3
+  case "$OUT" in
+    *"NOT an infrastructure fault"*) ok "gate-precondition-message" ;;
+    *) bad "gate-precondition-message: $OUT" ;;
+  esac
+  case "$OUT" in
+    *"gate infra"*) bad "gate-precondition-not-labelled-infra" ;;
+    *) ok "gate-precondition-not-labelled-infra" ;;
+  esac
 
   echo "selftest: $PASS passed, $FAIL failed"
   # Contract fix 2026-09-11: was `return $?`, which returned ECHO's status (0),
