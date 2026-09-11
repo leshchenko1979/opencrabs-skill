@@ -82,6 +82,10 @@ export OC_ROSTER_FORUM_CHAT="$FORUM" OC_ROSTER_NOW="$NOW"
 "$TOOL" work           > "$D/work.out"   2>/dev/null
 "$TOOL" classify       > "$D/class.out"  2>"$D/class.err";   chk "classify-rc" "$?" "0"
 "$TOOL" classify --json > "$D/class.json" 2>/dev/null;       chk "classify-json-rc" "$?" "0"
+"$TOOL" live --json   > "$D/live.json"   2>/dev/null;       chk "live-json-rc" "$?" "0"
+"$TOOL" forum --json  > "$D/forum.json"  2>/dev/null;       chk "forum-json-rc" "$?" "0"
+"$TOOL" claims --json > "$D/claims.json" 2>/dev/null;       chk "claims-json-rc" "$?" "0"
+"$TOOL" work --json   > "$D/work.json"   2>/dev/null;       chk "work-json-rc" "$?" "0"
 "$TOOL" bogus >/dev/null 2>&1; chk "unknown-verb-rc2" "$?" "2"
 
 chk "live-count"     "$(wc -l < "$D/live.out")" "3"
@@ -119,9 +123,44 @@ chk("classify-active-is-l1", [r[1] for r in rows if r[0]=="ACTIVE"] == ["1111111
 chk("classify-idle-is-l4", [r[1] for r in rows if r[0]=="IDLE"] == ["44444444-4444-4444-8444-444444444444"], repr([r[1] for r in rows if r[0]=="IDLE"]))
 chk("classify-orphan-is-u2", [r[1] for r in rows if r[0]=="ORPHAN"] == [U2], repr([r[1] for r in rows if r[0]=="ORPHAN"]))
 chk("classify-unknown-is-u1-u3", sorted(r[1] for r in rows if r[0]=="UNKNOWN") == sorted([U1,U3]))
-j = json.load(open(D + "/class.json"))
+def jload(name):
+    """Parse a --json artifact. A parse error is a FAIL, never an abort: an
+    uncaught JSONDecodeError kills the whole block and hides every later
+    assertion (seen while proving these cases non-vacuous)."""
+    try:
+        return json.load(open(D + "/" + name))
+    except Exception as e:
+        chk(name + "-parses", False, repr(e))
+        return {"rows": [], "tallies": {}, "phantoms": []}
+
+j = jload("class.json")
 chk("json-tally-matches-tsv", j["tallies"] == tally, "%r vs %r" % (j["tallies"], tally))
 chk("json-row-count", len(j["rows"]) == len(rows))
+
+# --json for the four non-classify verbs (2026-09-11): the usage line always
+# advertised it; only classify implemented it, so callers got the human lines
+# and a JSON parse error. Each verb now emits {"rows":[...]} and the row set
+# must agree with the TSV path it shadows.
+def slurp(p):
+    return [l for l in open(D + p).read().splitlines() if l.strip()]
+lj = jload("live.json")
+chk("live-json-keys", all(set(r) == {"uuid", "title", "updated_at"} for r in lj["rows"]),
+    repr(lj["rows"][:1]))
+chk("live-json-set-matches-tsv", sorted(r["uuid"] for r in lj["rows"]) == sorted(slurp("/live.out")),
+    "%r vs %r" % (sorted(r["uuid"] for r in lj["rows"]), sorted(slurp("/live.out"))))
+fj = jload("forum.json")
+chk("forum-json-keys", all(set(r) == {"uuid", "title", "updated_at"} for r in fj["rows"]))
+chk("forum-json-set-matches-tsv", sorted(r["uuid"] for r in fj["rows"]) == sorted(slurp("/forum.out")),
+    "%r vs %r" % (sorted(r["uuid"] for r in fj["rows"]), sorted(slurp("/forum.out"))))
+cj = jload("claims.json")
+chk("claims-json-keys", all(set(r) == {"uuid", "issue", "t", "what"} for r in cj["rows"]))
+chk("claims-json-open-set", set(r["uuid"] for r in cj["rows"]) == {U1, U3, U4},
+    repr(sorted(r["uuid"] for r in cj["rows"])))
+wj = jload("work.json")
+chk("work-json-keys", all(set(r) == {"task", "path", "branch", "dirty", "attributed"} for r in wj["rows"]))
+chk("work-json-count-matches-tsv", len(wj["rows"]) == len(slurp("/work.out")))
+chk("work-json-attach-200", [r["attributed"] for r in wj["rows"] if r["task"] == "200-thing"] == [U1],
+    repr([r["attributed"] for r in wj["rows"] if r["task"] == "200-thing"]))
 att = {l.split("\t")[0]: l.split("\t")[4] for l in open(D + "/work.out").read().splitlines() if l.strip()}
 chk("work-attach-200", att.get("200-thing") == U1, repr(att))
 chk("work-attach-201", att.get("201-fix") == U2, repr(att))

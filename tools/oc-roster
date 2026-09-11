@@ -24,11 +24,15 @@
 #            in-progress evidence on a lane outside forum scope. ESCALATE.
 #
 # Usage:
-#   oc-roster live [--detail]     canonical full session ids, one per line
-#   oc-roster forum [--detail]    live sessions bound to the forum chat
-#   oc-roster claims              uuid<TAB>issue<TAB>t<TAB>what (open only)
-#   oc-roster work                task<TAB>path<TAB>branch<TAB>dirty<TAB>uuid
-#   oc-roster classify [--json]   the roster table; tallies go to stderr
+#   oc-roster live [--detail|--json]   canonical full session ids, one per line
+#   oc-roster forum [--detail|--json]  live sessions bound to the forum chat
+#   oc-roster claims [--json]          uuid<TAB>issue<TAB>t<TAB>what (open only)
+#   oc-roster work [--json]            task<TAB>path<TAB>branch<TAB>dirty<TAB>uuid
+#   oc-roster classify [--json]        the roster table; tallies go to stderr
+#
+# --json emits {"rows":[...]} on stdout for EVERY verb above (classify adds
+# tallies/phantoms/forum_chat/now). Exit stays 0 ok / 2 usage / 3 unreadable —
+# oc-roster never invents a NO-MATCH code; an empty roster is rows=[] at rc 0.
 #   oc-roster --selftest          offline fixtures (no network, no live DB)
 #
 # Exit: 0 ok / 2 usage / 3 unreadable source (DB, ledger, worktree tool)
@@ -180,22 +184,20 @@ verb = sys.argv[1]
 opts = sys.argv[2:]
 con = db()
 
-if verb == "live":
-    for sid, title, upd in sorted(live_rows(con)):
-        if "--detail" in opts:
-            print("%s\t%s\t%s" % (sid, upd, (title or "").replace("\t", " ")))
-        else:
-            print(sid)
-    sys.exit(0)
-
-if verb == "forum":
-    ids = set(forum_ids(con))
-    for sid, title, upd in sorted(live_rows(con)):
-        if sid in ids:
+if verb in ("live", "forum"):
+    only = set(forum_ids(con)) if verb == "forum" else None
+    rows = [{"uuid": sid, "title": title or "", "updated_at": upd}
+            for sid, title, upd in sorted(live_rows(con))
+            if only is None or sid in only]
+    if "--json" in opts:
+        print(json.dumps({"rows": rows}, indent=1))
+    else:
+        for r in rows:
             if "--detail" in opts:
-                print("%s\t%s\t%s" % (sid, upd, (title or "").replace("\t", " ")))
+                print("%s\t%s\t%s" % (r["uuid"], r["updated_at"],
+                                       (r["title"] or "").replace("\t", " ")))
             else:
-                print(sid)
+                print(r["uuid"])
     sys.exit(0)
 
 led = load_ledger()
@@ -203,9 +205,14 @@ events = led.get("events", []) or []
 
 if verb == "claims":
     opens, _ = claims_index(events)
-    for c in sorted(opens, key=lambda x: (int(x["issue"]), x["uuid"])):
-        print("%s\t%s\t%s\t%s" % (c["uuid"], c["issue"], c["t"],
-                                  c["what"].replace("\t", " ")))
+    rows = [{"uuid": c["uuid"], "issue": c["issue"], "t": c["t"],
+             "what": c["what"].replace("\t", " ")}
+            for c in sorted(opens, key=lambda x: (int(x["issue"]), x["uuid"]))]
+    if "--json" in opts:
+        print(json.dumps({"rows": rows}, indent=1))
+    else:
+        for r in rows:
+            print("%s\t%s\t%s\t%s" % (r["uuid"], r["issue"], r["t"], r["what"]))
     sys.exit(0)
 
 wts = worktrees()
@@ -221,14 +228,21 @@ known_ids = {r[0] for r in con.execute("SELECT id FROM sessions")}
 phantoms = sorted(u for u in issues_by_uuid if u not in known_ids)
 
 if verb == "work":
+    rows = []
     for w in sorted(wts, key=lambda x: x["task"]):
         att = "-"
         for u, iss in sorted(issues_by_uuid.items()):
             if w["issue"] and w["issue"] in iss:
                 att = u
                 break
-        print("%s\t%s\t%s\t%s\t%s" % (w["task"], w["path"], w["branch"],
-                                      w["dirty"], att))
+        rows.append({"task": w["task"], "path": w["path"], "branch": w["branch"],
+                     "dirty": w["dirty"], "attributed": att})
+    if "--json" in opts:
+        print(json.dumps({"rows": rows}, indent=1))
+    else:
+        for r in rows:
+            print("%s\t%s\t%s\t%s\t%s" % (r["task"], r["path"], r["branch"],
+                                          r["dirty"], r["attributed"]))
     sys.exit(0)
 
 # ---- classify -------------------------------------------------------------
