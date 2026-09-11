@@ -447,3 +447,19 @@ rule above governs until these ship.
 When modifying executable scripts (`tools/oc-*`, bash helpers) via temporary staging files (`temp + mv` atomic write pattern), **never assume default permissions**:
 - Standard temp file creation (`touch`, `tempfile`) defaults to mode `0644`. `mv` preserves the source inode permissions, stripping the `+x` bit on the target executable.
 - **Mandatory rule:** Always explicitly apply `chmod --reference="$target" "$temp"` (or `chmod 755 "$temp"`) prior to moving the temp file over the target.
+
+## Post-Harvest Issue Assignment & Lane Allocation (v0.4.143)
+
+At the conclusion of the nightly batch sync and harvest run:
+1. **Outstanding Issue Sweep**: Triage sweeps open, vetted issues on `leshchenko1979/opencrabs` that carry clear problem statements and acceptance criteria.
+2. **Lane Allocation**: Outstanding issues are assigned to existing idle editor lanes via `session_notify` and ledger claim stamps.
+3. **Lane Expansion**: If open vetted issues exceed the capacity of idle lanes, Triage creates new editor lanes (reusing idle forum topics where available or provisioning dedicated topics) so editors start the daytime window with assigned work on their worktrees.
+
+## Code-Structure Exploration & Scoutgraph Indexing Law (v0.4.143)
+
+- **Per-worktree `.codegraph` indexing is RETIRED**: Worktrees do NOT run `oc-index-worktree` or maintain separate `.codegraph.db` SQLite instances.
+- **Centralized `memory_search`**: All structural code queries ("who calls X", "where is X defined", "callees of Y") route through the core OpenCrabs `memory_search` tool with `scope="external"`, indexing `/root/opencrabs/src/**/*.rs`.
+
+## CI Polling & Watcher Throttling Law (v0.4.143)
+
+- **`gh run watch` default interval (3s) is FORBIDDEN**: Any manual or script-driven `gh run watch` execution MUST pass `--interval 30` (or `60`) to protect host 1-vCPU resources and API quotas.

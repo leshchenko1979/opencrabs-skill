@@ -81,11 +81,11 @@ do_selftest() {
   printf '#!/usr/bin/env bash\necho "codegraph index exploded" >&2\nexit 4\n' > "$D/idx-fail"; chmod +x "$D/idx-fail"
   local E="OC_GIT=$GIT_BIN OC_INDEX_WORKTREE=$D/idx-ok OC_TOOLS_NOLOG=1"
 
-  # 1. add happy -> 0, indexed exactly once
-  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t1 feat-x --repo "$D/repo" >/dev/null 2>&1; RC=$?
-  if [ "$RC" -eq 0 ] && [ -d "$HOME/oc-wt-t1" ] && [ "$(wc -l < "$D/idx-calls")" -eq 1 ]; then
-    t_ok "add happy: tree created + index chained exactly once"
-  else t_bad "add happy (rc=$RC idx=$(wc -l < "$D/idx-calls" 2>/dev/null))"; fi
+  # 1. add happy -> 0, tree created
+  env OC_TOOLS_NOLOG=1 "$SELF" add t1 feat-x --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  if [ "$RC" -eq 0 ] && [ -d "$HOME/oc-wt-t1" ]; then
+    t_ok "add happy: tree created"
+  else t_bad "add happy (rc=$RC)"; fi
   # 2. add twice -> 3
   env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t1 feat-x --repo "$D/repo" >/dev/null 2>&1; RC=$?
   [ "$RC" -eq 3 ] && t_ok "add existing path -> 3" || t_bad "add twice (rc=$RC)"
@@ -103,14 +103,12 @@ do_selftest() {
   # 6. behind base --force -> 0
   env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t3 feat-behind --force --repo "$D/repo" >/dev/null 2>&1; RC=$?
   [ "$RC" -eq 0 ] && t_ok "behind-base --force -> 0" || t_bad "behind-base force (rc=$RC)"
-  # 7. index fail -> 4 + tree KEPT
-  env OC_INDEX_WORKTREE="$D/idx-fail" OC_TOOLS_NOLOG=1 "$SELF" add t4 feat-x --repo "$D/repo" >/dev/null 2>&1
-  # feat-x already checked out in t1 -> worktree add itself fails first; use a fresh branch
+  # 7. add fresh branch -> 0
   git -C "$D/repo" branch feat-y feat-x
-  OUT="$(env OC_INDEX_WORKTREE="$D/idx-fail" OC_TOOLS_NOLOG=1 "$SELF" add t4 feat-y --repo "$D/repo" 2>&1)"; RC=$?
-  if [ "$RC" -eq 4 ] && [ -d "$HOME/oc-wt-t4" ] && case "$OUT" in *"codegraph index exploded"*) true ;; *) false ;; esac; then
-    t_ok "index fail -> 4, tree kept, warning verbatim"
-  else t_bad "index fail (rc=$RC dir=$([ -d "$HOME/oc-wt-t4" ] && echo yes || echo no))"; fi
+  OUT="$(env OC_TOOLS_NOLOG=1 "$SELF" add t4 feat-y --repo "$D/repo" 2>&1)"; RC=$?
+  if [ "$RC" -eq 0 ] && [ -d "$HOME/oc-wt-t4" ]; then
+    t_ok "add fresh branch -> 0"
+  else t_bad "add fresh branch (rc=$RC)"; fi
   # 7b. list (C10) -> 3 rows: task/path/branch/dirty, t1 clean
   LIST_OUT="$(env OC_TOOLS_NOLOG=1 "$SELF" list --repo "$D/repo" 2>&1)"; RC=$?
   if [ "$RC" -eq 0 ] && [ "$(printf '%s\n' "$LIST_OUT" | grep -c .)" -eq 3 ] \
@@ -143,10 +141,10 @@ do_selftest() {
   env OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$D/tools.log" "$SELF" remove t4 --force --repo "$D/repo" --no-log >/dev/null 2>&1
   [ ! -s "$D/tools.log" ] && t_ok "--no-log suppresses journal" || t_bad "--no-log leaked"
 
-  # 13. E8: --create escape hatch — branch created from --from, then normal add + index
-  env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t8 up/feat-new --create --from main --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  # 13. E8: --create escape hatch — branch created from --from, then normal add
+  env OC_TOOLS_NOLOG=1 "$SELF" add t8 up/feat-new --create --from main --repo "$D/repo" >/dev/null 2>&1; RC=$?
   if [ "$RC" -eq 0 ] && git -C "$D/repo" rev-parse --verify -q refs/heads/up/feat-new >/dev/null && [ -d "$HOME/oc-wt-t8" ]; then
-    t_ok "--create: branch created from --from + tree indexed"
+    t_ok "--create: branch created from --from + tree added"
   else t_bad "--create happy (rc=$RC)"; fi
   # 13b. --create refuses existing branch -> 5
   env OC_INDEX_WORKTREE="$D/idx-ok" OC_TOOLS_NOLOG=1 "$SELF" add t9 feat-x --create --from main --repo "$D/repo" >/dev/null 2>&1; RC=$?
@@ -273,17 +271,8 @@ if [ "$VERB" = "add" ]; then
   # 3. add
   [ -e "$WT" ] && { echo "$PROG: path exists: $WT (remove it first)" >&2; exit 3; }
   "$GIT_BIN" -C "$REPO" worktree add "$WT" "$BRANCH" 2>&1 || { echo "$PROG: worktree add failed" >&2; exit 3; }
-  # 4. INDEX CHAIN — the point of the tool: un-skippable
-  IDX_OUT="$("$INDEX_TOOL" "$WT" 2>&1)"; IDX_RC=$?
-  if [ "$IDX_RC" -ne 0 ]; then
-    printf '%s\n' "$IDX_OUT" >&2
-    echo "$PROG: index FAILED (rc=$IDX_RC) — worktree KEPT at $WT, codegraph broken until indexed" >&2
-    oc_log_extra "indexed" "failed"
-    exit 4
-  fi
-  oc_log_extra "indexed" "ok"
   BASE_SHA="$("$GIT_BIN" -C "$REPO" rev-parse "$BASE" 2>/dev/null)"
-  echo "ADDED $WT branch=$BRANCH base=${BASE_SHA:0:7} indexed=yes"
+  echo "ADDED $WT branch=$BRANCH base=${BASE_SHA:0:7}"
   exit 0
 fi
 

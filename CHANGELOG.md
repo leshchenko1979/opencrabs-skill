@@ -1,3 +1,10 @@
+## v0.4.143 (2026-09-11) — Post-Harvest Issue Allocation, Worktree Indexing Retirement & CI Throttling
+
+- **Post-Harvest Issue Assignment & Lane Expansion (`fleet-directives.md`)**: Codified automated issue assignment sweep following nightly harvest batches. Unassigned vetted issues are allocated to idle editor lanes, expanding lane capacity as needed so work is queued for daytime execution.
+- **Worktree Indexing Retirement (`tools/oc-wt`, `editor.md`, `fleet-directives.md`)**: Removed chained `oc-index-worktree` execution from `tools/oc-wt add`. Code structure exploration routes to centralized daemon `memory_search(scope="external")`. Cleaned 69 redundant `.codegraph` directories (~5.8 GB reclaimed).
+- **CI Polling & Watcher Throttling (`tools/oc-prchecks`, `editor.md`, `fleet-directives.md`)**: Bumped `tools/oc-prchecks` default `POLL` from 15s to 30s and `RESOLVE_POLL` from 5s to 15s. Mandated `--interval 30` for any raw `gh run watch` command.
+- **BATTERY**: 162 PASS / 0 FAIL.
+
 ## v0.4.142 (2026-09-11)
 
 - **Daytime-Editing & Nighttime-Batch-Sync Cadence (fleet-directives.md)**: Codified operator workflow separating daytime design/smoke approvals from nighttime batch upstream merges and consolidated harvest PR runs.

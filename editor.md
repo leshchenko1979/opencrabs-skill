@@ -227,8 +227,8 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 
 | Tool | Invocation | For |
 |------|-----------|-----|
-| `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add→oc-index-worktree |
-| `oc-index-worktree` | `tools/oc-index-worktree <worktree-path>` | codegraph index — un-skippable Phase 2 final leg (oc-wt chain) |
+| `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add |
+| `oc-index-worktree` | `tools/oc-index-worktree <worktree-path>` | legacy standalone codegraph index (per-worktree indexing retired in v0.4.143; use memory_search scope="external") |
 | `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume |
 | `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) |
 | `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | per-commit implementation comment (body-file discipline inside; chained by oc-ship-chain Leg 2) |
@@ -322,11 +322,10 @@ covers WRITTEN ARTIFACT claims.
 
 ```bash
 ~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-wt add <task> <branch>
-# oc-wt chains prune -> fetch origin -> worktree add -> oc-index-worktree.
-# The index step is UN-SKIPPABLE: worktrees inherit NO per-tree index
-# (.codegraph is per-tree; a worktree's .git is only a gitdir: pointer), so an
-# unindexed tree silently returns empty codegraph queries (the incident class
-# oc-wt exists to kill, v0.4.12 -> v0.4.46). Teardown:
+# oc-wt chains prune -> fetch origin -> validate local branch -> behind-base gate -> worktree add.
+# Per-worktree indexing is RETIRED (v0.4.143): code-structure exploration is handled
+# centrally via core memory_search(query="who calls X", scope="external").
+# Teardown:
 #   tools/oc-wt remove <task>   (dirty-tree gate; --force journals the listing)
 ```
 
@@ -594,3 +593,8 @@ routing (Phase 7b) are split out of this file — single home:
 **`editor-upstream-pr.md`** (loaded on demand at the Phase 7 trigger, not on
 every reload). Triggers unchanged; the PR SHIPMENT law's procedure reference
 resolves there (law home: SKILL.md §ISSUE ROUTING, PR SHIPMENT row).
+
+## CI Watcher Discipline & Throttling (v0.4.143)
+
+- **`gh run watch` throttling**: When invoking raw `gh run watch <run-id>` detached in background, **always specify `--interval 30`** (or `--interval 60`). The default interval is 3s, which saturates CPU loops and GitHub rate limits across parallel lanes.
+- **Automated Tool Polling**: `oc-prchecks` defaults to a 30s poll interval (`OC_PRCHECKS_POLL=30`) and 15s resolve poll (`OC_PRCHECKS_RESOLVE_POLL=15`).
