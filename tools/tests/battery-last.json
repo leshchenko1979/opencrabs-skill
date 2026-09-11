@@ -1,7 +1,8 @@
 {
   "path": "/root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/tests/battery-last.json",
-  "ts": "2026-09-11T22:23:20Z",
+  "ts": "2026-09-11T22:29:58Z",
   "pass": 166,
   "fail": 0,
-  "verdict": "PASS"
+  "verdict": "PASS",
+  "mode": "parallel jobs=4"
 }
