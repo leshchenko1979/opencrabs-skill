@@ -154,7 +154,7 @@ case "\$*" in
     printf '%s\n' 'ffffffffffffffffffffffffffffffffffffffff' ;;
   *"workflow run"*)
     [ "\$S" = "dispatch_fail" ] && exit 1
-    echo dispatched >> "${GHDISPATCH_LOG:-/dev/null}"
+    echo "dispatched \$*" >> "${GHDISPATCH_LOG:-/dev/null}"
     exit 0 ;;
   *"run list"*)
     case "\$S" in
@@ -430,14 +430,21 @@ do_selftest() {
     t_ok "C-1 wait subcommand: executes with custom budget/poll (adopted 222)"
   else t_bad "C-1 wait subcommand (rc=$T_RC out=$T_OUT)"; fi
 
+  # (g) --fast flag dispatches fast=true payload to carrier
+  run_t green "$SHA" --fast
+  if [ "$T_RC" -eq 0 ] && grep -q "fast=true" "$D/gh-dispatch.log"; then
+    t_ok "--fast flag dispatches fast=true payload to carrier"
+  else t_bad "--fast flag (rc=$T_RC out=$T_OUT)"; fi
+
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   cat <<'EOH'
-Usage: oc-prchecks [<branch-or-sha> | resume <run-id> | wait <ref>] [--wait N] [--budget N] [--poll S] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
+Usage: oc-prchecks [<branch-or-sha> | resume <run-id> | wait <ref>] [--fast] [--wait N] [--budget N] [--poll S] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
   resume <run-id>  re-attach to a witnessed run (no dispatch, no adoption) — #74 H2
   wait <ref>       single-invocation wait/watch loop with budget (default 2700s, poll 30s) — Cycle 5 C-1
+  --fast           fast gate (fmt + clippy only, skip tests on carrier)
 Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable / 8 AMBIGUOUS-same-ref-witness-unverifiable (fail-closed, dispatch refused, #115B)
 EOH
   exit 0
@@ -450,6 +457,7 @@ REF=""
 FAULT_PR=""
 RESUME_MODE=0
 WAIT_SUBCOMMAND=0
+FAST_MODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --wait)    shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage "--wait needs an integer (got '$WAIT_SECS')" ;; esac ;;
@@ -459,7 +467,7 @@ while [ $# -gt 0 ]; do
     --repo)    shift; REPO="${1:-}"; [ -n "$REPO" ] || usage "--repo needs a value" ;;
     --carrier) shift; CARRIER="${1:-}"; [ -n "$CARRIER" ] || usage "--carrier needs a value" ;;
     --fault-scope) shift; FAULT_PR="${1:-}"; [ -n "$FAULT_PR" ] || usage "--fault-scope needs a PR number" ;;   # E5 (v0.4.78)
-    --fast)    usage "--fast retired: carrier workflow yml does not take fast input" ;;
+    --fast)    FAST_MODE=1 ;;
     --notify)  usage "--notify retired; run with background: true and chain 'cmd && tools/lib/oc-notify.sh <uuid> <msg>'" ;;
     --timeout) usage "--timeout retired; use --wait N for bounded watch or run with background: true" ;;
     --label)   shift ;; # legacy no-op
@@ -625,6 +633,7 @@ if command -v jq >/dev/null 2>&1 && [ -f "${OC_TOOLS_LOG:-/nonexistent}" ]; then
 fi
 if [ "${OC_PR_SKIPPED_DISPATCH:-0}" != 1 ]; then
 DISPATCH_ARGS=(-f "ref=$SHA")
+[ "$FAST_MODE" -eq 1 ] && DISPATCH_ARGS+=(-f "fast=true")
 "$GH_BIN" workflow run pr-checks.yml --repo "$REPO" --ref "$CARRIER" "${DISPATCH_ARGS[@]}" >/dev/null 2>&1 || {
   echo "$PROG: dispatch failed (repo=$REPO carrier=$CARRIER)" >&2
   oc_log_extra "dispatch" "failed"

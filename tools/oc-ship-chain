@@ -108,6 +108,7 @@ GATE_RESUMES="${OC_SHIPCHAIN_GATE_RESUMES:-2}"     # max rc-5 resume-polls befor
 [ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 exec bash "$SELF"
 [ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
 
+FAST_GATE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --sha)       SHA="${2:?}"; shift 2 ;;
@@ -118,7 +119,7 @@ while [ $# -gt 0 ]; do
     --gate-wait) GATE_WAIT="${2:?}"; shift 2 ;;
     --gated-sha) GATED_SHA="${2:?}"; shift 2 ;;
     --gated-run) GATED_RUN="${2:?}"; shift 2 ;;
-    --fast)      die "--fast retired: workflow yml on ci/quick-build-linux does not take fast input" 2 ;;
+    --fast)      FAST_GATE=1; shift ;;
     --dry-run)   DRY=1; shift ;;
     --no-ledger) NOLEDGER=1; shift ;;
     --help|-h)   usage ;;
@@ -281,9 +282,13 @@ elif [ -n "$GATED_SHA" ]; then
     die "gated-sha verification failed: no completed success run found for $SHA" 4
   fi
 else
-  journal "LEG1 gate start (oc-prchecks $SHA --wait $GATE_WAIT)"
+  journal "LEG1 gate start (oc-prchecks $SHA --wait $GATE_WAIT${FAST_GATE:+ --fast})"
   set +e
-  GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} --wait "$GATE_WAIT" 2>&1)"
+  PRCHECKS_CALL=("$PRCHECKS_BIN" "$SHA")
+  [ -n "$REPO" ] && PRCHECKS_CALL+=(--repo "$REPO")
+  PRCHECKS_CALL+=(--wait "$GATE_WAIT")
+  [ "$FAST_GATE" -eq 1 ] && PRCHECKS_CALL+=(--fast)
+  GATE_OUT="$("${PRCHECKS_CALL[@]}" 2>&1)"
   GATE_RC=$?
   set -e
   # rc 5 is NON-TERMINAL, never infra (defect fix 2026-09-11, lane 4b4463d5).
@@ -453,6 +458,7 @@ selftest_impl() {
   # fake binaries
   cat > "$T/fake-prchecks" <<'EOF'
 #!/usr/bin/env bash
+echo "$*" >> "${FAKE_PRCHECKS_LOG:-/dev/null}"
 # green unless FAKE_GATE=red
 [ "${FAKE_GATE:-green}" = "red" ] && exit 3
 exit 0
@@ -492,6 +498,13 @@ EOF
   case "$OUT" in *SWAPPED*) ok "swapped-marker" ;; *) bad "swapped-marker: $OUT" ;; esac
   grep -q "LEG4 ship GREEN" "$T/journal.log" && ok "journal-ship-leg" || bad "journal-ship-leg"
   grep -q "DONE SWAPPED" "$T/journal.log" && ok "journal-done" || bad "journal-done"
+
+  # 1b. full GREEN chain with --fast
+  rm -f "$T/journal.log" "$T/prchecks.log"
+  git -C "$T/clone" reset -q --hard origin/main
+  OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 --fast 2>&1)"; RC=$?
+  check_rc "full-chain-fast" "$RC" 0
+  grep -q "\-\-fast" "$T/prchecks.log" && ok "fast-flag-passed-to-prchecks" || bad "fast-flag-passed-to-prchecks"
 
   # 2. gate RED → exit 4, merge must NOT happen
   rm -f "$T/journal.log"
