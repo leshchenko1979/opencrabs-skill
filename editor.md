@@ -479,19 +479,30 @@ tools/oc-ship-chain --sha <commit-sha> --branch <branch> [--issue <issue-n>]
 
 There is NO legitimate manual exit point between gate verdict and swap. The #134 orphan class (stopping at GREEN without swapping) is structurally closed.
 
+### Failure Modes, Tool Automations & Agent Recovery Protocol (v0.4.145)
+
+When shipping features via `oc-ship-chain` or deploying via `oc-deploy`, failures and interruptions follow the mechanical automation vs. manual resolution contract below:
+
+| Failure Mode | Return Code / Signal | What is Mechanical (Automated by Tool) | What Requires Agent (Semantic Fix) | Tool Output & Communication |
+|---|---|---|---|---|
+| **1. Non-Fast-Forward Push** | `rc=0` (Auto) / `rc=5` (Conflict) | **100% Automated by tool** on clean rebase: `oc-deploy`/`oc-ship-chain` auto-fetches `origin/main`, rebases topic commits, audits with `oc-rebase-safety audit`, and retries push in 3s. | Only if git hits a **semantic merge conflict**: agent inspects conflicting files (`git status`), resolves diff, re-runs chain. | `REBASE_CLEAN: auto-pushed rebased SHA` (clean) OR `REBASE_CONFLICT: manual diff needed in <file>` (conflict) |
+| **2. Carrier Compilation Failure** | `rc=3` (`build-failed`) | **Auto-log extraction**: Tool automatically runs `gh run view <id> --log-failed`, parses `error[E...]` and rustc diagnostic lines, and prints the exact compiler error and file:line in tool stderr. | Agent fixes the Rust syntax, borrow checker, or missing module error in the worktree, commits, and re-runs `oc-ship-chain`. | `CARRIER_BUILD_FAILED (rc=3): Run <id>` followed by extracted compiler error block |
+| **3. Daemon Boot Panic / Swap Failure** | `rc=4` (`swap-failed`) | **Auto-rollback & Auto-diag**: `oc-deploy swap-execute` **automatically rolls back** to the previous binary (`/usr/local/bin/opencrabs.bak`), restarts the service, and automatically extracts the panic backtrace from `journalctl -u opencrabs-ops.service -n 30` into tool output. | Agent inspects the auto-extracted panic trace, reproduces/fixes the startup bug or bad unwrap in the worktree, commits, and re-chains. Host remains 100% healthy. | `SWAP_FAILED (rc=4): Auto-rolled back to previous binary. Daemon boot panic: <extracted log>` |
+| **4. Daemon Bounce Task Interruption** | Restart signal / `[BACKGROUND TASK INTERRUPTED]` | **100% Automated via state file & resume probe**: `oc-deploy swap-execute` runs in an isolated transient `systemd-run` unit and writes deployment result to `/root/.opencrabs/profiles/ops/opencrabs-dev/deployed.sha`. Tool provides `oc-ship-chain --resume` or post-swap status check. | **Zero agent action required**: When agent wakes up post-restart, running `oc-ship-chain --resume` (or checking `deployed.sha`) confirms `disk==proc MATCH` and tells the agent to proceed immediately to Phase 6b smoke testing. | `SWAP_SUCCESSFUL: running binary matches deployed SHA. Ready for Phase 6b smoke.` |
+
 **Exit codes & Lane action:**
 - **Exit 0 — SWAPPED:** The new binary is running live on the host (`opencrabs-ops` user unit). Worktree can now be removed (`tools/oc-wt remove <task>`). Proceed immediately to Phase 6b (Smoke-test-on-notify).
 - **Exit 2 — USAGE:** Bad or missing arguments (`--sha`/`--branch` are required; malformed flag). Correct the invocation and re-run — no lane state to resolve.
 - **Exit 3 — DIRTY CHECKOUT:** The fork checkout has uncommitted changes (pre-flight refusal). Clean or stash it, then re-run.
 - **Exit 4 — GATE-RED / CARRIER-RED:** The CI gate failed or the carrier build failed. Start a fix round (Phase 6c): keep the same branch, fix in a new worktree, commit, push, and re-run `oc-ship-chain`. Triage heuristics live in `SKILL.md §Red-run triage heuristics`. **Also the `--gated-run` / `--gated-sha` pre-verify failure:** the supplied run was not `completed success` on a job pinned to the sha, or `--gated-sha` did not match `--sha`. Do NOT re-dispatch the run — re-verify it with `gh run view <id> --json status,conclusion,jobs` and re-supply the correct id.
-- **Exit 5 — NON-FF:** Another editor merged to fork `main` first. Fast-forward push was refused. Lane rebases safely — manually, in its own task worktree:
+- **Exit 5 — NON-FF / MERGE CONFLICT:** Automatic in-tool rebase encountered an actual semantic merge conflict that requires manual diff adjudication:
   ```bash
   git -C ~/oc-wt-<task> fetch origin
   git -C ~/oc-wt-<task> rebase origin/main
+  # resolve conflicts in working tree
   git -C ~/oc-wt-<task> push --force-with-lease origin <branch>
   ```
-  ⚠️ **`oc-rebase-safety` is NOT the remedy here** — it has no `run` subcommand and is READ-ONLY by design (git plumbing only: `overlap` / `audit`; anything else is rc 2 usage). A prior revision of this file cited `oc-rebase-safety run ~/oc-wt-<task> origin/main`, which is dead law — a lane that hit exit 5 and followed it got a usage error and had to improvise (lane 6cd8175f, 2026-09-11, #149: chain exit 5 when fork main moved `12d25260` → `87ac2aa0` under it).
-  Then re-run `tools/oc-ship-chain --sha <new-sha> --branch <branch> [--issue <issue-n>]`.
+  ⚠️ **`oc-rebase-safety` is NOT the rebase engine** — it is a READ-ONLY safety auditor (`audit` / `overlap`). Use standard git commands to resolve conflicts, verify zero lost edits with `oc-rebase-safety audit`, and re-run `oc-ship-chain`.
 - **Exit 6 — INFRA / ORDER-GATE:** dispatch or poll infrastructure failure (`oc-prchecks` rc 4/7/8, or ship rc other) — **or an ORDER-gate rejection post-push.** ⚠️ **The UNSIGNED case lands HERE, and it is NOT an infra fault:** a head commit carrying no `Session-Id` trailer is refused by ORDER gate 4 (`oc-order-validate: UNSIGNED … attribution mandatory`), and the chain exits 6. Read the message before you act — if it says UNSIGNED, do not go hunting for a network or carrier problem. Fix = land an empty trailer-signed marker commit on the head (tree-identical, forward-only; `upstream-merge-runbook.md` step 8) and re-run. Every synthesis/merge head is unsigned **by construction**, so this recurs on every sync.
 - **Exit 7 — GATE IN FLIGHT:** the gate was still running after the chain's budget and resume-polls (`oc-prchecks` rc 5, non-terminal). The run id is printed — do **NOT** re-dispatch (that concurrency-cancels the live run); wait for it and re-run with `--gated-run <id>`, which pre-verifies and skips dispatch.
 

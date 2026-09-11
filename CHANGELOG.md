@@ -1,5 +1,14 @@
 ## v0.4.144 (2026-09-11) — Duty 4 Direct-Persistence & Zero-Notify Law
 
+## v0.4.145 (2026-09-11) — Unified Event Capture Matrix, Split-Gate Ship Pipeline & Failure Recovery Protocol
+
+- **Unified Event Capture Matrix (`fleet-directives.md`)**: Codified routing law separating urgent anomalies (Toolsmith direct notification, GitHub fork issues, Alexey) from batched self-improvement (Duty 4 review proposals and Idea Box intake persisted directly to disk/ledger without flooding HQ).
+- **Split-Gate Ship Pipeline & Merge-First Velocity (`fleet-directives.md`, `editor.md`)**: Codified split-gate CI strategy where pre-swap carrier builds focus on artifact compilation and sanity validation, deferring the full `cargo test` triad (24.7m) to either pre-PR gates or asynchronous post-merge suites, reducing ship cycle turnaround from ~38m to ~13m.
+- **Automated In-Tool Rebase Mechanics & Failure Protocol (`editor.md`)**: Codified failure modes and recovery protocol for `oc-ship-chain` and `oc-deploy`, delegating mechanical rebase on non-FF (`rc=5`) into tool automation and providing clear recovery steps for CI test failures, carrier compile errors, and binary swap regressions.
+- **BATTERY**: 162 PASS / 0 FAIL.
+
+## v0.4.144 (2026-09-11) — Zero Session Notify for Duty 4 & Direct Persistence
+
 - **Zero Session Notify Law for Duty 4 Proposals (`hq.md`, `editor.md`)**: Codified that workers do NOT submit Duty 4 skill review proposals via `session_notify` to HQ. Inbound proposal notifications flood HQ's conversational context, accelerate memory compaction, and create hub contention. Proposals are persisted directly to disk at `~/.opencrabs/profiles/ops/opencrabs-dev/reviews/<cycle-id>/proposals/<session-uuid>.md` or appended to the ledger via `oc-ledger stamp proposal`.
 - **Mechanical Duty 4 Closure (`hq.md`)**: HQ assesses duty completion through on-disk file discovery (`ls $REVIEW_DIR/proposals/`) and ledger query (`oc-ledger events --kind proposal`), bounded by quorum or window cutoff, batching review ingestion into a single turn before stamping the cadence boundary.
 - **BATTERY**: 162 PASS / 0 FAIL.
