@@ -29,8 +29,14 @@
 #         via oc-rebase-safety, then re-runs the chain)
 #       6 dispatch/poll infra failure (prchecks rc 4/5/7/8, ship rc other)
 #
-# Chain-id: every leg stamps the ledger under one id
-#   CHAIN-<shortsha>-<UTCstamp>  →  oc-ledger show | grep <id> = whole run.
+# Chain-id: every leg stamps the ledger under one id (kind=shipchain)
+#   CHAIN-<shortsha>-<UTCstamp>  →  retrieve the whole run with
+#   jq -r '.events[] | select(.kind=="shipchain")
+#          | select(.what | contains("<CHAIN-id>")) | .what' \
+#      ~/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json
+#   (the old help named an `oc-ledger show` verb that does not exist — fixed
+#    2026-09-11, same defect report as the kind: an auditor following a
+#    non-existent retrieval path reads "no rows" as "chain never ran".)
 #
 # Env (selftest hooks — never needed in production):
 #   OC_PRCHECKS_BIN  default tools/oc-prchecks
@@ -53,7 +59,7 @@ if [ -f "$_OC_LIB" ]; then
 else
   oc_log_finish() { :; }
 fi
-trap 'oc_log_finish $?' EXIT
+trap 'rc=$?; if command -v journal_summary >/dev/null 2>&1; then journal_summary; fi; oc_log_finish $rc' EXIT
 
 # selftest dispatch BEFORE arg parsing (avoids the unknown-arg gate)
 # impl re-entry is guarded by OC_SHIPCHAIN_IMPL to prevent exec-loop
@@ -71,7 +77,7 @@ ISSUELOG_BIN="${OC_ISSUELOG_BIN:-$TOOLS_DIR/oc-issue-log}"
 FORK_REPO="${OC_FORK_REPO:-$HOME/opencrabs}"
 GH_BIN="${OC_GH:-gh}"
 
-usage() { sed -n '2,34p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0; }
+usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$SELF"; exit 0; }
 die() { printf 'oc-ship-chain: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0; GATED_SHA=""; GATED_RUN=""
@@ -103,17 +109,41 @@ CHAIN="CHAIN-${SHORT}-$(date -u +%Y%m%dT%H%M%SZ)"
 # ---- journal --------------------------------------------------------------
 # One line per leg, all under the chain id. OC_TOOLS_NOLOG=1 or --no-ledger
 # (selftests/battery) writes to stderr instead of the ledger.
+#
+# FAILURE IS LOUD, NEVER FATAL (2026-09-11, defect fix lane 4b4463d5): this
+# used to be `... >/dev/null 2>&1 || true`, so a journal write that could NEVER
+# succeed (stamping a kind absent from oc-ledger's enum -> permanent rc 2) was
+# byte-identical to success. 216/216 journal stamps in tools.log died rc 2 and
+# nobody knew; the ledger held ZERO chain rows while the help text promised a
+# per-run trail, and an auditor reading it concluded "chain never ran".
+# Telemetry must not kill a chain that has done real work (ff-merge, ship,
+# swap) — so: first failure warns loudly with the real stderr, later ones are
+# counted, and the run continues either way.
+JOURNAL_FAILS=0
 journal() {
   local line="[$CHAIN] $1"
   if [ -n "${OC_SHIPCHAIN_LEDGER:-}" ]; then
     printf '%s\n' "$line" >> "$OC_SHIPCHAIN_LEDGER"
   elif [ "$NOLEDGER" = "1" ] || [ "${OC_TOOLS_NOLOG:-0}" = "1" ]; then
     printf '%s\n' "$line" >&2
-  elif [ -n "${OC_SHIPCHAIN_LEDGER:-}" ]; then
-    printf '%s\n' "$line" >> "$OC_SHIPCHAIN_LEDGER"
   else
-    "$TOOLS_DIR/oc-ledger" stamp shipchain "$line" >/dev/null 2>&1 || true
+    local out="" rc=0
+    out="$("$TOOLS_DIR/oc-ledger" stamp shipchain "$line" 2>&1)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      JOURNAL_FAILS=$((JOURNAL_FAILS + 1))
+      if [ "$JOURNAL_FAILS" -eq 1 ]; then
+        printf '%s\n' "oc-ship-chain: WARNING — ledger journaling FAILED (rc=$rc) for $CHAIN." >&2
+        printf '%s\n' "  oc-ledger said: $out" >&2
+        printf '%s\n' "  first lost line: $line" >&2
+        printf '%s\n' "  the chain CONTINUES, but this run will have NO ledger trail." >&2
+        printf '%s\n' "  fix: oc-ledger must accept kind 'shipchain' (see tools/oc-ledger KINDS)." >&2
+      fi
+    fi
   fi
+}
+journal_summary() { # call before exit: one line if any journal write was lost
+  [ "$JOURNAL_FAILS" -gt 0 ] || return 0
+  printf '%s\n' "oc-ship-chain: $JOURNAL_FAILS journal line(s) lost for $CHAIN (see the first warning above)" >&2
 }
 
 # ---- pre-flight -----------------------------------------------------------
@@ -257,7 +287,9 @@ exit 0
 # ---- selftest --------------------------------------------------------------
 # Fixture-based: fake prchecks/deploy/issuelog + fixture fork repo (bare origin
 # + clone). Covers: full GREEN chain exit 0, gate RED exit 4, carrier RED exit
-# 4, NON-FF exit 5. Selftests never touch real CI or the real fork checkout.
+# 4, NON-FF exit 5, gated-sha/gated-run pre-verification, and (2026-09-11)
+# journal-write failure = loud + non-fatal, working ledger path = quiet.
+# Selftests never touch real CI or the real fork checkout.
 selftest_impl() {
   set -u
   T="$(mktemp -d)"
@@ -397,6 +429,50 @@ EOF
   RC=0; OUT="$(OC_GH="$T/fake-gh-run" run_chain --sha "$FSHA" --branch feat --gated-run 11111 2>&1)" || RC=$?
   check_rc "gated-run-green" "$RC" 0
   grep -q "LEG1 gate pre-verified GREEN (gh run: 11111 completed success" "$T/journal.log" && ok "journal-gated-run" || bad "journal-gated-run"
+
+  # 7. journaling failure is LOUD and NEVER FATAL (2026-09-11, defect fix lane
+  # 4b4463d5). A journal write that could never succeed (stamping a kind absent
+  # from oc-ledger's enum -> permanent rc 2) was swallowed by `|| true`, making
+  # it byte-identical to success: 216/216 real stamps died and no chain ever had
+  # a ledger trail. Copy the tool beside a fake oc-ledger that rejects the kind
+  # (exactly what the real one did) and assert the chain still completes AND
+  # says so on stderr.
+  # NOTE: OC_TOOLS_NOLOG must be forced OFF here — it routes journal() to stderr
+  # and would bypass the ledger path under test. The battery exports it =1
+  # globally, so neutralize it explicitly and redirect the tool log instead.
+  mkdir -p "$T/bin"
+  cp "$SELF" "$T/bin/oc-ship-chain"
+  cat > "$T/bin/oc-ledger" <<'EOF'
+#!/usr/bin/env bash
+echo "oc-ledger: stamp: unknown kind 'shipchain' (v1.2 vocabulary — see header)" >&2
+exit 2
+EOF
+  chmod +x "$T/bin/oc-ledger"
+  run_chain_plain() { # as run_chain, but the LEDGER path (no OC_SHIPCHAIN_LEDGER)
+    OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$T/tools.log" \
+      bash "$T/bin/oc-ship-chain" "$@"
+  }
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(run_chain_plain --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  check_rc "journal-fail-nonfatal" "$RC" 0
+  case "$OUT" in *"WARNING — ledger journaling FAILED (rc=2)"*) ok "journal-fail-loud" ;; *) bad "journal-fail-loud: $OUT" ;; esac
+  case "$OUT" in *"unknown kind 'shipchain'"*) ok "journal-fail-shows-stderr" ;; *) bad "journal-fail-shows-stderr" ;; esac
+  case "$OUT" in *"journal line(s) lost"*) ok "journal-fail-summary" ;; *) bad "journal-fail-summary" ;; esac
+  case "$OUT" in *SWAPPED*) ok "journal-fail-chain-completed" ;; *) bad "journal-fail-chain-completed" ;; esac
+
+  # 8. a WORKING ledger path stays quiet — no false alarm, and the summary stays
+  # silent (the counter only speaks when lines were actually lost).
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$T/bin/oc-ledger"; chmod +x "$T/bin/oc-ledger"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(run_chain_plain --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  check_rc "journal-ok-rc" "$RC" 0
+  case "$OUT" in *"journaling FAILED"*) bad "journal-ok-no-false-alarm" ;; *) ok "journal-ok-no-false-alarm" ;; esac
+  case "$OUT" in *"line(s) lost"*) bad "journal-ok-no-false-summary" ;; *) ok "journal-ok-no-false-summary" ;; esac
 
   echo "selftest: $PASS passed, $FAIL failed"
   return $?
