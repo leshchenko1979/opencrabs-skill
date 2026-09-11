@@ -80,46 +80,47 @@ hand from a stale registry.
    decision: adopt upstream (default), keep fork, or reconcile. Auto-keep with
    no decision: commits adolfo merged from our own harvest PRs. **[GATE]** for
    any keep-ours.
-7. **Migrate lane branches onto the new base** — for each roster entry. The cut
-   point is NOT the branch-time tip and NOT a remembered old-main sha: after the
-   cutover those shas are gone from the new history, so using one replays the
-   ENTIRE fork history. **Derive it from the OLDEST UNMERGED commit:**
+7. **Migrate lane branches onto the new base** — for each roster entry.
+   **Measure pending work against the TARGET base, never against the old fork
+   main.** After the cutover the old shas are gone from the new history, so a
+   range measured from old main counts commits the new base ALREADY HAS: on
+   three real branches that read 121 / 105 / 120 where the true pending counts
+   were 2 / 0 / 1. **Test the target range first:**
    ```bash
-   # 1. what is actually still unmerged? (measured against the OLD fork main)
-   git log --oneline <old-fork-main-sha>..<lane-branch>
-   # 2. cut at the PARENT of the oldest of those
-   CUT="$(git rev-list --reverse <old-fork-main-sha>..<lane-branch> | head -1)^"
+   # 1. how much of this branch is NOT already in the new base?
+   git rev-list --count origin/main..<lane-branch>     # 0 -> absorbed, see below
+   # 2. cut at the PARENT of the oldest of THAT range
+   CUT="$(git rev-list --reverse origin/main..<lane-branch> | head -1)^"
    git rebase --onto origin/main "$CUT" <lane-branch>
    ```
-   **Zero-pending case — test BEFORE deriving the cut.** The derivation above
-   assumes at least one unmerged commit. A lane already fully absorbed into old
-   fork main has an EMPTY range, so `head -1` yields nothing and `CUT` becomes
-   the bare `^`: `git rev-parse "^"` is **rc 128** (`fatal: ambiguous argument
-   '^'`). The ancestor fallback below does NOT cover it either — the old sha is
-   not an ancestor of the new base. Test first:
-   ```bash
-   git rev-list --count <old-fork-main-sha>..<lane-branch>   # 0 -> this case
-   ```
-   With no delta to replay, the migration is a pointer move onto the new base:
-   `git rebase --onto origin/main <old-fork-main-sha> <lane-branch>`. That is the
-   SAME command that over-replays when the lane DOES have pending commits, which
-   is why the count test comes first. Lane `2fbfb2f8` (2026-09-11, #132) hit
-   exactly this: pre-rebase head `299d1c72`, `7432e538..299d1c72` = 0, fallback
-   rc=1, reflog `299d1c72 -> 12d25260`, dirty=0, no conflicts.
+   **Zero-pending case — the count test comes FIRST, and it is not optional.**
+   `rev-list --reverse … | head -1` on an EMPTY range yields nothing, so `CUT`
+   becomes the bare `^`, and `git rev-parse "^"` is **rc 128** (`fatal: ambiguous
+   argument '^'`). A count of 0 means the branch is already fully contained in
+   the new base: there is nothing to replay, so **skip the rebase** (or move the
+   pointer) rather than deriving a cut. Lane `2fbfb2f8` (2026-09-11, #132) hit
+   this: `299d1c72` had 0 pending, the derivation yielded `^`, and the old-sha
+   fallback did not apply either.
    **Failure signature — an over-replay does NOT error.** It presents as a huge
    commit wall and mass conflicts, so it reads as "the lane is a mess" rather
-   than "the cut point is wrong". Lane `facd50af` measured **220 commits**
-   offered where exactly **1** was pending (`12d25260..branch` = 1 vs
-   `ff234125..branch` = 220): their branch-time tip was `ff234125`, but old main
-   `7432e538` had already absorbed 5 of their 6 commits. The corrected cut
-   replayed 1 commit, ending at `e89f2033` with `dirty=0` and no conflicts.
+   than "the cut point is wrong". Lane `facd50af` was offered **220 commits**
+   where exactly **1** was pending: their branch-time tip was `ff234125`, and old
+   main `7432e538` had already absorbed 5 of their 6 commits. Lane `d18ce16a`
+   (2026-09-11) reproduced the same class on a branch with **ZERO** pending
+   commits — old-main range 12, target range 0 — where the derived rebase hit 4
+   conflicting files. Measuring against the target is what removes both.
    **Fallback (rare):** if the old fork-main sha IS still an ancestor of the new
-   base — i.e. the sync did not rewrite history — the simple
+   base — i.e. the sync did not rewrite history — the two ranges coincide and
    `git rebase --onto origin/main <old-fork-main-sha> <lane-branch>` is
    equivalent; test with `git merge-base --is-ancestor <old-main> origin/main`.
    Lane-local conflicts are isolated to that lane; anything else is a roster
    defect and returns to step 1. Unpause lanes via `session_notify` with the new
    base sha.
+   **Verifying "no rebase in progress" — do NOT use `ls .git/rebase-*`.** In a
+   LINKED worktree `.git` is a FILE pointing at the real gitdir, so that path is
+   not a directory and the naive check reports a FALSE "no rebase". Use
+   `git rev-parse --git-path rebase-merge` (correct in both layouts) or the
+   `git status` header.
 8. Fork CI (`pr-checks`) GREEN on the rebased tree — the only CODE-TESTS locus
    (box law; no local cargo per build-lane directive) → force-push
    `--force-with-lease` to `origin/main`, consolidated report with the
