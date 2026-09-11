@@ -1,3 +1,9 @@
+## v0.4.144 (2026-09-11) — Duty 4 Direct-Persistence & Zero-Notify Law
+
+- **Zero Session Notify Law for Duty 4 Proposals (`hq.md`, `editor.md`)**: Codified that workers do NOT submit Duty 4 skill review proposals via `session_notify` to HQ. Inbound proposal notifications flood HQ's conversational context, accelerate memory compaction, and create hub contention. Proposals are persisted directly to disk at `~/.opencrabs/profiles/ops/opencrabs-dev/reviews/<cycle-id>/proposals/<session-uuid>.md` or appended to the ledger via `oc-ledger stamp proposal`.
+- **Mechanical Duty 4 Closure (`hq.md`)**: HQ assesses duty completion through on-disk file discovery (`ls $REVIEW_DIR/proposals/`) and ledger query (`oc-ledger events --kind proposal`), bounded by quorum or window cutoff, batching review ingestion into a single turn before stamping the cadence boundary.
+- **BATTERY**: 162 PASS / 0 FAIL.
+
 ## v0.4.143 (2026-09-11) — Post-Harvest Issue Allocation, Worktree Indexing Retirement & CI Throttling
 
 - **Post-Harvest Issue Assignment & Lane Expansion (`fleet-directives.md`)**: Codified automated issue assignment sweep following nightly harvest batches. Unassigned vetted issues are allocated to idle editor lanes, expanding lane capacity as needed so work is queued for daytime execution.

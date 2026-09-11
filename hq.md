@@ -124,31 +124,33 @@ owner directives only; ACK bookkeeping stays ledger-internal. *(Historical:
 the compiler role was RETIRED 2026-08-28 — builds fire via `oc-deploy ship`;
 this paragraph is kept only as the runbook for any future re-enabled lane.)*
 
-## Duty 4 — Poll workers for skill input
+## Duty 4 — Poll workers for skill input (Direct Persistence & Ledger Intake)
 
 Cadence: STANDING — after every FIVE shipped version bumps (shared trigger
 with Duty 6), on owner request, or when incidents cluster without a rule.
 
-**Rollcall proactive trigger (owner 2026-09-08 "Go then duty 4+6",
-v0.4.108):** on each Duty-4 firing, HQ also checks the fleet for
-owner-decision items sitting unprompted between rollcalls (gates the law
-reserves for the owner: designs, smoke-readiness, dispatch priority) and,
-if any are found, lists them in the consolidated verdict table — Triage
-T7 execution stays on-demand; HQ's duty here is only to make the owner
-see what's waiting, never to fire the Rollcall itself.
+**Zero Session Notify Law for Worker Proposals (owner order 2026-09-11):**
+Workers do NOT submit Duty 4 proposals via `session_notify` to HQ. Inbound notify
+floods pollute HQ's context window, accelerate context compactions, and duplicate
+the freeze-ACK anti-pattern. Workers write proposals directly to disk in the
+cycle review directory (`~/.opencrabs/profiles/ops/opencrabs-dev/reviews/<cycle-id>/proposals/<session-uuid>.md`)
+or record them onto the ledger via `oc-ledger stamp proposal "ADD|CHANGE <rule> in <file+section> BECAUSE <evidence>"`.
 
-1. Live roster FIRST (`session_search`, same turn).
-2. Notify every non-dormant editor: proposals in strict format —
-   `ADD|CHANGE <rule> in <file+section> BECAUSE <gap actually hit>` with dates
-   and evidence. No niceties. Workers NEVER edit skill files themselves.
-   **Reply surface (v0.4.91):** replies go via `session_notify` with
-   `target_session` = HQ's FULL session UUID — never posted in the worker's
-   own chat (the polling channel; an unwitnessed reply is an unfound reply).
-3. Validate every proposal three ways BEFORE reporting: disk truth (rule may
+1. Live roster FIRST (`session_search` / `oc-ledger roster --live`, same turn).
+2. Broadcast poll notification via `oc-notify-fanout`: instruct non-dormant editors
+   to write proposals directly to disk (`$REVIEW_DIR/proposals/<uuid>.md`) or append to the ledger.
+   Proposals must use strict format: `ADD|CHANGE <rule> in <file+section> BECAUSE <gap actually hit>`
+   with dates and evidence. Workers NEVER edit skill files themselves.
+3. Intake & Closure Determination:
+   - **Mechanical State Check**: HQ reads the submissions in a single batch turn from disk (`ls $REVIEW_DIR/proposals/`)
+     and ledger events (`oc-ledger events --kind proposal`).
+   - **Quorum / Window**: All active lanes have written their file/ledger entry OR a bounded window
+     (e.g. 15–30 minutes / post-harvest boundary) expires. Lanes that submit nothing are treated as having no gaps.
+4. Validate every proposal three ways BEFORE reporting: disk truth (rule may
    already exist), live/log evidence (gap must have really happened), coherence
    with existing gates.
-4. Consolidated verdict table to the owner; ships ONLY on his word.
-5. Convergence beats volume: several workers burning independently on the same
+5. Consolidated verdict table to the owner; ships ONLY on his word.
+6. Convergence beats volume: several workers burning independently on the same
    gap is stronger signal than any single proposal — merge them into one rule.
 
 ## Duty 5 — Procedure rulings (decision 6)

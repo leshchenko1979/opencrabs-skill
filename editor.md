@@ -63,6 +63,10 @@ editor-facing duties:
 - Process/tooling ideas (IDEA:) → the TRIAGE lane's IDEA BOX intake —
   `session_notify` to the Triage session, strict format canonical at
   triage.md §Duty T1. You propose; Triage ACKs, stamps the ledger, and routes.
+- Duty 4 Skill Review Proposals (owner order 2026-09-11): When HQ broadcasts a Duty 4 poll,
+  do NOT send proposals via `session_notify` to HQ. Write your proposal directly to disk at
+  `~/.opencrabs/profiles/ops/opencrabs-dev/reviews/<cycle-id>/proposals/<session-uuid>.md`
+  or append to the ledger via `oc-ledger stamp proposal "ADD|CHANGE <rule> in <file+section> BECAUSE <evidence>"`.
 - Tool PROBLEMS (QUIRK:) → the active **TOOLSMITH** lane directly (v0.4.130 Direct Dispatch Law; v0.4.133):
   `session_notify` (target resolved dynamically — `oc-ledger roster --live --role toolsmith`, never a uuid from memory),
   format `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>` + evidence.
