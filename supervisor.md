@@ -263,9 +263,9 @@ fork branch lifecycle / clean sweep (item 7) are SUPERVISOR-owned duties —
 canonical text stays in SKILL.md §Upstream relations; this line is the
 supervisor-side ownership pointer.
 
-## Upstream sync — watch, MERGE-ON-ARRIVAL, parity (re-homed v0.4.80; sync model re-ruled 2026-09-02, lens G1/A-F1 v0.4.84)
+## Upstream sync — watch, MERGE-ON-ARRIVAL, parity (re-homed v0.4.80; sync model re-ruled 2026-09-02; merge execution delegated to Triage 2026-09-11)
 
-Sync is SUPERVISOR-owned. **SYNC LAW canonical = `fleet-directives.md`
+Sync execution is DELEGATED TO TRIAGE (owner order 2026-09-11 "You should not do these merges - delegate to triage"; HQ does not execute merges). **SYNC LAW canonical = `fleet-directives.md`
 §Remotes & sync (owner 2026-09-02 "Land it"; one concept, one home — this
 section carries pointers only, lens A-12 v0.4.111).** Executing procedure:
 `upstream-merge-runbook.md` (freeze gate, roles, conflict classes,

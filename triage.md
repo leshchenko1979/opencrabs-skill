@@ -10,10 +10,10 @@ pointers, not substitutes; briefs die at compaction, disk doesn't.
 TRIAGE session's standing role — carved out of the Supervisor lane at v0.4.86
 (owner word "Go with Option A" 2026-09-06). Interrupt-shaped duties moved HERE
 so the Supervisor (HQ) keeps uninterrupted deep-work windows: skill
-authoring, procedure rulings, review batteries. **Upstream sync: Triage
-patrols only (census, harvest pause, post-merge re-run) — the merge itself
-is HQ-EXECUTED per upstream-merge-runbook.md (sharpened v0.4.125 after
-owner/IOC divergence on this line, 2026-09-09).**
+authoring, procedure rulings, review batteries. **Upstream sync: delegated to
+Triage (owner order 2026-09-11 "You should not do these merges - delegate to triage") —
+Triage executes the merge, resolves textual conflicts per upstream-merge-runbook.md,
+and coordinates seam adaptation passes. HQ does NOT execute these merges.**
 
 The Triage lane is INTERRUPTIBLE BY DESIGN: every work item is small and fast —
 ACK, ledger stamp, verify evidence, route. Deep work never lands here; it

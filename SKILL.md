@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.135
+version: 0.4.136
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -420,8 +420,9 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    Alexey with the delta and WAIT. Procedure: `supervisor.md` §Upstream sync.
 2. **Sync model = MERGE-ON-ARRIVAL** (owner 2026-09-02 "Land it"; supersedes the
    2026-08-26 REBASE-PORT, which is RETIRED — historical, PR chains only):
-   fork main **merges** `adolfousier/main` when upstream shifts. Sync LAW
-   canonical: `fleet-directives.md` §Remotes & sync (one concept, one home — lens A3
+   fork main **merges** `adolfousier/main` when upstream shifts. Merge execution
+   is DELEGATED TO TRIAGE (owner order 2026-09-11 "You should not do these merges - delegate to triage";
+   HQ does not execute merges). Sync LAW canonical: `fleet-directives.md` §Remotes & sync (one concept, one home — lens A3
    v0.4.89); executing procedure: `upstream-merge-runbook.md` (freeze gate,
    roles, conflict classes, migration-union rule, semantic-triage defaults).
 3. **Absorption rule**: when upstream merges or reimplements one of OUR

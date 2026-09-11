@@ -1,3 +1,6 @@
+## v0.4.136 (2026-09-11, upstream merge execution delegated to Triage)
+- GOVERNANCE: delegated upstream merge execution to Triage (`triage.md`, `supervisor.md`, `SKILL.md`, `fleet-directives.md`, `upstream-merge-runbook.md`). Per owner order 2026-09-11 ("You should not do these merges - delegate to triage"), HQ does not execute merges; Triage executes the freeze check, performs the merge, resolves textual conflicts wholesale to upstream per upstream-merge-runbook.md, and coordinates seam adaptation passes.
+
 ## v0.4.135 (2026-09-10, detached command execution standard & waiter retirement)
 - RETIREMENT: decommissioned `tools/oc-waiter` in favor of native detached bash execution (`background: true`).
 - CRONS: unscheduled and dismantled `oc-waiter-sweep` cron job (`b0d7e0d3-1270-4fb5-8cb8-6c7161e90c34`).

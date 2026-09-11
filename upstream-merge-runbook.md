@@ -2,7 +2,8 @@
 
 Procedure for the merge-on-arrival sync policy (owner 2026-09-02 "Land it";
 directive text lives in `fleet-directives.md`, the `~/opencrabs remotes`
-paragraph — this file is the how, that file is the law). Executed by HQ.
+paragraph — this file is the how, that file is the law). Delegated to Triage
+(owner order 2026-09-11 "You should not do these merges - delegate to triage"; HQ does NOT execute).
 Owner gates are marked **[GATE]**.
 
 First application: the 2026-09-02 backlog-clearing merge (67 upstream-only
@@ -22,7 +23,8 @@ commits, 133 fork-only, 68 overlapping files, merge-base `4776bee2`).
 
 | Actor | Job |
 |---|---|
-| **HQ** | freeze check, run the merge, arbitrate textual conflicts, ledger stamps, consolidated report with the per-feature decisions table |
+| **Triage** | freeze check, run the merge, arbitrate textual conflicts, ledger stamps, seam adaptation dispatch, consolidated report with the per-feature decisions table (delegated owner 2026-09-11) |
+| **HQ** | supervisory oversight, process/skill updates, review of owner-gated semantic overrides — HQ does NOT execute the merge |
 | **Review lens** (one spawn) | audits each semantic pair — diff fork behavior vs upstream's, flag anything upstream's version *loses* |
 | **Editor lane** (hosting editor; TOOLSMITH builds no trees per toolsmith.md law) | runs `oc-deploy ship` on the marker commit via the `oc-deploy` lane, runs the battery — HQ never hand-builds |
 | **Harvest lane** | unaffected for open PRs, but **pauses new branch creation** off fork main until the merge lands (stale bases). **v0.4.93:** filed upstream PRs stay FROZEN during the merge window — the merge does NOT trigger re-ports; conflicts on filed PRs are maintainer-side at merge time (editor.md Phase 7 PR-freeze law) |
