@@ -698,11 +698,12 @@ printf '%s' "$NFOUT" | grep -q "sent=0" \
 section "oc-health (hourly health & cleanliness sweep)"
 HZ="$TOOLS_DIR/oc-health"
 # 62a. hermetic selftest: fixture state dir + tmp glob + sqlite DB + git repos,
-#      so the reaping cases run without touching live state. 22 assertions cover
+#      so the reaping cases run without touching live state. 25 assertions cover
 #      stale-lock reap, live-pid never-reap, backup keep-window, tmp age gate,
-#      JSON contract, cron DM-leak vs blank-deliver_to, orphan worktrees.
+#      dead-mirror reap vs live-mirror never-reap (fork #167), JSON contract,
+#      cron DM-leak vs blank-deliver_to, orphan worktrees.
 HOUT="$(bash "$HZ" --selftest 2>&1)"; HRC=$?
-[ "$HRC" -eq 0 ] && ok "oc-health --selftest PASS (22 assertions)" \
+[ "$HRC" -eq 0 ] && ok "oc-health --selftest PASS (25 assertions)" \
   || bad "oc-health --selftest rc=$HRC: $(printf '%s' "$HOUT" | tail -3)"
 # 62b. read-only run must NOT mutate: no --reap, no writes; rc is 0 (clean) or 1
 #      (findings) — never 2/3 on a healthy box.
