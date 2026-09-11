@@ -233,13 +233,13 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 |------|-----------|-----|
 | `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add |
 | `oc-index-worktree` | `tools/oc-index-worktree <worktree-path>` | legacy standalone codegraph index (per-worktree indexing retired in v0.4.143; use memory_search scope="external") |
-| `oc-prchecks` | `tools/oc-prchecks <branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; exit 5 = run URL to resume |
+| `oc-prchecks` | `tools/oc-prchecks wait <branch>` / `<branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; `wait` provides single-command blocking gate |
 | `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) |
 | `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | per-commit implementation comment (body-file discipline inside; chained by oc-ship-chain Leg 2) |
 | `oc-commit` | `tools/oc-commit -m "<msg>" [--issue N] [--no-comment]` | gated SIGNED commit: Session-Id + Issue-Ref trailers derived from OC_ACTOR + ledger claim; implementation comment folded in (oc-issue-log leg) — Phase 6c step 2 default |
-| `oc-ledger` | `stamp claim --what "…"` (canonical: `--what`; bare positional also accepted) · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack |
+| `oc-ledger` | `stamp claim --what "…"` · `--verbs` · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack; `--verbs` discovers subcommands |
 | `oc-drift-check` | `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` | §Mid-cycle skill drift step 1–2 |
-| `oc-deploy` | `ship --execute` · `poll` · `watch` · `fanout` | ship chain (dispatch → watch → swap); ship dispatch is leg 1 ONLY — watch+swap REQUIRED |
+| `oc-deploy` | `ship --execute` · `poll` · `status [--json]` · `watch` · `fanout` | ship chain (dispatch → watch → swap); `status` verifies running vs disk binary |
 | `oc-upstream-delta` | `tools/oc-upstream-delta` | fork vs upstream divergence read |
 | `oc-attrib` | `tools/oc-attrib --deployed` | who owns the deployed range (fanout targeting) |
 | `oc-branch-sweep` | `tools/oc-branch-sweep --repo <path>` | merged/stale branch proof; deletes MERGED only |
