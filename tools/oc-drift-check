@@ -5,8 +5,12 @@
 #
 # Usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]
 #   Compares the version a lane claimed at task-claim time against the LIVE
-#   SKILL.md (editor.md §Mid-cycle skill drift step 1-2). On drift,
-#   --ack delegates the oc-ledger ack so the re-read is mechanically recorded.
+#   SKILL.md (editor.md §Mid-cycle skill drift step 1-2). --ack delegates the
+#   oc-ledger ack so the re-read is mechanically recorded — on BOTH verdicts,
+#   including the no-drift one every compliant reload actually hits (fixed
+#   2026-09-11; it previously fired only on DRIFT, so a lane that ran the
+#   prescribed ritual on a clean tree recorded nothing and its roster
+#   last_acked went stale).
 #
 # Skill-dir resolution (v0.4.130, ruling n=2369): --skill-dir flag >
 # OC_SKILL_DIR env > CANONICAL profile copy
@@ -62,16 +66,24 @@ cmd_drift() {
   cur="$(grep -E '^version:' "$SKILL_DIR/SKILL.md" 2>/dev/null | head -1 | awk '{print $2}')"
   [ -n "$cur" ] || die 3 "cannot read version from $SKILL_DIR/SKILL.md"
   local claimed_bare="${claimed#v}"
+  # --ack stamps on BOTH paths (defect fix 2026-09-11, lanes d18ce16a + a5b34466).
+  # This block used to sit AFTER the no-drift early return, so --ack fired ONLY on
+  # DRIFT — the inverse of the promise in the header and of every RELOAD brief,
+  # which prescribes `oc-drift-check <uuid> <live-version> --ack`. A lane that
+  # complied on a clean tree (the COMMON case) recorded NOTHING: roster last_acked
+  # went stale (two lanes independently observed theirs ~a day behind across
+  # several reloads) and version-compliance reads were unreliable. Mechanical
+  # recording has to cover the invocation the brief actually prescribes.
+  if [ "$ack" = "1" ]; then
+    OC_LEDGER="$LEDGER" OC_SKILL_DIR="$SKILL_DIR" "$_OC_DIR/oc-ledger" ack "$uuid" "$cur" || die 3 "ack failed (oc-ledger rc=$?)"
+    echo "ack stamped for $uuid at $cur"
+  fi
   if [ "$claimed_bare" = "$cur" ]; then
     echo "NO-DRIFT: claimed $claimed_bare == live $cur"
     oc_log_extra verdict NO-DRIFT; return 0
   fi
   echo "DRIFT: claimed $claimed_bare != live $cur — re-read SKILL.md + editor.md IN FULL before next phase boundary"
   oc_log_extra verdict DRIFT
-  if [ "$ack" = "1" ]; then
-    OC_LEDGER="$LEDGER" OC_SKILL_DIR="$SKILL_DIR" "$_OC_DIR/oc-ledger" ack "$uuid" "$cur" || die 3 "ack failed (oc-ledger rc=$?)"
-    echo "ack stamped for $uuid at $cur"
-  fi
   return 1
 }
 
@@ -112,6 +124,26 @@ EOF
   # --ack: drift case delegates to oc-ledger ack against fixture ledger
   OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.57 --ack --skill-dir "$T/skill" >/dev/null 2>&1
   chk "drift-ack-stamped" "0.4.58" "$(jq -r '.workers[] | select(.uuid=="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") | .last_acked.version // "none"' "$T/state-ledger.json")"
+  # --ack must ALSO stamp on the NO-DRIFT path (defect fix 2026-09-11, lanes
+  # d18ce16a + a5b34466). The ack block sat AFTER the no-drift early return, so
+  # the exact invocation every RELOAD brief prescribes — run on a clean tree,
+  # which is the common case — recorded nothing and roster last_acked went
+  # stale. Reset last_acked, run no-drift WITH --ack, assert it landed AND the
+  # verdict is still rc 0 (the fix must not turn a clean tree into a failure).
+  jq '.workers[0].last_acked = null' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  chk "no-drift-ack-precondition" "none" "$(jq -r '.workers[0].last_acked.version // "none"' "$T/state-ledger.json")"
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.58 --ack --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "no-drift-ack-rc0" 0 "$RC"
+  case "$OUT" in *"NO-DRIFT"*) ND=yes ;; *) ND=no ;; esac
+  chk "no-drift-ack-verdict" "yes" "$ND"
+  case "$OUT" in *"ack stamped for aaaaaaaa"*) AS=yes ;; *) AS=no ;; esac
+  chk "no-drift-ack-message" "yes" "$AS"
+  chk "no-drift-ack-stamped" "0.4.58" "$(jq -r '.workers[] | select(.uuid=="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") | .last_acked.version // "none"' "$T/state-ledger.json")"
+  # and WITHOUT --ack the no-drift path must stay a pure read (no ledger write)
+  jq '.workers[0].last_acked = null' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.58 --skill-dir "$T/skill" >/dev/null 2>&1 || RC=$?
+  chk "no-drift-without-ack-rc0" 0 "$RC"
+  chk "no-drift-without-ack-no-write" "none" "$(jq -r '.workers[0].last_acked.version // "none"' "$T/state-ledger.json")"
   rm -rf "$T"
   echo "oc-drift-check selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
