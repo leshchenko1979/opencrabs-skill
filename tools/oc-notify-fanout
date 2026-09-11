@@ -472,9 +472,17 @@ while IFS=$'\t' read -r uuid role topic; do
   fi
   T1=$(date +%s%N)
   LAT_MS=$(( (T1 - T0) / 1000000 ))
+  # The CLI prints `notification id <id>` ONLY on a DEFERRED verdict (quiet
+  # mode). An IMMEDIATE delivery prints `delivered: delivered to session <uuid>`
+  # — no id phrase at all — so this regex can never match a normal send and the
+  # fallback below is the COMMON path, not an error. The label is deliberately
+  # self-describing: `rc0-no-id` read like a receipt failure and cost HQ a cycle
+  # proving it was fine (HQ addendum 2026-09-11). The bare `rc0` fallback that
+  # lands in the ledger stamp's `ids:` field is LEFT ALONE — it is a pre-existing
+  # token other lanes' greps may key on, and it never reaches a receipt line.
   nid="$(printf '%s' "$out" | grep -oE 'notification id [0-9a-f-]+' | head -1 || true)"
   if [ "$rc" = 0 ]; then
-    receipts+="SENT ${uuid} ${role} ${nid:-rc0-no-id} ${LAT_MS}ms"$'\n'
+    receipts+="SENT ${uuid} ${role} ${nid:-rc0-immediate-no-id} ${LAT_MS}ms"$'\n'
     ids+="${nid:-rc0} " ; sent=$((sent+1))
     printf '%s\n' "$uuid" >> "$SENT_FILE"   # law 8: append-one-per-send idempotency receipt
   else
