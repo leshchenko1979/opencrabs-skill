@@ -64,7 +64,7 @@ editor-facing duties:
   `session_notify` to the Triage session, strict format canonical at
   triage.md §Duty T1. You propose; Triage ACKs, stamps the ledger, and routes.
 - Tool PROBLEMS (QUIRK:) → the active **TOOLSMITH** lane directly (v0.4.130 Direct Dispatch Law; v0.4.133):
-  `session_notify` (target dynamically resolved via `oc-ledger roster` — never uuid from memory),
+  `session_notify` (target resolved dynamically — `oc-ledger roster --live --role toolsmith`, never a uuid from memory),
   format `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>` + evidence.
   Never retry-around silently, never self-patch — Toolsmith owns `tools/oc-*` tool code.
   Core daemon bugs go directly to GitHub fork issues. Fallback target if Toolsmith

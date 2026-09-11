@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# oc-roster --selftest — offline fixtures only: a fixture session DB, a fixture
+# ledger, and an oc-wt shim. No network, no live DB, no live ledger, no writes
+# outside the temp dir. Invoked by `oc-roster --selftest` (which also sets
+# OC_TOOLS_NOLOG=1 through lib/oc-log.sh so the run never journals).
+set -u
+set -o pipefail
+export OC_TOOLS_NOLOG=1
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+TOOL="$SELF_DIR/oc-roster"
+D="$(mktemp -d)"
+trap 'rm -rf "$D"' EXIT
+
+pass=0; fail=0
+ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
+bad() { fail=$((fail+1)); echo "selftest: $1  FAIL${2:+ — $2}"; }
+chk() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "want [$3] got [$2]"; }
+
+NOW=1800000000
+U1=aaaaaaaa-0000-4000-8000-000000000001
+U2=aaaaaaaa-0000-4000-8000-000000000002
+U3=aaaaaaaa-0000-4000-8000-000000000003
+U4=aaaaaaaa-0000-4000-8000-000000000004
+L1=11111111-1111-4111-8111-111111111111
+L2=22222222-2222-4222-8222-222222222222
+L3=33333333-3333-4333-8333-333333333333
+L4=44444444-4444-4444-8444-444444444444
+L5=55555555-5555-4555-8555-555555555555
+FORUM=-1003936827469
+
+# ---- fixture session DB -----------------------------------------------------
+sqlite3 "$D/db.sqlite" <<SQL
+CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, updated_at INTEGER, archived_at INTEGER);
+CREATE TABLE session_bindings (session_id TEXT PRIMARY KEY, channel TEXT, chat_id TEXT, thread_id INTEGER);
+INSERT INTO sessions VALUES ('$L1','lane-one',$((NOW-3600)),NULL);
+INSERT INTO sessions VALUES ('$L2','lane-two',$((NOW-3600)),NULL);
+INSERT INTO sessions VALUES ('$L3','lane-three',$((NOW-3600)),$NOW);
+INSERT INTO sessions VALUES ('$L4','lane-four',$((NOW-100*3600)),NULL);
+INSERT INTO sessions VALUES ('$L5','subagent:child',$((NOW-60)),NULL);
+INSERT INTO sessions VALUES ('$U3','lane-three-archived',$((NOW-100*3600)),$NOW);
+INSERT INTO sessions VALUES ('$U1','lane-u1-archived',$((NOW-100*3600)),$NOW);
+INSERT INTO sessions VALUES ('$U2','lane-u2-archived',$((NOW-100*3600)),$NOW);
+INSERT INTO session_bindings VALUES ('$L1','telegram','$FORUM',1);
+INSERT INTO session_bindings VALUES ('$L2','telegram','-1000000000',1);
+INSERT INTO session_bindings VALUES ('$L4','telegram','$FORUM',2);
+SQL
+chk "fixture-db-created" "$(sqlite3 "$D/db.sqlite" 'SELECT count(*) FROM sessions;')" "8"
+
+# ---- fixture ledger ---------------------------------------------------------
+cat > "$D/ledger.json" <<JSON
+{"workers":[{"uuid":"$U1","role":"editor"},{"uuid":"$U2","role":"triage"}],
+ "events":[
+  {"n":1,"t":"2026-09-11T00:00Z","by":"editor $U1","kind":"claim","what":"CLAIM #200 — open thing"},
+  {"n":2,"t":"2026-09-11T00:01Z","by":"editor $U2","kind":"claim","what":"CLAIM #201 — closed thing"},
+  {"n":3,"t":"2026-09-11T00:02Z","by":"editor $U2","kind":"confirm","what":"confirm #201 shipped"},
+  {"n":4,"t":"2026-09-11T00:03Z","by":"editor $U3","kind":"claim","what":"CLAIM #202 — open orphan"},
+  {"n":5,"t":"2026-09-11T00:04Z","by":"editor $U4","kind":"claim","what":"CLAIM #203 — frankenstein author"}
+ ]}
+JSON
+chk "fixture-ledger-parses" "$(jq '.events|length' "$D/ledger.json")" "5"
+
+# ---- oc-wt shim -------------------------------------------------------------
+cat > "$D/oc-wt" <<'SH'
+#!/usr/bin/env bash
+printf '200-thing\t/root/oc-wt-200-thing\tfeat/200\t0\n'
+printf '201-fix\t/root/oc-wt-201-fix\tfix/201\t2\n'
+printf '202-orph\t/root/oc-wt-202-orph\tfeat/202\t0\n'
+printf '203-phantom\t/root/oc-wt-203-phantom\tfeat/203\t0\n'
+SH
+chmod +x "$D/oc-wt"
+
+# ---- run the tool -----------------------------------------------------------
+export OC_ROSTER_DB="$D/db.sqlite" OC_ROSTER_LEDGER="$D/ledger.json"
+export OC_ROSTER_WT="$D/oc-wt" OC_ROSTER_WT_REPO="$D/repo"
+export OC_ROSTER_FORUM_CHAT="$FORUM" OC_ROSTER_NOW="$NOW"
+
+"$TOOL" live           > "$D/live.out"   2>"$D/live.err";    chk "live-rc" "$?" "0"
+"$TOOL" live --detail  > "$D/lived.out"  2>/dev/null
+"$TOOL" forum          > "$D/forum.out"  2>/dev/null
+"$TOOL" claims         > "$D/claims.out" 2>"$D/claims.err";  chk "claims-rc" "$?" "0"
+"$TOOL" work           > "$D/work.out"   2>/dev/null
+"$TOOL" classify       > "$D/class.out"  2>"$D/class.err";   chk "classify-rc" "$?" "0"
+"$TOOL" classify --json > "$D/class.json" 2>/dev/null;       chk "classify-json-rc" "$?" "0"
+"$TOOL" bogus >/dev/null 2>&1; chk "unknown-verb-rc2" "$?" "2"
+
+chk "live-count"     "$(wc -l < "$D/live.out")" "3"
+chk "live-no-subagent" "$(grep -c "$L5" "$D/live.out" || true)" "0"
+chk "forum-count"    "$(wc -l < "$D/forum.out")" "2"
+chk "claims-open-count" "$(wc -l < "$D/claims.out")" "3"
+chk "work-count"     "$(wc -l < "$D/work.out")" "4"
+chk "classify-rows"  "$(wc -l < "$D/class.out")" "5"
+
+# independent re-derivation of the live set (set-equality, not eyeball)
+sqlite3 "$D/db.sqlite" "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
+  | sort > "$D/live.expected"
+sort "$D/live.out" > "$D/live.got"
+if diff -q "$D/live.expected" "$D/live.got" >/dev/null; then ok "live-set-equality"; else bad "live-set-equality" "$(diff "$D/live.expected" "$D/live.got" | head -3)"; fi
+
+python3 - "$D" "$U1" "$U2" "$U3" "$U4" <<'PY'
+import json, re, sys
+D, U1, U2, U3, U4 = sys.argv[1:6]
+ok = fail = 0
+def chk(name, cond, detail=""):
+    global ok, fail
+    if cond: ok += 1; print("selftest: %s  OK" % name)
+    else:    fail += 1; print("selftest: %s  FAIL%s" % (name, " — " + detail if detail else ""))
+
+uuid_re = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+rows = [l.split("\t") for l in open(D + "/class.out").read().splitlines() if l.strip()]
+chk("classify-every-row-full-uuid", all(uuid_re.match(r[1]) for r in rows),
+    "bad rows: %r" % [r[1] for r in rows if not uuid_re.match(r[1])])
+tally = {}
+for r in rows: tally[r[0]] = tally.get(r[0], 0) + 1
+chk("classify-tally-sums-to-rows", sum(tally.values()) == len(rows),
+    "tally=%r rows=%d" % (tally, len(rows)))
+chk("classify-all-four-classes", set(tally) == {"ACTIVE","IDLE","ORPHAN","UNKNOWN"}, repr(tally))
+chk("classify-active-is-l1", [r[1] for r in rows if r[0]=="ACTIVE"] == ["11111111-1111-4111-8111-111111111111"], repr([r[1] for r in rows if r[0]=="ACTIVE"]))
+chk("classify-idle-is-l4", [r[1] for r in rows if r[0]=="IDLE"] == ["44444444-4444-4444-8444-444444444444"], repr([r[1] for r in rows if r[0]=="IDLE"]))
+chk("classify-orphan-is-u2", [r[1] for r in rows if r[0]=="ORPHAN"] == [U2], repr([r[1] for r in rows if r[0]=="ORPHAN"]))
+chk("classify-unknown-is-u1-u3", sorted(r[1] for r in rows if r[0]=="UNKNOWN") == sorted([U1,U3]))
+j = json.load(open(D + "/class.json"))
+chk("json-tally-matches-tsv", j["tallies"] == tally, "%r vs %r" % (j["tallies"], tally))
+chk("json-row-count", len(j["rows"]) == len(rows))
+att = {l.split("\t")[0]: l.split("\t")[4] for l in open(D + "/work.out").read().splitlines() if l.strip()}
+chk("work-attach-200", att.get("200-thing") == U1, repr(att))
+chk("work-attach-201", att.get("201-fix") == U2, repr(att))
+chk("work-attach-202", att.get("202-orph") == U3, repr(att))
+op = set(l.split("\t")[0] for l in open(D + "/claims.out").read().splitlines() if l.strip())
+chk("claims-open-set", op == {U1, U3, U4}, repr(op))
+chk("role-from-ledger", any(r[2] == "editor" for r in rows), repr([r[2] for r in rows]))
+chk("classify-excludes-phantom", all(r[1] != U4 for r in rows))
+chk("json-phantoms-is-u4", j.get("phantoms") == [U4], repr(j.get("phantoms")))
+err = open(D + "/class.err").read()
+chk("phantom-flagged-on-stderr", "PHANTOM" in err and U4 in err, err.strip()[:120])
+with open(D + "/pycnt", "w") as fh:
+    fh.write("%d %d\n" % (ok, fail))
+sys.exit(1 if fail else 0)
+PY
+if read -r pyok pyfail < "$D/pycnt" 2>/dev/null; then
+  pass=$((pass + pyok)); fail=$((fail + pyfail))
+else
+  fail=$((fail + 1))
+fi
+
+echo "selftest: oc-roster — ${pass} passed, ${fail} failed"
+[ "$fail" = "0" ] || exit 1
+exit 0

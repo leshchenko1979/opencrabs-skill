@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-roster — DERIVED in-progress roster (fork-rebase gate, plan step 1,
+# 2026-09-11). Owner finding: no roster source existed — oc-ledger roster was
+# a phantom verb, workers-ledger.json stores version-acks not work state,
+# ~120 worktrees are a graveyard, and the session DB alone is liveness only.
+#
+# NOT a registry. Stores nothing. Every run derives the roster from four
+# independent signals and joins them:
+#
+#   INTENT   ledger events kind=claim, minus closures (close|confirm|reject|
+#            done|unclaim by the same author, later index, same #N)
+#   EVIDENCE oc-wt list dirty count, joined by ISSUE NUMBER
+#            (worktree slug numeric prefix  <->  the claim's #N)
+#   LIVENESS profile session DB: archived_at IS NULL AND title NOT LIKE
+#            'subagent:%'  (identical query shape to oc-notify-fanout v0.4.129)
+#   SCOPE    session_bindings.chat_id = the opencrabs-dev forum chat
+#
+# Classification (deterministic, documented — never guessed):
+#   ACTIVE   live + forum-bound + (open claim | dirty worktree | updated <24h)
+#   IDLE     live + forum-bound + no in-progress evidence
+#   ORPHAN   not live + no open claim + a worktree exists for a claimed issue
+#   UNKNOWN  signals conflict — in-progress evidence without liveness, or
+#            in-progress evidence on a lane outside forum scope. ESCALATE.
+#
+# Usage:
+#   oc-roster live [--detail]     canonical full session ids, one per line
+#   oc-roster forum [--detail]    live sessions bound to the forum chat
+#   oc-roster claims              uuid<TAB>issue<TAB>t<TAB>what (open only)
+#   oc-roster work                task<TAB>path<TAB>branch<TAB>dirty<TAB>uuid
+#   oc-roster classify [--json]   the roster table; tallies go to stderr
+#   oc-roster --selftest          offline fixtures (no network, no live DB)
+#
+# Exit: 0 ok / 2 usage / 3 unreadable source (DB, ledger, worktree tool)
+# =============================================================================
+set -u
+set -o pipefail
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-roster" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="$(basename "$0")"
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROFILE="${OC_PROFILE:-ops}"
+: "${OC_ROSTER_DB:=$HOME/.opencrabs/profiles/$PROFILE/opencrabs.db}"
+: "${OC_ROSTER_LEDGER:=${OC_LEDGER:-$HOME/.opencrabs/profiles/$PROFILE/opencrabs-dev/workers-ledger.json}}"
+: "${OC_ROSTER_WT:=$SELF_DIR/oc-wt}"
+: "${OC_ROSTER_WT_REPO:=$HOME/opencrabs}"
+export OC_ROSTER_DB OC_ROSTER_LEDGER OC_ROSTER_WT OC_ROSTER_WT_REPO
+
+usage() { # C-#3: --help/-h answers 0 on STDOUT; a usage error answers 2 on STDERR
+  local rc="${1:-2}"
+  if [ "$rc" = 0 ]; then
+    echo "usage: $PROG <live|forum|claims|work|classify> [--detail|--json] | --selftest"
+  else
+    echo "usage: $PROG <live|forum|claims|work|classify> [--detail|--json] | --selftest" >&2
+  fi
+  exit "$rc"
+}
+
+verb="${1:-}"; shift || true
+case "$verb" in
+  live|forum|claims|work|classify)
+    python3 - "$verb" "$@" <<'PY'
+import json, os, re, sqlite3, subprocess, sys, time
+
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+ISSUE_RE = re.compile(r"#(\d+)")
+CLOSERS = {"close", "confirm", "reject", "done", "unclaim"}
+RECENT_S = 24 * 3600
+
+def env(k, d=""):
+    return os.environ.get(k) or d
+
+DB, LEDGER = env("OC_ROSTER_DB"), env("OC_ROSTER_LEDGER")
+WT, WT_REPO = env("OC_ROSTER_WT"), env("OC_ROSTER_WT_REPO")
+FORUM = env("OC_ROSTER_FORUM_CHAT", "-1003936827469")
+NOW = int(env("OC_ROSTER_NOW", str(int(time.time()))))
+
+def die(rc, msg):
+    sys.stderr.write("oc-roster: %s\n" % msg)
+    sys.exit(rc)
+
+def db():
+    if not DB or not os.path.exists(DB):
+        die(3, "session DB unreadable: %s" % (DB or "<unset>"))
+    try:
+        return sqlite3.connect("file:%s?mode=ro" % DB, uri=True)
+    except sqlite3.Error as e:
+        die(3, "session DB open failed: %s" % e)
+
+def live_rows(con):
+    return con.execute(
+        "SELECT id, title, updated_at FROM sessions "
+        "WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%')"
+    ).fetchall()
+
+def forum_ids(con):
+    return [r[0] for r in con.execute(
+        "SELECT b.session_id FROM session_bindings b JOIN sessions s ON s.id = b.session_id "
+        "WHERE s.archived_at IS NULL AND b.chat_id = ?", (FORUM,))]
+
+def load_ledger():
+    if not LEDGER or not os.path.exists(LEDGER):
+        die(3, "ledger unreadable: %s" % (LEDGER or "<unset>"))
+    try:
+        with open(LEDGER) as fh:
+            return json.load(fh)
+    except (OSError, ValueError) as e:
+        die(3, "ledger parse failed: %s" % e)
+
+def claims_index(events):
+    """-> (open_claims, issues_by_uuid). Open = no later closer by same author."""
+    opens, issues = [], {}
+    for i, ev in enumerate(events):
+        if ev.get("kind") != "claim":
+            continue
+        m = UUID_RE.search(ev.get("by") or "")
+        if not m:
+            continue
+        uuid = m.group(0)
+        what = ev.get("what") or ""
+        mi = ISSUE_RE.search(what)
+        if not mi:
+            continue
+        num = mi.group(1)
+        issues.setdefault(uuid, set()).add(num)
+        closed = False
+        for later in events[i + 1:]:
+            if uuid not in (later.get("by") or ""):
+                continue
+            if later.get("kind") not in CLOSERS:
+                continue
+            if ("#" + num) in (later.get("what") or ""):
+                closed = True
+                break
+        if not closed:
+            opens.append({"uuid": uuid, "issue": num,
+                          "t": ev.get("t") or "", "what": what})
+    return opens, issues
+
+def worktrees():
+    if not WT or not os.path.exists(WT):
+        die(3, "worktree tool missing: %s" % (WT or "<unset>"))
+    try:
+        r = subprocess.run([WT, "list", "--repo", WT_REPO],
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        die(3, "oc-wt list failed: %s" % e)
+    rows = []
+    for line in (r.stdout or "").splitlines():
+        p = line.split("\t")
+        if len(p) < 4:
+            continue
+        task, path, branch, dirty = p[0], p[1], p[2], p[3]
+        m = re.match(r"^(\d+)", task)
+        try:
+            dn = int(dirty)
+        except ValueError:
+            dn = 0
+        rows.append({"task": task, "path": path, "branch": branch,
+                     "dirty": dn, "issue": m.group(1) if m else None})
+    return rows
+
+def roles(led):
+    out = {}
+    for w in led.get("workers", []) or []:
+        u = w.get("uuid")
+        if u:
+            out[u] = w.get("role") or "-"
+    return out
+
+def age_h(updated_at):
+    ts = int(updated_at or 0)
+    if ts > 10 ** 12:          # ms epoch
+        ts //= 1000
+    return (NOW - ts) / 3600.0
+
+verb = sys.argv[1]
+opts = sys.argv[2:]
+con = db()
+
+if verb == "live":
+    for sid, title, upd in sorted(live_rows(con)):
+        if "--detail" in opts:
+            print("%s\t%s\t%s" % (sid, upd, (title or "").replace("\t", " ")))
+        else:
+            print(sid)
+    sys.exit(0)
+
+if verb == "forum":
+    ids = set(forum_ids(con))
+    for sid, title, upd in sorted(live_rows(con)):
+        if sid in ids:
+            if "--detail" in opts:
+                print("%s\t%s\t%s" % (sid, upd, (title or "").replace("\t", " ")))
+            else:
+                print(sid)
+    sys.exit(0)
+
+led = load_ledger()
+events = led.get("events", []) or []
+
+if verb == "claims":
+    opens, _ = claims_index(events)
+    for c in sorted(opens, key=lambda x: (int(x["issue"]), x["uuid"])):
+        print("%s\t%s\t%s\t%s" % (c["uuid"], c["issue"], c["t"],
+                                  c["what"].replace("\t", " ")))
+    sys.exit(0)
+
+wts = worktrees()
+opens, issues_by_uuid = claims_index(events)
+open_by_uuid = {}
+for c in opens:
+    open_by_uuid.setdefault(c["uuid"], []).append(c["issue"])
+
+# Ledger authors whose uuid the session DB has NEVER seen are not roster rows —
+# they are ledger defects (hand-assembled frankenstein ids, n=2221 class;
+# incident n=2227). Reported separately so no phantom enters a freeze list.
+known_ids = {r[0] for r in con.execute("SELECT id FROM sessions")}
+phantoms = sorted(u for u in issues_by_uuid if u not in known_ids)
+
+if verb == "work":
+    for w in sorted(wts, key=lambda x: x["task"]):
+        att = "-"
+        for u, iss in sorted(issues_by_uuid.items()):
+            if w["issue"] and w["issue"] in iss:
+                att = u
+                break
+        print("%s\t%s\t%s\t%s\t%s" % (w["task"], w["path"], w["branch"],
+                                      w["dirty"], att))
+    sys.exit(0)
+
+# ---- classify -------------------------------------------------------------
+live = {sid: (title, upd) for sid, title, upd in live_rows(con)}
+forum = set(forum_ids(con))
+role = roles(led)
+
+def wts_for(uuid):
+    iss = issues_by_uuid.get(uuid) or set()
+    return [w for w in wts if w["issue"] and w["issue"] in iss]
+
+universe = set(forum)
+for u in issues_by_uuid:
+    if u in live or u in forum or wts_for(u):
+        universe.add(u)
+universe |= {u for u in issues_by_uuid if open_by_uuid.get(u)}
+
+rows = []
+for u in sorted(universe):
+    if u not in known_ids:
+        continue
+    is_live = u in live
+    in_forum = u in forum
+    my_wt = wts_for(u)
+    dirty = sum(w["dirty"] for w in my_wt)
+    cl = open_by_uuid.get(u, [])
+    upd = live[u][1] if is_live else 0
+    ah = age_h(upd) if is_live else None
+    recent = ah is not None and ah < (RECENT_S / 3600.0)
+    if not is_live:
+        if cl and not my_wt:
+            klass = "UNKNOWN"
+        elif cl and my_wt:
+            klass = "UNKNOWN"
+        elif my_wt:
+            klass = "ORPHAN"
+        else:
+            continue
+    elif not in_forum:
+        klass = "UNKNOWN" if (cl or dirty) else None
+        if klass is None:
+            continue
+    elif cl or dirty or recent:
+        klass = "ACTIVE"
+    else:
+        klass = "IDLE"
+    rows.append({"class": klass, "uuid": u, "role": role.get(u, "-"),
+                 "forum": "yes" if in_forum else "no",
+                 "claims": ",".join(sorted(set(cl), key=int)) or "-",
+                 "worktrees": ",".join(sorted(w["task"] for w in my_wt)) or "-",
+                 "dirty": dirty,
+                 "age_h": "%.1f" % ah if ah is not None else "-"})
+
+tallies = {}
+for r in rows:
+    tallies[r["class"]] = tallies.get(r["class"], 0) + 1
+
+if "--json" in opts:
+    print(json.dumps({"rows": rows, "tallies": tallies, "phantoms": phantoms,
+                      "forum_chat": FORUM, "now": NOW}, indent=1))
+else:
+    for r in rows:
+        print("\t".join([r["class"], r["uuid"], r["role"], r["forum"],
+                         r["claims"], r["worktrees"], str(r["dirty"]), r["age_h"]]))
+for p in phantoms:
+    sys.stderr.write("oc-roster: PHANTOM claim author %s — absent from session DB "
+                     "(ledger defect, not a roster row)\n" % p)
+sys.stderr.write("oc-roster: rows=%d %s phantoms=%d\n" % (
+    len(rows), " ".join("%s=%d" % kv for kv in sorted(tallies.items())), len(phantoms)))
+PY
+    ;;
+  --selftest|selftest) "$SELF_DIR/oc-roster-selftest" ;;
+  -h|--help) usage 0 ;;
+  "") usage ;;
+  *) echo "$PROG: unknown verb '$verb'" >&2; usage ;;
+esac

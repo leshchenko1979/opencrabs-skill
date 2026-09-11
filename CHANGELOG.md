@@ -1,3 +1,10 @@
+## v0.4.137 (2026-09-11, derived in-progress roster — `oc-roster`)
+- NEW TOOL: `tools/oc-roster` — the DERIVED in-progress roster (fork-rebase gate, plan step 1). Verbs `live | forum | claims | work | classify`, plus `--selftest` (31 checks, offline fixtures, no network, no live DB). It joins four independent signals — ledger `events[kind=claim]` (INTENT), `oc-wt list` dirty state (EVIDENCE), the session DB live roster (LIVENESS), forum bindings (SCOPE) — and classifies every row ACTIVE / IDLE / ORPHAN / UNKNOWN. It stores nothing; `live` is set-equal to the `oc-notify-fanout` v0.4.129 query.
+- SAFETY: a claim author whose uuid the session DB has never seen is reported as a PHANTOM and excluded from the roster — a hand-assembled frankenstein id can never enter a freeze list (n=2221 class; incident n=2227). Live run: 57 rows, 28 ACTIVE / 16 IDLE / 0 ORPHAN / 13 UNKNOWN, 3 phantoms.
+- DOCS: `editor.md` Toolsmith dispatch target now cites the real verb `oc-ledger roster --live --role toolsmith`; the bare `oc-ledger roster` it named was a phantom at authoring time.
+- SWEPT (Toolsmith 2fae1230, stamped n=2598, selftest 167/0): `oc-ledger` gains the read verb it was missing — `events|tail [--n N] [--kind K] [--actor U] [--since T] [--json] [--full]`; rc 1 = NO-MATCH verdict. RC-CONTRACT.md documents it. It was complete and green in the shared tree but uncommitted, so this bump is its first tagged home.
+- BATTERY: 157 PASS / 0 FAIL.
+
 ## v0.4.136 (2026-09-11, upstream merge execution delegated to Triage)
 - GOVERNANCE: delegated upstream merge execution to Triage (`triage.md`, `supervisor.md`, `SKILL.md`, `fleet-directives.md`, `upstream-merge-runbook.md`). Per owner order 2026-09-11 ("You should not do these merges - delegate to triage"), HQ does not execute merges; Triage executes the freeze check, performs the merge, resolves textual conflicts wholesale to upstream per upstream-merge-runbook.md, and coordinates seam adaptation passes.
 
