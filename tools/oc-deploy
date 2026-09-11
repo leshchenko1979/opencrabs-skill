@@ -1696,16 +1696,28 @@ watch_run() { # explicit `oc-deploy watch [--with-delta]` ; exit 0 clean | 2 str
   exit "$TRIP_RC"
 }
 
-# KILL FILE: first line of EVERY invocation (before arg parsing).
-[ -f "$KILL_FILE" ] && die 9 "KILL FILE present ($KILL_FILE) — all oc-deploy invocations abort"
-[ -f "$KILL_FILE2" ] && die 9 "KILL FILE present ($KILL_FILE2) — all oc-deploy invocations abort"
+# KILL FILE brake — invoked at the top of every REAL-mode arm of the dispatch
+# case below, never from arg parsing (contract fix 2026-09-11, owner word via
+# HQ d72bd52d). It used to run as "the first line of EVERY invocation", which
+# also swallowed the surfaces the RC contract keeps ungated: with a kill file
+# present `--help` reported 9 instead of 0, and the no-args / unknown-arg usage
+# diags reported 9 instead of 1, because the brake sat above the -h|--help case
+# and above the whole arg loop. Real ship / poll / swap-execute / watch / fanout
+# work is still blocked, with the documented rc 9. `return 0` keeps the
+# `[ -f ] && die` idiom from tripping `set -e` on the clean path.
+kill_brake() {
+  [ -f "$KILL_FILE" ] && die 9 "KILL FILE present ($KILL_FILE) — all oc-deploy invocations abort"
+  [ -f "$KILL_FILE2" ] && die 9 "KILL FILE present ($KILL_FILE2) — all oc-deploy invocations abort"
+  return 0
+}
 
 MODE="${1:-}"; [ $# -gt 0 ] && shift
 # C-F5 (v0.4.71): --help / -h exits 0 on stdout, before any validation
 case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
 # issue #24 D1: contributors takes its own arg shape (positional range /
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
-# positional range survives. Kill-file check already ran above.
+# positional range survives. contributors is RETIRED (dies rc 1); the
+# kill-file brake now lives in the real-mode dispatch arms, below.
 if [ "$MODE" = contributors ]; then contributors_run "$@"; exit $?; fi
 SHA=""; FEATURES=""; FEATURES_EXPLICIT=0; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0; ALLOW_DROP=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
 WAIT_SECS=0; NOTIFY_SESSION=""   # C-#2: poll --wait / --notify-session
@@ -1774,6 +1786,7 @@ fi
 case "$MODE" in
   # ------------------------------------------------------------------ ship --
   ship)
+    kill_brake
     # F-1 fusion (v0.4.97, editor.md Phase 6a lens E promise): --wait N on an
     # EXECUTE ship is now honoured — after a successful dispatch the SAME
     # process bounded-polls the carrier run (N seconds) and exits on GREEN /
@@ -1878,6 +1891,7 @@ case "$MODE" in
     ;;
   # ------------------------------------------------------------------ poll --
   poll)
+    kill_brake
     # Duty-6 lens F task 5: --wait validated FIRST — before the RED-scan
     # fanout side effects below (a bad --wait used to burn real fanout
     # API calls + fanout.state writes before dying on validation).
@@ -1974,6 +1988,7 @@ case "$MODE" in
     ;;
   # ------------------------------------------------------------ swap-execute --
   swap-execute)
+    kill_brake
     [ -n "$SHA" ] && [ -n "$RUN_ID" ] || die 1 "swap-execute needs --sha <40-hex> and --run <id>"
     echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
     # NOTE (n=1878): NO local cat-file guard here — swap-execute targets the
@@ -1983,10 +1998,12 @@ case "$MODE" in
     ;;
   # ---------------------------------------------------------------- fanout --
   fanout)
+    kill_brake
     fanout_run "$RUN_ID" "${DRYRUN:-0}"
     ;;
   # ----------------------------------------------------------------- watch --
   watch)
+    kill_brake
     watch_run "${WITH_DELTA:-0}"
     ;;
   --selftest|selftest) selftest "$@" ;;
