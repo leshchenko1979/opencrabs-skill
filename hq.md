@@ -265,15 +265,15 @@ fork branch lifecycle / clean sweep (item 7) are HQ-owned duties —
 canonical text stays in SKILL.md §Upstream relations; this line is the
 HQ-side ownership pointer.
 
-## Upstream sync — watch, REBASE parity (re-homed v0.4.80; sync model re-ruled 2026-09-02; sync execution delegated to Triage 2026-09-11)
+## Upstream sync — watch, REBASE parity (re-homed v0.4.80; sync model REBASE 2026-09-11; sync execution delegated to Triage 2026-09-11)
 
-Sync execution is DELEGATED TO TRIAGE (owner order 2026-09-11 "You should not do these merges - delegate to triage"; HQ does not execute merges). **SYNC LAW canonical = `fleet-directives.md`
-§Remotes & sync (owner 2026-09-02 "Land it"; one concept, one home — this
+Sync execution is DELEGATED TO TRIAGE (owner order 2026-09-11 "You should not do these merges - delegate to triage"; HQ does not execute syncs). **SYNC LAW canonical = `fleet-directives.md`
+§Remotes & sync (REBASE model 2026-09-11; one concept, one home — this
 section carries pointers only, lens A-12 v0.4.111).** Executing procedure:
 `upstream-merge-runbook.md` (freeze gate, roles, conflict classes,
 migration-union rule, semantic-triage defaults). SKILL.md §Upstream relations
 items 1/2/6 carry the one-line summaries. The
-REBASE-PORT procedure below is RETIRED — kept for PR-chain ports only (harvest
+REBASE-PORT procedure below is RETIRED for fork main — kept for PR-chain ports only (harvest
 branches onto upstream PR heads, where force-push-with-lease applies to the PR
 BRANCH, never to fork main).
 
@@ -282,8 +282,7 @@ BRANCH, never to fork main).
     git -C ~/opencrabs fetch adolfousier
     ./tools/oc-upstream-delta    # base/ahead/behind TSV + ABSORBED-CANDIDATE rows
 
-- Upstream shifted → run the MERGE per `upstream-merge-runbook.md` (HQ-led;
-  small clean deltas still get a gate on the merged tip before ship).
+- Upstream shifted → notify Triage to execute the rebase sync per `upstream-merge-runbook.md`.
 - Conflicts beyond the runbook's trivial classes → notify Alexey with the
   delta summary and WAIT for the word. Never improvise a history rewrite.
 

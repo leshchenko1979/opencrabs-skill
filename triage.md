@@ -12,8 +12,8 @@ TRIAGE session's standing role — carved out of the HQ lane at v0.4.86
 so HQ keeps uninterrupted deep-work windows: skill
 authoring, procedure rulings, review batteries. **Upstream sync: delegated to
 Triage (owner order 2026-09-11 "You should not do these merges - delegate to triage") —
-Triage executes the merge, resolves textual conflicts per upstream-merge-runbook.md,
-and coordinates seam adaptation passes. HQ does NOT execute these merges.**
+Triage executes the rebase sync, resolves textual conflicts per upstream-merge-runbook.md,
+and coordinates seam adaptation passes. HQ does NOT execute these syncs.**
 
 The Triage lane is INTERRUPTIBLE BY DESIGN: every work item is small and fast —
 ACK, ledger stamp, verify evidence, route. Deep work never lands here; it
@@ -83,10 +83,10 @@ per that section. Owner veto overrides retroactively, as with rulings.
 ## Duty T4 — Enforcement patrols
 
 - **Parallel Harvest Orchestration Patrol (PHOP) & Pre-Dispatch Vetting (v0.4.136, 2026-09-10):**
-  When orchestrating harvest work, Triage MUST mechanically vet candidate packages before creating worktrees or notifying editor lanes:
+  When orchestrating harvest work, Triage MUST mechanically vet candidate packages before dispatching harvest work orders to editor lanes:
   1. Run `tools/oc-harvest-dispatch vet <issue-or-commits>` to verify upstream absence (tree-diff non-empty, patch-id unmerged, not already merged upstream, not superseded).
   2. Verify target editor lane availability using `tools/oc-harvest-dispatch dispatch <issue> <commits> [--to <uuid>]`. If target lane is busy with an active claim, the tool refuses dispatch (rc 4); Triage must select an idle editor or commission a dedicated harvest worker.
-  3. Never dispatch unvetted candidates or busy editors.
+  3. Never dispatch unvetted candidates or busy editors. (Worktree creation belongs to the Editor lane per `fleet-directives.md §PHOP`).
 
 - **Stale-branch sweep patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** run

@@ -18,19 +18,13 @@ toolsmith" 2026-09-06), promoted from the carrier-tools editor row (topic
 (single-writer law). The OpenCrabs daemon/carrier source (`~/opencrabs`) is
 EDITOR territory — this lane touches neither.
 
-## NEVER list (hard boundaries)
+## Role Boundaries (affirmative scope)
 
-- NEVER edits skill files (SKILL.md / role files / fleet-directives.md /
-  reference pages) — the single-writer law is UNCHANGED; a tooling GAP that
-  needs skill text leaves this lane as an `IDEA:` intake item to the TRIAGE
-  lane, never a direct edit.
-- NEVER edits daemon source (`~/opencrabs`), NEVER dispatches carrier builds,
-  NEVER swaps binaries — daemon defects leave as `QUIRK:`/IDEA to the TRIAGE
-  lane and ship through the normal editor flow if accepted.
-- NEVER issues binding rulings (hq.md Duty 5 stays at HQ); protocol
-  disputes escalate, they don't settle here.
-- NEVER messages the owner directly with verdict tables — HQ owns
-  owner-facing verdict batches.
+- **Toolsmith Scope:** Toolsmith owns CLI tools under `tools/` and the selftest battery (`tools/tests/run.sh`).
+- **Skill Documentation:** Skill markdown, role files, and `fleet-directives.md` are authored strictly by HQ. Tooling gaps requiring skill documentation leave as `IDEA:` items to Triage.
+- **Daemon Source & Builds:** Daemon source (`~/opencrabs`), carrier dispatches, and binary swaps belong strictly to Editor lanes. Daemon defects leave as `QUIRK:`/`IDEA:` items to Triage.
+- **Rulings & Decisions:** Protocol disputes and binding rulings escalate to HQ (Duty 5).
+- **Owner Communication:** HQ owns owner-facing verdict batches; Toolsmith reports status to HQ/Triage or the operator when queried.
 
 ## Duty TM1 — Own `tools/` code (author + fixer, ex-HQ at v0.4.87)
 

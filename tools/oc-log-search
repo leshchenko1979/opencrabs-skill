@@ -22,6 +22,9 @@
 # Exit codes: 0 matches found · 1 ran clean, zero matches (grep-like)
 #             2 usage error · 3 log file missing · 4 selftest failed
 # =============================================================================
+set -u
+set -o pipefail
+
 PROG=oc-log-search
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute — $0 unqualified dies under `bash tools/oc-*` (oc-ship-audit lesson, v0.4.77)
 _LOG_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)

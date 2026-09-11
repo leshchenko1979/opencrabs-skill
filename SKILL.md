@@ -90,8 +90,6 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-job-verify <run-id> <source-ref> [--features] [--identity-only]` | standalone run-identity gate (provenance of RED runs) |
 | `./tools/oc-artifact-verify <artifact-path> [--source <sha>] [--run-id <id>] [--markers m1,m2] [--expect-sha <sha256>] [--expect-version <v>] [--repo R] [--json]` | EXECUTION SANITY SIGNAL + FEATURE-PRESENCE CHECK |
 | `./tools/oc-seal-state [--sha S] [...]` | baseline/orders seal (flag-based interface — no positional `<sha>`) |
-| `./tools/archive/oc-post-receipts ...` | **INTERNAL/ARCHIVED** (E2 #7) — zero live consumers, do NOT call |
-| `./tools/oc-index-worktree <path>` | LEGACY STANDALONE (per-worktree indexing retired in v0.4.143; code queries use memory_search scope="external") |
 | `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>] [--contributors]` | commit-range → worker-lane attribution; `--contributors` projects the 3-col TSV (SINGLE SHAPE); `--deployed` composes the range from `deployed.sha` + `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) |
 | `./tools/oc-deploy <mode>` | the ship path itself — `ship` / `poll` / `swap-execute` / `status [--json]` / `watch [--with-delta]` / `fanout` / `contributors` RETIRED (use `oc-attrib --contributors`). Editor S3 path: `editor.md` §Ship. Verdict codes + wait semantics: RC-CONTRACT.md |
 | `./tools/oc-deploy fanout --run <id> [--dry-run]` | mechanical notify fan-out for one carrier run ([#24](https://github.com/leshchenko1979/opencrabs/issues/24)); auto-fired at `swap_execute` tail + on `poll` RED-scan; `OC_DEPLOY_NOFANOUT=1` suppresses — mechanics + journal vocabulary in `s2-swap-journal-spec.md` §Fan-out legs |
@@ -418,67 +416,17 @@ codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing 
 
 ## Upstream relations (v0.4.0, owner-approved 2026-08-26)
 
-Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
+Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
 
-1. **Watch = HQ duty, every build cycle**: `./tools/oc-upstream-delta`
-   (base/ahead/behind TSV + patch-id ABSORBED-CANDIDATE rows; exit 0 clean,
-   1 delta = verdict consumed here). Small clean delta → propose the sync
-   (owner word gates it); mass absorption or non-trivial conflicts → notify
-   Alexey with the delta and WAIT. Procedure: `hq.md` §Upstream sync.
-2. **Sync model = REBASE** (owner-approved transition 2026-09-11, plan "Fork Rebase Transition and Sync Workflow"; the 2026-09-02 MERGE policy is RETIRED):
-   fork main is rebased onto `adolfousier/main` and topical commits are kept clean; accepted PR commits drop on rebase. Sync execution
-   is DELEGATED TO TRIAGE (owner order 2026-09-11 "You should not do these merges - delegate to triage";
-   HQ does not execute syncs). Sync LAW canonical: `fleet-directives.md` §Remotes & sync (one concept, one home — lens A3
-   v0.4.89); executing procedure: `upstream-merge-runbook.md` (freeze gate,
-   roles, conflict classes, migration-union rule, semantic-triage defaults).
-3. **Absorption rule**: when upstream merges or reimplements one of OUR
-   features, matching fork-only commits auto-classify DROPPABLE at the next
-   sync (patch-id match or title-twin against his rework). The owning editor
-   gets a "SHIPPED UPSTREAM" notice — fork-side maintenance ends.
-4. **PR lifecycle**: every open upstream PR has an owning editor (the
-   Session-Id trailers of its harvested commits). PR not mergeable → route by
-   blocker class (`editor-upstream-pr.md` Phase 7b): our files broken → owning editor;
-   conflicts → maintainer-side at merge time (v0.4.93 PR-freeze law — the
-   filed PR is frozen; editors never rebase or force-push a filed PR. **Scope
-   (2026-09-11): this governs the filed UPSTREAM PR BRANCH only. The fork-main
-   sync rebase is a different surface and is sanctioned force-push via
-   `--force-with-lease` — it never touches a filed PR branch, so the freeze and
-   the sync do not conflict.**);
-   PRE-EXISTING
-   upstream red → NO editor pings, housekeeping-PR decision escalates to
-   Alexey; maintainer rejects/closes → owning editor reopens linked issues.
-5. **Maintainer behavior (facts)**: Adolfo AUTO-ASSIGNS
-   new upstream issues to himself — that is a CI workflow, NOT intent to work on
-   them; an assignee is not a worker. He may also CLOSE our upstream PRs (and any
-   legacy upstream issues) — the reason is ALWAYS in the comments. Our NEW issues
-   live on the fork (item routing) where WE are the assigner. An issue/PR that looks "missing" is almost
-   always CLOSED: find it among closed ones and read the comments BEFORE
-   concluding anything. CLI comment output PAGINATES — later pages may hold the
-   decisive comment (`gh api ... --paginate` / `--page N`); never conclude from
-   the first page alone.
-6. **Fork-local CI = carrier namespace (`ci/*`, v0.4.16)**: local-only workflow
-   files live ONLY on `ci/*` branches, NEVER on fork `main` — anything under
-   `.github/workflows/` on main rides the next PR diff toward upstream.
-   Dispatch via `gh workflow run --ref ci/<name>`. After every upstream
-   merge/port verify parity mechanically (three-way-diff workflow check —
-   procedure: `hq.md` §Parity; the runbook §Port carries the port-side
-   mechanics, the three-way parity check itself lives in hq.md).
-   **DRIFT PERMANENT (owner
-   ruling):** fork `ci.yml` stays REMOVED (zombie-run risk, order cc100dc6);
-   the carrier branch is the sole build lane. oc-ci-parity RETIRED v0.4.117
-   (owner "3 - ok" 21:44Z: zero live use, C-H2; runbook diff check supersedes).
-7. **Fork branch lifecycle (v0.4.24)**: the fork carries
-   PERMANENT refs only — `main` (sync mirror; pre-S3: compiler rebase-port), `ci/quick-build-linux`
-   (carrier), `backup/pre-port-*` (until the port cycle settles) — plus short-lived
-   `leshchenko1979/<slug>` work branches. A work branch dies when its PR merges or the task
-   dies, and ONLY after its landing is PROVEN by one of: tip sha-reachable from upstream or
-   fork `main` · tip contained in `backup/pre-port-*` · exact mirror of a live upstream
-   branch · a MERGED PR (either repo) whose head is the branch. Deletion without proof is
-   forbidden — unproven branches stay and get reported to the owner. Every sweep archives
-   BEFORE deleting: tip tags `archive/<date>/<branch>`, an `--all` bundle, and a manifest,
-   so any deletion is reversible in one command. Branch heads riding OPEN PRs are
-   never deletable.
-
+| Lifecycle Area | Owning Role | Key Tool / Procedure | Canonical Home |
+|---|---|---|---|
+| **1. Upstream Delta Watch** | HQ | `./tools/oc-upstream-delta` | `hq.md §Upstream sync` |
+| **2. Sync Model (REBASE)** | Triage | `upstream-merge-runbook.md` | `fleet-directives.md §Remotes & sync` |
+| **3. Absorption & Dropping** | Triage / HQ | Auto-classify DROPPABLE patch-ids | `upstream-merge-runbook.md` |
+| **4. Upstream PR Lifecycle** | Editor | Phase 7b / Phase 7c (`oc-harvest-dispatch`) | `editor-upstream-pr.md` |
+| **5. Maintainer Interaction** | HQ / Alexey | Track PR comments via gh API | `fleet-directives.md §Upstream repo etiquette` |
+| **6. Fork-local CI (`ci/*`)** | HQ | Carrier namespace `ci/quick-build-linux` | `hq.md §Parity` |
+| **7. Fork Branch Lifecycle** | Triage | `./tools/oc-branch-sweep` (archive before delete) | `triage.md §Duty T4` |
 
 ## Hard rules (all roles)
 
@@ -513,11 +461,6 @@ HQ-only). Skill markdown + fleet-directives stay HQ-only.
   same-turn — run id against the API, sha against `ls-remote`/job-name embed,
   binary against sha256. A claim verified by someone else's message is
   unverified.
-- P1 REJECTED (owner verdict 2026-08-26 — "overengineering, don't do this"):
-  NO evidence-parameter mechanism goes into `session_notify` — no mandatory
-  evidence fields, no pattern-triggered enforcement, no tool change. The
-  relay-predication rule above is the SOLE control for fabrication-class
-  claims. Do not re-propose P1 in any form.
 - ISSUE ROUTING (owner directives 2026-08-25 → 2026-08-27; consolidated as a
   table 2026-08-29):
 

@@ -35,7 +35,7 @@
 
 No single role "owns ports" alone — the law names the chain explicitly (owner 17:00Z: "We need to decide who owns ports"). The button pick supersedes HQ's 17:02Z three-class board proposal and Triage's 16:50Z three-hand answer wherever they differed.
 
-**Upstream PR law** (owner 2026-08-27, tightened 2026-08-26) — canonical text: SKILL.md §Upstream relations + §Hard rules rows ("Upstream receives PRs ONLY", "PR SHIPMENT gates on owner approval", "APPROVAL = Alexey's reply or a positive Telegram reaction"). Core: PRs-only upstream, never `Closes #N`, fork-issue link at body end, smoke-PASSED owner word BEFORE PR creation, silence ≠ consent, no ad-hoc PRs, branch namespace `leshchenko1979/<slug>` (SKILL.md §Upstream relations item 7). **Kept here (unique) — #1255 exception (owner 2026-08-28 13:59Z):** the compaction-stall / gateway-timeout class is owner-sanctioned for direct upstream REPORTING — adolfo is actively working that area (#1247, fix `a0954b63` on `fix/session-routing-and-fallback-chain`); field report filed as adolfousier/opencrabs#1255 (ledger 1280); follow-ups on that thread may continue upstream. Nightly cron pulls repo only — never pushes brain changes.
+**Upstream PR law** (owner 2026-08-27, tightened 2026-08-26) — canonical text: SKILL.md §Upstream relations + §Hard rules rows ("Upstream receives PRs ONLY", "PR SHIPMENT LAW"). Core: PRs-only upstream, never `Closes #N`, fork-issue link at body end, autonomous filing on smoke PASS (v0.4.104 4-leg rubric; PR SHIPMENT law — SKILL.md §ISSUE ROUTING, no owner pre-wait), no ad-hoc PRs, branch namespace `leshchenko1979/<slug>` (SKILL.md §Upstream relations item 7). **Kept here (unique) — #1255 exception (owner 2026-08-28 13:59Z):** the compaction-stall / gateway-timeout class is owner-sanctioned for direct upstream REPORTING — adolfo is actively working that area (#1247, fix `a0954b63` on `fix/session-routing-and-fallback-chain`); field report filed as adolfousier/opencrabs#1255 (ledger 1280); follow-ups on that thread may continue upstream. Nightly cron pulls repo only — never pushes brain changes.
 
 ## Parallel Harvest Orchestration Protocol (PHOP) (v0.4.136, 2026-09-10)
 
@@ -166,9 +166,17 @@ Every PR this fleet opens carries a type prefix in the title so upstream release
 - `feat:` (or `feat(scope):`) — new capability or behavior change
 - `chore:` — tooling/CI/docs/deps; zero user-visible behavior change
 Applies to upstream (adolfousier/opencrabs) AND fork PRs. New branches mirror the type in the slug: `leshchenko1979/fix/<slug>` / `feat/<slug>` / `chore/<slug>` (existing branches untouched). Retro-check 2026-08-30: upstream PR #1265 already conforms (`fix(plan): …`). Procedure detail: `/opencrabs-dev` skill, editor-upstream-pr.md Phase 7.
-## CI-wait discipline + actor attribution (owner 2026-08-30 — fix batch)
+## CI-wait discipline & actor attribution (owner 2026-08-30 — fix batch)
 
-Canonical: editor.md §CI-wait discipline & actor attribution (items 1–9: detached command execution standard, `OC_ACTOR` export on every oc-* call, pr-checks concurrency group, checkout-ref-is-terminal-truth, dispatch identity check, dispatch-receipt gate, full shas, solo-surface rule, PR-state receipt law) + hq.md §Detached command execution (background: true) + SKILL.md §session_notify DELIVERY MODES (notify form, `--interrupt` for mid-turn operational wakes). Fleet-directives carries no extra text.
+**Canonical Waiter Discipline Standards (W1–W6):**
+1. **W1 (Detached execution standard):** Long-running commands (>60s) execute detached (`background: true`). Hand-rolled nohup/sleep loops are strictly forbidden.
+2. **W2 (Poll floor & ceiling):** Detached CI watchers must respect a ≥30s poll interval floor and a bounded timeout ceiling (default 2700s via `oc-prchecks wait`).
+3. **W3 (Invocation verification):** Verify job dispatch identity before entering wait loops; never poll an ambiguous or unverified run ID.
+4. **W4 (Notify wiring):** Automated watchers notify directly to the owning session UUID via `session_notify` upon terminal completion.
+5. **W5 (Log-window cuts):** Grep and log queries must bound search ranges (`--since` or fixed tail) to avoid context compaction floods.
+6. **W6 (Actor attribution):** Every `oc-*` tool call must export `OC_ACTOR=<session-uuid>`.
+
+Procedure detail: `editor.md §CI-wait discipline & actor attribution`.
 
 ## Creating new editors (owner order 2026-09-01 21:56Z)
 

@@ -257,7 +257,7 @@ a tool's exit code alone; the ≥60s detached-poll floor (fleet-directives.md §
 git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
 ```
 
-- Branch off fresh `origin/main`; merge-sync RETIRED (2026-08-26, REBASE-PORT —
+- Branch off fresh `origin/main`; merge-sync RETIRED (canonical REBASE model 2026-09-11 —
   SKILL.md §Upstream relations): NEVER `merge --ff-only adolfousier/main` into
   the shared checkout.
 - **The shared `~/opencrabs` checkout is NEVER evidence** (v0.4.5): it may sit on any
