@@ -71,11 +71,18 @@ record).
 Recipes (verified live):
 
 ```bash
+# NOTE (2026-09-11, toolsmith): tools.log is JSONL, but it carries 2 NON-JSON
+# lines (383, 443) — prose appended by hand on 2026-08-31; 443 is an
+# evidentiary actor-correction, so it is NOT deleted. A plain `jq -r` over the
+# whole file ABORTS there ("Invalid numeric literal at line 383"), which means
+# two of the recipes below were labelled "verified live" while they could not
+# run at all. They now read raw and skip unparseable lines (`-Rr 'fromjson?'`);
+# malformed lines are dropped SILENTLY, so if a count looks short, that is why.
 # failing invocations (note: rc≠0 is often a VERDICT, not a crash —
 # oc-skew-scan 1 = skew found, oc-ping-proof 1 = SILENT; filter .tool first)
-jq -r 'select(.exit!=0) | [.ts,.tool,.exit,.args] | @tsv' tools.log
+jq -Rr 'fromjson? | select(.exit!=0) | [.ts,.tool,.exit,.args] | @tsv' tools.log
 # usage per tool
-jq -r '.tool' tools.log | sort | uniq -c | sort -rn
+jq -Rr 'fromjson? | .tool' tools.log | sort | uniq -c | sort -rn
 # newest line
 tail -1 tools.log | jq -c .
 ```
