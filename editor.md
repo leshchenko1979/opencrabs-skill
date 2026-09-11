@@ -171,11 +171,13 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
 6. **PATH anchoring (v0.4.130, ruling n=2369):** the oc-* tools are NOT on
    the lane shell's PATH — never invoke them bare and never `which` them
    (empty result ⇒ the rc=127 discovery class, first catalogued 2026-09-06).
-   They are path-invoked skill scripts. Canonical anchor:
-   `~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/<tool>` — relative
-   `tools/<tool>` forms in these docs assume the skill dir as cwd. In a
-   worktree, invoke via the WORKTREE's `tools/` copy; drift checks resolve
-   the canonical copy themselves (oc-drift-check §Skill-dir resolution).
+They are path-invoked skill scripts. Canonical anchor:
+`~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/<tool>` — relative
+`tools/<tool>` forms in these docs assume the skill dir as cwd. ALWAYS
+invoke that CANONICAL copy — never a worktree's `tools/` copy, and never
+the invoking script's own location (worktree self-resolution produced
+contradicting same-day drift verdicts; `oc-drift-check` resolves the
+canonical profile copy by default — §Skill-dir resolution, v0.4.130).
 
 No reload volley is owed to you (v0.4.19 disk absorption stands) — the
 pull-check is YOUR duty; HQ notifies stay targeted per Duty 3.
@@ -463,14 +465,17 @@ There is NO legitimate manual exit point between gate verdict and swap. The #134
 
 **Exit codes & Lane action:**
 - **Exit 0 — SWAPPED:** The new binary is running live on the host (`opencrabs-ops` user unit). Worktree can now be removed (`tools/oc-wt remove <task>`). Proceed immediately to Phase 6b (Smoke-test-on-notify).
-- **Exit 4 — GATE-RED / CARRIER-RED:** The CI gate failed or the carrier build failed. Start a fix round (Phase 6c): keep the same branch, fix in a new worktree, commit, push, and re-run `oc-ship-chain`. Triage heuristics live in `SKILL.md §Red-run triage heuristics`.
+- **Exit 2 — USAGE:** Bad or missing arguments (`--sha`/`--branch` are required; malformed flag). Correct the invocation and re-run — no lane state to resolve.
+- **Exit 3 — DIRTY CHECKOUT:** The fork checkout has uncommitted changes (pre-flight refusal). Clean or stash it, then re-run.
+- **Exit 4 — GATE-RED / CARRIER-RED:** The CI gate failed or the carrier build failed. Start a fix round (Phase 6c): keep the same branch, fix in a new worktree, commit, push, and re-run `oc-ship-chain`. Triage heuristics live in `SKILL.md §Red-run triage heuristics`. **Also the `--gated-run` / `--gated-sha` pre-verify failure:** the supplied run was not `completed success` on a job pinned to the sha, or `--gated-sha` did not match `--sha`. Do NOT re-dispatch the run — re-verify it with `gh run view <id> --json status,conclusion,jobs` and re-supply the correct id.
 - **Exit 5 — NON-FF:** Another editor merged to fork `main` first. Fast-forward push was refused. Lane rebases safely:
   ```bash
   tools/oc-rebase-safety run ~/oc-wt-<task> origin/main
   git -C ~/oc-wt-<task> push --force-with-lease origin <branch>
   ```
   Then re-run `tools/oc-ship-chain --sha <new-sha> --branch <branch> [--issue <issue-n>]`.
-- **Exit 3 / 6 — Infra failure:** Dirty checkout or carrier dispatch timeout. Inspect error message, resolve local state, and retry.
+- **Exit 6 — INFRA / ORDER-GATE:** dispatch or poll infrastructure failure (`oc-prchecks` rc 4/7/8, or ship rc other) — **or an ORDER-gate rejection post-push.** ⚠️ **The UNSIGNED case lands HERE, and it is NOT an infra fault:** a head commit carrying no `Session-Id` trailer is refused by ORDER gate 4 (`oc-order-validate: UNSIGNED … attribution mandatory`), and the chain exits 6. Read the message before you act — if it says UNSIGNED, do not go hunting for a network or carrier problem. Fix = land an empty trailer-signed marker commit on the head (tree-identical, forward-only; `upstream-merge-runbook.md` step 8) and re-run. Every synthesis/merge head is unsigned **by construction**, so this recurs on every sync.
+- **Exit 7 — GATE IN FLIGHT:** the gate was still running after the chain's budget and resume-polls (`oc-prchecks` rc 5, non-terminal). The run id is printed — do **NOT** re-dispatch (that concurrency-cancels the live run); wait for it and re-run with `--gated-run <id>`, which pre-verifies and skips dispatch.
 
 **Conflict-quality gate — MANDATORY after any rebase with hand-resolved code:**
 *(A hand-resolved merge shipping a crate-alias mismatch is five E0308s and a red CI round-trip)*:
