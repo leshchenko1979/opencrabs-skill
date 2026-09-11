@@ -441,6 +441,19 @@ pass, audit the diff before staging — rustfmt can reformat unrelated
 pre-existing lines (2026-09-01: flow.rs:418); revert out-of-scope hunks and
 keep the commit pure (atomicity law).
 
+**fmt-clean ≠ compiles — audit CALL-SITE SHAPE before you chain (v0.4.141).**
+There is no local compile path on this box: `which cargo` prints a path, but
+running it prints `BLOCKED` — *the presence of a path is not evidence of a
+toolchain*, the same family as "an empty result from a wrong path is not a
+verdict". `rustfmt --edition 2024 --check` proves FORMATTING only, so the first
+real compile is CI — a full gate dispatch. Before `oc-ship-chain`, mechanically
+cross-check every NEW or CHANGED call site against the callee's real definition:
+**free fn vs associated fn** (a free-fn path on an associated fn is `E0425`),
+the **receiver** (`&self` / `&mut self` / none), and **`Drop`-impl move rules**
+(moving a field out of `&mut self` in `drop` is `E0507` — take it with
+`Option::take()`). Lane `facd50af` (2026-09-11, #111) burned a whole gate budget
+on exactly these two classes after a clean fmt pre-pass.
+
 ## Phase 5 — Ship (`oc-ship-chain`)
 
 **`oc-ship-chain` IS the single, exclusive ship path from commit to swapped binary (v0.4.126; manual push-to-main, manual issue-log, and manual oc-deploy sediment retired v0.4.132).**
