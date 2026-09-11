@@ -67,7 +67,7 @@ the registry answers "who exists and which version are they on"; discovery
 answers "who is alive right now".
 
 - **LIVE STATUS IS NEVER STORED:** whenever liveness or freshness matters,
-  DISCOVER it in the same turn: `session_search` roster for sessions,
+  DISCOVER it in the same turn: `oc-roster live` for sessions (the DERIVED roster — ledger claims + worktree state + session-DB liveness + forum bindings; `oc-roster classify` for ACTIVE/IDLE/UNKNOWN, `oc-roster work`/`claims` for the other two signals). Role resolution is NOT `oc-roster` — use `oc-ledger roster --live --role <role>`; `oc-roster`'s `--role` flag is accepted and silently ignored,
   `gh run list` for CI, `git ls-remote` for refs.
 - Seed/update ONLY from proven facts (full schema + write rules now live in
   triage.md §Duty T6 — lens B-F10 v0.4.96 cross-role move).
