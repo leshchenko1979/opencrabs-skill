@@ -4,7 +4,7 @@
 # (KERNEL items C1–C5, design /root/oc-work/oc-ledger-design-20260829.md;
 #  run-2 Lens C deltas: battery-receipt gate, commit-pending --bundle, enroll;
 #  item-2(b) owner ruling 2026-08-29: the pending-stamp sweep lives HERE as
-#  `commit-pending`, run on the supervisor Duty-3/4 cadence).
+#  `commit-pending`, run on the HQ Duty-3/4 cadence).
 #
 # Subcommands:
 #   stamp <kind> "<what>" [--by <label>]   append event under lock (flock +
@@ -75,7 +75,7 @@
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
-#   --selftest                             fixture suite (200 cases)
+#   --selftest                             fixture suite (205 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -205,6 +205,7 @@ with_lock() { # runs "$@" with exclusive flock on $LEDGER.lock
 derive_by() { # default stamp attribution (v0.4.58, Duty-4 IDEA from lane 7e1ebbb6, n=1386 trap):
   # OC_ACTOR -> roster role label; unrostered actor says so; NO actor = LOUD
   # "(unattributed ...)" — the old silent "supervisor (topic 30220)" default
+  # (quoted verbatim: that role string is now `hq`)
   # mis-attributed worker stamps (n=1337-correct-via---by vs n=1386-silent-lie).
   local uuid="${OC_ACTOR:-}" hit
   if [ -n "$uuid" ] && [ -f "$LEDGER" ]; then
@@ -656,7 +657,7 @@ cmd_commit_pending() {
     head_n="$(git -C "$sd" show HEAD:workers-ledger.json 2>/dev/null | jq '([.events[]? | .n // 0] | max // 0)' 2>/dev/null || echo "$disk_n")"
     if [ "$(git -C "$sd" status --porcelain workers-ledger.json 2>/dev/null)" != "" ]; then
       git -C "$sd" add workers-ledger.json \
-        && git -C "$sd" commit -q -m "ledger commit-pending: events n=$((head_n+1))..$disk_n uncommitted (supervisor sweep)" \
+        && git -C "$sd" commit -q -m "ledger commit-pending: events n=$((head_n+1))..$disk_n uncommitted (HQ sweep)" \
         && { echo "sweep: state ledger committed (n=$((head_n+1))..$disk_n)"; did=1; }
     fi
     if [ "$bundle" -eq 1 ]; then
@@ -697,7 +698,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (200 cases) -----------------------------------------------------
+# ---- selftest (205 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -1054,6 +1055,25 @@ EOF
     OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live --json >/dev/null 2>&1; chk "roster-live-json-nomatch-rc1" 1 $?
     OC_LEDGER_DB="$T/nope.db" bash "$ME" roster --live >/dev/null 2>&1; chk "roster-live-db-missing-rc3" 3 $?
   fi
+  # 66b (2026-09-11, ontology fold c586e61f): the HQ role string was
+  # `hq-supervisor`, now `hq`. Lanes had `roster --live --role hq-supervisor` in
+  # ACTIVE habit (tools.log 11:51:28Z, minutes before the fold was announced),
+  # so the legacy spelling must keep resolving: a rc 1 NO-MATCH there reads to a
+  # lane as "HQ is unrostered", a false negative in exactly the place lanes
+  # check HQ's existence. Both spellings must select the SAME row set.
+  local WH=88888888-8888-8888-8888-888888888888
+  bash "$ME" enroll "$WH" hq --topic 30220 >/dev/null 2>&1
+  bash "$ME" roster --role hq > "$T/rh-new.out" 2>/dev/null; chk "role-alias-new-rc" 0 $?
+  bash "$ME" roster --role hq-supervisor > "$T/rh-old.out" 2>/dev/null; chk "role-alias-legacy-rc" 0 $?
+  chk "role-alias-same-set" "true" "$(cmp -s "$T/rh-new.out" "$T/rh-old.out" && echo true || echo false)"
+  awk -F'\t' -v u="$WH" '$1==u' "$T/rh-new.out" | grep -q . && ok || bad "role-alias-finds-hq-row"
+  # the alias is EXACT, never a blanket 'supervisor' match — a stale query
+  # written with the bare retired term must still fail loudly (rc 1), or a lane
+  # would read success where nothing matched
+  bash "$ME" roster --role supervisor >/dev/null 2>&1; chk "role-alias-bare-term-rc1" 1 $?
+  # fixture hygiene: drop the probe row via jq, so no extra ledger events are
+  # written and the later assertions see the fixture they expect
+  jq --arg u "$WH" '.workers |= map(select(.uuid != $u))' "$OC_LEDGER" > "$T/rh.json" && mv "$T/rh.json" "$OC_LEDGER"
   # 67-70 (2026-09-11, HQ request): events|tail — the read verb the playbooks
   # kept guessing while the usage line named no event reader at all. Assertions
   # are relative to jq over the same fixture file, never to a frozen count.
@@ -1283,6 +1303,15 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   fi
 
   local lrole; lrole="$(printf '%s' "$role" | tr 'A-Z' 'a-z')"
+  # Legacy role alias (ontology fold 2026-09-11, commit c586e61f): the HQ role
+  # string was `hq-supervisor`, now `hq`. tools.log shows
+  # `roster --live --role hq-supervisor` run at 11:51:28Z — MINUTES before the
+  # fold was announced — so without this alias that query returns rc 1
+  # NO-MATCH, which a lane reads as "HQ is unrostered": a false negative in
+  # exactly the place lanes check HQ's existence. Twin of canon_role() in
+  # oc-notify-fanout; BOTH carry a selftest asserting the legacy string still
+  # resolves, so the pair cannot drift apart.
+  [ "$lrole" = "hq-supervisor" ] && lrole="hq"
   local sel rc
   sel="$(jq -r --arg lr "$lrole" \
     '.workers[]?

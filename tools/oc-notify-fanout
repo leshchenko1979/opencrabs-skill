@@ -55,7 +55,7 @@
 # Usage:
 #   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
 #     [--text "what changed ..."] [--text-file /path/brief.md] \
-#     [--roles editor,hq-supervisor] [--exclude "40695,uuid8char"] \
+#     [--roles editor,hq] [--exclude "40695,uuid8char"] \
 #     [--forum-chat <chat_id>] [--dry-run] [--no-stamp] [--include-self]
 #
 #   Default brief (when --text/--text-file omitted) is the canonical
@@ -184,6 +184,31 @@ JSON
   out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
   echo "$out" | grep -q "SENT $L1" && chk 0 post-clear-send || chk 1 post-clear-send
 
+  # 5. Ontology fold alias (2026-09-11, c586e61f): the HQ role string was
+  #    `hq-supervisor`, now `hq`. A wave dispatched with the LEGACY selector must
+  #    still reach an `hq`-roled worker — otherwise it silently reaches nobody,
+  #    which is the worst failure mode a fanout can have. Both spellings must
+  #    select the same worker, and an unrelated selector must not.
+  HQL="$T/ledger-hq.json"
+  cat > "$HQL" <<JSON
+{"workers": [
+  {"uuid": "$L1", "role": "hq", "topic_id": 1}
+], "events": []}
+JSON
+  fanout_roles() { # $1 = --roles value, $2 = run dir
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$HQL" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$2" \
+    FAKE_NOTIFY_LOG="$T/fake-notify-log" \
+      bash "$0" --title T --text "brief {{UUID}}" --no-stamp --roles "$1" 2>&1
+  }
+  out="$(fanout_roles hq "$T/run-hq1")"
+  echo "$out" | grep -q "SENT $L1" && chk 0 role-alias-new-selector || chk 1 role-alias-new-selector
+  out="$(fanout_roles hq-supervisor "$T/run-hq2")"
+  echo "$out" | grep -q "SENT $L1" && chk 0 role-alias-legacy-selector || chk 1 role-alias-legacy-selector
+  out="$(fanout_roles editor "$T/run-hq3")"
+  echo "$out" | grep -q "SENT $L1" && chk 1 role-alias-exact || chk 0 role-alias-exact
+
   echo "oc-notify-fanout selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
   exit $?
@@ -275,9 +300,23 @@ sqlite3 "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}
 
 [ -n "$text" ] || text="(see title)"
 
+canon_role() { # ontology fold 2026-09-11 (c586e61f): the HQ role string was
+  # `hq-supervisor`, now `hq`. Legacy selectors must keep resolving, or a wave
+  # dispatched with `--roles hq-supervisor` silently reaches nobody. Twin of the
+  # alias in oc-ledger cmd_roster; both carry a selftest assertion.
+  case "$1" in hq-supervisor|HQ-SUPERVISOR) printf 'hq' ;; *) printf '%s' "$1" ;; esac
+}
 want_role() { # $1=role -> 0 if selected by --roles filter
   [ -z "$roles" ] && return 0
-  case ",$roles," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+  # Exact comma-delimited match, as before — but canonicalised on BOTH sides so
+  # the legacy `hq-supervisor` selector and the new `hq` selector each match the
+  # row whichever spelling the row happens to carry.
+  local r s IFS=','
+  r="$(canon_role "$1")"
+  for s in $roles; do
+    [ "$(canon_role "$s")" = "$r" ] && return 0
+  done
+  return 1
 }
 excluded() { # $1=uuid $2=topic -> 0 if excluded (8-char prefix or full uuid or topic)
   local t
