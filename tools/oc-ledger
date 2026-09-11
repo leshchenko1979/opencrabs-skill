@@ -50,6 +50,15 @@
 #                                          the old N.N regex could never record
 #                                          a real version; folds IDEA A core)
 #   enroll <uuid> <role> [--topic N] [--feature X]   roster row creation
+#   retire <uuid> [--why TEXT]             REMOVE a roster row: drops out of
+#                                          `oc-ledger roster` + `oc-roster` and
+#                                          loses signing (the sign gate keys on
+#                                          uuid presence). The only correction
+#                                          path for a wrongly-enrolled uuid —
+#                                          enroll refuses a dup, promote only
+#                                          mutates, neither can drop a row.
+#                                          Records the removed row's data in a
+#                                          roster-retire event.
 #   commit-pending [--bundle]              sweep: commit uncommitted stamps /
 #                                          runtime artifacts (B1–B4 option b);
 #                                          --bundle also sweeps state receipts:
@@ -60,19 +69,25 @@
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
-#   --selftest                             fixture suite (167 cases)
+#   --selftest                             fixture suite (181 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
 #   4 write-fail (live file untouched) · 5 battery gate · 6 version mismatch.
-# Kinds (frozen v1; v1.1 adds claim; v1.2 adds shipchain): ruling idea
-#   idea-verdict design-feedback design-locked review-battery incident note ack
-#   roster-enroll claim confirm swap-result notify-fanout shipchain
+# Kinds (frozen v1; v1.1 adds claim; v1.2 adds shipchain; v1.3 adds
+#   roster-retire): ruling idea idea-verdict design-feedback design-locked
+#   review-battery incident note ack roster-enroll roster-retire claim confirm
+#   swap-result notify-fanout shipchain
 #   (v1.1 change 2026-08-29: Duty-7 IDEA from editor lane 7e1ebbb6, task #34 —
 #   the ISSUE ROUTING row requires a claim shape; two lanes hit the gap live.)
 #   (v1.2 change 2026-09-11: shipchain — oc-ship-chain journal() lines. The tool
 #   shipped stamping this kind while it was absent from the enum, so the whole
 #   journal path was dead: rc 2 swallowed by `|| true`, 216/216 in tools.log.)
+#   (v1.3 change 2026-09-11: roster-retire — the removal half of the roster
+#   lifecycle. enroll could create and promote could mutate, but NOTHING could
+#   drop a row, so a wrongly-enrolled uuid signed forever; the sign gate keys on
+#   uuid PRESENCE (oc-order-validate selects .role by uuid), which is why a
+#   demote revokes nothing and only removal works.)
 #   (skill-bump is stamp-REFUSED — it exists only via `sync`.)
 # Discipline: n = max(events[].n)+1 computed INSIDE the lock; read-only
 #   subcommands never lock; every mutation journals via lib/oc-log.sh; git is
@@ -98,7 +113,12 @@ SELFTEST=0
 # 0 rows in the ledger): no chain ever had a ledger trail. Note is NOT the
 # fallback here — note is the dominant kind (649 rows) and chain telemetry in it
 # would be unfilterable noise.
-KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident lesson note ack roster-enroll claim confirm swap-result notify-fanout shipchain "
+# roster-retire (2026-09-11, HQ ASK): the FIFTH tool-written mechanical kind,
+# same admission path. cmd_retire REMOVES a roster row; the event is the only
+# surviving record of what was removed, so it must be its own kind — `note`
+# would bury a SIGNING REVOCATION among 649 routine rows, and this is exactly
+# the kind of row a later audit asks for by name.
+KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident lesson note ack roster-enroll roster-retire claim confirm swap-result notify-fanout shipchain "
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 die() { echo "oc-ledger: $2" >&2; exit "$1"; }
@@ -504,6 +524,60 @@ cmd_promote() { # promote <uuid> <new-role> [--topic N] [--feature X] — update
   with_lock _promote_locked
 }
 
+# ---- retire (HQ ASK 2026-09-11) ---------------------------------------------
+cmd_retire() { # retire <uuid> [--why TEXT] — REMOVE an enrolled roster row.
+  # The correction path the roster lifecycle was missing. enroll refuses a dup
+  # uuid, promote only mutates in place, and the sign gate keys on uuid
+  # PRESENCE (`oc-order-validate` selects .role by uuid) — so a wrongly-enrolled
+  # uuid kept signing and NOTHING could drop it. A demote revokes nothing;
+  # only removal does. Live case that motivated this: enrollment n=2457 put
+  # `editor 359fe71b` on topic 49607 + feature cron-session-isolation, which
+  # belong to lane 6cd8175f — two editor rows for one topic, the wrong one
+  # unable to be dropped.
+  #
+  # The row is REMOVED, so the event is the only surviving record: it carries
+  # role/topic/feature plus the caller's --why. --why is OPTIONAL on purpose —
+  # a correction verb must never be blocked when the fix is urgent; an absent
+  # reason is recorded verbatim as "(no reason given)", which is itself a
+  # visible signal in the audit trail rather than a silent omission.
+  # rc: 0 retired · 2 usage / bad uuid / not enrolled · 3 ledger unreadable.
+  local uuid="${1:-}" why=""; shift 2>/dev/null || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --why) [ -n "${2:-}" ] || die 2 "retire: --why needs a value"; why="$2"; shift 2 ;;
+      -h|--help) echo "usage: oc-ledger retire <uuid> [--why TEXT]"; exit 0 ;;
+      *) die 2 "retire: unknown arg '$1' (usage: oc-ledger retire <uuid> [--why TEXT])" ;;
+    esac
+  done
+  [ -n "$uuid" ] || die 2 "usage: oc-ledger retire <uuid> [--why TEXT]"
+  echo "$uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+    || die 2 "retire: uuid shape invalid: '$uuid'"
+  ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+  jq -e --arg u "$uuid" '.workers[]? | select(.uuid == $u)' "$LEDGER" >/dev/null 2>&1 \
+    || die 2 "retire: uuid not enrolled (nothing to remove): $uuid"
+  [ -n "$why" ] || why="(no reason given)"
+  # Snapshot the row BEFORE removal — the event is its only surviving record.
+  local cur_role cur_topic cur_feature cur_confirmed
+  cur_role="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].role // "-"' "$LEDGER")"
+  cur_topic="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].topic_id // "-" | tostring' "$LEDGER")"
+  cur_feature="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].feature // "-"' "$LEDGER")"
+  cur_confirmed="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].confirmed // false | tostring' "$LEDGER")"
+  _retire_locked() {
+    local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
+    atomic_jq --arg u "$uuid" --arg r "$cur_role" --arg tp "$cur_topic" \
+      --arg f "$cur_feature" --arg c "$cur_confirmed" --arg w "$why" \
+      --arg n "$n" --arg t "$t" \
+      '.workers |= map(select(.uuid != $u))
+       | .events += [{n: ($n|tonumber), t: $t, by: "oc-ledger retire", kind: "roster-retire",
+                      what: ("retired " + $r + " " + $u + " (topic " + $tp + ", feature " + $f
+                             + ", confirmed " + $c + "): " + $w)}]
+       | .updated_at = $t' || return $?
+    echo "retired $cur_role $uuid (event n=$n) — row removed, signing revoked"
+    git_state_commit "ledger n=$n: retire $cur_role $uuid (oc-ledger)"
+  }
+  with_lock _retire_locked
+}
+
 # ---- commit-pending (item-2(b) sweep) ----------------------------------------
 # v0.4.60 migration: deploy artifacts moved to the STATE dir (owner order
 # 2026-08-31 06:03Z) — skill repo keeps only the battery receipt; the moved
@@ -561,7 +635,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (167 cases) -----------------------------------------------------
+# ---- selftest (181 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -694,6 +768,37 @@ EOF
   chk "promote-event" "true" "$(jq -r '[.events[] | select(.by == "oc-ledger promote")] | last | .what | startswith("promoted 22222222")' "$OC_LEDGER")"
   bash "$ME" promote aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee tester2 >/dev/null 2>&1; chk "promote-ack-carries-rc" 0 $?
   chk "promote-ack-carries" "0.4.3" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
+  # 29c: retire (HQ ASK 2026-09-11) — the REMOVAL half of the roster lifecycle.
+  # enroll creates, promote mutates, retire drops the row so the uuid leaves
+  # `oc-ledger roster` + `oc-roster` and loses signing (the sign gate keys on
+  # uuid PRESENCE, so only removal revokes). The event is the only surviving
+  # record of the row, hence the data + reason assertions below.
+  bash "$ME" retire >/dev/null 2>&1; chk "retire-no-args" 2 $?
+  bash "$ME" retire nope >/dev/null 2>&1; chk "retire-bad-uuid" 2 $?
+  bash "$ME" retire 44444444-4444-4444-4444-444444444444 >/dev/null 2>&1; chk "retire-not-enrolled" 2 $?
+  bash "$ME" retire 22222222-2222-2222-2222-222222222222 --bogus >/dev/null 2>&1; chk "retire-unknown-arg" 2 $?
+  bash "$ME" retire 22222222-2222-2222-2222-222222222222 --why "wrong topic 49607" >/dev/null 2>&1; chk "retire-happy" 0 $?
+  chk "retire-row-gone" "0" "$(jq '[.workers[] | select(.uuid == "22222222-2222-2222-2222-222222222222")] | length' "$OC_LEDGER")"
+  chk "retire-roster-drops" "0" "$(bash "$ME" roster 2>/dev/null | grep -c '22222222-2222-2222-2222-222222222222' || true)"
+  # the sign gate's own predicate (oc-order-validate:98): .role selected by uuid.
+  # After retire it is EMPTY -> the gate's `[ -n "$ROLE" ] || fail 3 UNSIGNED`.
+  chk "retire-loses-signing" "" "$(jq -r --arg u 22222222-2222-2222-2222-222222222222 '.workers[] | select(.uuid == $u) | .role // empty' "$OC_LEDGER")"
+  chk "retire-event-kind" "roster-retire" "$(jq -r '[.events[] | select(.by == "oc-ledger retire")] | last | .kind' "$OC_LEDGER")"
+  chk "retire-event-carries-row" "true" "$(jq -r '[.events[] | select(.by == "oc-ledger retire")] | last | .what | startswith("retired toolsmith 22222222-2222-2222-2222-222222222222 (topic 39171, feature tools, confirmed false): wrong topic 49607")' "$OC_LEDGER")"
+  # a SECOND retire is refused — the row is gone, so this is the not-enrolled path
+  bash "$ME" retire 22222222-2222-2222-2222-222222222222 >/dev/null 2>&1; chk "retire-twice" 2 $?
+  # --why is OPTIONAL by design (a correction verb must never block on ceremony);
+  # the absence is RECORDED verbatim, never silently omitted.
+  bash "$ME" enroll 55555555-5555-5555-5555-555555555555 probe --topic 7 >/dev/null 2>&1
+  bash "$ME" retire 55555555-5555-5555-5555-555555555555 >/dev/null 2>&1; chk "retire-why-optional" 0 $?
+  chk "retire-why-recorded" "true" "$(jq -r '[.events[] | select(.by == "oc-ledger retire")] | last | .what | endswith("(no reason given)")' "$OC_LEDGER")"
+  chk "retire-event-n-unique" "true" "$(jq -r '[.events[].n] | length == (unique | length)' "$OC_LEDGER")"
+  # fixture hygiene: the retire cases above REMOVED a row; the later roster
+  # assertions in THIS fixture count 3 workers and name 2222 as
+  # toolsmith/topic 39171, so restore it to the exact pre-retire state. The
+  # retire assertions already ran against the removed state — this restores the
+  # fixture, it does not undo them.
+  bash "$ME" enroll 22222222-2222-2222-2222-222222222222 toolsmith --topic 39171 --feature tools >/dev/null 2>&1
   # 30-32: commit-pending
   bash "$ME" commit-pending | grep -q "clean" && ok || bad "commit-pending-clean"
   jq '.events += [{"n": 900, "t": "x", "by": "tool", "kind": "note", "what": "stray"}]' "$OC_LEDGER" > "$T/d.json" && mv "$T/d.json" "$OC_LEDGER"
@@ -1185,7 +1290,7 @@ cmd_events() { # oc-ledger events|tail [--n N] [--kind K] [--actor U] [--since T
 
 # ---- dispatch -----------------------------------------------------------------
 parse_global "$@"
-case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons|roster|events|tail> | [selftest|--selftest]"; exit 0 ;; esac
+case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|retire|commit-pending|confirm|claim-ref|claims|lessons|roster|events|tail> | [selftest|--selftest]"; exit 0 ;; esac
 if [ "$SELFTEST" -eq 1 ]; then cmd_selftest; exit $?; fi
 sub="${ARGS[0]:-}"; rest=("${ARGS[@]:1}")
 case "$sub" in
@@ -1196,6 +1301,7 @@ case "$sub" in
   ack) cmd_ack "${rest[@]+"${rest[@]}"}" ;;
   enroll) cmd_enroll "${rest[@]+"${rest[@]}"}" ;;
   promote) cmd_promote "${rest[@]+"${rest[@]}"}" ;;
+  retire)  cmd_retire  "${rest[@]+"${rest[@]}"}" ;;
   commit-pending) cmd_commit_pending "${rest[@]+"${rest[@]}"}"; oc_ship_audit_chain ;;
   confirm) cmd_confirm "${rest[@]+"${rest[@]}"}" ;;
   claim-ref) cmd_claim_ref "${rest[@]+"${rest[@]}"}" ;;
@@ -1204,5 +1310,5 @@ case "$sub" in
   roster) cmd_roster "${rest[@]+"${rest[@]}"}" ;;
   events|tail) cmd_events "${rest[@]+"${rest[@]}"}" ;;
   selftest) cmd_selftest; exit $? ;;
-  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons|roster|events|tail> | --selftest" ;;
+  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|retire|commit-pending|confirm|claim-ref|claims|lessons|roster|events|tail> | --selftest" ;;
 esac
