@@ -165,6 +165,8 @@ case "\$*" in
       fmt_failed)  printf '{"jobs":[{"name":"lint","conclusion":"success","steps":[{"name":"cargo fmt","conclusion":"failure"}]},{"name":"test","conclusion":"success","steps":[]}]}\n' ;;
       fmt_skipped) printf '{"jobs":[{"name":"lint","conclusion":"success","steps":[{"name":"cargo fmt","conclusion":"skipped"}]}]}\n' ;;
       job_failed)  printf '{"jobs":[{"name":"lint","conclusion":"failure","steps":[{"name":"cargo fmt","conclusion":"success"}]}]}\n' ;;
+      fmt_gate_ok) printf '{"jobs":[{"name":"lint","conclusion":"success","steps":[{"name":"Check formatting","conclusion":"success"},{"name":"Apply cargo fmt (fix mode)","conclusion":"skipped"},{"name":"Upload fmt-fix patch","conclusion":"skipped"}]}]}\n' ;;
+      fmt_gate_failed) printf '{"jobs":[{"name":"lint","conclusion":"success","steps":[{"name":"Check formatting","conclusion":"failure"}]}]}\n' ;;
       *)           printf '{"jobs":[{"name":"lint","conclusion":"success","steps":[{"name":"cargo fmt","conclusion":"success"}]},{"name":"test","conclusion":"success","steps":[]}]}\n' ;;
     esac ;;
   *"run view"*)
@@ -228,6 +230,18 @@ do_selftest() {
   if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"fmt-skipped-pass"*) true ;; *) false ;; esac; then
     t_ok "fmt skipped + run success -> GREEN exit 0 reason fmt-skipped-pass (IDEA B killed)"
   else t_bad "fmt skipped pass (rc=$T_RC out=$T_OUT)"; fi
+  # 2026-09-11 (lane 359fe71b report): LIVE workflow step names. The gate step
+  # is "Check formatting"; the skipped fix-mode steps must NOT be read as the
+  # fmt leg (they labelled every green run fmt-skipped-pass), and a real fmt
+  # failure must still surface RED through the soft-fail tiebreak.
+  run_t fmt_gate_ok "$SHA"
+  if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"fmt-skipped-pass"*) false ;; *) true ;; esac; then
+    t_ok "live step names: green run NOT labelled fmt-skipped-pass"
+  else t_bad "live step names mislabelled (rc=$T_RC out=$T_OUT)"; fi
+  run_t fmt_gate_failed "$SHA"
+  if [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"Check formatting"*) true ;; *) false ;; esac; then
+    t_ok "live step names: real fmt failure -> 3 RED (soft-fail exposed)"
+  else t_bad "live step names fmt failure (rc=$T_RC out=$T_OUT)"; fi
   run_t job_failed "$SHA";           [ "$T_RC" -eq 3 ] && t_ok "job failed -> 3 RED" || t_bad "job failed (rc=$T_RC)"
   run_t cancelled "$SHA"
   if [ "$T_RC" -eq 6 ] && case "$T_OUT" in *"VERDICT CANCELLED"*"superseded"*) true ;; *) false ;; esac; then
@@ -691,7 +705,14 @@ fi
 JOBS="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json jobs 2>/dev/null)" || {
   echo "$PROG: jobs fetch failed for run $RUN_ID" >&2; exit 4; }
 printf '%s' "$JOBS" | jq -r '.jobs[] | "JOB\t\(.name)\t\(.conclusion)"'
-FMT_LINES="$(printf '%s' "$JOBS" | jq -r '.jobs[].steps[]? | select(.name | test("fmt";"i")) | "STEP\t\(.name)\t\(.conclusion)"')"
+# Step-name selector (defect fix 2026-09-11, lane 359fe71b report): the fmt
+# leg must be identified by the GATE step, never by any name containing
+# "fmt". The live workflow names it "Check formatting" (no "fmt" substring)
+# while the fix-mode steps "Apply cargo fmt (fix mode)" and "Upload fmt-fix
+# patch" are ALWAYS skipped on a normal gate run — so the old selector both
+# mislabelled every green run as fmt-skipped-pass and left the soft-fail RED
+# tiebreak unreachable (a real fmt failure never entered FMT_LINES).
+FMT_LINES="$(printf '%s' "$JOBS" | jq -r '.jobs[].steps[]? | select(.name | test("fmt|format";"i")) | select((.name | test("fix mode|fmt-fix|lock-regen|upload";"i")) | not) | "STEP\t\(.name)\t\(.conclusion)"')"
 [ -n "$FMT_LINES" ] && printf '%s\n' "$FMT_LINES"
 
 VERDICT="GREEN"
