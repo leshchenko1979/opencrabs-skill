@@ -12,6 +12,16 @@
 #   lessons [--kind <lesson|incident|all>] [--class <text>]
 #                                          extract lesson/incident rows by class
 #                                          (H-2 v0.4.116; read-only)
+#   roster [--role <substr>] [--live] [--json]
+#                                          role -> FULL uuid resolution for
+#                                          Direct Dispatch (2026-09-11 defect
+#                                          fix, lane d18ce16a: the skill cited
+#                                          this verb in 3 role files while it
+#                                          did not exist — lanes hand-assembled
+#                                          uuids). --live keeps only live
+#                                          sessions (profile DB, read-only).
+#                                          rc 1 = NO-MATCH verdict (never a
+#                                          silent empty). Read-only.
 #   sync --version <v> [--why <text>] [--catch-up]
 #                                          ONE atomic write: 3 version fields
 #                                          + skill-bump event; battery-receipt
@@ -42,7 +52,7 @@
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
-#   --selftest                             fixture suite (90 cases)
+#   --selftest                             fixture suite (135 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -764,6 +774,44 @@ EOF
   OC_ACTOR="$W4" bash "$ME" stamp notify-fanout "fanout 'T': sent=1 skipped=0 failed=0 ids: 99999999" >/dev/null 2>&1
   chk "notify-fanout-kind-accepted" 0 $?
   jq -e --arg u "$W4" '[.events[] | select(.kind=="notify-fanout")] | length > 0' "$OC_LEDGER" >/dev/null 2>&1 && ok || bad "notify-fanout-row-on-ledger"
+  # 56-66 (2026-09-11, defect fix lane d18ce16a): roster — role -> FULL uuid
+  # resolution, the verb the skill cited in 3 role files while it did not exist
+  # (`oc-ledger roster` fell through to the usage branch, rc 2). Fixture state
+  # here: aaaa=tester2 (promoted), 2222=toolsmith/topic 39171, W2=tester/topic 42.
+  bash "$ME" roster > "$T/roster-all.out" 2>/dev/null; chk "roster-all-rc" 0 $?
+  chk "roster-all-count" "3" "$(grep -c . "$T/roster-all.out")"
+  awk -F'\t' -v u="$W2" '$1==u {found=1} END{exit !found}' "$T/roster-all.out" && ok || bad "roster-prints-full-uuid"
+  bash "$ME" roster --role tester2 > "$T/roster-r.out" 2>/dev/null; chk "roster-role-rc" 0 $?
+  chk "roster-role-count" "1" "$(grep -c . "$T/roster-r.out")"
+  awk -F'\t' '$2=="tester2"' "$T/roster-r.out" | grep -q . && ok || bad "roster-role-label"
+  # substring (case-insensitive) match: 'TESTER' hits BOTH tester and tester2
+  bash "$ME" roster --role TESTER > "$T/roster-sub.out" 2>/dev/null; chk "roster-role-ci-rc" 0 $?
+  chk "roster-role-substring" "2" "$(grep -c . "$T/roster-sub.out")"
+  bash "$ME" roster --role zzznope > "$T/roster-none.out" 2>/dev/null; chk "roster-nomatch-rc1" 1 $?
+  [ -s "$T/roster-none.out" ] && bad "roster-nomatch-empty" || ok
+  bash "$ME" roster --json > "$T/roster.json" 2>/dev/null; chk "roster-json-rc" 0 $?
+  chk "roster-json-array" "true" "$(jq 'type == "array" and (length == 3)' "$T/roster.json" 2>/dev/null)"
+  chk "roster-json-fields" "true" "$(jq --arg u "$W2" '[.[] | select(.uuid == $u)][0] | has("role") and has("topic_id") and has("feature") and has("last_acked")' "$T/roster.json" 2>/dev/null)"
+  bash "$ME" roster --bogus >/dev/null 2>&1; chk "roster-unknown-flag-rc2" 2 $?
+  bash "$ME" roster --role >/dev/null 2>&1; chk "roster-role-novalue-rc2" 2 $?
+  bash "$ME" roster -h >/dev/null 2>&1; chk "roster-help-rc0" 0 $?
+  OC_LEDGER="$T/bad.json" bash "$ME" roster >/dev/null 2>&1; chk "roster-bad-ledger-rc3" 3 $?
+  # --live: same live-session query as oc-notify-fanout law 3 (read-only DB);
+  # archived/subagent rows are NOT live. OC_LEDGER_DB keeps it off the real DB.
+  if command -v sqlite3 >/dev/null 2>&1; then
+    local WS="77777777-7777-7777-7777-777777777777"
+    bash "$ME" enroll "$WS" subprobe >/dev/null 2>&1
+    sqlite3 "$T/sessions.db" "CREATE TABLE sessions (id TEXT PRIMARY KEY, archived_at TEXT, title TEXT);
+      INSERT INTO sessions VALUES ('$W2', NULL, NULL);
+      INSERT INTO sessions VALUES ('$WS', NULL, 'subagent: probe');
+      INSERT INTO sessions VALUES ('66666666-6666-6666-6666-666666666666', NULL, NULL);" >/dev/null 2>&1
+    OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role TESTER --live > "$T/roster-live.out" 2>/dev/null; chk "roster-live-rc" 0 $?
+    chk "roster-live-count" "1" "$(grep -c . "$T/roster-live.out")"
+    awk -F'\t' -v u="$W2" '$1==u' "$T/roster-live.out" | grep -q . && ok || bad "roster-live-keeps-live-row"
+    OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live >/dev/null 2>&1; chk "roster-live-subagent-excluded" 1 $?
+    OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live --json >/dev/null 2>&1; chk "roster-live-json-nomatch-rc1" 1 $?
+    OC_LEDGER_DB="$T/nope.db" bash "$ME" roster --live >/dev/null 2>&1; chk "roster-live-db-missing-rc3" 3 $?
+  fi
   rm -rf "$T"
   echo "oc-ledger selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
@@ -906,9 +954,95 @@ oc_ship_audit_chain() {
   return 0
 }
 
+# ---- roster (read-only; defect fix 2026-09-11, lane d18ce16a) -----------------
+cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
+  # role -> FULL uuid resolution — the backend the skill already promised.
+  # The skill cites `oc-ledger roster` in THREE role files (editor.md,
+  # triage.md, fleet-directives.md §Work orders) as THE dynamic way to resolve
+  # a lane uuid, but the verb NEVER EXISTED: `oc-ledger roster` fell through to
+  # the usage branch (rc 2), so a lane following its own skill either fell back
+  # to session_search or HAND-ASSEMBLED a uuid — the exact phantom class
+  # (n=2221 frankenstein id) the full-uuid-from-a-same-turn-receipt law exists
+  # to prevent. READ-ONLY: no lock, no mutation, never journals a write.
+  #   --role <substr>  case-insensitive substring over .workers[].role
+  #   --live           keep only rows whose uuid is a LIVE session (profile
+  #                    session DB, read-only, ~0s — same source as
+  #                    oc-notify-fanout law 3). OC_LEDGER_DB overrides the path.
+  #   --json           JSON array of {uuid,role,topic_id,feature,last_acked}
+  # Output (TSV, ledger order): uuid <TAB> role <TAB> topic <TAB> feature <TAB> ack
+  # rc 0 rows printed · 1 NO-MATCH (a VERDICT, deliberately not a silent empty:
+  # a caller that gets 1 must fall back to session_search, NEVER assemble an id)
+  # · 2 usage · 3 ledger or session DB unreadable.
+  local role="" live=0 json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --role) [ -n "${2:-}" ] || die 2 "roster: --role needs a value"; role="$2"; shift 2 ;;
+      --live) live=1; shift ;;
+      --json) json=1; shift ;;
+      -h|--help) echo "usage: oc-ledger roster [--role <substr>] [--live] [--json]"; exit 0 ;;
+      *) die 2 "roster: unknown arg '$1' (usage: oc-ledger roster [--role <substr>] [--live] [--json])" ;;
+    esac
+  done
+  ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+
+  local livef=""
+  if [ "$live" -eq 1 ]; then
+    local db; db="${OC_LEDGER_DB:-$(dirname "$(STATE_DIR)")/opencrabs.db}"
+    [ -f "$db" ] || die 3 "roster --live: session DB not found: $db (override with OC_LEDGER_DB)"
+    command -v sqlite3 >/dev/null 2>&1 || die 3 "roster --live: sqlite3 not on PATH"
+    livef="$(mktemp)" || die 3 "roster --live: mktemp failed"
+    # archived_at IS NULL AND non-subagent — the oc-notify-fanout law-3 query,
+    # one read-only handle; a DB that will not answer is a HARD fail (rc 3),
+    # never an empty roster that reads as "no such lane".
+    sqlite3 "file:${db}?mode=ro" \
+      "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
+      > "$livef" 2>/dev/null || { rm -f "$livef"; die 3 "roster --live: session DB unreadable: $db"; }
+  fi
+
+  local lrole; lrole="$(printf '%s' "$role" | tr 'A-Z' 'a-z')"
+  local sel rc
+  sel="$(jq -r --arg lr "$lrole" \
+    '.workers[]?
+     | select(($lr == "") or (((.role // "") | ascii_downcase) | contains($lr)))
+     | [(.uuid // ""), (.role // "-"), ((.topic_id // "-") | tostring),
+        ((.feature // "-") | tostring | .[0:60]), (.last_acked.version // "-")]
+     | @tsv' "$LEDGER")"
+  rc=$?
+  [ $rc -eq 0 ] || { [ -n "$livef" ] && rm -f "$livef"; die 3 "roster: jq failed (rc $rc) — ledger unreadable or query error"; }
+
+  local out="" uuid
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    uuid="${line%%$'\t'*}"
+    if [ "$live" -eq 1 ] && ! grep -qxF "$uuid" "$livef" 2>/dev/null; then continue; fi
+    out="${out}${line}"$'\n'
+  done <<< "$sel"
+  [ -n "$livef" ] && rm -f "$livef"
+
+  [ -n "$out" ] || {
+    local lsfx=""; [ "$live" -eq 1 ] && lsfx=" (live sessions only)"
+    echo "roster: no row matches${role:+ role~'$role'}${lsfx} — fall back to session_search; NEVER hand-assemble a uuid" >&2
+    exit 1
+  }
+
+  if [ "$json" -eq 1 ]; then
+    printf '%s' "$out" | jq -Rn '[inputs | split("\t")
+      | {uuid: .[0], role: .[1], topic_id: .[2], feature: .[3], last_acked: .[4]}]'
+  else
+    printf '%s' "$out"
+    # Dispatch-safety nudge: a filtered lookup that returns >1 row WITHOUT
+    # --live is the stale-row trap (an old lane shares the role string).
+    local nrows; nrows="$(printf '%s' "$out" | grep -c .)"
+    if [ -n "$role" ] && [ "$live" -eq 0 ] && [ "$nrows" -gt 1 ]; then
+      echo "roster: $nrows rows match role~'$role' — add --live to keep only live sessions before dispatching" >&2
+    fi
+  fi
+  exit 0
+}
+
 # ---- dispatch -----------------------------------------------------------------
 parse_global "$@"
-case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons> | [selftest|--selftest]"; exit 0 ;; esac
+case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons|roster> | [selftest|--selftest]"; exit 0 ;; esac
 if [ "$SELFTEST" -eq 1 ]; then cmd_selftest; exit $?; fi
 sub="${ARGS[0]:-}"; rest=("${ARGS[@]:1}")
 case "$sub" in
@@ -924,6 +1058,7 @@ case "$sub" in
   claim-ref) cmd_claim_ref "${rest[@]+"${rest[@]}"}" ;;
   claims) cmd_claims "${rest[@]+"${rest[@]}"}" ;;
   lessons) cmd_lessons "${rest[@]+"${rest[@]}"}" ;;
+  roster) cmd_roster "${rest[@]+"${rest[@]}"}" ;;
   selftest) cmd_selftest; exit $? ;;
-  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons> | --selftest" ;;
+  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons|roster> | --selftest" ;;
 esac
