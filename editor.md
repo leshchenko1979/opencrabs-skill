@@ -468,11 +468,13 @@ There is NO legitimate manual exit point between gate verdict and swap. The #134
 - **Exit 2 — USAGE:** Bad or missing arguments (`--sha`/`--branch` are required; malformed flag). Correct the invocation and re-run — no lane state to resolve.
 - **Exit 3 — DIRTY CHECKOUT:** The fork checkout has uncommitted changes (pre-flight refusal). Clean or stash it, then re-run.
 - **Exit 4 — GATE-RED / CARRIER-RED:** The CI gate failed or the carrier build failed. Start a fix round (Phase 6c): keep the same branch, fix in a new worktree, commit, push, and re-run `oc-ship-chain`. Triage heuristics live in `SKILL.md §Red-run triage heuristics`. **Also the `--gated-run` / `--gated-sha` pre-verify failure:** the supplied run was not `completed success` on a job pinned to the sha, or `--gated-sha` did not match `--sha`. Do NOT re-dispatch the run — re-verify it with `gh run view <id> --json status,conclusion,jobs` and re-supply the correct id.
-- **Exit 5 — NON-FF:** Another editor merged to fork `main` first. Fast-forward push was refused. Lane rebases safely:
+- **Exit 5 — NON-FF:** Another editor merged to fork `main` first. Fast-forward push was refused. Lane rebases safely — manually, in its own task worktree:
   ```bash
-  tools/oc-rebase-safety run ~/oc-wt-<task> origin/main
+  git -C ~/oc-wt-<task> fetch origin
+  git -C ~/oc-wt-<task> rebase origin/main
   git -C ~/oc-wt-<task> push --force-with-lease origin <branch>
   ```
+  ⚠️ **`oc-rebase-safety` is NOT the remedy here** — it has no `run` subcommand and is READ-ONLY by design (git plumbing only: `overlap` / `audit`; anything else is rc 2 usage). A prior revision of this file cited `oc-rebase-safety run ~/oc-wt-<task> origin/main`, which is dead law — a lane that hit exit 5 and followed it got a usage error and had to improvise (lane 6cd8175f, 2026-09-11, #149: chain exit 5 when fork main moved `12d25260` → `87ac2aa0` under it).
   Then re-run `tools/oc-ship-chain --sha <new-sha> --branch <branch> [--issue <issue-n>]`.
 - **Exit 6 — INFRA / ORDER-GATE:** dispatch or poll infrastructure failure (`oc-prchecks` rc 4/7/8, or ship rc other) — **or an ORDER-gate rejection post-push.** ⚠️ **The UNSIGNED case lands HERE, and it is NOT an infra fault:** a head commit carrying no `Session-Id` trailer is refused by ORDER gate 4 (`oc-order-validate: UNSIGNED … attribution mandatory`), and the chain exits 6. Read the message before you act — if it says UNSIGNED, do not go hunting for a network or carrier problem. Fix = land an empty trailer-signed marker commit on the head (tree-identical, forward-only; `upstream-merge-runbook.md` step 8) and re-run. Every synthesis/merge head is unsigned **by construction**, so this recurs on every sync.
 - **Exit 7 — GATE IN FLIGHT:** the gate was still running after the chain's budget and resume-polls (`oc-prchecks` rc 5, non-terminal). The run id is printed — do **NOT** re-dispatch (that concurrency-cancels the live run); wait for it and re-run with `--gated-run <id>`, which pre-verifies and skips dispatch.
