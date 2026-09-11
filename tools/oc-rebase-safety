@@ -103,15 +103,16 @@ cmd_overlap() {
 
 # --- audit --------------------------------------------------------------------
 cmd_audit() {
-  local old_tip="" new_tip="" base=""
+  local old_tip="" new_tip="" base="" repo=""
   while [ $# -gt 0 ]; do case "$1" in
     --old-tip) old_tip="${2:-}"; shift 2;;
     --new-tip) new_tip="${2:-}"; shift 2;;
     --base)    base="${2:-}"; shift 2;;
+    --repo)    repo="${2:-}"; shift 2;;
     *) usage "audit: unknown arg $1";;
   esac; done
   [ -n "$old_tip" ] && [ -n "$new_tip" ] || usage "audit: --old-tip and --new-tip required"
-  local repo="${OC_REBASE_SAFETY_REPO:-.}"
+  local repo="${repo:-${OC_REBASE_SAFETY_REPO:-.}}"
   git_ok "$repo" "$old_tip" || die 3 "bad --old-tip: $old_tip"
   git_ok "$repo" "$new_tip" || die 3 "bad --new-tip: $new_tip"
   if [ -z "$base" ]; then
