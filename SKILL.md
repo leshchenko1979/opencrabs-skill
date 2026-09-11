@@ -109,7 +109,12 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ship-audit [--hours N] [--log f] [--journal-dir d] [--grace min]` | dispatch-WITHOUT-swap alarm |
 | `./tools/oc-tg-audit <uuid> [--date D] [--days N] [--log-dir P]` | Telegram surface-law evidence scan |
 | `./tools/oc-ledger sync` CHANGELOG gate | sync refuses a version bump whose CHANGELOG entry is missing |
+| `./tools/oc-harvest-census <scan|check|record|sync>` | pre-flight census & lifecycle registry for upstream PR harvests; prevents duplicate/colliding PRs |
+| `./tools/oc-harvest-dispatch <issue> [--dry-run]` | dispatches automated harvest-to-upstream work order for eligible features |
 | `./tools/oc-harvest-sweep <pr-branch> [--base adolfousier/main] [--repo P] [--port-of sha1,sha2]` | pre-gate harvest verification (editor Phase 7 sweep, mechanical legs); behavioral judgment stays human |
+| `./tools/oc-health [--json|--summary]` | daily & pre-flight health audit of worktrees, watchers, and cron consistency |
+| `./tools/oc-roster-selftest` | hermetic test runner for roster generation and classification |
+| `./tools/oc-watcher-audit [--json|--kill-stale]` | detached watcher compliance and sleep-loop audit across active sessions |
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5). Full rc/adoption/lock/fmt-soft-fail register: RC-CONTRACT.md |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic; READ-ONLY — PROPOSE/WAIT judgment stays human |
 | `./tools/oc-wt add\|remove\|--force` | editor worktree manager (index step UN-SKIPPABLE; `--force` journals before removal) |
@@ -122,7 +127,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ship-chain --sha S --branch B` | CI gate → issue-log → ff-merge → ship → swap in ONE invocation; no-self-ping |
 | `./tools/oc-notify-fanout --title T` | per-lane skill-change brief generator; DB-validated forum-scoped targets, receipts + ledger stamp |
 | `./tools/oc-rebase-safety overlap\|audit` | re-gate split rule arithmetic |
-| `./tools/oc-roster <live\|forum\|claims\|work\|classify> [--detail\|--json]` | the DERIVED in-progress roster — joins ledger claim events + worktree dirty state + session-DB liveness + forum bindings; stores nothing. `live` = the freeze list; `classify` = ACTIVE/IDLE/ORPHAN/UNKNOWN per row; a claim author absent from the session DB is reported PHANTOM and excluded. `--selftest` = 44 checks. **`--role` is accepted and SILENTLY IGNORED (rc 0, no stderr) — role resolution is `oc-ledger roster --live --role <role>`.** Sync runbook step 0 |
+| `./tools/oc-roster <live\|forum\|claims\|work\|classify> [--detail\|--json]` | the DERIVED in-progress roster — joins ledger claim events + worktree dirty state + session-DB liveness + forum bindings; stores nothing. `live` = the freeze list; `classify` = ACTIVE/IDLE/ORPHAN/UNKNOWN per row; a claim author absent from the session DB is reported PHANTOM and excluded. `--selftest` = 44 checks. **`--role` is REJECTED (rc 2) — role resolution is `oc-ledger roster --live --role <role>`.** Sync runbook step 0 |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (the
 SELFTEST BATTERY — tool selftests, distinct from the CI-gate CODE TESTS
@@ -420,11 +425,10 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    1 delta = verdict consumed here). Small clean delta → propose the sync
    (owner word gates it); mass absorption or non-trivial conflicts → notify
    Alexey with the delta and WAIT. Procedure: `hq.md` §Upstream sync.
-2. **Sync model = MERGE-ON-ARRIVAL** (owner 2026-09-02 "Land it"; supersedes the
-   2026-08-26 REBASE-PORT, which is RETIRED — historical, PR chains only):
-   fork main **merges** `adolfousier/main` when upstream shifts. Merge execution
+2. **Sync model = REBASE** (owner-approved transition 2026-09-11, plan "Fork Rebase Transition and Sync Workflow"; the 2026-09-02 MERGE policy is RETIRED):
+   fork main is rebased onto `adolfousier/main` and topical commits are kept clean; accepted PR commits drop on rebase. Sync execution
    is DELEGATED TO TRIAGE (owner order 2026-09-11 "You should not do these merges - delegate to triage";
-   HQ does not execute merges). Sync LAW canonical: `fleet-directives.md` §Remotes & sync (one concept, one home — lens A3
+   HQ does not execute syncs). Sync LAW canonical: `fleet-directives.md` §Remotes & sync (one concept, one home — lens A3
    v0.4.89); executing procedure: `upstream-merge-runbook.md` (freeze gate,
    roles, conflict classes, migration-union rule, semantic-triage defaults).
 3. **Absorption rule**: when upstream merges or reimplements one of OUR

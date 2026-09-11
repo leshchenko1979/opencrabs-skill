@@ -169,6 +169,7 @@ Rules:
   (box law); test-placement policy → §Phase 4.
 - Pre-flight gate (step 2c) is MANDATORY (v0.4.0): read the fmt STEP outcome,
   not just the run conclusion — soft-fail hides failures from the run.
+- **Harvest census pre-flight gate (Cycle 5 / Duty 4, v0.4.143):** before opening an upstream PR or creating a harvest branch, run `tools/oc-harvest-census check <issue-number-or-slug>`. Refuse to file if rc=1 (finding: already MERGED or IN_FLIGHT upstream, or blocked).
 - `leshchenko1979/<slug>` is the RESERVED PR-head namespace (`leshchenko1979/…`
   branch names stand out in the upstream branch list): branches with that
   prefix are created ONLY in this phase, never developed on, never merged into
