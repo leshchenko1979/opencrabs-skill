@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.137
+version: 0.4.138
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -66,7 +66,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-skew-scan [--ledger f] [--current v]` | ledger worker-version skew vs current skill version (HQ roster review) |
 | `./tools/oc-ping-proof <uuid> <ping-ts> [--ledger f]` | post-swap notify proof: WOKEN / SILENT / UNREACHABLE verdict |
 | `./tools/oc-pr-atomicity <pr-number>` | atomicity gate (editor Phase 7 / issue triage) |
-| `./tools/oc-ledger <verb>` | workers-ledger: stamp/sync/check-version/cadence/ack/enroll/commit-pending/claim-ref/confirm |
+| `./tools/oc-ledger <verb>` | workers-ledger: stamp/sync/check-version/cadence/ack/enroll/roster/commit-pending/claim-ref/confirm — `roster --live --role <role>` is the ROLE-RESOLUTION verb (it works; `oc-roster --role` does NOT — see the `oc-roster` row below) |
 | `./tools/oc-shadow-rotate [--dry-run]` | INTERNAL tail step of `oc-ledger sync` (standalone = manual fallback) |
 | `./tools/oc-review-persist <lens> <text\|@file\|-> [--dir DIR]` | persist a Duty-6 review report — the index line IS the "persisted" receipt |
 | `./tools/oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2] [--negative-control <bin>]` | mechanical identity + presence evidence for a Phase 6b smoke verdict; behavioral judgment stays human |
@@ -88,6 +88,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ship-chain --sha S --branch B` | CI gate → issue-log → ff-merge → ship → swap in ONE invocation; no-self-ping |
 | `./tools/oc-notify-fanout --title T` | per-lane skill-change brief generator; DB-validated forum-scoped targets, receipts + ledger stamp |
 | `./tools/oc-rebase-safety overlap\|audit` | re-gate split rule arithmetic |
+| `./tools/oc-roster <live\|forum\|claims\|work\|classify> [--detail\|--json]` | the DERIVED in-progress roster — joins ledger claim events + worktree dirty state + session-DB liveness + forum bindings; stores nothing. `live` = the freeze list; `classify` = ACTIVE/IDLE/ORPHAN/UNKNOWN per row; a claim author absent from the session DB is reported PHANTOM and excluded. `--selftest` = 44 checks. **`--role` is accepted and SILENTLY IGNORED (rc 0, no stderr) — role resolution is `oc-ledger roster --live --role <role>`.** Sync runbook step 0 |
 
 Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (the
 SELFTEST BATTERY — tool selftests, distinct from the CI-gate CODE TESTS
@@ -434,7 +435,11 @@ Upstream movement is WATCHED and ABSORBED on a schedule — never improvised:
    Session-Id trailers of its harvested commits). PR not mergeable → route by
    blocker class (`editor-upstream-pr.md` Phase 7b): our files broken → owning editor;
    conflicts → maintainer-side at merge time (v0.4.93 PR-freeze law — the
-   filed PR is frozen; editors never rebase or force-push a filed PR);
+   filed PR is frozen; editors never rebase or force-push a filed PR. **Scope
+   (2026-09-11): this governs the filed UPSTREAM PR BRANCH only. The fork-main
+   sync rebase is a different surface and is sanctioned force-push via
+   `--force-with-lease` — it never touches a filed PR branch, so the freeze and
+   the sync do not conflict.**);
    PRE-EXISTING
    upstream red → NO editor pings, housekeeping-PR decision escalates to
    Alexey; maintainer rejects/closes → owning editor reopens linked issues.
