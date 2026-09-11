@@ -184,6 +184,7 @@ harvested commits. When a PR is not mergeable, route by BLOCKER CLASS:
 |---|---|---|
 | fmt/clippy/test failure in THIS feature's files | Owning editor (notified with log evidence via the mechanical post-swap fan-out — `oc-deploy fanout`) | **PR-freeze check first (v0.4.93):** fixes on a FILED PR only when CI failure exists at push time or maintainer asks. Otherwise frozen. If valid: fresh worktree off the PR head → fix → Phase 5 gate (pr-checks) + conflict-quality gate → signed push to the head |
 | Merge conflicts with new upstream `main` | **Maintainer (v0.4.93)** | **DO NOT rebase/force-push the filed PR** — PR-freeze law. Conflict resolution on a filed PR is the maintainer's side (he merges locally, fixes on top, pushes, comments). Editor action: NONE beyond a factual comment ONLY if the maintainer asks; pre-filing, 2-fresh governs |
+| Prerequisite unharvested (feature depends on fork-only changes from another issue) | **Editor / HQ (v0.4.142)** | **Hold harvest filing.** Do NOT bundle multi-issue commits; notify HQ to harvest prerequisite first, then rebase once landed |
 | PRE-EXISTING upstream red (base fails in files we never touched) | ❌ NO editor pings — our code is innocent | housekeeping-PR candidate: issue filed + ledger-registered first (v0.3.8), Alexey decides |
 | Maintainer rejects/closes the PR | Owning editor | REOPEN the linked issues with a pointer comment; record the outcome |
 

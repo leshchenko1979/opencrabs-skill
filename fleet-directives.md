@@ -430,3 +430,20 @@ rule above governs until these ship.
   Any hit → do NOT write that file in place. If the write cannot wait, write a temp file **in the same directory** and `mv` it over the target: `mv` replaces the directory entry, so a running interpreter keeps reading the OLD inode and completes safely. The four long-running tools are the exposure — the other ~33 finish in milliseconds.
 - **Not only an agent-edit hazard.** Issue #167 notes that `git checkout` / `git pull` write working-tree files in place too, so a lane checking out a different revision mid-chain can kill a sibling's chain. The rename form is the only safe write during a live chain.
 - Filed as `leshchenko1979/opencrabs#167` (verified OPEN 2026-09-11T13:23:42Z). The tool-side fix — snapshot the running script to the same directory and re-exec behind an env guard, for the four long-running tools only — is Toolsmith-owned, design signed off, pending a quiet tree.
+
+## Daytime-Editing & Nighttime-Batch-Sync Cadence (v0.4.142)
+
+**Separation of Concerns across diurnal cycle:**
+1. **Daytime (Active Operator Window / Interactive Hours):**
+   - Focus is exclusively on **feature editing, design approvals, and smoke verification**.
+   - No large upstream merge/rebase synchronization is performed across the fleet during daytime.
+   - Editors advance topic branches and smoke-test against the stable deployed fork base.
+2. **Nighttime (Batch Merge & Batch Harvest Window):**
+   - Fleet-wide synchronization and rebases against upstream `adolfousier/main` are executed in **one consolidated batch** when editing activity stops.
+   - **Batch Harvesting:** Upstream harvest PRs are generated, rebased, and CI-gated in consolidated waves following the nighttime sync, eliminating daytime CI slot contention and unharvested dependency collision cascades.
+
+## Atomic Write Executable Preservation Law (v0.4.142)
+
+When modifying executable scripts (`tools/oc-*`, bash helpers) via temporary staging files (`temp + mv` atomic write pattern), **never assume default permissions**:
+- Standard temp file creation (`touch`, `tempfile`) defaults to mode `0644`. `mv` preserves the source inode permissions, stripping the `+x` bit on the target executable.
+- **Mandatory rule:** Always explicitly apply `chmod --reference="$target" "$temp"` (or `chmod 755 "$temp"`) prior to moving the temp file over the target.
