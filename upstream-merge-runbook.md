@@ -80,10 +80,31 @@ hand from a stale registry.
    decision: adopt upstream (default), keep fork, or reconcile. Auto-keep with
    no decision: commits adolfo merged from our own harvest PRs. **[GATE]** for
    any keep-ours.
-7. **Migrate lane branches onto the new base** — for each roster entry:
-   `git rebase --onto origin/main <old-fork-main-sha> <lane-branch>`. Lane-local
-   conflicts are isolated to that lane; anything else is a roster defect and
-   returns to step 1. Unpause lanes via `session_notify` with the new base sha.
+7. **Migrate lane branches onto the new base** — for each roster entry. The cut
+   point is NOT the branch-time tip and NOT a remembered old-main sha: after the
+   cutover those shas are gone from the new history, so using one replays the
+   ENTIRE fork history. **Derive it from the OLDEST UNMERGED commit:**
+   ```bash
+   # 1. what is actually still unmerged? (measured against the OLD fork main)
+   git log --oneline <old-fork-main-sha>..<lane-branch>
+   # 2. cut at the PARENT of the oldest of those
+   CUT="$(git rev-list --reverse <old-fork-main-sha>..<lane-branch> | head -1)^"
+   git rebase --onto origin/main "$CUT" <lane-branch>
+   ```
+   **Failure signature — an over-replay does NOT error.** It presents as a huge
+   commit wall and mass conflicts, so it reads as "the lane is a mess" rather
+   than "the cut point is wrong". Lane `facd50af` measured **220 commits**
+   offered where exactly **1** was pending (`12d25260..branch` = 1 vs
+   `ff234125..branch` = 220): their branch-time tip was `ff234125`, but old main
+   `7432e538` had already absorbed 5 of their 6 commits. The corrected cut
+   replayed 1 commit, ending at `e89f2033` with `dirty=0` and no conflicts.
+   **Fallback (rare):** if the old fork-main sha IS still an ancestor of the new
+   base — i.e. the sync did not rewrite history — the simple
+   `git rebase --onto origin/main <old-fork-main-sha> <lane-branch>` is
+   equivalent; test with `git merge-base --is-ancestor <old-main> origin/main`.
+   Lane-local conflicts are isolated to that lane; anything else is a roster
+   defect and returns to step 1. Unpause lanes via `session_notify` with the new
+   base sha.
 8. Fork CI (`pr-checks`) GREEN on the rebased tree — the only CODE-TESTS locus
    (box law; no local cargo per build-lane directive) → force-push
    `--force-with-lease` to `origin/main`, consolidated report with the
