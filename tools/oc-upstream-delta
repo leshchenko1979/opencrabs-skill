@@ -10,7 +10,7 @@
 # upstream-relations cluster) — exit 1 is a VERDICT, not an error.
 #
 # Usage:
-#   oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R] [--no-log]
+#   oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R] [--json] [--no-log]
 #   oc-upstream-delta --selftest      offline fixtures (local remotes only)
 #
 # Output: TSV lines on stdout —
@@ -32,10 +32,11 @@ GIT_BIN="${OC_GIT:-git}"
 REPO="${HOME}/opencrabs"
 FORK_REMOTE="origin"
 UP_REMOTE="adolfousier"
+JSON_OUT=0
 
 usage() {
   cat >&2 <<EOS
-Usage: $PROG [--repo P] [--fork-origin R] [--upstream R] [--no-log]
+Usage: $PROG [--repo P] [--fork-origin R] [--upstream R] [--json] [--no-log]
 Exit: 0 clean / 1 delta (verdict) / 2 usage / 3 fetch-or-git failure
 EOS
   exit 2
@@ -153,6 +154,15 @@ do_selftest() {
   [ ! -s "$D/tools2.log" ] && t_ok "--no-log suppresses journal" || t_bad "--no-log leaked"
   rm -rf "$F"
 
+  # 11. --json mode
+  F="$(mkfix)"
+  RC=0
+  OUT="$("$SELF" --repo "$F/w" --json 2>/dev/null)" || RC=$?
+  if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q '"ahead": 0' && echo "$OUT" | grep -q '"behind": 0'; then
+    t_ok "--json clean 0/0"
+  else t_bad "--json clean 0/0 failed"; fi
+  rm -rf "$F"
+
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
@@ -164,8 +174,9 @@ while [ $# -gt 0 ]; do
     --repo)        shift; REPO="${1:-}"; [ -n "$REPO" ] || usage ;;
     --fork-origin) shift; FORK_REMOTE="${1:-}"; [ -n "$FORK_REMOTE" ] || usage ;;
     --upstream)    shift; UP_REMOTE="${1:-}"; [ -n "$UP_REMOTE" ] || usage ;;
+    --json)        JSON_OUT=1 ;;
     --no-log)      : ;;
-    -h|--help)     echo "usage: oc-upstream-delta [--repo <path>] [--fork-origin R] [--upstream R]"; echo "Exit: 0 clean / 1 delta (verdict) / 2 usage / 3 fetch-or-git failure"; exit 0 ;;  # C-#3: help=0
+    -h|--help)     echo "usage: oc-upstream-delta [--repo <path>] [--fork-origin R] [--upstream R] [--json]"; echo "Exit: 0 clean / 1 delta (verdict) / 2 usage / 3 fetch-or-git failure"; exit 0 ;;  # C-#3: help=0
     *)             usage ;;
   esac
   shift
@@ -190,20 +201,25 @@ BASE="$("$GIT_BIN" -C "$REPO" merge-base "$FORK_REF" "$UP_REF")" || {
 AHEAD="$("$GIT_BIN" -C "$REPO" rev-list --count "$UP_REF..$FORK_REF")" || exit 3
 BEHIND="$("$GIT_BIN" -C "$REPO" rev-list --count "$FORK_REF..$UP_REF")" || exit 3
 
-printf 'BASE\t%s\n' "${BASE:0:7}"
-printf 'AHEAD\t%s\n' "$AHEAD"
-printf 'BEHIND\t%s\n' "$BEHIND"
+if [ "$JSON_OUT" -eq 0 ]; then
+  printf 'BASE\t%s\n' "${BASE:0:7}"
+  printf 'AHEAD\t%s\n' "$AHEAD"
+  printf 'BEHIND\t%s\n' "$BEHIND"
+fi
 
 emit_commits() { # $1=range $2=tag — C rows, sha7 + subject
   "$GIT_BIN" -C "$REPO" log --format='%H%x09%s' "$1" 2>/dev/null | while IFS="$(printf '\t')" read -r sha subj; do
     [ -n "$sha" ] && printf 'C\t%s\t%s\n' "${sha:0:7}" "$subj"
   done
 }
-emit_commits "$FORK_REF..$UP_REF" behind   # what upstream gained, first
-emit_commits "$UP_REF..$FORK_REF" ahead    # our fork-only delta
+if [ "$JSON_OUT" -eq 0 ]; then
+  emit_commits "$FORK_REF..$UP_REF" behind   # what upstream gained, first
+  emit_commits "$UP_REF..$FORK_REF" ahead    # our fork-only delta
+fi
 
 # ---------- ABSORBED-CANDIDATE via patch-id (skip when nothing to compare) -----
 ABSORBED=0
+ABSORBED_PAIRS=""
 if [ "$AHEAD" -gt 0 ] && [ "$BEHIND" -gt 0 ]; then
   UP_IDS="$(mktemp)"
   "$GIT_BIN" -C "$REPO" rev-list "$FORK_REF..$UP_REF" | while read -r c; do
@@ -216,12 +232,30 @@ if [ "$AHEAD" -gt 0 ] && [ "$BEHIND" -gt 0 ]; then
       [ -n "$pid" ] || continue
       twin="$(awk -F'\t' -v p="$pid" '$1==p {print $2; exit}' "$UP_IDS")"
       if [ -n "$twin" ]; then
-        printf 'ABSORBED-CANDIDATE\t%s\t%s\n' "${c:0:7}" "${twin:0:7}"
+        if [ "$JSON_OUT" -eq 0 ]; then
+          printf 'ABSORBED-CANDIDATE\t%s\t%s\n' "${c:0:7}" "${twin:0:7}"
+        fi
+        ABSORBED_PAIRS="${ABSORBED_PAIRS}${c:0:7}:${twin:0:7} "
         ABSORBED=$((ABSORBED+1))
       fi
     done
   fi
   rm -f "$UP_IDS"
+fi
+
+if [ "$JSON_OUT" -eq 1 ]; then
+  python3 -c '
+import json, sys
+base, ahead, behind, absorbed, pairs = sys.argv[1:6]
+p_list = [p.split(":") for p in pairs.split() if p]
+print(json.dumps({
+    "base": base,
+    "ahead": int(ahead),
+    "behind": int(behind),
+    "absorbed": int(absorbed),
+    "absorbed_candidates": [{"fork_sha": f, "upstream_sha": u} for f, u in p_list]
+}))
+' "${BASE:0:7}" "$AHEAD" "$BEHIND" "$ABSORBED" "$ABSORBED_PAIRS"
 fi
 
 oc_log_extra "base" "${BASE:0:7}"

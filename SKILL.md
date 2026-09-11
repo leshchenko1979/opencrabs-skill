@@ -36,7 +36,7 @@ load ONLY the one matching the session's role.
 prohibition, telegram surface law, tool logging, gates, editor creation, tool-problem triage (Triage lane),
 cadence) live in `fleet-directives.md` — re-homed from ops AGENTS.md/MEMORY.md per
 owner order 2026-09-02. Load it before ANY opencrabs-dev work. Executing procedure for the sync
-policy's merge leg: `upstream-merge-runbook.md` (freeze gate, roles, conflict
+policy's rebase procedure: `upstream-merge-runbook.md` (freeze gate, roles, conflict
 classes, migration-union rule, semantic-triage defaults).
 
 ## STEP ZERO — establish the role (mandatory on every load)

@@ -260,10 +260,7 @@ for operations and HERE for batch/verdict ownership.
 - **Backlog assignment (Duty T5, v0.4.92):** post-compaction sweep of OPEN fork issues against ledger claim-refs; unclaimed → route (T2) or surface here for dispatch.
 - **Telegram-law TOOL_ACCUM enforcement (Duty T4, v0.4.43):** OPERATES in the TRIAGE lane since v0.4.86 — full procedure in `triage.md` §Duty T4. Repeat offenders escalate HERE for review-toggle decisions.
 
-**Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) and
-fork branch lifecycle / clean sweep (item 7) are HQ-owned duties —
-canonical text stays in SKILL.md §Upstream relations; this line is the
-HQ-side ownership pointer.
+**Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) is an HQ-owned duty; fork branch lifecycle / clean sweep (item 7) is delegated to and executed by Triage (`triage.md §Duty T4`) — canonical text stays in SKILL.md §Upstream relations; this line is the HQ-side ownership pointer.
 
 ## Upstream sync — watch, REBASE parity (re-homed v0.4.80; sync model REBASE 2026-09-11; sync execution delegated to Triage 2026-09-11)
 
