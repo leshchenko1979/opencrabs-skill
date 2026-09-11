@@ -64,7 +64,7 @@ waiting for a poll.
 
 **Scope note (owner order 2026-09-10 ~02:4xZ & 14:3xZ, fleet-directives §Direct dispatch):** Triage
 is an AUDITOR, not a relay hub. Direct dispatch mandates that workers report tool anomalies directly
-to the active **TOOLSMITH** lane (`session_notify`; resolved dynamically via `oc-ledger roster`),
+to the active **TOOLSMITH** lane (`session_notify`; resolved dynamically via `oc-ledger roster --live --role toolsmith`),
 while core anomalies are filed directly as GitHub fork issues. Triage does NOT relay quirk tickets.
 
 Triage's responsibility under T2 is AUDITING:
