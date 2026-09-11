@@ -118,6 +118,28 @@ done
 [ -n "$SHA" ]    || die "--sha required"
 [ -n "$BRANCH" ] || die "--branch required"
 
+# ---- FREEZE GUARD (plan step 3, 2026-09-11; owner-scoped to opencrabs-dev) ----
+# Blocks NEW CHAINS during the fork-rebase window; remove the freeze file at
+# unfreeze and this block goes inert.
+# PLACEMENT IS LOAD-BEARING (contract fix 2026-09-11, owner word via HQ): the
+# guard sits AFTER the selftest dispatch, AFTER the arg loop and AFTER the
+# required-arg checks, so the non-chain surfaces stay correct while frozen:
+#   --selftest  exits earlier (mode-1 exec / mode-2 eval, above) -> its own rc
+#   --help/-h   exits via usage() in the arg loop             -> rc 0
+#   no args     dies rc 2 on "--sha required" (above this line)
+#   bad arg     dies rc 2 in the arg loop
+#   real chain  reaches THIS guard                              -> rc 3
+# The previous form ran the guard before arg parsing with a `for ... break`
+# "exemption": `break` exits only the loop, the following `if` still fired, so
+# --selftest died rc 3 and the battery lost 3 assertions (oc-ship-chain
+# selftest/no-args/unknown-arg). Freeze enforcement was never weakened.
+# OC_SHIPCHAIN_FREEZE_FILE keeps the guard hermetically testable (selftest
+# points it at a temp file); production always uses the canonical path.
+FREEZE_FILE="${OC_SHIPCHAIN_FREEZE_FILE:-/root/.opencrabs/profiles/ops/opencrabs-dev/.fork-freeze}"
+if [ -f "$FREEZE_FILE" ] && [ "${OC_SHIPCHAIN_FREEZE_OVERRIDE:-0}" != "1" ]; then
+  die "FREEZE — fork rebase window is open (plan step 3); new chains are blocked. Remove $FREEZE_FILE at unfreeze, or set OC_SHIPCHAIN_FREEZE_OVERRIDE=1 for an HQ-sanctioned exception." 3
+fi
+
 # ---- chain id -------------------------------------------------------------
 SHORT="$(printf '%s' "$SHA" | cut -c1-8)"
 CHAIN="CHAIN-${SHORT}-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -384,10 +406,15 @@ EOF
   printf '#!/usr/bin/env bash\nexit 0\n' > "$T/fake-issuelog"
   chmod +x "$T/fake-issuelog"
 
+  # Fixtures are NOT real chains: they run against a temp clone with fake
+  # prchecks/deploy and touch no fork state, so they carry the sanctioned
+  # freeze override. Without it the guard blocks the selftest's own fixtures
+  # and --selftest dies rc 3 during the fork-rebase window.
   run_chain() {
     OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
     OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
     OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
       bash "$SELF" "$@"
   }
 
@@ -497,6 +524,7 @@ EOF
     OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
     OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
     OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$T/tools.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
       bash "$T/bin/oc-ship-chain" "$@"
   }
   rm -f "$T/journal.log"
@@ -542,6 +570,7 @@ EOF
     OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks-inflight" OC_DEPLOY_BIN="$T/fake-deploy" \
     OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
     OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
       bash "$SELF" "$@"
   }
 
@@ -572,7 +601,32 @@ EOF
   RC=0; OUT="$(GATE_MODE=norunid run_chain_inflight --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
   check_rc "gate-rc5-no-runid-rc6" "$RC" 6
 
+  # 11. FREEZE GUARD (contract fix 2026-09-11, owner word via HQ): a REAL chain
+  #     is blocked rc 3 while the freeze file is present, and the sanctioned
+  #     override lifts it. OC_SHIPCHAIN_FREEZE_FILE makes this hermetic — the
+  #     case never depends on the live .fork-freeze existing.
+  printf 'freeze\n' > "$T/freeze"
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+      OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" OC_TOOLS_NOLOG=1 \
+      OC_SHIPCHAIN_LEDGER="$T/journal.log" OC_SHIPCHAIN_FREEZE_FILE="$T/freeze" \
+      bash "$SELF" --sha "$FSHA" --branch feat 2>&1)" || RC=$?
+  check_rc "freeze-blocks-real-chain-rc3" "$RC" 3
+  case "$OUT" in *FREEZE*) ok "freeze-message" ;; *) bad "freeze-message: $OUT" ;; esac
+
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+      OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" OC_TOOLS_NOLOG=1 \
+      OC_SHIPCHAIN_LEDGER="$T/journal.log" OC_SHIPCHAIN_FREEZE_FILE="$T/freeze" \
+      OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
+      bash "$SELF" --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  check_rc "freeze-override-lifts-block" "$RC" 0
+
   echo "selftest: $PASS passed, $FAIL failed"
-  return $?
+  # Contract fix 2026-09-11: was `return $?`, which returned ECHO's status (0),
+  # so a broken selftest still exited 0 and the battery's run_selftest gate
+  # could never see it fail. rc now reflects the failure count.
+  [ "$FAIL" -eq 0 ]
 }
 exit 0
