@@ -444,10 +444,11 @@ if tool oc-deploy; then
   "$TOOLS_DIR/oc-deploy" --bogus >/dev/null 2>&1; [ $? -eq 1 ] && ok "unknown arg -> 1" || bad "unknown arg -> expected 1"
   d="$(mktemp -d)"; printf x > "$d/oc-deploy.kill"
   OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-deploy" poll >/dev/null 2>&1
-  [ $? -eq 9 ] && ok "kill file -> 9 (first-line brake)" || bad "kill file -> expected 9"
+  [ $? -eq 9 ] && ok "kill file -> 9 (real-mode brake)" || bad "kill file -> expected 9"
   # Duty-6 lens F task 5: --wait validated BEFORE any RED-scan side effects —
-  # bad --wait dies rc1 with no fanout/state writes (kill-file brake still
-  # applies first, so poll with kill file + bad --wait -> 9, not 1).
+  # bad --wait dies rc1 with no fanout/state writes (the kill-file brake sits at
+  # the TOP of every real-mode arm, so poll with kill file + bad --wait -> 9,
+  # not 1; contract fix ec4706bd moved it there from before arg parsing).
   d2="$(mktemp -d)"
   OC_DEPLOY_STATE_DIR="$d2" OC_DEPLOY_GH=/bin/false "$TOOLS_DIR/oc-deploy" poll --wait abc >/dev/null 2>&1
   [ $? -eq 1 ] && ok "poll bad --wait -> 1 before side effects" || bad "poll bad --wait -> expected 1"
@@ -697,11 +698,11 @@ printf '%s' "$NFOUT" | grep -q "sent=0" \
 section "oc-health (hourly health & cleanliness sweep)"
 HZ="$TOOLS_DIR/oc-health"
 # 62a. hermetic selftest: fixture state dir + tmp glob + sqlite DB + git repos,
-#      so the reaping cases run without touching live state. 19 assertions cover
+#      so the reaping cases run without touching live state. 22 assertions cover
 #      stale-lock reap, live-pid never-reap, backup keep-window, tmp age gate,
 #      JSON contract, cron DM-leak vs blank-deliver_to, orphan worktrees.
 HOUT="$(bash "$HZ" --selftest 2>&1)"; HRC=$?
-[ "$HRC" -eq 0 ] && ok "oc-health --selftest PASS (19 assertions)" \
+[ "$HRC" -eq 0 ] && ok "oc-health --selftest PASS (22 assertions)" \
   || bad "oc-health --selftest rc=$HRC: $(printf '%s' "$HOUT" | tail -3)"
 # 62b. read-only run must NOT mutate: no --reap, no writes; rc is 0 (clean) or 1
 #      (findings) — never 2/3 on a healthy box.

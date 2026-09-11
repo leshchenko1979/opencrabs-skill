@@ -111,6 +111,23 @@ after sloppy lanes and hide the pattern.
 - **Observed:** **723 MB.** Growing; not urgent, but it is the largest single
   artifact under the profile.
 
+## 11. `tools.log` JSONL integrity — `QUIRK` (report only)
+
+- **Where:** `$OC_DEV_STATE/tools.log` (`OC_HEALTH_LOG` overrides).
+- **Check:** `wc -l` vs the count of lines that parse as JSON
+  (`jq -Rr 'fromjson? | .ts'`). Any difference is a malformed line, and the
+  offending line numbers are named.
+- **Remediation:** **report only — never rewrite or delete the evidence.**
+- **Why:** one prose line makes a plain `jq -r` over the whole file abort
+  (`Invalid numeric literal at line 383`), and the flood guard's `tail -n 300`
+  scan stops matching at that point — a silent failure exactly when the log
+  matters. The documented recipes in RC-CONTRACT.md therefore read raw
+  (`-Rr 'fromjson?'`).
+- **Observed 2026-09-11:** 2 malformed lines, **383** and **443**, hand-appended
+  2026-08-31. Line 443 is an evidentiary actor-correction (below); it stays.
+  The **writer path is clean** — `oc_log_finish` (lib/oc-log.sh) only ever
+  appends a `jq -cn`-built object, so these were hand-written, not a tool bug.
+
 ---
 
 ## Never touch (evidence / live state)

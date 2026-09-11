@@ -12,7 +12,7 @@
 #   --reap    apply the SAFE remediations (stale locks, old backups, old tmp).
 #             Without it the tool is a pure read — safe to run any time.
 #   --quiet   print only findings, not the checked-and-clean lines
-#   --selftest  run the hermetic offline fixture suite (19 assertions), exit 0/1
+#   --selftest  run the hermetic offline fixture suite (22 assertions), exit 0/1
 #
 # Exit: 0 clean · 1 findings (warn) · 2 usage · 3 measurement failure
 #   Findings NEVER make the exit non-zero for a reaped-only run: a reap is a
@@ -40,6 +40,7 @@ LOCK_MAX_AGE_H="${OC_HEALTH_LOCK_MAX_AGE_H:-24}"
 BAK_KEEP="${OC_HEALTH_BAK_KEEP:-3}"
 TMP_MAX_AGE_H="${OC_HEALTH_TMP_MAX_AGE_H:-48}"
 SKILL_DIR="$(cd "$TOOLS_DIR/.." && pwd)"
+LOGF="${OC_HEALTH_LOG:-$STATE/tools.log}"
 
 JSON=0; REAP=0; QUIET=0
 for a in "$@"; do
@@ -90,9 +91,12 @@ selftest_impl() {
   run() {
     OC_HEALTH_STATE="$T/state" OC_HEALTH_TMP_GLOB="$T/tmp/oc-*" OC_HEALTH_DB="$T/db.sqlite" \
     OC_HEALTH_SKILL_DIR="$T/skill" OC_HEALTH_FORK="$T/fork" OC_HEALTH_WT_PATTERNS="$T/wt/*" \
-    OC_HEALTH_SKIP_VERSION=1 \
+    OC_HEALTH_LOG="$T/tools.log" OC_HEALTH_SKIP_VERSION=1 \
       bash "$SELF" "$@"
   }
+
+  # fixture tools.log: valid JSONL (check 11 clean path)
+  printf '{"ts":"2026-09-11T00:00:00Z","tool":"oc-demo","args":"","exit":0,"secs":0.1,"extra":{}}\n' > "$T/tools.log"
 
   # 1. clean fixture → rc 0, zero findings
   RC=0; OUT="$(run 2>&1)" || RC=$?
@@ -181,6 +185,19 @@ selftest_impl() {
   echo dirty > "$T/skill/dirtyfile"
   RC=0; OUT="$(run 2>&1)" || RC=$?
   case "$OUT" in *"checkout-dirty"*) ok ;; *) bad "checkout-dirty-detected: $OUT" ;; esac
+
+  # 15. check 11: a clean JSONL log is NOT flagged (regression guard — the
+  #     clean path must stay silent, or every run cries wolf)
+  RC=0; OUT="$(run 2>&1)" || RC=$?
+  case "$OUT" in *"toolslog-malformed"*) bad "toolslog-clean-false-positive: $OUT" ;; *) ok ;; esac
+
+  # 16. check 11: a hand-appended PROSE line in the JSONL journal is flagged
+  #     (the 383/443 class) — report-only, the evidence line is NEVER rewritten
+  printf '2026-08-31T04:11:21Z actor-correction: prose evidence line\n' >> "$T/tools.log"
+  RC=0; OUT="$(run 2>&1)" || RC=$?
+  case "$OUT" in *"toolslog-malformed"*) ok ;; *) bad "toolslog-malformed-detected: $OUT" ;; esac
+  n_after="$(wc -l < "$T/tools.log")"
+  chk "toolslog-evidence-preserved" 2 "$n_after"
 
   echo "oc-health selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
@@ -366,6 +383,26 @@ if [ -f "$DB" ]; then
   else
     clean_line "session db: ${db_mb}MB"
   fi
+fi
+
+# ---- 11. tools.log JSONL integrity -----------------------------------------
+# tools.log is JSONL by contract, but hand-appended prose lines exist (383, 443
+# — written 2026-08-31; 443 is an evidentiary actor-correction, so it is NOT
+# deleted). One malformed line makes a plain `jq -r` over the whole file abort
+# AND stops the flood guard's tail-based scan at that point, so the failure is
+# invisible exactly when it matters. Report-only: never rewrite evidence.
+if [ -f "$LOGF" ]; then
+  n_lines=$(wc -l < "$LOGF")
+  n_ok=$(jq -Rr 'fromjson? | .ts' "$LOGF" 2>/dev/null | wc -l)
+  n_bad=$((n_lines - n_ok))
+  if [ "$n_bad" -gt 0 ]; then
+    bad_lines="$(jq -Rr 'fromjson? | empty' "$LOGF" 2>/dev/null >/dev/null; awk 'NR==FNR{next}' /dev/null /dev/null; jq -R 'fromjson? // empty' "$LOGF" >/dev/null 2>&1; grep -n -v -E '^\{' "$LOGF" 2>/dev/null | head -3 | cut -d: -f1 | tr '\n' ' ')"
+    add_finding 11 QUIRK toolslog-malformed "$n_bad non-JSON line(s) in $(basename "$LOGF") (${n_ok} parseable of ${n_lines}; lines: ${bad_lines:-?}) — plain jq aborts there and the flood guard's tail scan stops at that point; recipes must use -Rr 'fromjson?'"
+  else
+    clean_line "tools.log: ${n_lines} JSONL line(s), all parseable"
+  fi
+else
+  clean_line "tools.log: absent"
 fi
 
 # ---- output ----------------------------------------------------------------

@@ -19,10 +19,20 @@
 #      Dead targets are skipped with a reason, never attempted.
 #   4. RECEIPTS: one line per lane (uuid role rc detail); summary; ledger
 #      stamp kind=notify-fanout carrying all ids (opt-out --no-stamp).
-#   5. QUIET-60S contract text is embedded in briefs; NOTE: the binary's
-#      `session notify` CLI has no quiet/mode flag (verified 2026-09-09) —
-#      sends are immediate with the standard interrupt-retry (lib contract).
-#      Flagged to HQ as binary gap (upstream-harvest candidate).
+#   5. QUIET-60S contract text is embedded in briefs. SENDS ARE IMMEDIATE
+#      (`--mode` defaults to now) with the standard interrupt-retry: on rc 3
+#      the send is re-issued with --interrupt, which is now a deprecated alias
+#      for --mode turn-end.
+#      CORRECTION 2026-09-11 (Toolsmith, dispatched by the hourly health sweep):
+#      an earlier note here claimed the binary's `session notify` CLI had NO
+#      quiet/mode flag (verified 2026-09-09) and flagged it to HQ as a binary
+#      gap. That is FALSE now and was never re-checked: `opencrabs session
+#      notify --help` lists `--mode now|turn-end|quiet`, `--quiet-for-secs`,
+#      `--max-delay-secs`, and `--confirm`. The gap was closed upstream-side.
+#      The tool still sends immediately ON PURPOSE — deferred delivery for a
+#      work-dispatch wave is a fleet delivery-semantics decision, not a header
+#      detail. If HQ wants quiet-by-default fanout, the switch is one flag
+#      (`--mode quiet`), and it belongs in a separate, owner-visible change.
 #   6. FORUM-SCOPE GUARD (owner order 2026-09-10 03:16Z): ALL opencrabs-dev
 #      work — including skill-change fanout — happens ONLY in the opencrabs-dev
 #      forum chat. A target session is sendable only when the profile session
