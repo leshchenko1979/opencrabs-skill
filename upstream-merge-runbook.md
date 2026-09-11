@@ -91,6 +91,21 @@ hand from a stale registry.
    CUT="$(git rev-list --reverse <old-fork-main-sha>..<lane-branch> | head -1)^"
    git rebase --onto origin/main "$CUT" <lane-branch>
    ```
+   **Zero-pending case — test BEFORE deriving the cut.** The derivation above
+   assumes at least one unmerged commit. A lane already fully absorbed into old
+   fork main has an EMPTY range, so `head -1` yields nothing and `CUT` becomes
+   the bare `^`: `git rev-parse "^"` is **rc 128** (`fatal: ambiguous argument
+   '^'`). The ancestor fallback below does NOT cover it either — the old sha is
+   not an ancestor of the new base. Test first:
+   ```bash
+   git rev-list --count <old-fork-main-sha>..<lane-branch>   # 0 -> this case
+   ```
+   With no delta to replay, the migration is a pointer move onto the new base:
+   `git rebase --onto origin/main <old-fork-main-sha> <lane-branch>`. That is the
+   SAME command that over-replays when the lane DOES have pending commits, which
+   is why the count test comes first. Lane `2fbfb2f8` (2026-09-11, #132) hit
+   exactly this: pre-rebase head `299d1c72`, `7432e538..299d1c72` = 0, fallback
+   rc=1, reflog `299d1c72 -> 12d25260`, dirty=0, no conflicts.
    **Failure signature — an over-replay does NOT error.** It presents as a huge
    commit wall and mass conflicts, so it reads as "the lane is a mess" rather
    than "the cut point is wrong". Lane `facd50af` measured **220 commits**
