@@ -21,7 +21,7 @@
 # dispatch+adopt and the newest run in window is always this lane's own.
 #
 # Usage:
-#   oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
+#   oc-prchecks [<branch-or-sha> | resume <run-id> | wait <ref>] [--wait N] [--budget N] [--poll S] [--repo SLUG-or-PATH] [--carrier C] [--no-log]
 #   oc-prchecks --selftest          offline, gh-shim injected (zero network)
 #
 # Defaults: --repo leshchenko1979/opencrabs, --carrier ci/quick-build-linux,
@@ -120,8 +120,9 @@ usage() { # [reason] — C-#1: prints WHY before the usage block. A repeat of th
   printf '%s %s %s\n' "$_now" "$_h" "$_cnt" > "$_cf" 2>/dev/null || :
   [ "$_cnt" -gt 1 ] && sleep $(( _cnt * 2 < 10 ? _cnt * 2 : 10 ))
   cat >&2 <<EOS
-Usage: $PROG [<branch-or-sha> | resume <run-id>] [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
+Usage: $PROG [<branch-or-sha> | resume <run-id> | wait <ref>] [--wait N] [--budget N] [--poll S] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
   resume <run-id>  re-attach to a run this lane WITNESSED (rc-5 stdout / journal extra.run_id);
+  wait <ref>       single-invocation wait/watch loop with budget (default 2700s, poll 30s) — Cycle 5 C-1
                    skips shape gate / yml check / dispatch / lock / adoption, goes straight to watch+verdict
 Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable / 8 AMBIGUOUS-same-ref-witness-unverifiable (fail-closed, dispatch refused, #115B)
 EOS
@@ -423,13 +424,20 @@ do_selftest() {
     t_ok "dedup window 6h: 11-min-old witness with LIVE run adopted (no re-dispatch cancel)"
   else t_bad "dedup window 6h (rc=$T_RC out=$T_OUT)"; fi
 
+  # (f) C-1 wait subcommand & --budget / --poll support
+  run_t green wait "$SHA" --budget 10 --poll 1
+  if [ "$T_RC" -eq 0 ] && case "$T_OUT" in *"adopted run=222"*) true ;; *) false ;; esac; then
+    t_ok "C-1 wait subcommand: executes with custom budget/poll (adopted 222)"
+  else t_bad "C-1 wait subcommand (rc=$T_RC out=$T_OUT)"; fi
+
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   cat <<'EOH'
-Usage: oc-prchecks [<branch-or-sha> | resume <run-id>] [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--fast] [--no-log]
+Usage: oc-prchecks [<branch-or-sha> | resume <run-id> | wait <ref>] [--wait N] [--budget N] [--poll S] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--fast] [--no-log]
   resume <run-id>  re-attach to a witnessed run (no dispatch, no adoption) — #74 H2
+  wait <ref>       single-invocation wait/watch loop with budget (default 2700s, poll 30s) — Cycle 5 C-1
 Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable / 8 AMBIGUOUS-same-ref-witness-unverifiable (fail-closed, dispatch refused, #115B)
 EOH
   exit 0
@@ -441,10 +449,14 @@ CALL_ARGS="$*"   # C-#1: backoff identity — same args dying rc=2 repeatedly
 REF=""
 FAULT_PR=""
 RESUME_MODE=0
+WAIT_SUBCOMMAND=0
 FAST_MODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --wait)    shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage "--wait needs an integer (got '$WAIT_SECS')" ;; esac ;;
+    --budget)  shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage "--budget needs an integer (got '$WAIT_SECS')" ;; esac ;;
+    --poll)    shift; POLL="${1:-}"; case "$POLL" in ''|*[!0-9]*) usage "--poll needs an integer (got '$POLL')" ;; esac ;;
+    wait)      [ "$WAIT_SUBCOMMAND" -eq 0 ] || usage "repeat 'wait'"; [ "$RESUME_MODE" -eq 0 ] || usage "cannot mix wait and resume"; WAIT_SUBCOMMAND=1 ;;
     --repo)    shift; REPO="${1:-}"; [ -n "$REPO" ] || usage "--repo needs a value" ;;
     --carrier) shift; CARRIER="${1:-}"; [ -n "$CARRIER" ] || usage "--carrier needs a value" ;;
     --fault-scope) shift; FAULT_PR="${1:-}"; [ -n "$FAULT_PR" ] || usage "--fault-scope needs a PR number" ;;   # E5 (v0.4.78)
@@ -460,6 +472,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$REF" ] || usage "missing <branch-or-sha> argument"
+if [ "$WAIT_SUBCOMMAND" -eq 1 ]; then
+  # C-1 (Duty-6 Cycle-5 review): single-invocation wait defaults to 2700s budget and 30s poll
+  [ "$WAIT_SECS" = "600" ] && WAIT_SECS=2700
+  [ "$POLL" = "15" ] && POLL=30
+  oc_log_extra "wait_subcommand" "1"
+fi
 if [ "$RESUME_MODE" -eq 1 ]; then   # #74 H2: positional is a NUMERIC run id, not a sha/branch
   case "$REF" in ''|*[!0-9]*) usage "resume needs a numeric run id (got '$REF')" ;; esac
 fi

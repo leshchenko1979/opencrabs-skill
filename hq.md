@@ -265,7 +265,7 @@ fork branch lifecycle / clean sweep (item 7) are HQ-owned duties —
 canonical text stays in SKILL.md §Upstream relations; this line is the
 HQ-side ownership pointer.
 
-## Upstream sync — watch, MERGE-ON-ARRIVAL, parity (re-homed v0.4.80; sync model re-ruled 2026-09-02; merge execution delegated to Triage 2026-09-11)
+## Upstream sync — watch, REBASE parity (re-homed v0.4.80; sync model re-ruled 2026-09-02; sync execution delegated to Triage 2026-09-11)
 
 Sync execution is DELEGATED TO TRIAGE (owner order 2026-09-11 "You should not do these merges - delegate to triage"; HQ does not execute merges). **SYNC LAW canonical = `fleet-directives.md`
 §Remotes & sync (owner 2026-09-02 "Land it"; one concept, one home — this

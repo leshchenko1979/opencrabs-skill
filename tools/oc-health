@@ -26,6 +26,9 @@
 # =============================================================================
 set -u
 set -o pipefail
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-health" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
 
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOOLS_DIR="$(dirname "$SELF")"
@@ -85,7 +88,7 @@ selftest_impl() {
   git -C "$T/fork" commit -qm init >/dev/null 2>&1
 
   sqlite3 "$T/db.sqlite" "CREATE TABLE cron_jobs (name TEXT, enabled INTEGER, deliver_to TEXT, prompt TEXT);"
-  sqlite3 "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-waiter-sweep',1,'','silent; uses session_notify');"
+  sqlite3 "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-roster-detached-sweep',1,'','silent; uses session_notify');"
   sqlite3 "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('harvest-watch-4h',1,'','ok');"
 
   run() {
@@ -169,13 +172,13 @@ selftest_impl() {
   if printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then ok; else bad "json-parse: $OUT"; fi
 
   # 10. a DM-routed dev cron is flagged as a leak
-  sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='telegram:133526395' WHERE name='oc-waiter-sweep';"
+  sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='telegram:133526395' WHERE name='oc-roster-detached-sweep';"
   RC=0; OUT="$(run 2>&1)" || RC=$?
   case "$OUT" in *"cron-leak"*) ok ;; *) bad "cron-leak-detected: $OUT" ;; esac
 
   # 11. a BLANK deliver_to is NOT a leak (the cron briefs via session_notify) —
   #     regression guard for the false positive caught live on 2026-09-11.
-  sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='' WHERE name='oc-waiter-sweep';"
+  sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='' WHERE name='oc-roster-detached-sweep';"
   RC=0; OUT="$(run 2>&1)" || RC=$?
   case "$OUT" in *"cron-leak"*) bad "blank-deliver-to-false-positive: $OUT" ;; *) ok ;; esac
 
@@ -237,7 +240,7 @@ clean_line() { # never writes to stdout in --json mode: the JSON is the whole co
 # ---- 1. stale fanout locks -------------------------------------------------
 n_locks=0; n_stale=0; reaped_locks=0
 if [ -d "$STATE" ]; then
-  for f in "$STATE"/fanout.lock.*; do
+  for f in "$STATE"/fanout.lock.* "$SKILL_CHECK"/run/wave-*.lock "$SKILL_CHECK"/run/wave-*.sent; do
     [ -e "$f" ] || continue
     n_locks=$((n_locks + 1))
     age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
@@ -254,7 +257,7 @@ fi
 if [ "$n_stale" -gt 0 ]; then
   if [ "$REAP" = "1" ]; then
     REAPED=$((REAPED + reaped_locks))
-    add_finding 1 SAFE stale-locks "reaped $reaped_locks stale fanout lock(s) of $n_locks"
+    add_finding 1 SAFE stale-locks "reaped $reaped_locks stale lock(s)/sent-marker(s) of $n_locks"
   else
     add_finding 1 SAFE stale-locks "$n_stale of $n_locks fanout lock(s) are stale (>=${LOCK_MAX_AGE_H}h, owner pid dead) — rerun with --reap"
   fi
@@ -360,7 +363,7 @@ fi
 # ---- 8. cron liveness + leak detection -------------------------------------
 if [ -f "$DB" ] && command -v sqlite3 >/dev/null 2>&1; then
   # (a) law-carrying crons must be enabled
-  cron_bad="$(sqlite3 "$DB" "SELECT name FROM cron_jobs WHERE enabled=0 AND name IN ('harvest-watch-4h','oc-waiter-sweep','oc-health-hourly');" 2>/dev/null)"
+  cron_bad="$(sqlite3 "$DB" "SELECT name FROM cron_jobs WHERE enabled=0 AND name IN ('harvest-watch-4h','oc-roster-detached-sweep','oc-health-hourly');" 2>/dev/null)"
   [ -n "$cron_bad" ] && add_finding 8 QUIRK cron-disabled "law-carrying cron(s) disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
   # (b) LEAK class — a dev cron delivering OUTSIDE the forum. Two real shapes:
   #     deliver_to is a private DM (positive id; groups/supergroups are negative),

@@ -64,6 +64,10 @@ usage() { # C-#3: --help/-h answers 0 on STDOUT; a usage error answers 2 on STDE
 
 verb="${1:-}"; shift || true
 case "$verb" in
+  --role|--role=*)
+    echo "oc-roster: --role is not supported (oc-roster derives liveness, not roles). Use: oc-ledger roster --live --role <role>" >&2
+    exit 2
+    ;;
   live|forum|claims|work|classify)
     python3 - "$verb" "$@" <<'PY'
 import json, os, re, sqlite3, subprocess, sys, time

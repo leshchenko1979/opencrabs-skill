@@ -32,7 +32,7 @@ EDITOR territory — this lane touches neither.
 - NEVER messages the owner directly with verdict tables — HQ owns
   owner-facing verdict batches.
 
-## Duty S1 — Own `tools/` code (author + fixer, ex-HQ at v0.4.87)
+## Duty TM1 — Own `tools/` code (author + fixer, ex-HQ at v0.4.87)
 
 **Standing duties (owner 2026-09-08 "Go then duty 4+6", v0.4.108):**
 
@@ -84,7 +84,7 @@ Hard discipline for every change:
   CHANGELOG.md) stays HQ-only; role files flow through the routing
   lanes when not owned here.
 
-## Duty S2 — Battery stewardship
+## Duty TM2 — Battery stewardship
 
 `tools/tests/run.sh` — the **SELFTEST BATTERY** (the full `bash
 tools/tests/run.sh` suite every version bump must pass GREEN; lens A9

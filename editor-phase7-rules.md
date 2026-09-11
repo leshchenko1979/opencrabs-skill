@@ -2,8 +2,9 @@
 
 Reference detail behind editor.md §Phase 7 (progressive disclosure — reviewer
 G, Duty-6 2026-09-01: in-skill steps stay inline, load-bearing reference moves
-here behind a one-line pointer). Load when harvesting onto an upstream base,
-resolving conflicts on a PR head, or writing text for upstream surfaces.
+here behind a one-line pointer). Load when harvesting onto an upstream base
+or writing text for upstream surfaces (Note: PR-FREEZE law in editor-upstream-pr.md
+freezes upstream PRs once filed — no force-pushing/re-porting on open PR heads).
 
 - **HARVEST VERIFICATION SWEEP (Duty-4, v0.4.71):** after
   conflict resolution on a harvested branch, BEFORE the first gate dispatch:

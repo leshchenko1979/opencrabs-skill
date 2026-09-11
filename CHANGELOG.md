@@ -1,11 +1,10 @@
-## v0.4.144 (2026-09-11) — Duty 4 Direct-Persistence & Zero-Notify Law
-
 ## v0.4.145 (2026-09-11) — Unified Event Capture Matrix, Split-Gate Ship Pipeline & Failure Recovery Protocol
 
 - **Unified Event Capture Matrix (`fleet-directives.md`)**: Codified routing law separating urgent anomalies (Toolsmith direct notification, GitHub fork issues, Alexey) from batched self-improvement (Duty 4 review proposals and Idea Box intake persisted directly to disk/ledger without flooding HQ).
 - **Split-Gate Ship Pipeline & Merge-First Velocity (`fleet-directives.md`, `editor.md`)**: Codified split-gate CI strategy where pre-swap carrier builds focus on artifact compilation and sanity validation, deferring the full `cargo test` triad (24.7m) to either pre-PR gates or asynchronous post-merge suites, reducing ship cycle turnaround from ~38m to ~13m.
 - **Automated In-Tool Rebase Mechanics & Failure Protocol (`editor.md`)**: Codified failure modes and recovery protocol for `oc-ship-chain` and `oc-deploy`, delegating mechanical rebase on non-FF (`rc=5`) into tool automation and providing clear recovery steps for CI test failures, carrier compile errors, and binary swap regressions.
-- **BATTERY**: 162 PASS / 0 FAIL.
+- **Cycle 5 Review Improvements & Tool Suite Fixes**: Integrated `oc-deploy status [--json]`, `oc-ledger` verb suggestion hints, `oc-roster` strict `--role` rejection, `oc-watcher-audit` CLI tool with full selftests, and purged stale lock/sent artifacts.
+- **BATTERY**: 166 PASS / 0 FAIL.
 
 ## v0.4.144 (2026-09-11) — Zero Session Notify for Duty 4 & Direct Persistence
 

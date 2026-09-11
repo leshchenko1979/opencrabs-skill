@@ -79,8 +79,8 @@ editor-facing duties:
 ## CI-wait discipline & actor attribution
 
 *(Waiter-discipline items — poll floor, --wait ceiling, invocation
-verify, notify wiring, log-window cuts, REST casing — are HQ-scoped:
-hq.md §CI-wait & waiter discipline, items W1–W6.)*
+verify, notify wiring, log-window cuts, REST casing — live canonically in:
+fleet-directives.md §CI-wait discipline & actor attribution.)*
 
 **Direct dispatch (owner order 2026-09-10, fleet-directives §Direct dispatch):
 work orders go sender → resource-owner directly — never through an intermediary
@@ -249,7 +249,7 @@ Per-tool rc registers: `tools/RC-CONTRACT.md` (sole register; rows above carry p
 
 Rules that outlive any table: journal read-back after every `oc-ledger`
 claim/stamp (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
-a tool's exit code alone; the ≥60s detached-poll floor (hq.md §CI-wait & waiter discipline, item W1).
+a tool's exit code alone; the ≥60s detached-poll floor (fleet-directives.md §CI-wait discipline & actor attribution).
 
 ## Phase 0 — Fresh base
 

@@ -16,6 +16,7 @@
 #                          [--artifact-dir D] [--drill]        # Phase B
 #   oc-deploy watch [--with-delta]       # stray-commit tripwire (report-only)
 #                                        # + optional upstream arithmetic leg
+#   oc-deploy status [--json]            # read-only deployment / daemon state summary
 #   (contributors RETIRED v0.4.91 — use oc-attrib --contributors)
 #   oc-deploy fanout --run <id> [--dry-run]   # issue #24: mechanical notify fan-out
 #   oc-deploy --selftest
@@ -600,6 +601,18 @@ NSTUB2
   git -C "$T/repo" checkout -qB watchtest FETCH_HEAD
   echo stray > "$T/repo/f-stray"; git -C "$T/repo" add f-stray; git -C "$T/repo" commit -qm stray
   git -C "$T/repo" push -q "$T/remote.git" HEAD:refs/heads/main
+  # 20. status subcommand: read-only deployment / daemon summary
+  printf '{"sha":"1111111111111111111111111111111111111111","ts":"2026-09-11T12:00:00Z","stage":"S3","features":"telegram,code-graph","run_id":999,"target_host":"local"}\n' > "$SD/deployed.meta.json"
+  printf '1111111111111111111111111111111111111111\n' > "$SD/deployed.sha"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" "$SELF_BIN" status 2>&1)"; rc=$?
+  check_rc "status-text-rc" $rc 0
+  check_has "status-text-sha" "$out" "Deployed SHA:    1111111111111111111111111111111111111111"
+
+  out="$(OC_DEPLOY_STATE_DIR="$SD" "$SELF_BIN" status --json 2>&1)"; rc=$?
+  check_rc "status-json-rc" $rc 0
+  check_has "status-json-sha" "$out" '"sha": "1111111111111111111111111111111111111111"'
+  check_has "status-json-features" "$out" '"features": "telegram,code-graph"'
+
   out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" OC_DEPLOY_GH="$SD/gh" "$SELF_BIN" watch 2>&1)"; rc=$?
   check_rc "watch-alert-rc" $rc 2
   check_has "watch-alert-line" "$out" "WATCH-ALERT"
@@ -1724,6 +1737,90 @@ watch_run() { # explicit `oc-deploy watch [--with-delta]` ; exit 0 clean | 2 str
   exit "$TRIP_RC"
 }
 
+# ----------------------------------------------------------------- status --
+status_run() {
+  local json_out=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json_out=1 ;;
+      -h|--help) echo "usage: oc-deploy status [--json]"; exit 0 ;;
+      *) die 1 "status: unknown arg: $1" ;;
+    esac
+    shift || true
+  done
+
+  local dep_sha="" dep_ts="" dep_stage="" dep_features="" dep_run="" dep_target=""
+  if [ -f "$DEPLOYED_META" ]; then
+    dep_sha="$(jq -r '.sha // empty' "$DEPLOYED_META" 2>/dev/null || true)"
+    dep_ts="$(jq -r '.ts // empty' "$DEPLOYED_META" 2>/dev/null || true)"
+    dep_stage="$(jq -r '.stage // empty' "$DEPLOYED_META" 2>/dev/null || true)"
+    dep_features="$(jq -r '.features // empty' "$DEPLOYED_META" 2>/dev/null || true)"
+    dep_run="$(jq -r '.run_id // empty' "$DEPLOYED_META" 2>/dev/null || true)"
+    dep_target="$(jq -r '.target_host // empty' "$DEPLOYED_META" 2>/dev/null || true)"
+  fi
+  if [ -z "$dep_sha" ] && [ -f "$DEPLOYED" ]; then
+    dep_sha="$(cat "$DEPLOYED" 2>/dev/null | tr -d ' \n\r\t' || true)"
+  fi
+
+  local daemon_pid="" daemon_uptime="" daemon_status="stopped"
+  daemon_pid="$(pgrep -f "opencrabs.*daemon|target/release/opencrabs" 2>/dev/null | head -1 || true)"
+  if [ -z "$daemon_pid" ]; then
+    daemon_pid="$(pgrep -f "opencrabs" 2>/dev/null | grep -v "^$$" | head -1 || true)"
+  fi
+  if [ -n "$daemon_pid" ] && kill -0 "$daemon_pid" 2>/dev/null; then
+    daemon_status="running"
+    daemon_uptime="$(ps -p "$daemon_pid" -o etime= 2>/dev/null | tr -d ' ' || true)"
+  fi
+
+  local current_stage="$(stage)"
+
+  local last_journal="" last_journal_step="" last_journal_verdict=""
+  if [ -d "$STATE_DIR/oc-deploy/journal" ]; then
+    last_journal="$(ls -t "$STATE_DIR/oc-deploy/journal"/swap-*.jsonl 2>/dev/null | head -1 || true)"
+    if [ -n "$last_journal" ] && [ -f "$last_journal" ]; then
+      last_journal_step="$(tail -1 "$last_journal" | jq -r '.step // empty' 2>/dev/null || true)"
+      last_journal_verdict="$(tail -1 "$last_journal" | jq -r '.status // empty' 2>/dev/null || true)"
+    fi
+  fi
+
+  if [ "$json_out" = 1 ]; then
+    jq -n \
+      --arg sha "${dep_sha:-unknown}" \
+      --arg ts "${dep_ts:-unknown}" \
+      --arg stage "${current_stage:-unknown}" \
+      --arg features "${dep_features:-unknown}" \
+      --arg run "${dep_run:-unknown}" \
+      --arg target "${dep_target:-unknown}" \
+      --arg daemon_status "$daemon_status" \
+      --arg daemon_pid "${daemon_pid:-}" \
+      --arg daemon_uptime "${daemon_uptime:-}" \
+      --arg last_swap_journal "${last_journal:-}" \
+      --arg last_swap_step "${last_journal_step:-}" \
+      --arg last_swap_verdict "${last_journal_verdict:-}" \
+      '{deployed:{sha:$sha, ts:$ts, stage:$stage, features:$features, run_id:$run, target_host:$target}, daemon:{status:$daemon_status, pid:(if $daemon_pid == "" then null else ($daemon_pid|tonumber) end), uptime:$daemon_uptime}, last_swap:{journal:$last_swap_journal, step:$last_swap_step, verdict:$last_swap_verdict}}'
+  else
+    echo "DEPLOYMENT STATUS"
+    echo "  Deployed SHA:    ${dep_sha:-unknown}"
+    echo "  Timestamp:       ${dep_ts:-unknown}"
+    echo "  Current Stage:   ${current_stage:-unknown}"
+    echo "  Features:        ${dep_features:-unknown}"
+    echo "  Carrier Run:     ${dep_run:-unknown}"
+    echo "  Target Host:     ${dep_target:-unknown}"
+    echo "DAEMON"
+    echo "  Status:          $daemon_status"
+    if [ "$daemon_status" = "running" ]; then
+      echo "  PID:             $daemon_pid"
+      echo "  Uptime:          $daemon_uptime"
+    fi
+    if [ -n "$last_journal" ]; then
+      echo "LAST SWAP"
+      echo "  Journal:         $last_journal"
+      echo "  Step/Verdict:    ${last_journal_step:-unknown} / ${last_journal_verdict:-unknown}"
+    fi
+  fi
+  return 0
+}
+
 # KILL FILE brake — invoked at the top of every REAL-mode arm of the dispatch
 # case below, never from arg parsing (contract fix 2026-09-11, owner word via
 # HQ d72bd52d). It used to run as "the first line of EVERY invocation", which
@@ -1741,12 +1838,13 @@ kill_brake() {
 
 MODE="${1:-}"; [ $# -gt 0 ] && shift
 # C-F5 (v0.4.71): --help / -h exits 0 on stdout, before any validation
-case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
+case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
 # issue #24 D1: contributors takes its own arg shape (positional range /
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. contributors is RETIRED (dies rc 1); the
 # kill-file brake now lives in the real-mode dispatch arms, below.
 if [ "$MODE" = contributors ]; then contributors_run "$@"; exit $?; fi
+if [ "$MODE" = status ]; then status_run "$@"; exit $?; fi
 SHA=""; FEATURES=""; FEATURES_EXPLICIT=0; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0; ALLOW_DROP=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
 WAIT_SECS=0; NOTIFY_SESSION=""   # C-#2: poll --wait / --notify-session
 while [ $# -gt 0 ]; do
@@ -1762,7 +1860,7 @@ while [ $# -gt 0 ]; do
     --wait)     WAIT_SECS="${2:-}"; shift ;;   # C-#2: poll blocks until a NEW green run (or timeout, rc 5)
     --notify-session) [ -n "${2:-}" ] || die 2 "--notify-session needs a session uuid"; NOTIFY_SESSION="${2:-}"; shift ;;   # C-#2: session uuid woken on handoff/timeout; guard lens C MED-3 (v0.4.79)
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
-    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
     *)          die 1 "unknown arg: $1" ;;
   esac
   shift || true
@@ -2121,6 +2219,10 @@ case "$MODE" in
     kill_brake
     watch_run "${WITH_DELTA:-0}"
     ;;
+  # ---------------------------------------------------------------- status --
+  status)
+    status_run "$@"
+    ;;
   --selftest|selftest) selftest "$@" ;;
-  *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)" ;;
+  *) die 1 "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)" ;;
 esac

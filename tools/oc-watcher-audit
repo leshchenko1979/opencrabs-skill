@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-watcher-audit — C2 (Duty-6 Cycle-5 review, 2026-09-11): detached watcher
+# and background execution compliance audit.
+#
+# Scans detached task definitions in tmp/detached/*.json for policy violations:
+#   1. UNTHROTTLED_WATCH: 'gh run watch' executed without '--interval 30' or '--interval 60'
+#   2. NOHUP_SPAWN: 'nohup' used for background execution (bypasses detached tasks)
+#   3. HANDROLLED_SLEEP_LOOP: Hand-rolled 'while ... sleep' or 'for ... sleep' pollers
+#
+# Usage:
+#   oc-watcher-audit [--since <ts>] [--json] [--dir <dir>] | --selftest
+#
+# Exit codes:
+#   0 clean (zero violations)
+#   1 violations found (audit alarm)
+#   2 usage / bad argument
+#   3 directory missing or unreadable
+# =============================================================================
+set -u
+set -o pipefail
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-watcher-audit" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+PROG="oc-watcher-audit"
+DEFAULT_DIR="${OC_DETACHED_DIR:-/root/.opencrabs/profiles/ops/tmp/detached}"
+
+usage() {
+  echo "usage: $PROG [--since <ts>] [--json] [--dir <dir>] | --selftest" >&2
+  exit 2
+}
+
+do_selftest() {
+  local d
+  d="$(mktemp -d)" || exit 3
+  local SELF
+  SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+  local pass=0 fail=0
+
+  assert_eq() {
+    local name="$1" exp="$2" act="$3"
+    if [ "$exp" = "$act" ]; then
+      echo "  PASS: $name"
+      pass=$((pass + 1))
+    else
+      echo "  FAIL: $name (expected '$exp', got '$act')" >&2
+      fail=$((fail + 1))
+    fi
+  }
+
+  echo "=== oc-watcher-audit selftest ==="
+
+  # Test 1: Empty dir -> 0
+  mkdir -p "$d/t1"
+  local rc1=0
+  "$SELF" --dir "$d/t1" >/dev/null 2>&1 || rc1=$?
+  assert_eq "empty dir returns 0" "0" "$rc1"
+
+  # Test 2: Compliant task -> 0
+  mkdir -p "$d/t2"
+  cat > "$d/t2/clean.json" <<'JSON'
+{
+  "id": "task-clean-1",
+  "session_id": "sess-1",
+  "task": "gh run watch 12345 --repo leshchenko1979/opencrabs --interval 30 --exit-status",
+  "spawned_at": "2026-09-11T10:00:00Z"
+}
+JSON
+  local rc2=0
+  "$SELF" --dir "$d/t2" >/dev/null 2>&1 || rc2=$?
+  assert_eq "compliant watch returns 0" "0" "$rc2"
+
+  # Test 3: Unthrottled watch -> 1
+  mkdir -p "$d/t3"
+  cat > "$d/t3/bad_watch.json" <<'JSON'
+{
+  "id": "task-bad-1",
+  "session_id": "sess-bad",
+  "task": "gh run watch 99999 --repo leshchenko1979/opencrabs --exit-status",
+  "spawned_at": "2026-09-11T10:00:00Z"
+}
+JSON
+  local rc3=0
+  local out3
+  out3="$("$SELF" --dir "$d/t3" 2>/dev/null)" || rc3=$?
+  assert_eq "unthrottled watch returns 1" "1" "$rc3"
+  echo "$out3" | grep -q "UNTHROTTLED_WATCH"
+  assert_eq "reports UNTHROTTLED_WATCH violation" "0" "$?"
+
+  # Test 4: Nohup spawn -> 1
+  mkdir -p "$d/t4"
+  cat > "$d/t4/bad_nohup.json" <<'JSON'
+{
+  "id": "task-nohup-1",
+  "session_id": "sess-nohup",
+  "task": "nohup /tmp/test.sh >/tmp/out.log 2>&1 &",
+  "spawned_at": "2026-09-11T10:00:00Z"
+}
+JSON
+  local rc4=0
+  local out4
+  out4="$("$SELF" --dir "$d/t4" 2>/dev/null)" || rc4=$?
+  assert_eq "nohup spawn returns 1" "1" "$rc4"
+  echo "$out4" | grep -q "NOHUP_SPAWN"
+  assert_eq "reports NOHUP_SPAWN violation" "0" "$?"
+
+  # Test 5: Handrolled sleep loop -> 1
+  mkdir -p "$d/t5"
+  cat > "$d/t5/bad_loop.json" <<'JSON'
+{
+  "id": "task-loop-1",
+  "session_id": "sess-loop",
+  "task": "while kill -0 1234; do sleep 10; done",
+  "spawned_at": "2026-09-11T10:00:00Z"
+}
+JSON
+  local rc5=0
+  local out5
+  out5="$("$SELF" --dir "$d/t5" 2>/dev/null)" || rc5=$?
+  assert_eq "handrolled loop returns 1" "1" "$rc5"
+  echo "$out5" | grep -q "HANDROLLED_SLEEP_LOOP"
+  assert_eq "reports HANDROLLED_SLEEP_LOOP violation" "0" "$?"
+
+  # Test 6: gh run watch --help is clean -> 0
+  mkdir -p "$d/t6"
+  cat > "$d/t6/help_watch.json" <<'JSON'
+{
+  "id": "task-help-1",
+  "session_id": "sess-help",
+  "task": "gh run watch --help",
+  "spawned_at": "2026-09-11T10:00:00Z"
+}
+JSON
+  local rc6=0
+  "$SELF" --dir "$d/t6" >/dev/null 2>&1 || rc6=$?
+  assert_eq "gh run watch --help returns 0" "0" "$rc6"
+
+  # Test 7: --since filters older items -> 0
+  local rc7=0
+  "$SELF" --dir "$d/t3" --since "2026-09-11T12:00:00Z" >/dev/null 2>&1 || rc7=$?
+  assert_eq "--since filtering out old task returns 0" "0" "$rc7"
+
+  # Test 8: --json emits valid JSON array
+  local json_out
+  json_out="$("$SELF" --dir "$d/t3" --json 2>/dev/null || true)"
+  local json_valid=1
+  python3 -c "import json, sys; data=json.loads(sys.argv[1]); sys.exit(0 if isinstance(data, list) and len(data) == 1 else 1)" "$json_out" && json_valid=0
+  assert_eq "--json outputs valid JSON array" "0" "$json_valid"
+
+  # Test 9: Missing dir -> 3
+  local rc9=0
+  "$SELF" --dir "$d/nonexistent_dir_12345" >/dev/null 2>&1 || rc9=$?
+  assert_eq "missing dir returns 3" "3" "$rc9"
+
+  # Test 10: Unknown flag -> 2
+  local rc10=0
+  "$SELF" --unknown-flag-xyz >/dev/null 2>&1 || rc10=$?
+  assert_eq "unknown flag returns 2" "2" "$rc10"
+
+  rm -rf "$d"
+  echo "oc-watcher-audit selftest: PASS=$pass FAIL=$fail"
+  [ "$fail" -eq 0 ] || exit 1
+  exit 0
+}
+
+# --- Arg parse ---
+SINCE=""
+JSON_MODE=0
+TARGET_DIR="$DEFAULT_DIR"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      echo "usage: $PROG [--since <ts>] [--json] [--dir <dir>] | --selftest"
+      exit 0
+      ;;
+    --selftest|selftest)
+      do_selftest
+      ;;
+    --since)
+      shift
+      [ $# -gt 0 ] || usage
+      SINCE="$1"
+      ;;
+    --json)
+      JSON_MODE=1
+      ;;
+    --dir)
+      shift
+      [ $# -gt 0 ] || usage
+      TARGET_DIR="$1"
+      ;;
+    *)
+      usage
+      ;;
+  esac
+  shift
+done
+
+if [ ! -d "$TARGET_DIR" ]; then
+  echo "$PROG: directory not found or unreadable: $TARGET_DIR" >&2
+  exit 3
+fi
+
+# Execute audit via python3
+python3 - "$TARGET_DIR" "$SINCE" "$JSON_MODE" << 'PYEOF'
+import sys, os, glob, json, re
+
+target_dir = sys.argv[1]
+since_ts = sys.argv[2] if len(sys.argv) > 2 else ""
+json_mode = (sys.argv[3] == "1") if len(sys.argv) > 3 else False
+
+def check_task(task_text):
+    violations = []
+    if not task_text:
+        return violations
+    
+    # 1. gh run watch
+    if re.search(r'\bgh\s+run\s+watch\b', task_text):
+        if not re.search(r'(--help\b|-h\b)', task_text):
+            if not re.search(r'(--interval\s+(30|60)\b|--interval=(30|60)\b|-i\s+(30|60)\b|-i=(30|60)\b)', task_text):
+                violations.append(("UNTHROTTLED_WATCH", "gh run watch lacking --interval 30|60"))
+                
+    # 2. nohup
+    if re.search(r'\bnohup\b', task_text):
+        violations.append(("NOHUP_SPAWN", "nohup is forbidden for detached execution"))
+        
+    # 3. handrolled sleep loop
+    if re.search(r'\bwhile\b[\s\S]*?\bsleep\b', task_text) or re.search(r'\bfor\b[\s\S]*?\bsleep\b', task_text):
+        violations.append(("HANDROLLED_SLEEP_LOOP", "hand-rolled sleep loop in background task"))
+        
+    return violations
+
+task_files = glob.glob(os.path.join(target_dir, "*.json"))
+results = []
+total_checked = 0
+
+for file_path in task_files:
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        continue
+        
+    task_id = str(data.get("id", os.path.basename(file_path).replace(".json", "")))
+    session_id = str(data.get("session_id", "unknown"))
+    spawned_at = str(data.get("spawned_at", data.get("created_at", "")))
+    task_cmd = str(data.get("task", data.get("command", "")))
+    
+    if since_ts and spawned_at and spawned_at < since_ts:
+        continue
+        
+    total_checked += 1
+    viols = check_task(task_cmd)
+    for vtype, detail in viols:
+        results.append({
+            "task_id": task_id,
+            "session_id": session_id,
+            "spawned_at": spawned_at,
+            "violation": vtype,
+            "detail": detail,
+            "command": task_cmd.strip().replace("\n", " ")[:120]
+        })
+
+if json_mode:
+    print(json.dumps(results, indent=2))
+else:
+    if results:
+        print(f"TASK_ID\tSESSION_ID\tSPAWNED_AT\tVIOLATION\tDETAIL\tCOMMAND")
+        for r in results:
+            print(f"{r['task_id']}\t{r['session_id']}\t{r['spawned_at']}\t{r['violation']}\t{r['detail']}\t{r['command']}")
+        print(f"\nAudit alarm: {len(results)} violations found across {total_checked} detached tasks checked.")
+    else:
+        print(f"Audit clean: 0 violations found across {total_checked} detached tasks checked.")
+
+sys.exit(1 if len(results) > 0 else 0)
+PYEOF
+AUDIT_RC=$?
+exit "$AUDIT_RC"

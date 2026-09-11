@@ -719,6 +719,14 @@ printf '%s' "$HOUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/
 # 62c. --help exits 0 (rc-contract row)
 bash "$HZ" --help >/dev/null 2>&1 && ok "oc-health --help rc=0" || bad "oc-health --help rc!=0"
 
+# ---- 63. oc-watcher-audit (detached watcher compliance audit, Cycle 5 Review C-2)
+section "oc-watcher-audit (detached watcher compliance audit)"
+run_selftest oc-watcher-audit
+if tool oc-watcher-audit; then
+  "$TOOLS_DIR/oc-watcher-audit" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/oc-watcher-audit" --help >/dev/null 2>&1 && ok "oc-watcher-audit --help rc=0" || bad "oc-watcher-audit --help rc!=0"
+fi
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \

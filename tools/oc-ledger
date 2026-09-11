@@ -1098,6 +1098,15 @@ EOF
   bash "$ME" events --n >/dev/null 2>&1; chk "events-n-novalue-rc2" 2 $?
   bash "$ME" events -h >/dev/null 2>&1; chk "events-help-rc0" 0 $?
   OC_LEDGER="$T/bad.json" bash "$ME" events >/dev/null 2>&1; chk "events-bad-ledger-rc3" 3 $?
+  # 71. grammar / suggestion hints and --verbs discovery
+  bash "$ME" --verbs > "$T/verbs.out" 2>/dev/null; chk "verbs-flag-rc0" 0 $?
+  chk "verbs-flag-contains-stamp" "true" "$(grep -qw stamp "$T/verbs.out" && echo true || echo false)"
+  chk "verbs-flag-contains-roster" "true" "$(grep -qw roster "$T/verbs.out" && echo true || echo false)"
+  out="$(bash "$ME" roster-enroll 2>&1 || true)"
+  chk "suggest-roster-enroll" "true" "$(echo "$out" | grep -q "did you mean 'enroll'?" && echo true || echo false)"
+  out="$(bash "$ME" roster-amend 2>&1 || true)"
+  chk "suggest-roster-amend" "true" "$(echo "$out" | grep -q "did you mean 'promote' or 'enroll'?" && echo true || echo false)"
+
   bash "$ME" events --since 2020-01-01T00:00:00Z > "$T/ev-s.out" 2>/dev/null; chk "events-since-past-rc" 0 $?
   chk "events-since-past-20" "20" "$(grep -c . "$T/ev-s.out")"
   # The compare is BYTE-lexicographic on t (== chronological for well-formed
@@ -1447,5 +1456,22 @@ case "$sub" in
   roster) cmd_roster "${rest[@]+"${rest[@]}"}" ;;
   events|tail) cmd_events "${rest[@]+"${rest[@]}"}" ;;
   selftest) cmd_selftest; exit $? ;;
-  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|retire|commit-pending|confirm|claim-ref|claims|lessons|roster|events|tail> | --selftest" ;;
+  --verbs)
+    echo "stamp sync check-version cadence ack enroll promote retire commit-pending confirm claim-ref claims lessons roster events tail"
+    exit 0
+    ;;
+  *)
+    case "$sub" in
+      claim) die 2 "unknown verb '$sub' — did you mean 'claim-ref' or 'claims'?" ;;
+      note|show|list) die 2 "unknown verb '$sub' — did you mean 'events' or 'stamp note'?" ;;
+      append|add|entry|record) die 2 "unknown verb '$sub' — did you mean 'stamp'?" ;;
+      roster-enroll) die 2 "unknown verb '$sub' — did you mean 'enroll'?" ;;
+      roster-amend|roster-update) die 2 "unknown verb '$sub' — did you mean 'promote' or 'enroll'?" ;;
+      roster-retire) die 2 "unknown verb '$sub' — did you mean 'retire'?" ;;
+      kinds) die 2 "unknown verb '$sub' — kinds are listed in --help" ;;
+      push-mirror) die 2 "unknown verb '$sub' — did you mean 'sync' or 'commit-pending'?" ;;
+      version-publish) die 2 "unknown verb '$sub' — did you mean 'sync --version <v>'?" ;;
+      *) die 2 "unknown verb '$sub' — usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|retire|commit-pending|confirm|claim-ref|claims|lessons|roster|events|tail> | --verbs | --selftest" ;;
+    esac
+    ;;
 esac

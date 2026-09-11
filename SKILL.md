@@ -41,6 +41,40 @@ owner order 2026-09-02. Load it before ANY opencrabs-dev work. Executing procedu
 policy's merge leg: `upstream-merge-runbook.md` (freeze gate, roles, conflict
 classes, migration-union rule, semantic-triage defaults).
 
+## STEP ZERO — establish the role (mandatory on every load)
+
+Ask the operator which role this session employs before doing anything:
+
+> **Editor, HQ, Triage, or Toolsmith?** (Compiler: archived — say "re-enable compiler" to load `tools/archive/compiler.md`.)
+
+| Role | Owns | Procedure file |
+|------|------|----------------|
+| **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR filed on smoke PASS (procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
+| **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + HQ watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
+| **HQ** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub = TEN reviewers, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `hq.md` |
+| **TRIAGE** | Intake & hygiene: idea/quirk intake, issue assignment, repo hygiene patrols, rebase/merge execution delegated from HQ | `triage.md` |
+| **TOOLSMITH** | CLI tools author & maintainer: owns `tools/` code, test battery stewardship | `toolsmith.md` |
+
+Roles **DO NOT intersect**:
+
+- The Editor NEVER installs/swaps binaries, NEVER restarts daemons, NEVER dispatches
+  BUILD runs — shipping goes through `oc-deploy ship` (S3). BUILD TRIGGERS = exactly
+  TWO with NO exceptions (§Hard rules, A3 ruling 2026-08-29); the Phase-7 PR-head
+  gate is the step-2c pr-checks dispatch — a lint/test gate, not a build trigger.
+- Hand-off point: the Editor produces (branch pushed AND fast-forwarded into fork
+  `main` + reported shas); `oc-deploy ship` takes it from there (dispatch → poll
+  → swap-execute, consent eliminated 2026-08-28). If the run is RED, `oc-deploy`
+  reports evidence and stops — fixing code is always Editor work.
+- The TRIAGE lane NEVER edits skill files (single-writer law unchanged — the
+  HQ is the sole author), NEVER settles protocol disputes (rulings =
+  HQ Duty 5), NEVER executes builds/swaps (strict routing, triage.md).
+- The TOOLSMITH lane owns `tools/` CODE only (v0.4.87 carve-out) — skill markdown +
+  fleet-directives stay HQ-only, daemon/carrier source stays Editor territory,
+  NEVER settles protocol disputes (rulings = HQ Duty 5).
+
+If the request mixes roles (e.g. "fix X and deploy it"), split into separate
+role loads — do not fuse the roles in one pass without Alexey saying so explicitly.
+
 ## Canonical tooling (v0.4.12, PROCESS-TOOL ownership)
 
 Mechanical rituals the roles once hand-ran are now single commands in `tools/`
@@ -101,40 +135,6 @@ bump; tools are never edited without re-running it.
 Every tool in `tools/` appends ONE JSONL line on exit (aggregate; per-run
 journals stay per-run). Path, schema, suppression rules, and verified jq
 recipes: `tools/RC-CONTRACT.md` §Unified tools log.
-
-## STEP ZERO — establish the role (mandatory on every load)
-
-Ask the operator which role this session employs before doing anything:
-
-> **Editor, HQ, Triage, or Toolsmith?** (Compiler: archived — say "re-enable compiler" to load `tools/archive/compiler.md`.)
-
-| Role | Owns | Procedure file |
-|------|------|----------------|
-| **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR filed on smoke PASS (procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
-| **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + HQ watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
-| **HQ** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub = TEN reviewers, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `hq.md` |
-| **TRIAGE** | Interrupt lane (carved out of HQ at v0.4.86, owner "Go with Option A"): idea-box + `QUIRK:` tool-problem intake (same-turn ACK, ledger stamps), evidence verification, fix routing to owning editor, new-editor creation, TOOL_ACCUM / cadence enforcement; escalates semantic/KERNEL to HQ — NEVER edits skill files | `triage.md` |
-| **TOOLSMITH** | CLI tool lane (carved out at v0.4.87, owner "Go toolsmith" 2026-09-06; promoted from the carrier-tools editor row): owns `tools/` CODE — makes and fixes the CLI tools every other role uses (`oc-ledger`, `oc-deploy`, `oc-prchecks`, `oc-tg-audit`, battery); daemon/carrier source stays EDITOR territory, skill markdown stays HQ-only — NEVER edits skill files | `toolsmith.md` |
-
-Roles **DO NOT intersect**:
-
-- The Editor NEVER installs/swaps binaries, NEVER restarts daemons, NEVER dispatches
-  BUILD runs — shipping goes through `oc-deploy ship` (S3). BUILD TRIGGERS = exactly
-  TWO with NO exceptions (§Hard rules, A3 ruling 2026-08-29); the Phase-7 PR-head
-  gate is the step-2c pr-checks dispatch — a lint/test gate, not a build trigger.
-- Hand-off point: the Editor produces (branch pushed AND fast-forwarded into fork
-  `main` + reported shas); `oc-deploy ship` takes it from there (dispatch → poll
-  → swap-execute, consent eliminated 2026-08-28). If the run is RED, `oc-deploy`
-  reports evidence and stops — fixing code is always Editor work.
-- The TRIAGE lane NEVER edits skill files (single-writer law unchanged — the
-  HQ is the sole author), NEVER settles protocol disputes (rulings =
-  HQ Duty 5), NEVER executes builds/swaps (strict routing, triage.md).
-- The TOOLSMITH lane owns `tools/` CODE only (v0.4.87 carve-out) — skill markdown +
-  fleet-directives stay HQ-only, daemon/carrier source stays Editor territory,
-  NEVER settles protocol disputes (rulings = HQ Duty 5).
-
-If the request mixes roles (e.g. "fix X and deploy it"), split into separate
-role loads — do not fuse the roles in one pass without Alexey saying so explicitly.
 
 ## Session-notify loop (since v0.3.3)
 

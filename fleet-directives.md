@@ -276,7 +276,7 @@ Work notifications go **sender → resource-owner directly**. No intermediary la
 - **Rule 4 — Triage re-roles to auditor:** Triage no longer relays work between lanes. It runs periodic ledger sweeps for unclaimed/stale dispatches and escalates orphans **directly to the sender** (not through HQ). Verify-unclaimed (grep open claim-refs before dispatch) STAYS with Triage — it is an audit, not a relay.
 - **Rule 5 — Escalation is direct too:** a dispatch unacked past its stated ack deadline is escalated by the sender straight to HQ. No third-lane relay.
 - **Exceptions (not relays):** skill-change broadcast waves (oc-notify-fanout) and HQ rulings/broadcasts are fanout, not relayed work. The owner's design gate (v0.4.128) and roster authority stay with HQ.
-- Backed out in: editor.md §Execution discipline (one line, pointer), triage.md (T2 re-role note).
+- Backed out in: editor.md §Telegram surface law (one line, pointer), triage.md (T2 re-role note).
 
 ## Every turn ends with a "what now/next?" answer (owner order 2026-09-05 ~07:29Z)
 

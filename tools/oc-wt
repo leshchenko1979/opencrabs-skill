@@ -35,7 +35,6 @@ trap 'oc_log_finish $?' EXIT
 
 PROG="$(basename "$0")"
 GIT_BIN="${OC_GIT:-git}"
-INDEX_TOOL="${OC_INDEX_WORKTREE:-$(cd "$(dirname "$0")" && pwd)/oc-index-worktree}"
 REPO="${HOME}/opencrabs"
 BASE="origin/main"; BASE_EXPLICIT=0
 FORCE=0
