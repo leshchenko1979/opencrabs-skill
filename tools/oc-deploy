@@ -58,6 +58,10 @@
 # Deps: git, gh, jq, curl; oc-order-validate (ship execute);
 #       oc-artifact-verify + oc-seal-state (swap-execute real mode)
 # =============================================================================
+# --- oc-snap guard: run from an immutable mirror (fork #167; tools/lib/oc-snap.sh)
+_OC_SNAP="$(cd "$(dirname "$0")" && pwd)/lib/oc-snap.sh"
+if [ -f "$_OC_SNAP" ]; then . "$_OC_SNAP"; oc_snap_guard "$0" "$@"; fi
+
 set -uo pipefail
 _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-deploy" "$@"; else oc_log_finish() { :; }; fi

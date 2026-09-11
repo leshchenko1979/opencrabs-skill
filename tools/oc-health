@@ -153,6 +153,17 @@ selftest_impl() {
   [ -e "$T/tmp/oc-old" ] && bad "stale-tmp-reaped" || ok
   [ -e "$T/tmp/oc-fresh" ] && ok || bad "fresh-tmp-kept"
 
+  # 8b. snapshot mirrors: a dead-pid mirror is reaped, a LIVE-pid mirror is
+  #     NEVER reaped (fork #167). This is the guard's own safety rule: the sweep
+  #     must not pull a mirror out from under a running chain.
+  mkdir -p "$T/tmp/oc-snap-demo-999999" "$T/tmp/oc-snap-demo-$$"
+  RC=0; OUT="$(run 2>&1)" || RC=$?
+  case "$OUT" in *"dead mirror"*) ok ;; *) bad "dead-mirror-detected: $OUT" ;; esac
+  run --reap >/dev/null 2>&1
+  [ -e "$T/tmp/oc-snap-demo-999999" ] && bad "dead-mirror-reaped" || ok
+  [ -e "$T/tmp/oc-snap-demo-$$" ] && ok || bad "live-mirror-kept"
+  rm -rf "$T/tmp/oc-snap-demo-$$"
+
   # 9. --json is the whole stdout contract (no 'ok' chatter polluting it)
   RC=0; OUT="$(run --json 2>/dev/null)" || RC=$?
   if printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then ok; else bad "json-parse: $OUT"; fi
@@ -358,19 +369,41 @@ else
 fi
 
 # ---- 9. temp accumulation --------------------------------------------------
+# Snapshot mirrors (oc-snap-<tool>-<pid>, fork #167) are EXCLUDED from the age
+# rule below. A live chain legitimately holds its mirror for 30+ minutes, so an
+# age-based rm -rf would pull it out from under a running tool — the exact
+# failure class the snapshot guard exists to prevent. They are reaped pid-aware
+# instead: a mirror goes only when its name pid is GONE *and* no live process
+# references the path (the guard forks children that carry the path in argv with
+# their own pids, so a dead name pid alone does not prove the mirror is unused).
 n_tmp=0; reap_tmp=0
 for f in $TMP_GLOB; do
   [ -e "$f" ] || continue
+  # Only a real mirror (oc-snap-<tool>-<pid>, name ending in digits) is exempt.
+  # An apply backup (oc-snap-apply-<ts>, ends in Z) still follows the age rule.
+  case "${f##*/}" in oc-snap-*-*[0-9]) continue ;; esac
   age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
   [ "$age_h" -ge "$TMP_MAX_AGE_H" ] || continue
   n_tmp=$((n_tmp + 1))
   if [ "$REAP" = "1" ]; then rm -rf "$f"; reap_tmp=$((reap_tmp + 1)); fi
 done
-if [ "$reap_tmp" -gt 0 ]; then
-  REAPED=$((REAPED + reap_tmp))
-  add_finding 9 SAFE stale-tmp "removed $reap_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h"
-elif [ "$n_tmp" -gt 0 ]; then
-  add_finding 9 SAFE stale-tmp "$n_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h — rerun with --reap"
+
+n_mir=0; reap_mir=0
+if [ -f "$TOOLS_DIR/lib/oc-snap.sh" ]; then
+  . "$TOOLS_DIR/lib/oc-snap.sh"
+  MR="${OC_HEALTH_MIRROR_ROOT:-$(dirname "$TMP_GLOB")}"
+  if [ "$REAP" = "1" ]; then
+    reap_mir="$(oc_snap_reap "$MR")"
+  else
+    n_mir="$(oc_snap_reap --dry-run "$MR")"
+  fi
+fi
+
+if [ "$reap_tmp" -gt 0 ] || [ "$reap_mir" -gt 0 ]; then
+  REAPED=$((REAPED + reap_tmp + reap_mir))
+  add_finding 9 SAFE stale-tmp "removed $reap_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h + $reap_mir dead mirror(s)"
+elif [ "$n_tmp" -gt 0 ] || [ "$n_mir" -gt 0 ]; then
+  add_finding 9 SAFE stale-tmp "$n_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h, $n_mir dead mirror(s) — rerun with --reap"
 else
   clean_line "tmp: no stale /tmp/oc-*"
 fi

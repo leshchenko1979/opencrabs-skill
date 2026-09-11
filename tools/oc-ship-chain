@@ -59,6 +59,10 @@
 #   OC_SHIPCHAIN_LEDGER  path for chain journal lines (default: oc-ledger)
 #   OC_TOOLS_NOLOG=1     suppress ledger stamps (battery/selftest)
 
+# --- oc-snap guard: run from an immutable mirror (fork #167; tools/lib/oc-snap.sh)
+_OC_SNAP="$(cd "$(dirname "$0")" && pwd)/lib/oc-snap.sh"
+if [ -f "$_OC_SNAP" ]; then . "$_OC_SNAP"; oc_snap_guard "$0" "$@"; fi
+
 set -e
 set -u
 
