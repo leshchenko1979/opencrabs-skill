@@ -693,6 +693,29 @@ printf '%s' "$NFOUT" | grep -q "sent=0" \
   && ok "fanout --roles filter respected" \
   || bad "fanout --roles filter leaked sends"
 
+# ---- 62. oc-health (owner-ordered hourly health & cleanliness sweep, 2026-09-11)
+section "oc-health (hourly health & cleanliness sweep)"
+HZ="$TOOLS_DIR/oc-health"
+# 62a. hermetic selftest: fixture state dir + tmp glob + sqlite DB + git repos,
+#      so the reaping cases run without touching live state. 19 assertions cover
+#      stale-lock reap, live-pid never-reap, backup keep-window, tmp age gate,
+#      JSON contract, cron DM-leak vs blank-deliver_to, orphan worktrees.
+HOUT="$(bash "$HZ" --selftest 2>&1)"; HRC=$?
+[ "$HRC" -eq 0 ] && ok "oc-health --selftest PASS (19 assertions)" \
+  || bad "oc-health --selftest rc=$HRC: $(printf '%s' "$HOUT" | tail -3)"
+# 62b. read-only run must NOT mutate: no --reap, no writes; rc is 0 (clean) or 1
+#      (findings) — never 2/3 on a healthy box.
+HOUT="$(bash "$HZ" --json 2>&1)"; HRC=$?
+case "$HRC" in
+  0|1) ok "oc-health read-only rc=$HRC (0 clean / 1 findings)" ;;
+  *)   bad "oc-health read-only rc=$HRC (want 0|1)" ;;
+esac
+printf '%s' "$HOUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
+  && ok "oc-health --json parses (stdout is the whole contract)" \
+  || bad "oc-health --json not parseable: $(printf '%s' "$HOUT" | head -2)"
+# 62c. --help exits 0 (rc-contract row)
+bash "$HZ" --help >/dev/null 2>&1 && ok "oc-health --help rc=0" || bad "oc-health --help rc!=0"
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \
