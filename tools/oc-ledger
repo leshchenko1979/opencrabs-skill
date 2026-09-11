@@ -22,6 +22,14 @@
 #                                          sessions (profile DB, read-only).
 #                                          rc 1 = NO-MATCH verdict (never a
 #                                          silent empty). Read-only.
+#   events|tail [--n N] [--kind K] [--actor U] [--since T] [--json] [--full]
+#                                          recent ledger rows, newest last
+#                                          (HQ request 2026-09-11: playbooks
+#                                          kept guessing this verb while the
+#                                          usage line named none — a guess
+#                                          reads as "no such event", the same
+#                                          phantom-verb class as `roster`).
+#                                          rc 1 = NO-MATCH verdict. Read-only.
 #   sync --version <v> [--why <text>] [--catch-up]
 #                                          ONE atomic write: 3 version fields
 #                                          + skill-bump event; battery-receipt
@@ -52,7 +60,7 @@
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
-#   --selftest                             fixture suite (139 cases)
+#   --selftest                             fixture suite (167 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -553,7 +561,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (90 cases) ------------------------------------------------------
+# ---- selftest (167 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -833,6 +841,47 @@ EOF
     OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live --json >/dev/null 2>&1; chk "roster-live-json-nomatch-rc1" 1 $?
     OC_LEDGER_DB="$T/nope.db" bash "$ME" roster --live >/dev/null 2>&1; chk "roster-live-db-missing-rc3" 3 $?
   fi
+  # 67-70 (2026-09-11, HQ request): events|tail — the read verb the playbooks
+  # kept guessing while the usage line named no event reader at all. Assertions
+  # are relative to jq over the same fixture file, never to a frozen count.
+  bash "$ME" events --n 3 > "$T/ev.out" 2>/dev/null; chk "events-rc" 0 $?
+  chk "events-n-count" "3" "$(grep -c . "$T/ev.out")"
+  chk "events-newest-last" "$(jq -r '.events[-1].n' "$OC_LEDGER")" "$(tail -1 "$T/ev.out" | cut -f1)"
+  bash "$ME" tail --n 1 > "$T/ev-alias.out" 2>/dev/null; chk "events-tail-alias-rc" 0 $?
+  chk "events-tail-alias-count" "1" "$(grep -c . "$T/ev-alias.out")"
+  bash "$ME" events --kind zzznope >/dev/null 2>&1; chk "events-nomatch-rc1" 1 $?
+  bash "$ME" events --kind incident > "$T/ev-k.out" 2>/dev/null; chk "events-kind-rc" 0 $?
+  chk "events-kind-only" "0" "$(awk -F'\t' '$3 != "incident"' "$T/ev-k.out" | grep -c .)"
+  # .by is "role uuid" for a rostered actor — the filter is a substring match
+  OC_ACTOR="$W2" bash "$ME" stamp note "EVENTS-FIXTURE actor probe" >/dev/null 2>&1
+  bash "$ME" events --actor "$W2" > "$T/ev-a.out" 2>/dev/null; chk "events-actor-rc" 0 $?
+  chk "events-actor-only" "0" "$(awk -F'\t' -v u="$W2" 'index($4,u)==0' "$T/ev-a.out" | grep -c .)"
+  bash "$ME" events --json > "$T/ev.json" 2>/dev/null; chk "events-json-rc" 0 $?
+  chk "events-json-array" "true" "$(jq 'type=="array" and length > 0 and length <= 20' "$T/ev.json" 2>/dev/null)"
+  chk "events-json-fields" "true" "$(jq '[.[-1] | has("n") and has("t") and has("kind") and has("by") and has("what")] | .[0]' "$T/ev.json" 2>/dev/null)"
+  bash "$ME" events --n 0 >/dev/null 2>&1; chk "events-n0-rc2" 2 $?
+  bash "$ME" events --n abc >/dev/null 2>&1; chk "events-n-nonint-rc2" 2 $?
+  bash "$ME" events --bogus >/dev/null 2>&1; chk "events-unknown-flag-rc2" 2 $?
+  bash "$ME" events --n >/dev/null 2>&1; chk "events-n-novalue-rc2" 2 $?
+  bash "$ME" events -h >/dev/null 2>&1; chk "events-help-rc0" 0 $?
+  OC_LEDGER="$T/bad.json" bash "$ME" events >/dev/null 2>&1; chk "events-bad-ledger-rc3" 3 $?
+  bash "$ME" events --since 2020-01-01T00:00:00Z > "$T/ev-s.out" 2>/dev/null; chk "events-since-past-rc" 0 $?
+  chk "events-since-past-20" "20" "$(grep -c . "$T/ev-s.out")"
+  # The compare is BYTE-lexicographic on t (== chronological for well-formed
+  # ISO). The fixture, like a hand-edited ledger, carries a corrupt t="x" from
+  # an earlier case — "x" sorts above every digit-leading timestamp, so the
+  # no-match sentinel has to sort above "x" too, not just above 2099.
+  bash "$ME" events --since zzzz >/dev/null 2>&1; chk "events-since-none-rc1" 1 $?
+  # truncation: 160 by default, exact under --full, and a clipped row is nudged
+  # on stderr (a SILENT clip is how a claim gets built on half a line).
+  LONG="$(printf 'x%.0s' $(seq 1 300))"
+  bash "$ME" stamp note "$LONG" >/dev/null 2>&1
+  bash "$ME" events --n 1 > "$T/ev-tr.out" 2>"$T/ev-tr.err"; chk "events-trunc-rc" 0 $?
+  chk "events-trunc-160" "160" "$(awk -F'\t' '{print length($5)}' "$T/ev-tr.out")"
+  grep -q "truncated" "$T/ev-tr.err" && ok || bad "events-trunc-nudge"
+  bash "$ME" events --n 1 --full > "$T/ev-full.out" 2>"$T/ev-full.err"; chk "events-full-rc" 0 $?
+  chk "events-full-300" "300" "$(awk -F'\t' '{print length($5)}' "$T/ev-full.out")"
+  grep -q "truncated" "$T/ev-full.err" && bad "events-full-no-nudge" || ok
   rm -rf "$T"
   echo "oc-ledger selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
@@ -1061,9 +1110,82 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   exit 0
 }
 
+# ---- events / tail (read-only; HQ request 2026-09-11) ------------------------
+cmd_events() { # oc-ledger events|tail [--n N] [--kind K] [--actor U] [--since T]
+  #                          [--json] [--full]
+  # Read the RECENT tail of the ledger. HQ playbooks kept assuming this verb
+  # (`oc-ledger tail`) while the usage line listed NO read verb for events —
+  # the same phantom-verb family as `roster` (fixed the same day, lane d18ce16a)
+  # and the `oc-ledger show` the oc-ship-chain help used to name. The failure
+  # mode is what makes it worth a verb: a guess gets the usage branch (rc 2) or
+  # an empty result, and an auditor reads that as "the ledger has no such
+  # event" instead of "wrong verb". `tail` is an accepted ALIAS.
+  # READ-ONLY: no lock, no mutation, never journals a write.
+  #   --n N      how many rows, counted back from the NEWEST (default 20, >=1)
+  #   --kind K   exact kind match. NOT validated against KINDS on purpose:
+  #              retired or never-admitted kinds must stay READABLE (that is
+  #              how you audit a kind that a writer was stamping blind).
+  #   --actor U  substring match over .by (full uuid, or a lane's short prefix)
+  #   --since T  byte-lexicographic compare on `t` (== chronological for a
+  #              well-formed ISO-8601Z stamp; a corrupt t sorts by its bytes)
+  #   --json     JSON array of the matching events (full fields, untruncated)
+  #   --full     do not truncate `what` (default 160 chars, as in `lessons`);
+  #              a truncated row is nudged on stderr so no caller silently
+  #              builds a claim on a clipped read
+  # Output (TSV, oldest -> newest): n <TAB> t <TAB> kind <TAB> by <TAB> what
+  # rc 0 rows printed · 1 NO-MATCH verdict (deliberately not a silent empty:
+  # a caller that gets 1 must widen the filter, NEVER conclude "no events")
+  # · 2 usage · 3 ledger unreadable.
+  local n=20 kind="" actor="" since="" json=0 full=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --n) [ -n "${2:-}" ] || die 2 "events: --n needs a value"; n="$2"; shift 2 ;;
+      --kind) [ -n "${2:-}" ] || die 2 "events: --kind needs a value"; kind="$2"; shift 2 ;;
+      --actor) [ -n "${2:-}" ] || die 2 "events: --actor needs a value"; actor="$2"; shift 2 ;;
+      --since) [ -n "${2:-}" ] || die 2 "events: --since needs a value"; since="$2"; shift 2 ;;
+      --json) json=1; shift ;;
+      --full) full=1; shift ;;
+      -h|--help) echo "usage: oc-ledger events|tail [--n N] [--kind K] [--actor U] [--since T] [--json] [--full]"; exit 0 ;;
+      *) die 2 "events: unknown arg '$1' (usage: oc-ledger events|tail [--n N] [--kind K] [--actor U] [--since T] [--json] [--full])" ;;
+    esac
+  done
+  case "$n" in ''|*[!0-9]*) die 2 "events: --n must be a positive integer (got '$n')" ;; esac
+  [ "$n" -ge 1 ] || die 2 "events: --n must be >= 1 (got '$n')"
+  ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+  local sel rc
+  sel="$(jq -c --arg kind "$kind" --arg actor "$actor" --arg since "$since" --argjson n "$n" '
+    [ .events[]?
+      | select(($kind == "") or (((.kind // "") | tostring) == $kind))
+      | select(($actor == "") or ((((.by // "") | tostring)) | contains($actor)))
+      | select(($since == "") or (((.t // "") | tostring) >= $since))
+    ] as $m
+    | ($m | length) as $len
+    | $m[(if $len > $n then $len - $n else 0 end):]' "$LEDGER")"
+  rc=$?
+  [ $rc -eq 0 ] || die 3 "events: jq failed (rc $rc) — ledger unreadable or query error"
+
+  local count; count="$(printf '%s' "$sel" | jq 'length')"
+  [ "$count" -gt 0 ] || {
+    echo "events: no event matches (kind${kind:+=$kind} actor${actor:+~$actor} since${since:+>=$since}) — widen the filter; an empty result here is a VERDICT, not an empty ledger" >&2
+    exit 1
+  }
+  if [ "$json" -eq 1 ]; then printf '%s\n' "$sel" | jq '.'; exit 0; fi
+
+  local trunc=160; [ "$full" -eq 1 ] && trunc=1000000
+  printf '%s' "$sel" | jq -r --argjson t "$trunc" \
+    '.[] | [(.n // 0), (.t // "?"), (.kind // "?"), ((.by // "-") | tostring), ((.what // "") | tostring | .[0:$t])] | @tsv'
+  if [ "$full" -eq 0 ]; then
+    local clipped
+    clipped="$(printf '%s' "$sel" | jq --argjson t "$trunc" \
+      '[.[] | select(((.what // "") | tostring | length) > $t)] | length')"
+    [ "${clipped:-0}" -gt 0 ] && echo "events: $clipped row(s) had 'what' truncated to $trunc chars — rerun with --full for the complete text" >&2
+  fi
+  exit 0
+}
+
 # ---- dispatch -----------------------------------------------------------------
 parse_global "$@"
-case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons|roster> | [selftest|--selftest]"; exit 0 ;; esac
+case "${1:-}" in -h|--help) echo "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons|roster|events|tail> | [selftest|--selftest]"; exit 0 ;; esac
 if [ "$SELFTEST" -eq 1 ]; then cmd_selftest; exit $?; fi
 sub="${ARGS[0]:-}"; rest=("${ARGS[@]:1}")
 case "$sub" in
@@ -1080,6 +1202,7 @@ case "$sub" in
   claims) cmd_claims "${rest[@]+"${rest[@]}"}" ;;
   lessons) cmd_lessons "${rest[@]+"${rest[@]}"}" ;;
   roster) cmd_roster "${rest[@]+"${rest[@]}"}" ;;
+  events|tail) cmd_events "${rest[@]+"${rest[@]}"}" ;;
   selftest) cmd_selftest; exit $? ;;
-  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons|roster> | --selftest" ;;
+  *) die 2 "usage: oc-ledger <stamp|sync|check-version|cadence|ack|enroll|promote|commit-pending|confirm|claim-ref|claims|lessons|roster|events|tail> | --selftest" ;;
 esac
