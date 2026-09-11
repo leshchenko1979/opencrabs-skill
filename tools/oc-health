@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
 # =============================================================================
-# oc-health — hourly fleet health & cleanliness sweep (owner order 2026-09-11).
+# oc-health — 8-class rotating fleet health & cleanliness sweep (owner order 2026-09-11).
 #
-# Spec + per-check remediation: tools/HEALTH-CHECKS.md (canonical). This tool is
-# the MECHANICAL half: it measures, decides SAFE vs QUIRK, and (with --reap)
-# performs only the provably-dead class. It never touches evidence — see the
-# "Never touch" list in HEALTH-CHECKS.md.
+# Spec + per-check remediation: tools/HEALTH-CLASSES.md & tools/HEALTH-CHECKS.md.
+# This tool is the MECHANICAL half: it measures, decides SAFE vs QUIRK vs WARN,
+# and (with --reap) performs only the provably-dead class. It never touches evidence.
 #
-# Usage: oc-health [--json] [--reap] [--quiet] [--selftest]
-#   --json    machine-readable findings (the cron's contract)
-#   --reap    apply the SAFE remediations (stale locks, old backups, old tmp).
-#             Without it the tool is a pure read — safe to run any time.
-#   --quiet   print only findings, not the checked-and-clean lines
-#   --selftest  run the hermetic offline fixture suite (22 assertions), exit 0/1
+# Usage: oc-health [--class <name>|--all] [--rotate] [--status] [--json] [--reap] [--quiet] [--selftest]
+#   --class <name>  audit specific class: filesystem, runtime_procs, persistence,
+#                   git_vcs, schedulers, fleet_lanes, logs, issue_portfolio, or all
+#   --all           execute all 8 classes in a single full sweep
+#   --rotate        advance round-robin pointer in health-rotation.json (default)
+#   --status        show rotation history and next class up without executing sweep
+#   --json          machine-readable findings (the cron's contract)
+#   --reap          apply the SAFE remediations (stale locks, old backups, old tmp).
+#                   Without it the tool is a pure read — safe to run any time.
+#   --quiet         print only findings, not the checked-and-clean lines
+#   --selftest      run the hermetic offline fixture suite, exit 0/1
 #
 # Exit: 0 clean · 1 findings (warn) · 2 usage · 3 measurement failure
-#   Findings NEVER make the exit non-zero for a reaped-only run: a reap is a
-#   successful remediation, not a failure. rc 1 means "something is wrong".
-#
-# Env: OC_HEALTH_STATE (default profile opencrabs-dev state dir)
-#      OC_HEALTH_LOCK_MAX_AGE_H (default 24)  OC_HEALTH_BAK_KEEP (default 3)
-#      OC_HEALTH_TMP_MAX_AGE_H (default 48)   OC_HEALTH_FORK (default ~/opencrabs)
-#      (OC_HEALTH_DB / OC_HEALTH_SKILL_DIR / OC_HEALTH_WT_PATTERNS / OC_HEALTH_SKIP_VERSION
-#       exist for the hermetic selftest only)
 # =============================================================================
 set -u
 set -o pipefail
@@ -44,24 +40,67 @@ BAK_KEEP="${OC_HEALTH_BAK_KEEP:-3}"
 TMP_MAX_AGE_H="${OC_HEALTH_TMP_MAX_AGE_H:-48}"
 SKILL_DIR="$(cd "$TOOLS_DIR/.." && pwd)"
 LOGF="${OC_HEALTH_LOG:-$STATE/tools.log}"
+DAEMON_LOG_DIR="${OC_HEALTH_DAEMON_LOG_DIR:-$HOME/.opencrabs/profiles/$PROFILE/logs}"
+DETACHED_DIR="${OC_HEALTH_DETACHED_DIR:-$HOME/.opencrabs/profiles/$PROFILE/tmp/detached}"
+ROTATION_FILE="${OC_HEALTH_ROTATION_FILE:-$STATE/health-rotation.json}"
 
-JSON=0; REAP=0; QUIET=0
-for a in "$@"; do
-  case "$a" in
-    --json) JSON=1 ;;
-    --reap) REAP=1 ;;
-    --quiet) QUIET=1 ;;
-    --selftest) SELFTEST=1 ;;
-    -h|--help) sed -n '2,26p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "oc-health: unknown arg '$a' (see --help)" >&2; exit 2 ;;
+ALL_CLASSES=("filesystem" "runtime_procs" "persistence" "git_vcs" "schedulers" "fleet_lanes" "logs" "issue_portfolio")
+
+JSON=0; REAP=0; QUIET=0; SHOW_STATUS=0; TARGET_CLASS=""; DO_ALL=0; DO_ROTATE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) JSON=1; shift ;;
+    --reap) REAP=1; shift ;;
+    --quiet) QUIET=1; shift ;;
+    --status) SHOW_STATUS=1; shift ;;
+    --rotate) DO_ROTATE=1; shift ;;
+    --all) DO_ALL=1; shift ;;
+    --class)
+      [ $# -ge 2 ] || { echo "oc-health: --class requires a class name" >&2; exit 2; }
+      TARGET_CLASS="$2"; shift 2 ;;
+    --class=*)
+      TARGET_CLASS="${1#*=}"; shift ;;
+    --selftest) SELFTEST=1; shift ;;
+    -h|--help) sed -n '2,22p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "oc-health: unknown arg '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
 
+# ---- Status display --------------------------------------------------------
+if [ "$SHOW_STATUS" = "1" ]; then
+  if [ -f "$ROTATION_FILE" ]; then
+    if [ "$JSON" = "1" ]; then
+      cat "$ROTATION_FILE"
+    else
+      echo "=== Health Rotation State ==="
+      python3 -c "
+import json, sys
+try:
+    with open('$ROTATION_FILE') as f:
+        d = json.load(f)
+    print('Current Class  :', d.get('current_class', 'unknown'))
+    print('Next Class     :', d.get('next_class', 'unknown'))
+    print('Last Rotated   :', d.get('last_rotated_at', 'never'))
+    print('Cycle Count    :', d.get('cycle_count', 0))
+    print('History        :')
+    for k, v in d.get('history', {}).items():
+        print(f'  - {k:<16}: last_run={v.get(\"last_run\",\"never\")} findings={v.get(\"findings\",0)} reaped={v.get(\"reaped\",0)}')
+except Exception as e:
+    print('Error parsing rotation file:', e)
+"
+    fi
+    exit 0
+  else
+    if [ "$JSON" = "1" ]; then
+      echo '{"status":"uninitialized","next_class":"filesystem"}'
+    else
+      echo "Health rotation uninitialized (next up: filesystem)"
+    fi
+    exit 0
+  fi
+fi
+
 # ---- selftest --------------------------------------------------------------
-# Hermetic: every live path is overridden to a fixture (state dir, tmp glob,
-# session DB, skill checkout, worktree patterns). Nothing here can touch live
-# state — the tool reaps real files under --reap, so the fixture discipline is
-# load-bearing, not decoration.
 selftest_impl() {
   set -u
   T="$(mktemp -d)"
@@ -71,17 +110,14 @@ selftest_impl() {
   bad() { F=$((F+1)); echo "  FAIL $*" >&2; }
   chk() { [ "$2" = "$3" ] && ok || bad "$1 (want $2 got $3)"; }
 
-  mkdir -p "$T/state" "$T/tmp" "$T/skill" "$T/wt" "$T/fork"
+  mkdir -p "$T/state" "$T/tmp" "$T/skill" "$T/wt" "$T/fork" "$T/logs" "$T/detached"
   git -C "$T/skill" init -q 2>/dev/null
   git -C "$T/skill" config user.email t@t; git -C "$T/skill" config user.name t
   echo x > "$T/skill/f"; git -C "$T/skill" add -A >/dev/null 2>&1
   git -C "$T/skill" commit -qm init >/dev/null 2>&1
   git -C "$T/skill" branch -M main >/dev/null 2>&1
-  # check 6 compares HEAD against each push remote's main — give the fixture both
-  # refs, or every clean run reports a phantom checkout-diverged finding.
   git -C "$T/skill" update-ref refs/remotes/origin/main HEAD
   git -C "$T/skill" update-ref refs/remotes/mirror2/main HEAD
-  # fixture fork repo (so check 2 measures something, not a missing-dir failure)
   git -C "$T/fork" init -q 2>/dev/null
   git -C "$T/fork" config user.email t@t; git -C "$T/fork" config user.name t
   echo y > "$T/fork/f"; git -C "$T/fork" add -A >/dev/null 2>&1
@@ -90,135 +126,171 @@ selftest_impl() {
   sqlite3 "$T/db.sqlite" "CREATE TABLE cron_jobs (name TEXT, enabled INTEGER, deliver_to TEXT, prompt TEXT);"
   sqlite3 "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-roster-detached-sweep',1,'','silent; uses session_notify');"
   sqlite3 "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('harvest-watch-4h',1,'','ok');"
+  sqlite3 "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-health-hourly',1,'','ok');"
+
+  printf '{"ts":"2026-09-11T00:00:00Z","tool":"oc-demo","args":"","exit":0,"secs":0.1,"extra":{}}\n' > "$T/tools.log"
+  echo '{"version":1,"events":[],"roster":{"workers":{}}}' > "$T/state/workers-ledger.json"
 
   run() {
     OC_HEALTH_STATE="$T/state" OC_HEALTH_TMP_GLOB="$T/tmp/oc-*" OC_HEALTH_DB="$T/db.sqlite" \
     OC_HEALTH_SKILL_DIR="$T/skill" OC_HEALTH_FORK="$T/fork" OC_HEALTH_WT_PATTERNS="$T/wt/*" \
-    OC_HEALTH_LOG="$T/tools.log" OC_HEALTH_SKIP_VERSION=1 \
+    OC_HEALTH_LOG="$T/tools.log" OC_HEALTH_DAEMON_LOG_DIR="$T/logs" OC_HEALTH_DETACHED_DIR="$T/detached" \
+    OC_HEALTH_ROTATION_FILE="$T/state/health-rotation.json" OC_HEALTH_SKIP_VERSION=1 \
       bash "$SELF" "$@"
   }
 
-  # fixture tools.log: valid JSONL (check 11 clean path)
-  printf '{"ts":"2026-09-11T00:00:00Z","tool":"oc-demo","args":"","exit":0,"secs":0.1,"extra":{}}\n' > "$T/tools.log"
+  # 1. Clean fixture full sweep (--all) → rc 0, zero findings
+  RC=0; OUT="$(run --all 2>&1)" || RC=$?
+  chk "all-clean-rc0" 0 "$RC"
+  case "$OUT" in *"0 finding(s)"*) ok ;; *) bad "all-clean-zero-findings: $OUT" ;; esac
 
-  # 1. clean fixture → rc 0, zero findings
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  chk "clean-rc0" 0 "$RC"
-  case "$OUT" in *"0 finding(s)"*) ok ;; *) bad "clean-zero-findings: $OUT" ;; esac
+  # 2. Rotation state creation and advance
+  run >/dev/null 2>&1
+  chk "rotation-file-created" 1 "$( [ -f "$T/state/health-rotation.json" ] && echo 1 || echo 0 )"
+  first_class="$(python3 -c 'import json; print(json.load(open("'"$T/state/health-rotation.json"'"))["current_class"])')"
+  chk "first-class-filesystem" "filesystem" "$first_class"
 
-  # 2. a stale lock (dead pid, old) is detected
+  # 3. Second rotation run advances to runtime_procs
+  run >/dev/null 2>&1
+  second_class="$(python3 -c 'import json; print(json.load(open("'"$T/state/health-rotation.json"'"))["current_class"])')"
+  chk "second-class-runtime_procs" "runtime_procs" "$second_class"
+
+  # 4. Status flag inspects rotation state
+  RC=0; OUT="$(run --status 2>&1)" || RC=$?
+  chk "status-rc0" 0 "$RC"
+  case "$OUT" in *"Current Class"*|"current_class"*) ok ;; *) bad "status-output: $OUT" ;; esac
+
+  # 5. Class: filesystem — stale lock detection and reap
   printf 'pid=999999 ts=2020-01-01T00:00:00Z run=1\n' > "$T/state/fanout.lock.1"
   touch -d '3 days ago' "$T/state/fanout.lock.1"
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  chk "stale-lock-rc1" 1 "$RC"
-  case "$OUT" in *"stale-locks"*) ok ;; *) bad "stale-lock-detected: $OUT" ;; esac
+  RC=0; OUT="$(run --class filesystem 2>&1)" || RC=$?
+  chk "fs-stale-lock-rc1" 1 "$RC"
+  case "$OUT" in *"stale-locks"*) ok ;; *) bad "fs-stale-lock: $OUT" ;; esac
+  run --class filesystem --reap >/dev/null 2>&1
+  [ -e "$T/state/fanout.lock.1" ] && bad "fs-stale-lock-reaped" || ok
 
-  # 3. --reap removes the stale lock
-  run --reap >/dev/null 2>&1
-  [ -e "$T/state/fanout.lock.1" ] && bad "stale-lock-reaped" || ok
-
-  # 4. a lock whose pid is ALIVE is flagged and NEVER reaped (the safety rule)
+  # 6. Class: filesystem — live pid lock not reaped
   printf 'pid=%s ts=2020-01-01T00:00:00Z run=2\n' "$$" > "$T/state/fanout.lock.2"
   touch -d '3 days ago' "$T/state/fanout.lock.2"
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  case "$OUT" in *"stale-lock-live-pid"*) ok ;; *) bad "live-lock-flagged: $OUT" ;; esac
-  run --reap >/dev/null 2>&1
-  [ -e "$T/state/fanout.lock.2" ] && ok || bad "live-lock-not-reaped"
+  run --class filesystem --reap >/dev/null 2>&1
+  [ -e "$T/state/fanout.lock.2" ] && ok || bad "fs-live-lock-kept"
   rm -f "$T/state/fanout.lock.2"
 
-  # 5. a lock younger than the threshold is left alone
-  printf 'pid=999999 ts=x run=3\n' > "$T/state/fanout.lock.3"
-  run --reap >/dev/null 2>&1
-  [ -e "$T/state/fanout.lock.3" ] && ok || bad "fresh-lock-kept"
-  rm -f "$T/state/fanout.lock.3"
-
-  # 6. old backups are pruned to the keep count
+  # 7. Class: persistence — ledger backup pruning
   for i in 1 2 3 4 5; do
     printf 'x' > "$T/state/workers-ledger.json.bak.$i"
     touch -d "$((i + 1)) days ago" "$T/state/workers-ledger.json.bak.$i"
   done
-  run --reap >/dev/null 2>&1
+  run --class persistence --reap >/dev/null 2>&1
   left="$(ls -1 "$T/state"/workers-ledger.json.*bak* 2>/dev/null | wc -l)"
-  chk "backups-pruned-to-keep" 3 "$left"
-
-  # 7. a backup younger than 24h is NEVER deleted, even beyond the keep count —
-  #    all five are fresh, so the keep-3 rule must prune NOTHING (order-independent).
+  chk "persistence-backups-pruned" 3 "$left"
   rm -f "$T/state"/workers-ledger.json.*bak*
-  for i in 1 2 3 4 5; do printf 'x' > "$T/state/workers-ledger.json.bak.$i"; done
-  run --reap >/dev/null 2>&1
-  left="$(ls -1 "$T/state"/workers-ledger.json.*bak* 2>/dev/null | wc -l)"
-  chk "recent-backups-kept" 5 "$left"
 
-  # 8. stale tmp is reaped; fresh tmp is not
-  printf 'x' > "$T/tmp/oc-old"; touch -d '3 days ago' "$T/tmp/oc-old"
-  printf 'x' > "$T/tmp/oc-fresh"
-  run --reap >/dev/null 2>&1
-  [ -e "$T/tmp/oc-old" ] && bad "stale-tmp-reaped" || ok
-  [ -e "$T/tmp/oc-fresh" ] && ok || bad "fresh-tmp-kept"
+  # 8. Class: runtime_procs — unthrottled watcher detection
+  printf '{"command":"gh run watch 12345","detached_at":"2026-09-11T00:00:00Z","pid":999999}\n' > "$T/detached/test-watch.json"
+  RC=0; OUT="$(run --class runtime_procs 2>&1)" || RC=$?
+  chk "runtime_procs-unthrottled-rc1" 1 "$RC"
+  case "$OUT" in *"unthrottled-watch"*) ok ;; *) bad "unthrottled-watch-detected: $OUT" ;; esac
+  rm -f "$T/detached/test-watch.json"
 
-  # 8b. snapshot mirrors: a dead-pid mirror is reaped, a LIVE-pid mirror is
-  #     NEVER reaped (fork #167). This is the guard's own safety rule: the sweep
-  #     must not pull a mirror out from under a running chain.
-  mkdir -p "$T/tmp/oc-snap-demo-999999" "$T/tmp/oc-snap-demo-$$"
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  case "$OUT" in *"dead mirror"*) ok ;; *) bad "dead-mirror-detected: $OUT" ;; esac
-  run --reap >/dev/null 2>&1
-  [ -e "$T/tmp/oc-snap-demo-999999" ] && bad "dead-mirror-reaped" || ok
-  [ -e "$T/tmp/oc-snap-demo-$$" ] && ok || bad "live-mirror-kept"
-  rm -rf "$T/tmp/oc-snap-demo-$$"
+  # 9. Class: git_vcs — orphan worktree detection
+  mkdir -p "$T/wt/orphan/.git"
+  RC=0; OUT="$(run --class git_vcs 2>&1)" || RC=$?
+  chk "git_vcs-orphan-rc1" 1 "$RC"
+  case "$OUT" in *"orphan-worktrees"*) ok ;; *) bad "git_vcs-orphan: $OUT" ;; esac
+  rm -rf "$T/wt/orphan"
 
-  # 9. --json is the whole stdout contract (no 'ok' chatter polluting it)
-  RC=0; OUT="$(run --json 2>/dev/null)" || RC=$?
-  if printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then ok; else bad "json-parse: $OUT"; fi
-
-  # 10. a DM-routed dev cron is flagged as a leak
+  # 10. Class: schedulers — DM leak detection
   sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='telegram:133526395' WHERE name='oc-roster-detached-sweep';"
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  case "$OUT" in *"cron-leak"*) ok ;; *) bad "cron-leak-detected: $OUT" ;; esac
-
-  # 11. a BLANK deliver_to is NOT a leak (the cron briefs via session_notify) —
-  #     regression guard for the false positive caught live on 2026-09-11.
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  chk "schedulers-leak-rc1" 1 "$RC"
+  case "$OUT" in *"cron-leak"*) ok ;; *) bad "schedulers-leak: $OUT" ;; esac
   sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='' WHERE name='oc-roster-detached-sweep';"
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  case "$OUT" in *"cron-leak"*) bad "blank-deliver-to-false-positive: $OUT" ;; *) ok ;; esac
 
-  # 12. a disabled law-carrying cron is flagged
-  sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET enabled=0 WHERE name='harvest-watch-4h';"
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  case "$OUT" in *"cron-disabled"*) ok ;; *) bad "cron-disabled-detected: $OUT" ;; esac
-  sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name='harvest-watch-4h';"
+  # 11. Class: logs — malformed lines detection
+  printf '2026-08-31T04:11:21Z prose evidence line\n' >> "$T/tools.log"
+  RC=0; OUT="$(run --class logs 2>&1)" || RC=$?
+  chk "logs-malformed-rc1" 1 "$RC"
+  case "$OUT" in *"toolslog-malformed"*) ok ;; *) bad "logs-malformed: $OUT" ;; esac
 
-  # 13. an unregistered worktree dir is reported, never removed
-  mkdir -p "$T/wt/orphan"
-  touch "$T/wt/orphan/.git"
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  case "$OUT" in *"orphan-worktrees"*) ok ;; *) bad "orphan-worktree-detected: $OUT" ;; esac
-  run --reap >/dev/null 2>&1
-  [ -d "$T/wt/orphan" ] && ok || bad "orphan-worktree-not-removed"
+  # 12. Class: fleet_lanes — invalid ledger JSON detection
+  echo "INVALID JSON" > "$T/state/workers-ledger.json"
+  RC=0; OUT="$(run --class fleet_lanes 2>&1)" || RC=$?
+  chk "fleet_lanes-corrupt-rc1" 1 "$RC"
+  case "$OUT" in *"ledger-corrupt"*) ok ;; *) bad "fleet_lanes-corrupt: $OUT" ;; esac
+  echo '{"version":1,"events":[],"roster":{"workers":{}}}' > "$T/state/workers-ledger.json"
 
-  # 14. an uncommitted path in the shared checkout is flagged
-  echo dirty > "$T/skill/dirtyfile"
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  case "$OUT" in *"checkout-dirty"*) ok ;; *) bad "checkout-dirty-detected: $OUT" ;; esac
+  # 13. Class: issue_portfolio — clean run
+  RC=0; OUT="$(run --class issue_portfolio 2>&1)" || RC=$?
+  chk "issue_portfolio-clean-rc0" 0 "$RC"
 
-  # 15. check 11: a clean JSONL log is NOT flagged (regression guard — the
-  #     clean path must stay silent, or every run cries wolf)
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  case "$OUT" in *"toolslog-malformed"*) bad "toolslog-clean-false-positive: $OUT" ;; *) ok ;; esac
+  # 14. Unknown class argument handling
+  RC=0; OUT="$(run --class nonexistent 2>&1)" || RC=$?
+  chk "unknown-class-rc2" 2 "$RC"
 
-  # 16. check 11: a hand-appended PROSE line in the JSONL journal is flagged
-  #     (the 383/443 class) — report-only, the evidence line is NEVER rewritten
-  printf '2026-08-31T04:11:21Z actor-correction: prose evidence line\n' >> "$T/tools.log"
-  RC=0; OUT="$(run 2>&1)" || RC=$?
-  case "$OUT" in *"toolslog-malformed"*) ok ;; *) bad "toolslog-malformed-detected: $OUT" ;; esac
-  n_after="$(wc -l < "$T/tools.log")"
-  chk "toolslog-evidence-preserved" 2 "$n_after"
+  # 15. JSON output contract
+  RC=0; OUT="$(run --json 2>/dev/null)" || RC=$?
+  if printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "rotation" in d; assert "findings" in d' 2>/dev/null; then ok; else bad "json-schema-contract: $OUT"; fi
 
   echo "oc-health selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
 }
 
 if [ "${SELFTEST:-0}" = "1" ]; then selftest_impl; exit $?; fi
+
+# ---- Class Selection & Rotation Engine --------------------------------------
+ACTIVE_CLASSES=()
+CURRENT_ROTATION_CLASS=""
+NEXT_ROTATION_CLASS=""
+CYCLE_COUNT=0
+
+get_next_class_in_ring() {
+  local cur="$1"
+  local idx=0
+  for i in "${!ALL_CLASSES[@]}"; do
+    if [ "${ALL_CLASSES[$i]}" = "$cur" ]; then
+      idx=$(( (i + 1) % ${#ALL_CLASSES[@]} ))
+      echo "${ALL_CLASSES[$idx]}"
+      return 0
+    fi
+  done
+  echo "${ALL_CLASSES[0]}"
+}
+
+if [ "$DO_ALL" = "1" ] || [ "$TARGET_CLASS" = "all" ]; then
+  ACTIVE_CLASSES=("${ALL_CLASSES[@]}")
+  CURRENT_ROTATION_CLASS="all"
+  NEXT_ROTATION_CLASS="all"
+elif [ -n "$TARGET_CLASS" ]; then
+  # Validate class name
+  found=0
+  for c in "${ALL_CLASSES[@]}"; do
+    if [ "$c" = "$TARGET_CLASS" ]; then found=1; break; fi
+  done
+  if [ "$found" = "0" ]; then
+    echo "oc-health: unknown class '$TARGET_CLASS' (valid: ${ALL_CLASSES[*]} or all)" >&2
+    exit 2
+  fi
+  ACTIVE_CLASSES=("$TARGET_CLASS")
+  CURRENT_ROTATION_CLASS="$TARGET_CLASS"
+  NEXT_ROTATION_CLASS="$(get_next_class_in_ring "$TARGET_CLASS")"
+else
+  # Default mode: Rotate round-robin
+  mkdir -p "$(dirname "$ROTATION_FILE")"
+  if [ -f "$ROTATION_FILE" ]; then
+    state_cur="$(python3 -c 'import json; print(json.load(open("'"$ROTATION_FILE"'")).get("next_class","filesystem"))' 2>/dev/null || echo "filesystem")"
+    CYCLE_COUNT="$(python3 -c 'import json; print(json.load(open("'"$ROTATION_FILE"'")).get("cycle_count",0))' 2>/dev/null || echo 0)"
+  else
+    state_cur="filesystem"
+    CYCLE_COUNT=0
+  fi
+  CURRENT_ROTATION_CLASS="$state_cur"
+  NEXT_ROTATION_CLASS="$(get_next_class_in_ring "$CURRENT_ROTATION_CLASS")"
+  if [ "$NEXT_ROTATION_CLASS" = "${ALL_CLASSES[0]}" ]; then
+    CYCLE_COUNT=$((CYCLE_COUNT + 1))
+  fi
+  ACTIVE_CLASSES=("$CURRENT_ROTATION_CLASS")
+fi
 
 FINDINGS=0        # count of warn-class findings
 REAPED=0          # count of remediations applied
@@ -232,232 +304,418 @@ add_finding() { # <check-no> <severity> <slug> <message>
   [ -n "$F_JSON" ] && F_JSON="$F_JSON,"
   F_JSON="$F_JSON{\"check\":$1,\"severity\":\"$2\",\"slug\":\"$3\",\"message\":\"$(printf '%s' "$4" | sed 's/"/\\"/g')\"}"
 }
-clean_line() { # never writes to stdout in --json mode: the JSON is the whole contract
+clean_line() { # never writes to stdout in --json mode
   if [ "$QUIET" = "1" ] || [ "$JSON" = "1" ]; then return 0; fi
   printf '  ok   %s\n' "$1"
 }
 
-# ---- 1. stale fanout locks -------------------------------------------------
-n_locks=0; n_stale=0; reaped_locks=0
-if [ -d "$STATE" ]; then
-  for f in "$STATE"/fanout.lock.* "$SKILL_CHECK"/run/wave-*.lock "$SKILL_CHECK"/run/wave-*.sent; do
-    [ -e "$f" ] || continue
-    n_locks=$((n_locks + 1))
-    age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
-    [ "$age_h" -ge "$LOCK_MAX_AGE_H" ] || continue
-    pid="$(sed -n 's/^pid=\([0-9]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      add_finding 1 QUIRK stale-lock-live-pid "lock $(basename "$f") is ${age_h}h old but pid $pid is ALIVE — not reaping"
-      continue
-    fi
-    n_stale=$((n_stale + 1))
-    if [ "$REAP" = "1" ]; then rm -f "$f"; reaped_locks=$((reaped_locks + 1)); fi
+is_class_active() {
+  local target="$1"
+  for c in "${ACTIVE_CLASSES[@]}"; do
+    if [ "$c" = "$target" ] || [ "$c" = "all" ]; then return 0; fi
   done
-fi
-if [ "$n_stale" -gt 0 ]; then
-  if [ "$REAP" = "1" ]; then
-    REAPED=$((REAPED + reaped_locks))
-    add_finding 1 SAFE stale-locks "reaped $reaped_locks stale lock(s)/sent-marker(s) of $n_locks"
-  else
-    add_finding 1 SAFE stale-locks "$n_stale of $n_locks fanout lock(s) are stale (>=${LOCK_MAX_AGE_H}h, owner pid dead) — rerun with --reap"
-  fi
-else
-  clean_line "locks: $n_locks present, none stale"
-fi
+  return 1
+}
 
-# ---- 2. orphaned worktrees -------------------------------------------------
-if [ -d "$FORK/.git" ]; then
-  reg="$( { git -C "$FORK" worktree list 2>/dev/null | tail -n +2 | awk '{print $1}'; \
-            [ -d "$SKILL_CHECK/.git" ] && git -C "$SKILL_CHECK" worktree list 2>/dev/null | tail -n +2 | awk '{print $1}'; } | sort -u )"
-  n_reg="$(printf '%s\n' "$reg" | grep -c . || true)"
-  # Filter ondisk candidates to directories that actually contain .git (dir or file pointer)
-  ondisk_list=()
-  for p in $WT_PATTERNS; do
-    [ -d "$p" ] || continue
-    [ -e "$p/.git" ] || continue
-    ondisk_list+=("$p")
-  done
-  ondisk="$(printf '%s\n' "${ondisk_list[@]}" | sort -u)"
-  n_disk="$(printf '%s\n' "$ondisk" | grep -c . || true)"
-  orphan="$(comm -13 <(printf '%s\n' "$reg") <(printf '%s\n' "$ondisk") | grep -c . || true)"
-  if [ "${orphan:-0}" -gt 0 ]; then
-    add_finding 2 QUIRK orphan-worktrees "$orphan dir(s) on disk are NOT registered worktrees ($n_disk on disk vs $n_reg registered) — remove via tools/oc-wt, never rm -rf"
-  else
-    clean_line "worktrees: $n_reg registered, $n_disk on disk, 0 orphans"
-  fi
-else
-  FAILED=$((FAILED + 1))
-fi
-
-# ---- 3. ledger backups -----------------------------------------------------
-n_bak=0; reap_bak=0
-if [ -d "$STATE" ]; then
-  mapfile -t baks < <(ls -1t "$STATE"/workers-ledger.json.*bak* 2>/dev/null)
-  n_bak="${#baks[@]}"
-  for ((i=BAK_KEEP; i<n_bak; i++)); do
-    f="${baks[$i]}"
-    age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
-    [ "$age_h" -ge 24 ] || continue        # never delete a <24h backup
-    if [ "$REAP" = "1" ]; then rm -f "$f"; reap_bak=$((reap_bak + 1)); fi
-  done
-  if [ "$reap_bak" -gt 0 ]; then
-    REAPED=$((REAPED + reap_bak))
-    add_finding 3 SAFE ledger-backups "pruned $reap_bak old ledger backup(s), kept newest $BAK_KEEP"
-  elif [ "$n_bak" -gt "$BAK_KEEP" ]; then
-    add_finding 3 SAFE ledger-backups "$n_bak ledger backups (keep $BAK_KEEP) — rerun with --reap"
-  else
-    clean_line "ledger backups: $n_bak (keep $BAK_KEEP)"
-  fi
-fi
-
-# ---- 4. state-dir bloat ----------------------------------------------------
-if [ -d "$STATE" ]; then
-  mb="$(du -sm "$STATE" 2>/dev/null | awk '{print $1}')"
-  if [ "${mb:-0}" -gt 200 ]; then
-    top="$(du -sm "$STATE"/* 2>/dev/null | sort -rn | head -3 | awk '{printf "%s(%sM) ", $2, $1}')"
-    add_finding 4 REPORT state-bloat "state dir ${mb}MB > 200MB — top: $top"
-  else
-    clean_line "state dir: ${mb}MB"
-  fi
-fi
-
-# ---- 5. disk headroom ------------------------------------------------------
-disk_pct="$(df -P / | awk 'NR==2{gsub(/%/,"",$5); print $5}')"
+# =============================================================================
+# BASE CRITICAL INVARIANTS (Always executed on every sweep)
+# =============================================================================
+disk_pct="$(df -P / 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}')"
 if [ "${disk_pct:-0}" -ge 89 ]; then
   add_finding 5 URGENT disk-critical "root filesystem ${disk_pct}% — run vds-servers/scripts/cleanup-unified.sh, then re-check"
 elif [ "${disk_pct:-0}" -ge 85 ]; then
   add_finding 5 WARN disk-high "root filesystem ${disk_pct}% (warn at 85)"
 else
-  clean_line "disk: ${disk_pct}%"
+  clean_line "disk: ${disk_pct}% (headroom OK)"
 fi
 
-# ---- 6. shared checkout ----------------------------------------------------
-if [ -d "$SKILL_CHECK/.git" ]; then
-  dirty="$(git -C "$SKILL_CHECK" status --porcelain 2>/dev/null | wc -l)"
-  if [ "$dirty" -gt 0 ]; then
-    files="$(git -C "$SKILL_CHECK" status --porcelain 2>/dev/null | head -5 | awk '{print $2}' | tr '\n' ' ')"
-    add_finding 6 QUIRK checkout-dirty "$dirty uncommitted path(s) in the SHARED skill checkout: $files"
-  else
-    clean_line "checkout: clean"
+# =============================================================================
+# CLASS 1: filesystem
+# =============================================================================
+if is_class_active "filesystem"; then
+  # 1. Stale fanout & wave locks
+  n_locks=0; n_stale=0; reaped_locks=0
+  if [ -d "$STATE" ]; then
+    for f in "$STATE"/fanout.lock.* "$SKILL_CHECK"/run/wave-*.lock "$SKILL_CHECK"/run/wave-*.sent; do
+      [ -e "$f" ] || continue
+      n_locks=$((n_locks + 1))
+      age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
+      [ "$age_h" -ge "$LOCK_MAX_AGE_H" ] || continue
+      pid="$(sed -n 's/^pid=\([0-9]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        add_finding 1 QUIRK stale-lock-live-pid "lock $(basename "$f") is ${age_h}h old but pid $pid is ALIVE — not reaping"
+        continue
+      fi
+      n_stale=$((n_stale + 1))
+      if [ "$REAP" = "1" ]; then rm -f "$f"; reaped_locks=$((reaped_locks + 1)); fi
+    done
   fi
-  head_sha="$(git -C "$SKILL_CHECK" rev-parse --short HEAD 2>/dev/null)"
-  for r in origin mirror2; do
-    rsha="$(git -C "$SKILL_CHECK" rev-parse --short "$r/main" 2>/dev/null || echo none)"
-    [ "$rsha" = "$head_sha" ] || add_finding 6 QUIRK checkout-diverged "HEAD=$head_sha but $r/main=$rsha"
+  if [ "$n_stale" -gt 0 ]; then
+    if [ "$REAP" = "1" ]; then
+      REAPED=$((REAPED + reaped_locks))
+      add_finding 1 SAFE stale-locks "reaped $reaped_locks stale lock(s)/sent-marker(s) of $n_locks"
+    else
+      add_finding 1 SAFE stale-locks "$n_stale of $n_locks fanout lock(s) are stale (>=${LOCK_MAX_AGE_H}h, owner pid dead) — rerun with --reap"
+    fi
+  else
+    clean_line "locks: $n_locks present, none stale"
+  fi
+
+  # 4. State-dir bloat
+  if [ -d "$STATE" ]; then
+    mb="$(du -sm "$STATE" 2>/dev/null | awk '{print $1}')"
+    if [ "${mb:-0}" -gt 200 ]; then
+      top="$(du -sm "$STATE"/* 2>/dev/null | sort -rn | head -3 | awk '{printf "%s(%sM) ", $2, $1}')"
+      add_finding 4 REPORT state-bloat "state dir ${mb}MB > 200MB — top: $top"
+    else
+      clean_line "state dir: ${mb}MB"
+    fi
+  fi
+
+  # 9. Temp accumulation & Dead mirrors
+  n_tmp=0; reap_tmp=0
+  for f in $TMP_GLOB; do
+    [ -e "$f" ] || continue
+    case "${f##*/}" in oc-snap-*-*[0-9]) continue ;; esac
+    age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
+    [ "$age_h" -ge "$TMP_MAX_AGE_H" ] || continue
+    n_tmp=$((n_tmp + 1))
+    if [ "$REAP" = "1" ]; then rm -rf "$f"; reap_tmp=$((reap_tmp + 1)); fi
   done
-else
-  FAILED=$((FAILED + 1))
-fi
 
-# ---- 7. version / ledger consistency --------------------------------------
-if [ "${OC_HEALTH_SKIP_VERSION:-0}" = "1" ]; then
-  clean_line "version: skipped (selftest)"
-else
-cv_out="$(cd "$TOOLS_DIR" && ./oc-ledger check-version 2>&1)"; cv_rc=$?
-case "$cv_out" in
-  *MISMATCH*) add_finding 7 QUIRK version-mismatch "$(printf '%s' "$cv_out" | head -1) — fix is oc-ledger sync (HQ release flow)" ;;
-  *) [ "$cv_rc" = "0" ] && clean_line "version: consistent" || add_finding 7 QUIRK version-unreadable "check-version rc=$cv_rc: $(printf '%s' "$cv_out" | head -1)" ;;
-esac
-fi
+  n_mir=0; reap_mir=0
+  if [ -f "$TOOLS_DIR/lib/oc-snap.sh" ]; then
+    . "$TOOLS_DIR/lib/oc-snap.sh"
+    MR="${OC_HEALTH_MIRROR_ROOT:-$(dirname "$TMP_GLOB")}"
+    if [ "$REAP" = "1" ]; then
+      reap_mir="$(oc_snap_reap "$MR" 2>/dev/null || echo 0)"
+    else
+      n_mir="$(oc_snap_reap --dry-run "$MR" 2>/dev/null || echo 0)"
+    fi
+  fi
 
-# ---- 8. cron liveness + leak detection -------------------------------------
-if [ -f "$DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-  # (a) law-carrying crons must be enabled
-  cron_bad="$(sqlite3 "$DB" "SELECT name FROM cron_jobs WHERE enabled=0 AND name IN ('harvest-watch-4h','oc-roster-detached-sweep','oc-health-hourly');" 2>/dev/null)"
-  [ -n "$cron_bad" ] && add_finding 8 QUIRK cron-disabled "law-carrying cron(s) disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
-  # (b) LEAK class — a dev cron delivering OUTSIDE the forum. Two real shapes:
-  #     deliver_to is a private DM (positive id; groups/supergroups are negative),
-  #     or the prompt hardcodes the owner DM chat id. A BLANK deliver_to is NOT a
-  #     leak: per the Agent briefing law the cron sends via session_notify to the
-  #     process owner itself (oc-waiter-sweep does exactly this) — flagging blank
-  #     would be a false positive, caught live on 2026-09-11 when this check's
-  #     first version accused a correctly-routed cron.
-  leak_bad="$(sqlite3 "$DB" "SELECT name FROM cron_jobs WHERE enabled=1 AND name LIKE 'oc-%' AND ((deliver_to LIKE 'telegram:%' AND deliver_to NOT LIKE 'telegram:-%') OR prompt LIKE '%133526395%');" 2>/dev/null)"
-  [ -n "$leak_bad" ] && add_finding 8 QUIRK cron-leak "dev cron(s) delivering outside the forum (DM-routed): $(printf '%s' "$leak_bad" | tr '\n' ' ')"
-  [ -z "$cron_bad$leak_bad" ] && clean_line "crons: law-carrying enabled, no DM leaks"
-else
-  FAILED=$((FAILED + 1))
-fi
-
-# ---- 9. temp accumulation --------------------------------------------------
-# Snapshot mirrors (oc-snap-<tool>-<pid>, fork #167) are EXCLUDED from the age
-# rule below. A live chain legitimately holds its mirror for 30+ minutes, so an
-# age-based rm -rf would pull it out from under a running tool — the exact
-# failure class the snapshot guard exists to prevent. They are reaped pid-aware
-# instead: a mirror goes only when its name pid is GONE *and* no live process
-# references the path (the guard forks children that carry the path in argv with
-# their own pids, so a dead name pid alone does not prove the mirror is unused).
-n_tmp=0; reap_tmp=0
-for f in $TMP_GLOB; do
-  [ -e "$f" ] || continue
-  # Only a real mirror (oc-snap-<tool>-<pid>, name ending in digits) is exempt.
-  # An apply backup (oc-snap-apply-<ts>, ends in Z) still follows the age rule.
-  case "${f##*/}" in oc-snap-*-*[0-9]) continue ;; esac
-  age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
-  [ "$age_h" -ge "$TMP_MAX_AGE_H" ] || continue
-  n_tmp=$((n_tmp + 1))
-  if [ "$REAP" = "1" ]; then rm -rf "$f"; reap_tmp=$((reap_tmp + 1)); fi
-done
-
-n_mir=0; reap_mir=0
-if [ -f "$TOOLS_DIR/lib/oc-snap.sh" ]; then
-  . "$TOOLS_DIR/lib/oc-snap.sh"
-  MR="${OC_HEALTH_MIRROR_ROOT:-$(dirname "$TMP_GLOB")}"
-  if [ "$REAP" = "1" ]; then
-    reap_mir="$(oc_snap_reap "$MR")"
+  if [ "$reap_tmp" -gt 0 ] || [ "$reap_mir" -gt 0 ]; then
+    REAPED=$((REAPED + reap_tmp + reap_mir))
+    add_finding 9 SAFE stale-tmp "removed $reap_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h + $reap_mir dead mirror(s)"
+  elif [ "$n_tmp" -gt 0 ] || [ "$n_mir" -gt 0 ]; then
+    add_finding 9 SAFE stale-tmp "$n_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h, $n_mir dead mirror(s) — rerun with --reap"
   else
-    n_mir="$(oc_snap_reap --dry-run "$MR")"
+    clean_line "tmp: no stale /tmp/oc-*"
   fi
 fi
 
-if [ "$reap_tmp" -gt 0 ] || [ "$reap_mir" -gt 0 ]; then
-  REAPED=$((REAPED + reap_tmp + reap_mir))
-  add_finding 9 SAFE stale-tmp "removed $reap_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h + $reap_mir dead mirror(s)"
-elif [ "$n_tmp" -gt 0 ] || [ "$n_mir" -gt 0 ]; then
-  add_finding 9 SAFE stale-tmp "$n_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h, $n_mir dead mirror(s) — rerun with --reap"
-else
-  clean_line "tmp: no stale /tmp/oc-*"
-fi
-
-# ---- 10. session DB size ---------------------------------------------------
-if [ -f "$DB" ]; then
-  db_mb=$(( $(stat -c %s "$DB") / 1048576 ))
-  if [ "$db_mb" -gt 1024 ]; then
-    add_finding 10 REPORT db-size "session DB ${db_mb}MB > 1GB"
+# =============================================================================
+# CLASS 2: runtime_procs
+# =============================================================================
+if is_class_active "runtime_procs"; then
+  # Check detached jobs & watcher discipline
+  if [ -f "$TOOLS_DIR/oc-watcher-audit" ]; then
+    w_out="$(cd "$TOOLS_DIR" && ./oc-watcher-audit --dir "$DETACHED_DIR" --json 2>/dev/null)"; w_rc=$?
+    if [ "$w_rc" = "1" ]; then
+      v_count="$(printf '%s' "$w_out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("violation_count",0))' 2>/dev/null || echo 1)"
+      add_finding 12 WARN unthrottled-watch "$v_count unthrottled or non-compliant watcher(s) in $DETACHED_DIR"
+    elif [ "$w_rc" = "0" ]; then
+      clean_line "watchers: compliant (throttled and nohup-free)"
+    fi
   else
-    clean_line "session db: ${db_mb}MB"
+    clean_line "runtime_procs: oc-watcher-audit not installed"
   fi
 fi
 
-# ---- 11. tools.log JSONL integrity -----------------------------------------
-# tools.log is JSONL by contract, but hand-appended prose lines exist (383, 443
-# — written 2026-08-31; 443 is an evidentiary actor-correction, so it is NOT
-# deleted). One malformed line makes a plain `jq -r` over the whole file abort
-# AND stops the flood guard's tail-based scan at that point, so the failure is
-# invisible exactly when it matters. Report-only: never rewrite evidence.
-if [ -f "$LOGF" ]; then
-  n_lines=$(wc -l < "$LOGF")
-  n_ok=$(jq -Rr 'fromjson? | .ts' "$LOGF" 2>/dev/null | wc -l)
-  n_bad=$((n_lines - n_ok))
-  if [ "$n_bad" -gt 0 ]; then
-    bad_lines="$(jq -Rr 'fromjson? | empty' "$LOGF" 2>/dev/null >/dev/null; awk 'NR==FNR{next}' /dev/null /dev/null; jq -R 'fromjson? // empty' "$LOGF" >/dev/null 2>&1; grep -n -v -E '^\{' "$LOGF" 2>/dev/null | head -3 | cut -d: -f1 | tr '\n' ' ')"
-    add_finding 11 QUIRK toolslog-malformed "$n_bad non-JSON line(s) in $(basename "$LOGF") (${n_ok} parseable of ${n_lines}; lines: ${bad_lines:-?}) — plain jq aborts there and the flood guard's tail scan stops at that point; recipes must use -Rr 'fromjson?'"
-  else
-    clean_line "tools.log: ${n_lines} JSONL line(s), all parseable"
+# =============================================================================
+# CLASS 3: persistence
+# =============================================================================
+if is_class_active "persistence"; then
+  # 3. Ledger backups retention
+  n_bak=0; reap_bak=0
+  if [ -d "$STATE" ]; then
+    mapfile -t baks < <(ls -1t "$STATE"/workers-ledger.json.*bak* 2>/dev/null)
+    n_bak="${#baks[@]}"
+    for ((i=BAK_KEEP; i<n_bak; i++)); do
+      f="${baks[$i]}"
+      age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
+      [ "$age_h" -ge 24 ] || continue
+      if [ "$REAP" = "1" ]; then rm -f "$f"; reap_bak=$((reap_bak + 1)); fi
+    done
+    if [ "$reap_bak" -gt 0 ]; then
+      REAPED=$((REAPED + reap_bak))
+      add_finding 3 SAFE ledger-backups "pruned $reap_bak old ledger backup(s), kept newest $BAK_KEEP"
+    elif [ "$n_bak" -gt "$BAK_KEEP" ]; then
+      add_finding 3 SAFE ledger-backups "$n_bak ledger backups (keep $BAK_KEEP) — rerun with --reap"
+    else
+      clean_line "ledger backups: $n_bak (keep $BAK_KEEP)"
+    fi
   fi
-else
-  clean_line "tools.log: absent"
+
+  # 10. Session DB size
+  if [ -f "$DB" ]; then
+    db_mb=$(( $(stat -c %s "$DB") / 1048576 ))
+    if [ "$db_mb" -gt 1024 ]; then
+      add_finding 10 REPORT db-size "session DB ${db_mb}MB > 1GB"
+    else
+      clean_line "session db: ${db_mb}MB"
+    fi
+  fi
+
+  # Ledger JSON syntax check
+  if [ -f "$STATE/workers-ledger.json" ]; then
+    if ! python3 -c 'import json; json.load(open("'"$STATE/workers-ledger.json"'"))' 2>/dev/null; then
+      add_finding 13 URGENT ledger-corrupt "workers-ledger.json has invalid JSON syntax"
+    else
+      clean_line "ledger: valid JSON"
+    fi
+  fi
 fi
 
-# ---- output ----------------------------------------------------------------
+# =============================================================================
+# CLASS 4: git_vcs
+# =============================================================================
+if is_class_active "git_vcs"; then
+  # 2. Orphaned / unregistered worktrees
+  if [ -d "$FORK/.git" ]; then
+    reg="$( { git -C "$FORK" worktree list 2>/dev/null | tail -n +2 | awk '{print $1}'; \
+              [ -d "$SKILL_CHECK/.git" ] && git -C "$SKILL_CHECK" worktree list 2>/dev/null | tail -n +2 | awk '{print $1}'; } | sort -u )"
+    n_reg="$(printf '%s\n' "$reg" | grep -c . || true)"
+    ondisk_list=()
+    for p in $WT_PATTERNS; do
+      [ -d "$p" ] || continue
+      [ -e "$p/.git" ] || continue
+      ondisk_list+=("$p")
+    done
+    ondisk="$(printf '%s\n' "${ondisk_list[@]}" | sort -u)"
+    n_disk="$(printf '%s\n' "$ondisk" | grep -c . || true)"
+    orphan="$(comm -13 <(printf '%s\n' "$reg") <(printf '%s\n' "$ondisk") | grep -c . || true)"
+    if [ "${orphan:-0}" -gt 0 ]; then
+      add_finding 2 QUIRK orphan-worktrees "$orphan dir(s) on disk are NOT registered worktrees ($n_disk on disk vs $n_reg registered) — remove via tools/oc-wt, never rm -rf"
+    else
+      clean_line "worktrees: $n_reg registered, $n_disk on disk, 0 orphans"
+    fi
+  else
+    FAILED=$((FAILED + 1))
+  fi
+
+  # 6. Shared checkout cleanliness & divergence
+  if [ -d "$SKILL_CHECK/.git" ]; then
+    dirty="$(git -C "$SKILL_CHECK" status --porcelain 2>/dev/null | wc -l)"
+    if [ "$dirty" -gt 0 ]; then
+      files="$(git -C "$SKILL_CHECK" status --porcelain 2>/dev/null | head -5 | awk '{print $2}' | tr '\n' ' ')"
+      add_finding 6 QUIRK checkout-dirty "$dirty uncommitted path(s) in SHARED skill checkout: $files"
+    else
+      clean_line "checkout: clean"
+    fi
+    head_sha="$(git -C "$SKILL_CHECK" rev-parse --short HEAD 2>/dev/null)"
+    for r in origin mirror2; do
+      rsha="$(git -C "$SKILL_CHECK" rev-parse --short "$r/main" 2>/dev/null || echo none)"
+      [ "$rsha" = "$head_sha" ] || add_finding 6 QUIRK checkout-diverged "HEAD=$head_sha but $r/main=$rsha"
+    done
+  else
+    FAILED=$((FAILED + 1))
+  fi
+
+  # 7. Version / ledger consistency
+  if [ "${OC_HEALTH_SKIP_VERSION:-0}" = "1" ]; then
+    clean_line "version: skipped (selftest)"
+  else
+    cv_out="$(cd "$TOOLS_DIR" && ./oc-ledger check-version 2>&1)"; cv_rc=$?
+    case "$cv_out" in
+      *MISMATCH*) add_finding 7 QUIRK version-mismatch "$(printf '%s' "$cv_out" | head -1) — fix is oc-ledger sync" ;;
+      *) [ "$cv_rc" = "0" ] && clean_line "version: consistent" || add_finding 7 QUIRK version-unreadable "check-version rc=$cv_rc: $(printf '%s' "$cv_out" | head -1)" ;;
+    esac
+  fi
+fi
+
+# =============================================================================
+# CLASS 5: schedulers
+# =============================================================================
+if is_class_active "schedulers"; then
+  # 8. Cron liveness & DM leak detection
+  if [ -f "$DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+    cron_bad="$(sqlite3 "$DB" "SELECT name FROM cron_jobs WHERE enabled=0 AND name IN ('harvest-watch-4h','oc-roster-detached-sweep','oc-health-hourly');" 2>/dev/null)"
+    [ -n "$cron_bad" ] && add_finding 8 QUIRK cron-disabled "law-carrying cron(s) disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
+    
+    leak_bad="$(sqlite3 "$DB" "SELECT name FROM cron_jobs WHERE enabled=1 AND name LIKE 'oc-%' AND ((deliver_to LIKE 'telegram:%' AND deliver_to NOT LIKE 'telegram:-%') OR prompt LIKE '%133526395%');" 2>/dev/null)"
+    [ -n "$leak_bad" ] && add_finding 8 QUIRK cron-leak "dev cron(s) delivering outside forum (DM-routed): $(printf '%s' "$leak_bad" | tr '\n' ' ')"
+    [ -z "$cron_bad$leak_bad" ] && clean_line "crons: law-carrying enabled, zero DM leaks"
+  else
+    FAILED=$((FAILED + 1))
+  fi
+fi
+
+# =============================================================================
+# CLASS 6: fleet_lanes
+# =============================================================================
+if is_class_active "fleet_lanes"; then
+  if [ -f "$STATE/workers-ledger.json" ]; then
+    # Check if ledger JSON is valid before parsing roster
+    if ! python3 -c 'import json; json.load(open("'"$STATE/workers-ledger.json"'"))' 2>/dev/null; then
+      add_finding 13 URGENT ledger-corrupt "workers-ledger.json has invalid JSON syntax"
+    else
+      roster_err="$(python3 -c '
+import json, sys
+try:
+    with open("'"$STATE/workers-ledger.json"'") as f:
+        d = json.load(f)
+    roster = d.get("roster", {}).get("workers", {})
+    uuids = list(roster.keys())
+    if len(uuids) != len(set(uuids)):
+        print("duplicate worker UUIDs in roster")
+except Exception as e:
+    print(f"roster error: {e}")
+' 2>/dev/null)"
+      if [ -n "$roster_err" ]; then
+        add_finding 14 QUIRK roster-inconsistency "$roster_err"
+      else
+        clean_line "fleet_lanes: roster format consistent"
+      fi
+    fi
+  fi
+fi
+
+# =============================================================================
+# CLASS 7: logs
+# =============================================================================
+if is_class_active "logs"; then
+  # 11. tools.log JSONL syntax integrity
+  if [ -f "$LOGF" ]; then
+    n_lines=$(wc -l < "$LOGF")
+    n_ok=$(jq -Rr 'fromjson? | .ts' "$LOGF" 2>/dev/null | wc -l)
+    n_bad=$((n_lines - n_ok))
+    if [ "$n_bad" -gt 0 ]; then
+      bad_lines="$(grep -n -v -E '^\{' "$LOGF" 2>/dev/null | head -3 | cut -d: -f1 | tr '\n' ' ')"
+      add_finding 11 QUIRK toolslog-malformed "$n_bad non-JSON line(s) in $(basename "$LOGF") (${n_ok} parseable of ${n_lines}; lines: ${bad_lines:-?}) — recipes must use -Rr 'fromjson?'"
+    else
+      clean_line "tools.log: ${n_lines} JSONL line(s), all parseable"
+    fi
+
+    # Failure rate audit (>15% non-zero exit with minimum 10 invocations)
+    high_fail_tools="$(jq -Rr 'fromjson? | select(.tool != null) | {tool: .tool, exit: .exit}' "$LOGF" 2>/dev/null | \
+      python3 -c '
+import json, sys
+from collections import defaultdict
+counts = defaultdict(int)
+fails = defaultdict(int)
+for line in sys.stdin:
+    try:
+        row = json.loads(line)
+        t = row["tool"]
+        counts[t] += 1
+        if row.get("exit", 0) != 0:
+            fails[t] += 1
+    except:
+        pass
+bad = []
+for t, total in counts.items():
+    if total >= 10:
+        rate = fails[t] / total
+        if rate > 0.15:
+            bad.append(f"{t}({fails[t]}/{total}={rate:.0%})")
+if bad:
+    print(", ".join(bad))
+' 2>/dev/null)"
+    if [ -n "$high_fail_tools" ]; then
+      add_finding 15 REPORT tool-failure-rate "high failure rate (>15%) in tools: $high_fail_tools"
+    else
+      clean_line "tools.log: tool failure rates normal"
+    fi
+  else
+    clean_line "tools.log: absent"
+  fi
+
+  # Daemon log error spikes
+  today_log="$DAEMON_LOG_DIR/opencrabs.$(date -u +%Y-%m-%d)"
+  if [ -f "$today_log" ]; then
+    err_count="$(grep -c ' ERROR ' "$today_log" 2>/dev/null || echo 0)"
+    if [ "$err_count" -gt 50 ]; then
+      add_finding 16 WARN daemon-error-spike "high error volume in daemon log ($err_count errors today)"
+    else
+      clean_line "daemon log: error volume normal ($err_count errors)"
+    fi
+  fi
+fi
+
+# =============================================================================
+# CLASS 8: issue_portfolio
+# =============================================================================
+if is_class_active "issue_portfolio"; then
+  # Audit issue claims in ledger
+  if [ -f "$STATE/workers-ledger.json" ]; then
+    claims_check="$(python3 -c '
+import json, sys
+try:
+    with open("'"$STATE/workers-ledger.json"'") as f:
+        d = json.load(f)
+    events = d.get("events", [])
+    open_claims = {}
+    for ev in events:
+        k = ev.get("kind")
+        ref = ev.get("issue_ref")
+        uuid = ev.get("session_id")
+        if k == "claim" and ref:
+            open_claims[ref] = uuid
+        elif k in ("unclaim", "close", "done") and ref in open_claims:
+            open_claims.pop(ref, None)
+    # Check if any claim lacks uuid
+    empty = [r for r, u in open_claims.items() if not u]
+    if empty:
+        print(f"{len(empty)} unassigned claim(s)")
+except Exception as e:
+    pass
+' 2>/dev/null)"
+    if [ -n "$claims_check" ]; then
+      add_finding 17 REPORT issue-claims "$claims_check"
+    else
+      clean_line "issue portfolio: ledger claim structure valid"
+    fi
+  fi
+fi
+
+# =============================================================================
+# Record Rotation State
+# =============================================================================
+if [ "$DO_ALL" = "0" ] && [ "$TARGET_CLASS" != "all" ] && [ -n "$CURRENT_ROTATION_CLASS" ]; then
+  python3 -c "
+import json, os, datetime
+path = '$ROTATION_FILE'
+now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except:
+        data = {}
+
+data['version'] = 1
+data['current_class'] = '$CURRENT_ROTATION_CLASS'
+data['next_class'] = '$NEXT_ROTATION_CLASS'
+data['last_rotated_at'] = now
+data['cycle_count'] = $CYCLE_COUNT
+hist = data.setdefault('history', {})
+hist['$CURRENT_ROTATION_CLASS'] = {
+    'last_run': now,
+    'findings': $FINDINGS,
+    'reaped': $REAPED
+}
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+" 2>/dev/null || true
+fi
+
+# =============================================================================
+# Output
+# =============================================================================
+classes_str="$(IFS=,; echo "${ACTIVE_CLASSES[*]}")"
 if [ "$JSON" = "1" ]; then
-  printf '{"findings":[%s],"reaped":%d,"measure_failures":%d,"state_dir":"%s"}\n' \
-    "$F_JSON" "$REAPED" "$FAILED" "$STATE"
+  printf '{"findings":[%s],"reaped":%d,"measure_failures":%d,"state_dir":"%s","rotation":{"current_class":"%s","next_class":"%s","classes_run":[%s],"cycle_count":%d}}\n' \
+    "$F_JSON" "$REAPED" "$FAILED" "$STATE" \
+    "$CURRENT_ROTATION_CLASS" "$NEXT_ROTATION_CLASS" \
+    "$(printf '"%s",' "${ACTIVE_CLASSES[@]}" | sed 's/,$//')" "$CYCLE_COUNT"
 else
-  printf 'oc-health: %d finding(s), %d remediation(s), %d measurement failure(s)\n' \
-    "$FINDINGS" "$REAPED" "$FAILED"
+  printf 'oc-health [%s]: %d finding(s), %d remediation(s), %d measurement failure(s)\n' \
+    "$classes_str" "$FINDINGS" "$REAPED" "$FAILED"
   [ -n "$F_TEXT" ] && printf '%s' "$F_TEXT"
 fi
+
 [ "$FAILED" -gt 0 ] && exit 3
 [ "$FINDINGS" -gt 0 ] && exit 1
 exit 0

@@ -15,9 +15,8 @@
 # Usage:
 #   oc-ship-chain --sha <sha> --branch <branch> [--issue <n>] [--repo <fork-slug>]
 #                 [--gated-sha <sha>] [--gated-run <id>] [--wait <sec>]
-#                 [--gate-wait <sec>] [--fast] [--dry-run] [--no-ledger] [--selftest] [--help]
+#                 [--gate-wait <sec>] [--dry-run] [--no-ledger] [--selftest] [--help]
 #
-# --fast             Fast pre-merge syntax/clippy gate (~2.2m) passed to oc-prchecks.
 # --wait <sec>       LEG4 ship/swap budget (default 900).
 # --gate-wait <sec>  LEG1 CI-gate budget (default 2700 = 45 min; the PR-lane
 #                    gate runs ~30 min here, and oc-prchecks' own default is
@@ -66,6 +65,7 @@ if [ -f "$_OC_SNAP" ]; then . "$_OC_SNAP"; oc_snap_guard "$0" "$@"; fi
 
 set -e
 set -u
+set -o pipefail
 
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOOLS_DIR="$(dirname "$SELF")"
@@ -118,7 +118,7 @@ while [ $# -gt 0 ]; do
     --gate-wait) GATE_WAIT="${2:?}"; shift 2 ;;
     --gated-sha) GATED_SHA="${2:?}"; shift 2 ;;
     --gated-run) GATED_RUN="${2:?}"; shift 2 ;;
-    --fast)      FAST=1; shift ;;
+    --fast)      die "--fast retired: workflow yml on ci/quick-build-linux does not take fast input" 2 ;;
     --dry-run)   DRY=1; shift ;;
     --no-ledger) NOLEDGER=1; shift ;;
     --help|-h)   usage ;;
@@ -231,12 +231,25 @@ fi
 
 # ---- leg 1: CI gate -------------------------------------------------------
 if [ -n "$GATED_RUN" ]; then
-  # Verify specific run ID passed explicitly
-  journal "LEG1 gate resume: verifying run $GATED_RUN for $SHA"
+  # Verify specific run ID passed explicitly (or watch/resume it if still in flight)
+  journal "LEG1 gate resume: checking run $GATED_RUN for $SHA"
   RUN_INFO="$("$GH_BIN" run view "$GATED_RUN" -R "${REPO:-leshchenko1979/opencrabs}" --json status,conclusion,jobs -q '[.status, .conclusion, ([.jobs[]? | select(.name | contains("'"$SHA"'")) | .conclusion] | first // "no-job")] | join(" ")' 2>/dev/null || true)"
   case "$RUN_INFO" in
     "completed success success")
       journal "LEG1 gate pre-verified GREEN (gh run: $GATED_RUN completed success on $SHA)"
+      ;;
+    "in_progress"*|"queued"*)
+      journal "LEG1 gate run $GATED_RUN is still $RUN_INFO — attaching via oc-prchecks resume"
+      set +e
+      GATE_OUT="$("$PRCHECKS_BIN" resume "$GATED_RUN" ${REPO:+--repo "$REPO"} --wait "$GATE_WAIT" 2>&1)"
+      GATE_RC=$?
+      set -e
+      case "$GATE_RC" in
+        0) journal "LEG1 gate GREEN (resumed run $GATED_RUN)" ;;
+        3) journal "LEG1 gate RED (resumed run $GATED_RUN)"; printf '%s\n' "$GATE_OUT"; die "GATE-RED" 4 ;;
+        5) journal "LEG1 gate run $GATED_RUN still in flight after budget"; printf '%s\n' "$GATE_OUT"; die "gate still in flight (run=$GATED_RUN) — wait and resume" 7 ;;
+        *) journal "LEG1 gate resume failed rc=$GATE_RC"; printf '%s\n' "$GATE_OUT"; die "gate resume failed" 6 ;;
+      esac
       ;;
     *)
       journal "LEG1 gate resume rejected: run $GATED_RUN status is '$RUN_INFO'"
@@ -268,11 +281,9 @@ elif [ -n "$GATED_SHA" ]; then
     die "gated-sha verification failed: no completed success run found for $SHA" 4
   fi
 else
-  journal "LEG1 gate start (oc-prchecks $SHA ${FAST:+--fast }--wait $GATE_WAIT)"
+  journal "LEG1 gate start (oc-prchecks $SHA --wait $GATE_WAIT)"
   set +e
-  FAST_FLAG=""
-  [ "$FAST" = "1" ] && FAST_FLAG="--fast"
-  GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} $FAST_FLAG --wait "$GATE_WAIT" 2>&1)"
+  GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} --wait "$GATE_WAIT" 2>&1)"
   GATE_RC=$?
   set -e
   # rc 5 is NON-TERMINAL, never infra (defect fix 2026-09-11, lane 4b4463d5).
@@ -300,7 +311,7 @@ else
     journal "LEG1 gate in flight (run=$GATE_RUN_ID) — resume-poll $GATE_ATTEMPTS/$GATE_RESUMES"
     printf '%s\n' "oc-ship-chain: LEG1 gate still in flight run=$GATE_RUN_ID — resume-poll $GATE_ATTEMPTS/$GATE_RESUMES" >&2
     set +e
-    GATE_OUT="$("$PRCHECKS_BIN" resume "$GATE_RUN_ID" ${REPO:+--repo "$REPO"} $FAST_FLAG --wait "$GATE_WAIT" 2>&1)"
+    GATE_OUT="$("$PRCHECKS_BIN" resume "$GATE_RUN_ID" ${REPO:+--repo "$REPO"} --wait "$GATE_WAIT" 2>&1)"
     GATE_RC=$?
     set -e
   done
@@ -558,6 +569,20 @@ EOF
   RC=0; OUT="$(OC_GH="$T/fake-gh-run" run_chain --sha "$FSHA" --branch feat --gated-run 11111 2>&1)" || RC=$?
   check_rc "gated-run-green" "$RC" 0
   grep -q "LEG1 gate pre-verified GREEN (gh run: 11111 completed success" "$T/journal.log" && ok "journal-gated-run" || bad "journal-gated-run"
+
+  # 6b. gated-run with in_progress status triggers oc-prchecks resume
+  cat > "$T/fake-gh-run-inprogress" <<'EOF'
+#!/usr/bin/env bash
+echo "in_progress null in_progress"
+exit 0
+EOF
+  chmod +x "$T/fake-gh-run-inprogress"
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_GH="$T/fake-gh-run-inprogress" run_chain --sha "$FSHA" --branch feat --gated-run 11111 2>&1)" || RC=$?
+  check_rc "gated-run-inprogress" "$RC" 0
+  grep -q "LEG1 gate GREEN (resumed run 11111)" "$T/journal.log" && ok "journal-gated-run-inprogress" || bad "journal-gated-run-inprogress"
 
   # 7. journaling failure is LOUD and NEVER FATAL (2026-09-11, defect fix lane
   # 4b4463d5). A journal write that could never succeed (stamping a kind absent
