@@ -428,7 +428,7 @@ do_selftest() {
 }
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   cat <<'EOH'
-Usage: oc-prchecks [<branch-or-sha> | resume <run-id>] [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--no-log]
+Usage: oc-prchecks [<branch-or-sha> | resume <run-id>] [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR] [--fast] [--no-log]
   resume <run-id>  re-attach to a witnessed run (no dispatch, no adoption) — #74 H2
 Exit: 0 GREEN / 2 usage-or-shape-fork-lane / 3 RED / 4 dispatch-or-api-or-lock / 5 in-flight-timeout / 6 CANCELLED-superseded (P4) / 7 carrier-head-unresolvable / 8 AMBIGUOUS-same-ref-witness-unverifiable (fail-closed, dispatch refused, #115B)
 EOH
@@ -441,12 +441,14 @@ CALL_ARGS="$*"   # C-#1: backoff identity — same args dying rc=2 repeatedly
 REF=""
 FAULT_PR=""
 RESUME_MODE=0
+FAST_MODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --wait)    shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage "--wait needs an integer (got '$WAIT_SECS')" ;; esac ;;
     --repo)    shift; REPO="${1:-}"; [ -n "$REPO" ] || usage "--repo needs a value" ;;
     --carrier) shift; CARRIER="${1:-}"; [ -n "$CARRIER" ] || usage "--carrier needs a value" ;;
     --fault-scope) shift; FAULT_PR="${1:-}"; [ -n "$FAULT_PR" ] || usage "--fault-scope needs a PR number" ;;   # E5 (v0.4.78)
+    --fast)    FAST_MODE=1 ;;
     --notify)  usage "--notify retired; run with background: true and chain 'cmd && tools/lib/oc-notify.sh <uuid> <msg>'" ;;
     --timeout) usage "--timeout retired; use --wait N for bounded watch or run with background: true" ;;
     --label)   shift ;; # legacy no-op
@@ -605,7 +607,9 @@ if command -v jq >/dev/null 2>&1 && [ -f "${OC_TOOLS_LOG:-/nonexistent}" ]; then
   fi
 fi
 if [ "${OC_PR_SKIPPED_DISPATCH:-0}" != 1 ]; then
-"$GH_BIN" workflow run pr-checks.yml --repo "$REPO" --ref "$CARRIER" -f "ref=$SHA" >/dev/null 2>&1 || {
+DISPATCH_ARGS=(-f "ref=$SHA")
+[ "$FAST_MODE" -eq 1 ] && DISPATCH_ARGS+=(-f "fast=true")
+"$GH_BIN" workflow run pr-checks.yml --repo "$REPO" --ref "$CARRIER" "${DISPATCH_ARGS[@]}" >/dev/null 2>&1 || {
   echo "$PROG: dispatch failed (repo=$REPO carrier=$CARRIER)" >&2
   oc_log_extra "dispatch" "failed"
   flock -u 8
@@ -613,6 +617,7 @@ if [ "${OC_PR_SKIPPED_DISPATCH:-0}" != 1 ]; then
 }
 oc_log_extra "dispatch" "ok"
 oc_log_extra "dispatch_ts" "$DISPATCH_TS"
+[ "$FAST_MODE" -eq 1 ] && oc_log_extra "fast_gate" "1"
 
 RUN_ID=""
 # Adoption, headSha-corrected (owner-approved fix 2026-08-30, rebuilt after the

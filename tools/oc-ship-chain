@@ -15,8 +15,9 @@
 # Usage:
 #   oc-ship-chain --sha <sha> --branch <branch> [--issue <n>] [--repo <fork-slug>]
 #                 [--gated-sha <sha>] [--gated-run <id>] [--wait <sec>]
-#                 [--gate-wait <sec>] [--dry-run] [--no-ledger] [--selftest] [--help]
+#                 [--gate-wait <sec>] [--fast] [--dry-run] [--no-ledger] [--selftest] [--help]
 #
+# --fast             Fast pre-merge syntax/clippy gate (~2.2m) passed to oc-prchecks.
 # --wait <sec>       LEG4 ship/swap budget (default 900).
 # --gate-wait <sec>  LEG1 CI-gate budget (default 2700 = 45 min; the PR-lane
 #                    gate runs ~30 min here, and oc-prchecks' own default is
@@ -98,6 +99,7 @@ usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$SELF"; ex
 die() { printf 'oc-ship-chain: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0; GATED_SHA=""; GATED_RUN=""
+FAST=0
 # LEG1 gate budget (defect fix 2026-09-11, lane 4b4463d5). The PR-lane gate on
 # this box takes ~30 min end-to-end; oc-prchecks' own --wait default is 600 s,
 # so a fresh chain ALWAYS timed out mid-build and died on a non-terminal code.
@@ -116,6 +118,7 @@ while [ $# -gt 0 ]; do
     --gate-wait) GATE_WAIT="${2:?}"; shift 2 ;;
     --gated-sha) GATED_SHA="${2:?}"; shift 2 ;;
     --gated-run) GATED_RUN="${2:?}"; shift 2 ;;
+    --fast)      FAST=1; shift ;;
     --dry-run)   DRY=1; shift ;;
     --no-ledger) NOLEDGER=1; shift ;;
     --help|-h)   usage ;;
@@ -265,9 +268,11 @@ elif [ -n "$GATED_SHA" ]; then
     die "gated-sha verification failed: no completed success run found for $SHA" 4
   fi
 else
-  journal "LEG1 gate start (oc-prchecks $SHA --wait $GATE_WAIT)"
+  journal "LEG1 gate start (oc-prchecks $SHA ${FAST:+--fast }--wait $GATE_WAIT)"
   set +e
-  GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} --wait "$GATE_WAIT" 2>&1)"
+  FAST_FLAG=""
+  [ "$FAST" = "1" ] && FAST_FLAG="--fast"
+  GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} $FAST_FLAG --wait "$GATE_WAIT" 2>&1)"
   GATE_RC=$?
   set -e
   # rc 5 is NON-TERMINAL, never infra (defect fix 2026-09-11, lane 4b4463d5).
@@ -295,7 +300,7 @@ else
     journal "LEG1 gate in flight (run=$GATE_RUN_ID) — resume-poll $GATE_ATTEMPTS/$GATE_RESUMES"
     printf '%s\n' "oc-ship-chain: LEG1 gate still in flight run=$GATE_RUN_ID — resume-poll $GATE_ATTEMPTS/$GATE_RESUMES" >&2
     set +e
-    GATE_OUT="$("$PRCHECKS_BIN" resume "$GATE_RUN_ID" ${REPO:+--repo "$REPO"} --wait "$GATE_WAIT" 2>&1)"
+    GATE_OUT="$("$PRCHECKS_BIN" resume "$GATE_RUN_ID" ${REPO:+--repo "$REPO"} $FAST_FLAG --wait "$GATE_WAIT" 2>&1)"
     GATE_RC=$?
     set -e
   done

@@ -500,8 +500,9 @@ GHEOF
   echo div > "$d/repo/f3"; git -C "$d/repo" add f3; git -C "$d/repo" commit -qm div
   git -C "$d/repo" push -q -f "$d/remote.git" HEAD:refs/heads/main
   (cd "$d/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$d/remote.git" \
-    "$TOOLS_DIR/oc-deploy" ship --sha "$SHA2" --features telegram --execute >/dev/null 2>&1)
-  git -C "$d/repo" push -q -f "$d/remote.git" HEAD~1:refs/heads/main
+    "$TOOLS_DIR/oc-deploy" ship --sha "$SHA2" --features telegram >/dev/null 2>&1)
+  git -C "$d/repo" checkout -q -B main "$SHA2"
+  git -C "$d/repo" push -q -f "$d/remote.git" main~1:refs/heads/main
   OUT2="$(cd "$d/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$d/remote.git" \
     OC_DEPLOY_GH="$SD/gh" "$TOOLS_DIR/oc-deploy" ship --sha "$SHA2" --features telegram 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ] && case "$OUT2" in *"FF ok"*) true ;; *) false ;; esac; then
