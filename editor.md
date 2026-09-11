@@ -232,7 +232,6 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 | Tool | Invocation | For |
 |------|-----------|-----|
 | `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add |
-| `oc-index-worktree` | `tools/oc-index-worktree <worktree-path>` | legacy standalone codegraph index (per-worktree indexing retired in v0.4.143; use memory_search scope="external") |
 | `oc-prchecks` | `tools/oc-prchecks wait <branch>` / `<branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; `wait` provides single-command blocking gate |
 | `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) |
 | `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | per-commit implementation comment (body-file discipline inside; chained by oc-ship-chain Leg 2) |
@@ -249,7 +248,7 @@ Per-tool rc registers: `tools/RC-CONTRACT.md` (sole register; rows above carry p
 
 Rules that outlive any table: journal read-back after every `oc-ledger`
 claim/stamp (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
-a tool's exit code alone; the ≥60s detached-poll floor (fleet-directives.md §CI-wait discipline & actor attribution).
+a tool's exit code alone; the ≥30s detached-poll floor (fleet-directives.md §CI-wait discipline & actor attribution).
 
 ## Phase 0 — Fresh base
 

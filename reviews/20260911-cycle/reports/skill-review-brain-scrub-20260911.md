@@ -1,268 +1,177 @@
-# DUTY 6 · BRAIN-SCRUB REVIEW — OpenCrabs Dev Cycle 5
+[2026-09-11T22:49:11Z] NOTE: same-day overwrite of prior version
+# Duty 6 Cycle 7 — Lens BS Review: Ops Brain (Containment & Process Leakage)
 
-**Lens:** `brain-scrub` (canonical brief: `skills/opencrabs-dev/fleet-directives.md:308` §Review lens `brain-scrub`)
-**Scope (5 targets):** `~/.opencrabs/profiles/ops/{AGENTS.md, TOOLS.md, SECURITY.md, BOOT.md, MEMORY.md}`
-**Canonical home checked against:** `~/.opencrabs/profiles/ops/skills/opencrabs-dev/`
-**Mode:** read-only. **No files created, edited, or written** — per `fleet-directives.md:314` brain files are append-only; shrinks require explicit owner approval + `dedup_intent`/`cleanup_intent`. This report is findings only.
-
----
-
-## Method note
-
-- **Files read in full:** the five targets; plus `SKILL.md` (v0.4.143), `fleet-directives.md` (read in two passes — it truncates at 50 kB in a single read), `editor.md`, `CHANGELOG.md`, `review-lenses.md`, and the prior brain-scrub precedents (`reviews/skill-review-brain-scrub-20260906.md`; the 2026-09-10 report file returns `tools-v2` serialization noise, so the 2026-09-06 run is the readable precedent).
-- **Every canonical home below was verified present on disk this session** (grep/read receipt in-context) before a duplication finding was written — per lens rule 3, move-with-verification.
-- **Built-in `grep` matches LITERALLY unless `regex=true`.** All section-header and pattern scans were re-run with `regex=true`; a literal run returns "no matches" on text that is present (documented at `AGENTS.md:31` and `TOOLS.md:446`). This is itself a trap this lens re-encountered.
-- **Secret scan pattern set:** `ghp_…|gho_…|ghs_…|github_pat_…|glsa_…|sk-[A-Za-z0-9]{20,}|xoxb-…|AAAA…|[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}` — run narrow, per-file, against the five targets only. The wide variant across `ops/*.md` returns hundreds of out-of-scope matches in `memory/` and `rsi/` and was **not** re-run.
-- **No numeric tallies are stated** in this report: this session runs under a read-restricted registry (no shell), so no `python3` pass was available to verify arithmetic. All line numbers and quotes below are copied from live tool output.
+**Reviewer:** Lens BS (BRAIN — Ops Brain Containment & Process Leakage)
+**Cycle:** 7
+**Date:** 2026-09-11
+**Scope:** `/root/.opencrabs/profiles/ops/AGENTS.md` (44,496 B / 294 lines) · `TOOLS.md` (58,698 B / 635 lines) · `MEMORY.md` (91,341 B / 528 lines)
+**Charter:** (1) AGENTS.md token weight + opencrabs-dev process-law leakage (pointerization vs bloated inline law); (2) broken anchors from AGENTS.md into skill files; (3) MEMORY.md hygiene (stale incident logs → war-stories); (4) TOOLS.md duplication with core tool definitions.
+**Lens canon:** fleet-directives.md §Review lens `brain-scrub` (rule 1: AGENTS.md carries only one-line pointers + always-loaded anchors for dev-process law — a full law text duplicated here is a finding; rule 2: MEMORY.md carries no discipline laws; rule 3: every finding lands as a move-with-verification — canonical copy verified present in the skill BEFORE removal).
 
 ---
 
-## Verdict
+## Executive Summary
 
-The five brain files carry **no live secrets**. The dominant defect class is exactly what the lens exists to catch: **full dev-process law restated in `AGENTS.md` instead of a pointer**, plus **discipline laws living in passive `MEMORY.md`**, plus a **live stale-tool cluster** — four brain-file statements still tell lanes "worktrees need `oc-index-worktree`" while the skill retires per-worktree indexing as of v0.4.143, and `TOOLS.md` still prescribes the RETIRED `modum check`.
+The **anchor web from AGENTS.md into the skill is sound** — every cited skill file exists and every cited section header resolves (10/10 verified, incl. both sha anchors `3ab07c68` and `bb402cbf` in the skill's git history). Damage is not in broken pointers but in **law-text duplication, stale interface documentation, and a broken post-scrub digestion discipline**.
 
----
+Three load-bearing defects drive the **HIGH** grade:
 
-## HIGH FINDINGS
+1. **AGENTS.md duplicates full law text whose canonical, condensed home already exists in the skill.** Four of the 2026-09-11 Execution Discipline entries (read-back/branix 2,758 chars, probe-silence 910, shell-verdicts 643, verification-scoped 824) are near-verbatim expansions of four one-liners landed the same day in `fleet-directives.md` §Verification-discipline additions (lines 444–452). The brain-scrub lens rule 1 is violated with the canonical copy already in place — a pure shrink job, no land-first needed.
+2. **TOOLS.md §plan is a stale interface doc that teaches the WRONG plan tool.** It prescribes "Four operations" and `init` "auto-approves" — the live tool is two-track (design/checklist), user-approval-gated by default, with `add_tasks`/`add_task`/`approve`/`discard`/`grant_autonomy`/`revoke_autonomy`/`show_plan`. A lane following TOOLS.md would believe plans self-approve and would not learn the primary append op.
+3. **MEMORY.md teaches a RETIRED standard.** The CI-watcher lesson (MEMORY.md:245) anchors "detached waiters are `oc-waiter` — THE standard (editor.md §CI-wait item 10, v0.4.83)": editor.md §CI-wait now numbers items 1–9 (no item 10), and the skill's git history shows `v0.4.135 — native detached bash standard & oc-waiter retirement`. The lesson's anchor is broken *and* its prescription is retired.
 
-### H-1 · Stale tool reference, four sites — `oc-index-worktree` contradicted by live law (v0.4.143)
-**Where:** `AGENTS.md:176`; `TOOLS.md:158`, `TOOLS.md:162`, `TOOLS.md:166`
-
-`AGENTS.md:176` verbatim:
-> Reach for `grep_code` only for deep impact chains or when the repo/worktree isn't in `external_paths` (its `.codegraph` index is per-tree; worktrees need `oc-index-worktree`).
-
-`TOOLS.md:162` verbatim:
-> **Worktrees:** a worktree inherits NO index (`.codegraph` is per-tree; its `.git` is only a `gitdir:` pointer). Index it with the canonical tool — `oc-index-worktree <wt-path>` (init if absent, sync if present; built 2026-08-26 after live probing).
-
-(`TOOLS.md:158` and `TOOLS.md:166` carry the same "worktrees need `oc-index-worktree`" clause.)
-
-**Canonical, opposite:** `fleet-directives.md:458` `## Code-Structure Exploration & Scoutgraph Indexing Law (v0.4.143)`, whose `:460` reads verbatim:
-> - **Per-worktree `.codegraph` indexing is RETIRED**: Worktrees do NOT run `oc-index-worktree` or maintain separate `.codegraph.db` SQLite instances.
-
-Corroborated: `SKILL.md:60` — *"`./tools/oc-index-worktree <path>` | LEGACY STANDALONE (per-worktree indexing retired in v0.4.143; code queries use memory_search scope=\"external\")"*; `editor.md:231` — *"legacy standalone codegraph index (per-worktree indexing retired in v0.4.143…)"*.
-
-**Assessment:** HIGH. This is task-rule-2 (stale tool reference) **and** rule-1 (duplication) in one: four always-loaded statements actively instruct lanes to run a tool the current law forbids, and one of them (`TOOLS.md:162`) calls it "the canonical tool". A lane following `AGENTS.md:176` will do work the skill says is retired.
-**Recommendation (owner-gated):** replace all four with *"code queries → `memory_search scope="external"`; per-worktree `.codegraph` indexing RETIRED v0.4.143"* and delete the `oc-index-worktree` worktree advice. Leave the `AGENTS.md:176` routing pointer intact (that part is correct).
-
-### H-2 · Stale tool reference — `modum check` prescribed after retirement
-**Where:** `TOOLS.md:477`
-
-Verbatim (excerpt):
-> … Lint with `modum check` (naming-policy linter, `/usr/local/bin/modum`); fmt via the `/usr/local/bin/rustfmt` wrapper only (owner-approved 2026-08-27 — `--edition 2024` + entrypoint files for exact CI parity). …
-
-**Canonical:** `SKILL.md:371` — *"modum RETIRED 2026-08-28; lint evidence = GREEN pr-checks.yml run"*; `CHANGELOG.md:143` records the retirement; `war-stories.md:53`/`:67` carry *"(NOTE v0.4.96: `modum` is a RETIRED tool…)"*.
-
-**Assessment:** HIGH. This is the exact defect class the 2026-09-06 brain-scrub **F3** scrubbed out of `MEMORY.md` — it survives in `TOOLS.md`. Note `MEMORY.md:40-42` already carries the corrected form (*"`modum` RETIRED (brain-scrub 2026-09-06; lint = CI dispatch)"*), so `TOOLS.md:477` is now the **last** stale `modum` prescription in the brain files.
-**Recommendation (owner-gated):** delete the `modum check` clause; keep *"lint evidence = GREEN `pr-checks.yml` run"*.
-
-### H-3 · `AGENTS.md:21` — Direct dispatch law duplicated in full
-**Canonical home:** `fleet-directives.md:246` §Direct dispatch — no relay hops [LANE]
-
-Verbatim (`AGENTS.md:21`):
-> **Direct dispatch — no relay hops (owner order 2026-09-10 ~02:4xZ).** Work notifications go sender → resource-owner directly; no lane re-sends or forwards work to a third lane. Canon: fleet-directives §Direct dispatch (v0.4.131) — 5 rules: direct dispatch · full-uuid from same-turn receipt · ledger stamps every send · Triage re-roles to auditor (verify-unclaimed + orphan sweeps stay, relaying goes) · escalation direct to HQ. Fanout waves and HQ rulings are not relays.
-
-The canonical section enumerates the same five rules in full plus an Exceptions paragraph. The `AGENTS.md` copy is a **5-rule restatement**, not a one-line pointer.
-**Assessment:** HIGH — rule 1. **Recommendation:** shrink to the anchor sentence + pointer; the "5 rules" enumeration belongs only at `fd:246`.
-
-### H-4 · `AGENTS.md:225` — Skill-change lane notify law duplicated in full
-**Canonical home:** `fleet-directives.md:243` (bullet *"Skill-change notifies MUST carry the reload instruction (owner order 2026-09-09)"*), inside §Cross-lane message delivery discipline (`fd:233`)
-
-Verbatim (`AGENTS.md:225`):
-> **Skill-change lane notify (owner order 2026-09-09 09:06Z; reload clause 09:3xZ):** every skill version bump / law change in the opencrabs-dev skill → **quiet-notify all active lanes** (`session_notify` delivery.mode="quiet") with a one-line summary of what changed … **AND an explicit reload instruction** — the brief MUST tell the lane to re-read the skill per the RELOAD law (editor.md §Mid-cycle skill drift: `oc-drift-check <uuid> <new-ver> --ack`, then re-read changed role files + fleet-directives.md and stamp `oc-ledger ack`). … Lanes must not learn about law changes late — e.g. TOOLSMITH's `--wait` double-duty and the 48 handrolled watchers persisted partly because lanes ran under old law.
-
-`fd:243` carries the identical mode, reload verb, the `oc-drift-check … --ack` incantation, the `ACK after drift-check` contract, and the same v0.4.120 lesson.
-**Assessment:** HIGH — rule 1 (full law: mode, verb, procedure, rationale, incident). **Recommendation:** one-line pointer + anchor.
-
-### H-5 · `AGENTS.md:227` — "Dispatch = verify-unclaimed first" restated
-**Canonical homes:** `fleet-directives.md:253` (Rule 4 — Triage re-roles to auditor: *"Verify-unclaimed (grep open claim-refs before dispatch) STAYS with Triage — it is an audit, not a relay."*) and `fleet-directives.md:405` (*"Lane-side verify-unclaimed on owner Go … Extends Dispatch=verify-unclaimed-first to the RECEIVING lane."*)
-
-Verbatim (`AGENTS.md:227`):
-> **Dispatch = verify-unclaimed first (Violations: 2).** Before routing any issue/assignment to a lane, grep the opencrabs-dev workers-ledger for open claim-refs on that issue number — owner words and prior claims pre-assign issues outside Triage's view (#106 and #107 were both already held when the n=1815 fan-out routed them; lesson noted after the first and still missed on the second). No dispatch to a lane without either a clean claim-ref grep or a lane-side confirmation.
-
-**Assessment:** HIGH — the rule has two canonical homes and the brain copy restates the imperative in full. **Recommendation:** pointer to `fd:253`/`fd:405`.
-
-### H-6 · `AGENTS.md:241–247` — Agent briefing law duplicated in full
-**Canonical homes:** `fleet-directives.md:244` (bullet *"Forum-scope & Process-Owner Delivery guard"*), `fd:112` (Telegram surface law pointer), `fd:173` §Creating new editors item 3
-
-Verbatim (`AGENTS.md:241` heading + bullets):
-> ## Agent briefing law (hard, owner order 2026-09-10 13:11Z, reinforced 14:35Z, 15:33Z)
->
-> **NEVER brief or instruct agents via `telegram_send` or Telegram topics.** Agents do NOT read or observe what is posted to Telegram chat or forum topics. When dispatching, briefing, or passing task/alert data to an agent session (including topic workers, cron alerts, or watchdog reports):
-> - **Only `session_notify`** carries instructions or findings into an agent session. Use `session_notify` targeting the process owner session UUID directly.
-> - Telegram forum topics exist exclusively for the human operator (Alexey) to observe, supervise, and archive discussions.
-> - Automated dev tooling, watchers, and crons (e.g. `oc-waiter-sweep`) must deliver directly to the process owner's session via `session_notify`, NOT to a Telegram topic or DM.
-> - Posting a briefing to Telegram via `telegram_send` does zero work for the worker agent; dispatching without `session_notify` leaves the worker idling blind.
-
-`fd:244` verbatim (excerpt): *"Automated dev cron alerts and watchdogs MUST deliver directly to the process owner's session via `session_notify` (mode: turn-end), NEVER to a Telegram topic or the owner's private DM."*
-**Assessment:** HIGH — a 4-bullet restatement of a law with three canonical homes. **Recommendation:** keep the hard anchor sentence (*"NEVER brief or instruct agents via `telegram_send` or Telegram topics"* — legitimately always-loaded) + pointer; drop the four bullets.
-
-### H-7 · `MEMORY.md:393–395` — discipline law living in passive memory (detached poller)
-**Canonical home:** `editor.md` §CI-wait / §Detached waiters (v0.4.83), plus the one-watcher law (`CHANGELOG.md:638`)
-
-Verbatim (`MEMORY.md:393` heading + body):
-> ## Hand-rolled detached poller = skill violation (owner correction 2026-09-09, "See the skill")
->
-> When a gate watcher expires in-flight (oc-prchecks rc 5), the ONLY legal replacement is the standard tool: `oc-waiter arm --run <id> --ref <full-40-sha> --notify <session-uuid>` with OC_ACTOR set — NEVER a nohup bash poller to /tmp (no attribution, no terminal-state gate, no wake routing; editor.md §Detached waiters, v0.4.83). … Corollary: read back the journal start line before ending the turn (launch-death lesson, in the arm receipt).
-
-**Assessment:** HIGH — lens rule 2 (*"MEMORY.md carries no discipline laws — passive memory never binds on a cold session; directives found there are findings"*). The text is imperative (*"the ONLY legal replacement is…"*, *"NEVER a nohup bash poller"*). It is the **post-F4 rewrite** of a section the 2026-09-06 lens already scrubbed once — it now points correctly but still states the law imperatively in passive memory.
-**Recommendation (owner-gated):** reduce to dated history — *"2026-09-09 — armed a hand-rolled poller; owner corrected 'See the skill'; the standard is `oc-waiter arm` per editor.md §Detached waiters"* — and strip the imperative.
+Secondary: AGENTS.md has grown **×2.17 in 14 days** (20,516 B Aug 28 → 44,496 B today) into an 11–13K-token always-loaded document; ~18 opencrabs-dev incident post-mortems have re-accumulated in MEMORY.md since the 2026-09-02 scrub while `war-stories.md` has not been updated since 2026-09-05; TOOLS.md duplicates its own content internally (write_opencrabs_file path rules ×2, cargo prohibition ×2, grep_code routing ×3) and carries stale tool names (`http_client`, `config_tool`, `follow_up_question`).
 
 ---
 
-## MEDIUM FINDINGS
+## Findings Matrix
 
-### M-1 · `AGENTS.md:145` — HQ board routing law has **no canonical skill home** (inverse defect)
-Verbatim:
-> - **HQ board routing (owner order 2026-09-07 ~08:11Z):** HQ replies on the board at decision-points ONLY. Pure loop-closes / ACKs / "lane idle" relays → Triage (verify + file) or nobody; no HQ reply. Rulings, gates, deviations, ship/swap chains, cross-lane conflicts → HQ. HQ's own re-verifications of already-verified facts stay silent (ledger stamp at most, no board post). Origin: HQ acknowledged an already-verified closure — redundant, the auditor's F9 hub-concentration pattern.
-
-A `^## ` scan of `fleet-directives.md` shows **no section carrying this law**; the only skill-side trace is a provenance note, `CHANGELOG.md:415` — *"Routing-law mirror: AGENTS.md:128 (HQ board routing = decision-points only) …"*. This is dev-process law whose **only binding copy is the always-loaded brain file**.
-**Assessment:** MED — the inverse of the lens's usual defect. **Recommendation:** land the canonical copy in `fleet-directives.md` (land-in-skill-first, per rule 3), then reduce `AGENTS.md` to a pointer. Owner-gated.
-
-### M-2 · `AGENTS.md:210` — infra-quirk routing table duplicated
-**Canonical:** `fleet-directives.md:189` §Tool-problem reports: direct to TOOLSMITH for tools, issues for core
-Verbatim (`AGENTS.md:210`, excerpt):
-> **ALL infra quirks get reported to their process owner — noting one in a lane report is NOT reporting it (owner order 2026-09-11 ~08:34Z).** … Routing: `tools/oc-*` defects → Toolsmith · skill law text (`SKILL.md`, `editor*.md`, `fleet-directives.md`) → HQ (HQ-only authorship — the former name *Supervisor* is RETIRED, owner order 2026-09-11) · core daemon faults → GitHub fork issues · VDS/host infrastructure → Alexey. …
-**Assessment:** MED — duplicate routing map. The "same turn it is found" imperative is a defensible anchor; the 4-way map is the canonical content.
-**Recommendation:** compress to pointer + the one-line routing map.
-
-### M-3 · `AGENTS.md:212` — Substrate routing: long incident narrative + two hardcoded session UUIDs
-Verbatim (excerpt — the bullet is ~2 300 chars):
-> **Substrate routing — ask the substrate's owner for the change (owner order 2026-09-11 11:42Z).** … (session `d72bd52d-42aa-4dbd-ac99-5b5300770019`, Crabs Kanban Board topic `OC DEV HQ`) … the **fast-mcp-telegram** session (session `ef699b07-cd5a-477f-957e-7825213126d0`). … **Before declaring a capability missing: (1) find the substrate's own repo, (2) read its tool list, (3) probe the tool.**
-
-**Assessment:** MED — two problems. (a) The 3-step procedure + the settled `#160`/`#161` routing belong in the skill, not an always-loaded file. (b) **It stores two literal session UUIDs in `AGENTS.md`**, against the naming law (*"uuids are for ROUTING fields only"*, `SKILL.md` §Hard rules; and lanes are told to *"never uuid-from-memory"* — `SKILL.md` §Glossary). Stale-UUID risk on a cold session.
-**Recommendation:** pointer + dynamic resolution (`session_search` / `oc-roster live`); move the incident narrative to the skill.
-
-### M-4 · `MEMORY.md:185–187` — daemon no-reap law still imperative after landing
-**Canonical:** `fleet-directives.md:349` §Daemon no-reap — ruling 1273 *(landed in skill 2026-09-06, brain-scrub F5; law previously only in MEMORY.md)*
-Verbatim (`MEMORY.md:185`, excerpt):
-> … Ruling is canonical: no reap mechanism in the bounce chain, not deferred, never. Any future process-cleanup proposal: identify profile/unit membership via cmdline + cgroup FIRST; exe-sha alone is never evidence; default is no-touch.
-**Assessment:** MED — the 2026-09-06 **F5** landed this law into the skill; the passive copy retains imperative force + a directive for future proposals.
-**Recommendation (owner-gated):** dated history + pointer.
-
-### M-5 · `MEMORY.md:188–190` — inherited-claim three-pillar law still imperative after landing
-**Canonical:** `fleet-directives.md:355` §Inherited-claim three-pillar verification *(landed in skill 2026-09-06, brain-scrub F6; previously only in MEMORY.md)*
-Verbatim (`MEMORY.md:188`, excerpt):
-> **Rule:** before filing any issue from an INHERITED claim (forward, compaction, another lane), re-verify the three pillars — (1) the run's own log via `gh run view --log` …, (2) the named test/symbol exists via git grep at the exact sha, (3) the cited code site actually holds the claimed logic. …
-**Assessment:** MED — same pattern as M-4: a labelled *"Rule:"* with a 3-step procedure in passive memory, already canonical at `fd:355`.
-**Recommendation (owner-gated):** dated history + pointer.
-
-### M-6 · `MEMORY.md:40–42` — Rust ban list restated in passive memory
-**Canonical:** `editor.md` §Box law; `SKILL.md` §Shared environment facts
-Verbatim (`MEMORY.md:40`, excerpt):
-> Agents box has NO SANCTIONED Rust toolchain (hardened 2026-08-28, owner GO '1+2+3'). … Invoking cargo/rustc/clippy in ANY form (PATH, login shell, PATH-prepend, explicit path) is a ruling violation even when it works … To reverse: `bash /root/toolchain-disabled-20260828/restore.sh`.
-**Assessment:** MED — full ban list in passive memory. The `modum` half is already fixed (F3 scrub worked); the ban list itself duplicates `editor.md §Box law` (canonical) — which `SKILL.md:…` explicitly declares *"the canonical home … other files reference '(box law)'"*.
-**Recommendation (owner-gated):** trim to pointer.
-
-### M-7 · `MEMORY.md:460–466` — OC_ACTOR verification procedure (imperative in passive memory)
-Verbatim (`MEMORY.md:460` heading + first bullets):
-> ## 2026-09-11 — a compaction playbook can carry the WRONG OC_ACTOR (verify your own uuid)
->
-> … Setting it would have stamped the ledger and the commit trailer with another lane's identity.
-> - **Cheap authoritative check (same turn, no guessing):** grep the daemon log for the lines of the turn you just ran — `grep -n "session_id=" ~/.opencrabs/profiles/ops/logs/opencrabs.$(date -u +%F) | tail` — the `run_tool_loop{session_id=<uuid>}` wrapper on YOUR OWN tool calls is the live receipt. Cross-check with `oc-roster live --detail | grep topic:<n>` (uuid → topic name).
-**Assessment:** MED — a checkable procedure + imperative in `MEMORY.md`. `AGENTS.md:13` (identifier law) already covers the general principle; the lane-identity check belongs in `editor.md` or the skill.
-**Recommendation (owner-gated):** land-in-skill-first, then dated history here.
-
-### M-8 · `MEMORY.md:468–474` — scope ruling: binding behaviour in passive memory
-Verbatim (`MEMORY.md:468` heading + tail):
-> ## Scope: this lane (ai-antispam) vs opencrabs-dev — HQ ruling 2026-09-11
-> … Behaviour: on receiving a fork-rebase FREEZE (or other opencrabs-dev fork/ship directive) here, **check scope before stopping work** — if it targets ai-antispam, ignore it and do NOT send the worktree/dirty-count reply.
-**Assessment:** MED — a binding behavioural rule governing a roster-scope defect, living in passive memory. Canonical home would be `fleet-directives.md` §Lanes / roster-scope.
-**Recommendation:** land + pointer. Owner-gated.
-
-### M-9 · `AGENTS.md:185–187` — Owner design gate inline restatement
-**Canonical:** `fleet-directives.md:122` §Discussion links + fix-approval gate
-Verbatim (`AGENTS.md:185`):
-> ## Owner design gate (v0.4.128)
->
-> All implementation designs require canonical terms, vertical Mermaid diagrams, and explicit owner approval before code. Canon: `skills/opencrabs-dev/fleet-directives.md §Discussion links + fix-approval gate`.
-**Assessment:** MED (low end) — it *does* carry a pointer, but also restates the three requirements inline. Borderline: the 3-element summary is arguably a legitimate anchor.
-**Recommendation:** keep the anchor, drop *"All implementation designs require…"* to a shorter form.
-
-### M-10 · `TOOLS.md:475–479` — Rust ban restated outside its canonical home
-Verbatim (`TOOLS.md:477`, excerpt):
-> `cargo`/`rustc`/`clippy` are FORBIDDEN on this box in ANY form (ruling 2026-06-16, hardened 2026-08-28: compile binaries moved to `/root/toolchain-disabled-20260828/` …). … **Never claim local build evidence (learned 2026-09-05, theme-2 lane):** … Local Rust evidence is never valid regardless — CI carrier only.
-**Assessment:** MED — the ban list + the `${PIPESTATUS[0]}` narrative restate `editor.md §Box law` and `fd:418` (shell-verdicts law) outside their canonical homes. (Contains the H-2 stale `modum` clause too.)
-**Recommendation:** pointer to `editor.md §Box law` + `fd:418`; drop the duplicate narrative.
+| ID | Severity | Category | Target File | Summary |
+|---|---|---|---|---|
+| **BS-H1** | HIGH | Law leakage (duplicate, canonical present) | `AGENTS.md:23,29,27,33` ↔ `fleet-directives.md:447-450` | Four 09-11 Execution Discipline entries are expanded duplicates of one-liners already canonical in fleet-directives §Verification-discipline additions |
+| **BS-H2** | HIGH | Stale interface doc | `TOOLS.md:323-338` | §plan teaches "Four operations" + `init auto-approves`; live tool is two-track, approval-gated, `add_tasks`-based |
+| **BS-H3** | HIGH | Retired standard + broken anchor | `MEMORY.md:245` | CI-watcher lesson prescribes `oc-waiter` "THE standard (editor.md §CI-wait item 10, v0.4.83)" — no item 10 exists; oc-waiter retired at v0.4.135 |
+| **BS-H4** | MEDIUM | Cross-file contradiction | `TOOLS.md:477` vs `MEMORY.md:42` | TOOLS.md teaches `modum check` as local lint; MEMORY.md records `modum` RETIRED (brain-scrub 2026-09-06) |
+| **BS-M1** | MEDIUM | Token weight | `AGENTS.md` (whole) | 44.5 KB always-loaded (~11-13K tokens); ×2.17 in 14 days; Execution Discipline alone 27.5% (11.8 KB), 7 of 16 entries from one 09-11 lane |
+| **BS-M2** | MEDIUM | Digestion discipline | `MEMORY.md` (many) | ≥18 opencrabs-dev incident post-mortems accumulated since 09-02 scrub; `war-stories.md` last entry 09-05 |
+| **BS-M3** | MEDIUM | Stale pending-state | `MEMORY.md:151-160` | "Cron deliver_to outage" ends "awaiting Alexey's A or B" — resolved 09-05 (keys.toml `[channels.telegram]` token), no pointer to resolution |
+| **BS-M4** | MEDIUM | Intra-file duplication | `TOOLS.md:52-73 / 475 / 152-166`, `539-556 / 590` | write_opencrabs_file path rules ×2, cargo prohibition ×2, grep_code routing ×3 |
+| **BS-M5** | MEDIUM | Law leakage (canonical NOT yet present) | `AGENTS.md:17,31,35` | compaction-snapshot, hashline-anchors, history-rewrite laws — incident-shaped, no fleet/war-stories twin (verified absent); land-in-skill-first required |
+| **BS-M6** | MEDIUM | Heading misorganization | `AGENTS.md §Telegram identity law` | Heading bundles 7 unrelated receipt/session laws; 3 are opencrabs-dev routing law with canonical homes (fleet-directives, triage.md) |
+| **BS-L1** | LOW | Stale tool names | `TOOLS.md:235,353` | `http_client`/`config_tool`/`follow_up_question` vs live `http_request`/`config_manager`/`suggest_options` |
+| **BS-L2** | LOW | Anchor impedance | `SKILL.md:464` | `§ISSUE ROUTING` cited as a section by AGENTS.md; it is a bullet inside §Hard rules, not a `##` header |
+| **BS-L3** | LOW | Cosmetic structure | `MEMORY.md:1,3,325` | Two H1s at top (stock + scrub subtitle at H1 level) and a duplicate stock H1 mid-file at 325 |
 
 ---
 
-## LOW FINDINGS
+## Detailed Findings
 
-### L-1 · `AGENTS.md:255` — duplicate POST-COMPACTION anchor (intentional)
-Verbatim:
-> **POST-COMPACTION:** the skill is gone from context after any compaction — reload it before any ruling, dispatch or status claim. This line is the recovery anchor.
-`AGENTS.md:196` carries the primary POST-COMPACTION LAW block; `fd:151` §Post-compaction skill reload [LANE] is the skill-side copy. **Assessment:** LOW — deliberate redundancy so the anchor survives section-level reads; the 2026-09-06 lens left the analogous case as "extend-or-leave". **Note it; no action.**
+### BS-H1 — HIGH — AGENTS.md carries full law text whose canonical copy exists in the skill
 
-### L-2 · `AGENTS.md:286–292` — "Lane Management & Reuse": no skill home
-Verbatim (`AGENTS.md:286`):
-> ## Lane Management & Reuse (owner order 2026-09-11: "You are still using spawn_agent instead of working with lanes. …")
-> - **REUSE EXISTING LANES over spawning new ones.** …
-A grep of the skill repo for `Lane Management` / `reuse existing lanes` / `spawn_agent` returns **no canonical section**. **Assessment:** LOW–MED — arguably a legitimate `AGENTS.md` anchor (it governs all lanes on the box, including non-dev factories), but it is dev-process law without a skill home. **Recommendation:** land in `fleet-directives.md` §Lanes, then pointer.
+The brain-scrub lens rule 1 says AGENTS.md carries "only one-line pointers + always-loaded anchors for dev-process law — a full law text duplicated here is a finding." Four Execution Discipline entries added 2026-09-11 are expanded narrative versions of four laws that were landed **the same day** in condensed canonical form in `fleet-directives.md` §Verification-discipline additions (Task-8 governance pass):
 
-### L-3 · `AGENTS.md:23–31` — five verification-discipline bullets duplicated at `fd:413–419`
-Verbatim headers: `AGENTS.md:23` *"Defect claims about file/ledger content need a read-back-immune proof"* · `:25` *"Shell verdicts are read first-hand, never through a pipe"* · `:27` *"A probe against a path that does not exist returns silence, not a verdict"* · `:29` *"Hash anchors come from a same-turn read of that exact region"* · `:31` *"Verification is scoped by load-bearing, and its value-add is the CONTRADICTION check"*.
-**Duplication confirmed** — `fleet-directives.md:413` §Verification-discipline additions (Task-8 governance pass, 2026-09-11) carries near-verbatim copies at `fd:416` (literal COMMAND beside control hash), `fd:417` (probe-against-nonexistent-path), `fd:418` (shell verdicts first-hand), `fd:419` (verification scoped by load-bearing + the `grep` literal-match corollary).
-**Assessment:** LOW (prior-lens precedent treats the Execution Discipline family as legitimately always-loaded) — but note these bullets are the heaviest single items in `AGENTS.md` and the identical law already sits in the skill. **Recommendation:** keep the law in `AGENTS.md`; trim the incident/rationale prose to the skill.
+| AGENTS.md (full text) | Fleet-directives.md (canonical one-liner) |
+|---|---|
+| `AGENTS.md:23` — "Defect claims about file/ledger content need a read-back-immune proof" — **2,758 chars**, full 4-hit branix saga (n=2755/2762/2775, hex/len arithmetic, fork #163) | `fleet:447` — "Always record the literal COMMAND beside any control hash" (~600 chars, same origin cited) |
+| `AGENTS.md:29` — "A probe against a path that does not exist returns silence" — **910 chars** | `fleet:448` — same law, condensed |
+| `AGENTS.md:27` — "Shell verdicts are read first-hand, never through a pipe" — **643 chars** | `fleet:449` — same law, same dash/PIPESTATUS mechanics |
+| `AGENTS.md:33` — "Verification is scoped by load-bearing…" — **824 chars** | `fleet:450` — same law incl. the grep-literal corollary |
 
-### L-4 · `TOOLS.md:142`, `TOOLS.md:221` — stale `execute_code` reference
-Verbatim (`TOOLS.md:142`):
-> **Do not do math in reasoning.** Use `execute_code` Python for calculations.
-`execute_code` is **not** in the core tool list (`TOOLS.md:235` enumerates the core set and does not include it). The canonical math law (`AGENTS.md:9`) says use **`python3`** via bash. `TOOLS.md:221` repeats `execute_code` in the tg_send_message failure text.
-**Assessment:** LOW — stale tool name (task rule 2). **Recommendation:** change to `python3` / `bash`.
+The canonical copy is verified present in the skill, so this is a **shrink-only** finding per lens rule 3 (no land-first needed). The AGENTS.md entries should reduce to one line + pointer to `fleet-directives.md §Verification-discipline additions` — the pattern already modeled by the file's own "OpenCrabs dev — rules live in the skill" section.
 
-### L-5 · `TOOLS.md:353` vs `BOOT.md:46` — `config_tool` / `config_manager` naming drift
-`TOOLS.md:353` — *"(or `config_tool` `set_working_directory`)"*; `TOOLS.md:235` lists `config_tool` as core. `BOOT.md:46` — *"Offer to save it as a custom command** using `config_manager` with `add_command`"*. Two names for one tool surface.
-**Assessment:** LOW — naming inconsistency across brain files. **Recommendation:** settle on one name.
+### BS-H2 — HIGH — TOOLS.md §plan documents an obsolete plan-tool interface
 
-### L-6 · `BOOT.md:51–56` — memory-routing bullet conflicts with the authoritative routing law; `COMMANDS.md` does not exist
-Verbatim (`BOOT.md:52`):
-> - **MEMORY.md** — Lessons learned, patterns discovered, infrastructure details, troubleshooting fixes
-Verbatim (`BOOT.md:59`):
-> - Use `write_opencrabs_file` to update `TOOLS.md` or `COMMANDS.md` with corrections
-**Conflict:** `AGENTS.md:120–131` §Memory — new-rules routing law is authoritative: route to a **specialised skill file** if one applies, otherwise **`AGENTS.md`** — *"never MEMORY.md"*; *"Facts, context, dated history → MEMORY.md"*. The `BOOT.md` bullet sends "lessons learned, patterns discovered" to MEMORY.md without the passive/never-auto-loaded caveat and without the skill route.
-**Stale file:** no `COMMANDS.md` exists in `~/.opencrabs/profiles/ops/`.
-**Assessment:** LOW–MED — two defects (routing conflict + stale file reference). **Recommendation:** add the *"never for always-hold rules; dev process law → skill"* caveat; fix/remove the `COMMANDS.md` reference.
+`TOOLS.md:323-338` describes the plan tool as: *"The `plan` tool structures work into ordered steps. Four operations… `init` | Create/import a plan (**auto-approves**)"* — with `add_task`/`start`/`complete` and no mention of `add_tasks`, `approve`, `discard`, `grant_autonomy`/`revoke_autonomy`, `show_plan`, or the design/checklist two-track.
 
-### L-7 · `BOOT.md:129`, `BOOT.md:138` — stale `/srv/rs/opencrabs` paths; `/rebuild` contradiction
-Verbatim (`BOOT.md:129`): *"Read `~/srv/rs/opencrabs/README.md` for the full feature list and docs"* · (`BOOT.md:138`): *"cd /srv/rs/opencrabs    # or wherever your source lives"*.
-The live checkout is **`/root/opencrabs`** (`SKILL.md` §Shared environment facts: *"Checkout `~/opencrabs`…"*; `TOOLS.md:534` *"…`cd /root/opencrabs`"*). Neither `/srv/rs/opencrabs` nor `~/srv/rs/opencrabs/` appears in the skill canon — shipped-template paths never localized.
-**Contradiction:** `BOOT.md:21` *"You can rebuild yourself with `/rebuild` or `cargo build --release`"* (and `:81`, `:83`, `:94`) vs `TOOLS.md:355` *"`/rebuild` — RETIRED on ops profile (local `cargo` compile is forbidden; deployment is managed via `oc-ship-chain` and CI)"*.
-**Assessment:** LOW–MED — stale paths (task rule 2) + a direct cross-file contradiction on `/rebuild`. **Recommendation:** fix paths to `/root/opencrabs`; reconcile the `/rebuild` statement.
+The live tool (v0.5.x, per this session's runtime schema): `init` is **design or checklist track, and by default the plan waits in Editing for the USER to Approve** before `start` works; `add_tasks` is the primary append operation; `approve` is refused unless the user granted autonomy. The TOOLS.md claim that `init` "auto-approves" is **factually false for the current tool** and is load-bearing in the wrong direction: a lane following it believes plans self-activate and never learns the approval gate or the `add_tasks` append path. This is the stale-interface-doc class — the tool schema is the single source of truth, TOOLS.md should carry quirks/lessons only (e.g., plan-as-durable-memory-across-compactions is worth keeping).
 
-### L-8 · `SECURITY.md:243` vs `SECURITY.md:277` — duplicate Grafana #3 entry + mixed numbering
-Verbatim (`SECURITY.md:277`):
-> - Grafana Service Account Token #3 (`<GRAFANA-TOKEN-REDACTED>`) appeared in bash output Cycle 194. NOT redacted. Distinct from entry #9 (`glsa_****...`) and entry #10 (`glsa_****...`) — different service account token. **This entry was added in Cycle 211, removed by another session by Cycle 215, and re-added here.**
-The identical entry appears twice — once mid-file (`:243`, inside §Secret Handling in Bash Commands) and once appended at the tail (`:277`, after §Confidential File Protection), out of numerical order. Numbering switches between `-` bullets and explicit `19.`-style numbering; redaction placeholder formats vary.
-**Assessment:** LOW — no secrets leaked, no dev-process law; structural hygiene only. **Recommendation:** dedupe the Grafana #3 entry; normalize numbering.
+### BS-H3 — HIGH — MEMORY.md prescribes a retired standard and a broken anchor
 
-### L-9 · `AGENTS.md:13` — partial session UUIDs in prose
-Verbatim (excerpt):
-> … Incidents: 39-char hand-typed sha; merge trailer `462181e9-6798…` (ledger prefix + fabricated tail, blocked the ship gate); theme-1 ack sent to `aaa8d8ae-279b…` (theme-1 prefix on theme-4's tail, wrong session).
-**Assessment:** LOW — the law is general (always-loaded) but the incident evidence is dev-specific; two partial UUIDs appear in prose against the "refer to workers by topic name" law (low severity — they are partial/illustrative). **Recommendation:** trim the dev incidents to the skill.
+`MEMORY.md:245-248` (CI-watcher lesson, owner correction 2026-09-03):
+> "detached waiters are `oc-waiter` — THE standard (editor.md §CI-wait item 10, v0.4.83)… never hand-roll a poller."
+
+Verified against the skill:
+- **Anchor broken:** editor.md §CI-wait discipline & actor attribution (lines 79–146) now numbers items **1–9 only**; there is no item 10.
+- **Standard retired:** `git log --all` on the skill repo shows `472fa65a "feat: release v0.4.135 — native detached bash standard & oc-waiter retirement"`. The native detached `background: true` / harness-wake mechanism (documented in TOOLS.md §bash and AGENTS.md) replaced oc-waiter.
+
+A lesson that instructs a lane to use a retired tool is worse than a stale lesson — it re-imports the hand-rolled-poller failure mode the lesson was written to prevent. The MEMORY.md entry needs correcting to the native detached-bash standard (and the current oc-prchecks/gh-run-watch practice in editor.md §CI Watcher Discipline & Throttling, v0.4.143), with the anchor re-pointed or the entry digested into war-stories with the correction baked in.
+
+### BS-H4 — MEDIUM — modum: direct contradiction between TOOLS.md and MEMORY.md
+
+- `TOOLS.md:477` §Rust builds on this box: *"Lint with `modum check` (naming-policy linter, `/usr/local/bin/modum`)"*
+- `MEMORY.md:42` §Rust toolchain removed: *"`modum` RETIRED (brain-scrub 2026-09-06; lint = CI dispatch)"*
+
+Same box, same question (what local lint is sanctioned), two answers a session apart. One of the two was never updated after the 09-06 brain-scrub ruling. Bounded blast radius (local lint choice only) but a direct contradiction on a sanctioned-tool question — MED. Owner/HQ confirmation of the 09-06 retirement is the premise; then TOOLS.md:477 must match MEMORY.md.
+
+### BS-M1 — MEDIUM — AGENTS.md always-loaded token weight, ×2.17 in 14 days
+
+AGENTS.md is injected into every ops-profile session. Measured: **44,496 B file / 42,764 B content / 294 lines ≈ 11–13K tokens** at 3.2–4 ch/tok for this mixed prose-and-code text. Growth: **20,516 B (bak-1787945222, 2026-08-28) → 44,496 B today = +117% in 14 days**; +2,210 B in the last 8 hours alone (42,286 B @14:36 → 44,496 B @22:19). Section weight: **Execution Discipline = 11,780 B (27.5%)**, next 11 sections sum to ~38%. Of the 16 Execution Discipline entries, **7 are dated 2026-09-11** and come from a single lane (the #150 ship-chain + #116 smoke family): a day's incident log was appended as law, not digested. The law-first vs incident-first split drive this (see BS-H1 for the 4 that also duplicate the skill; BS-M5 for the 3 with no skill home yet).
+
+### BS-M2 — MEDIUM — opencrabs-dev post-mortems accumulating in MEMORY.md, war-stories.md stalled
+
+MEMORY.md's own header owns the law: *"opencrabs-dev records live in the skill: fleet-directives.md (owner directives) + war-stories.md (lessons); scrubbed 2026-09-02."* Verified actual state:
+
+- `war-stories.md` last entry: **2026-09-05** (Mermaid × buttons, `ed5a42f7`).
+- MEMORY.md since the drop: **≥18 incident sections** in the opencrabs-dev family — the phantom family ×6 (08-25 push self-heal, #110 events, sync-wake, 08-30 phantom CI findings x2, 09-05 phantom law commit `b8145f1`, phantom completion), CI-misc 08-30, smoke misattribution, swap coma, `send_buttons` #118 post-mortem, #138 probe rig, compaction OC_ACTOR, plus the 09-11 verification-discipline war stories that BS-H1 found duplicated into AGENTS.md.
+
+Exactly the corpus the header assigns to `war-stories.md`. MEMORY.md is on-demand (never auto-injected, so no token cost) — the issue is **single-home discipline and retrievability**: `memory_search` ranks daily notes and buried incident text above the distilled war-story, so the lessons are effectively parked in the wrong drawer. The 09-11 verification-discipline family should land in `war-stories.md` (fleet §Verification-discipline additions already carries the condensed laws).
+
+### BS-M3 — MEDIUM — stale pending-state with no resolution pointer
+
+`MEMORY.md:151-160` "Cron deliver_to outage" (2026-08-26) ends with the pending line **"awaiting Alexey's A or B"** (fix now vs schedule-defer). `MEMORY.md:321-323` "Cron delivery forensics" (2026-09-05) records the resolution: fixed by appending the `[channels.telegram]` token to `keys.toml`. The 08-26 entry was never updated — a reader finds a superseded open question with no link to its own verdict nine days later. Stale-pending-state class.
+
+### BS-M4 — MEDIUM — TOOLS.md duplicates its own content
+
+Three intra-file duplication clusters (one concept, multiple homes — exactly what the lens polices, here within a single file):
+
+| Cluster | Location 1 | Location 2 | Notes |
+|---|---|---|---|
+| write_opencrabs_file path rules | §write_opencrabs_file (52–73, 1,582 B) | "TOOLS addendum" (539–556, 1,367 B) | Same profile-relative, no-leading-slash, verify-returned-path rules twice |
+| cargo prohibition | §Rust builds on this box (475–479) | §Rust verification — never local, never piped (590–597) | Same ban, different incident attached |
+| grep_code routing law | `TOOLS.md:152-166` two bullets + AGENTS.md §Dynamic tool tails | — | The section says the routing "moved to AGENTS.md" but re-states it in full twice anyway — **3 copies of one law** (AGENTS.md + 2 in TOOLS.md) |
+
+### BS-M5 — MEDIUM — incident-shaped Execution Discipline entries with NO skill home yet (land-first)
+
+Three 09-11 laws in AGENTS.md have **no** condensed twin in the skill (verified by grep across fleet-directives/war-stories/editor.md/SKILL.md):
+
+- "A mid-loop compaction summary is a SNAPSHOT" (847 ch) — NOT in skill
+- "Hash anchors come from a same-turn read of that exact region" (910 ch) — NOT in skill
+- "After a history rewrite, verify lane completion by CONTENT" (654 ch) — NOT in skill
+
+Per lens rule 3 (move-with-verification), these are **land-in-skill-first** findings: the laws must first be added to `war-stories.md`/fleet in condensed form (they are genuine cross-session laws, not one-off noise), then AGENTS.md's entries shrink to one line + anchor. Removing them now without a skill home would orphan the laws.
+
+### BS-M6 — MEDIUM — §Telegram identity law heading misnames a bundle of 7 laws
+
+AGENTS.md's **5,017 B (11.7%)** "Telegram identity law (owner order 2026-09-04 22:23Z)" section contains only 2 telegram-identity laws (the `tg_send_message` ban; the routed/delivered receipt law). The other 5 entries under that heading are unrelated session/receipt law: "Claims from truncated tool output" (generic receipt law), "ANY identifier in a report needs a same-turn receipt" (generic), "Session naming convention" (opencrabs-dev lane naming — skill ontology home), "Skill-change lane notify" (opencrabs-dev skill-change process — fleet-directives canon already referenced in-file), "Dispatch = verify-unclaimed first" (Triage routing law — `triage.md` home). The heading inflation makes the true telegram-identity law look 3× bigger than it is and parks routing law under a misnamed banner. The 3 opencrabs-dev entries are pointers already referencing their canon (fleet/triage), but the section boundary should be redrawn.
+
+### BS-L1 — LOW — stale tool names in TOOLS.md core-set list
+
+`TOOLS.md:235` core list names `http_client` / `config_tool` / `follow_up_question`; `TOOLS.md:353` references `config_tool set_working_directory`. Live core tools (this session): `http_request` / `config_manager` / `suggest_options`. A lane told to prefer `http_client` in a pinned note gets a tool-not-found. LOW — resolvable by name-sync.
+
+### BS-L2 — LOW — §ISSUE ROUTING anchor impedance
+
+AGENTS.md cites "SKILL.md §ISSUE ROUTING"; in SKILL.md the ISSUE ROUTING table is a bullet-row **inside** §Hard rules (line 464), not a `##` heading. Text-search resolves it, heading-anchor tooling would not. The related **PR SHIPMENT LAW** row self-describes as "single home" — the section boundary markers should be promoted so the anchor is a real header.
+
+### BS-L3 — LOW — MEMORY.md header cosmetics
+
+Three H1-level lines where the stock layout expects one: line 1 `# OpenCrabs Long-Term Memory` (stock), line 3 scrub-subtitle as `# MEMORY — repo pointers` (H1 instead of a `<br>` note), and line 325 a **duplicate stock H1 mid-file** (`# OpenCrabs Long-Term Memory`) — an append artifact before the 09-06 block. The 09-07 H1-conflict entry claims the stock H1 "lives at line 1"; it also lives at 325. Cosmetic (no rule binds on it) but breaks the stock-header assumption both the template and the H1-conflict note rely on.
 
 ---
 
-## Secret-scan verdict (task rule 2)
+## Anchor Verification — positive results (NEGATIVE axis clean)
 
-- **All five target files: CLEAN.** A narrow regex scan of each — `ghp_… | gho_… | github_pat_… | glsa_… | sk-[A-Za-z0-9]{20,} | xoxb-… | [0-9]{8,10}:AA[A-Za-z0-9_-]{30,}` — returned **"No matches found"** for `AGENTS.md`, `TOOLS.md`, `MEMORY.md`, `BOOT.md`, and `SECURITY.md`. No literal live secrets.
-- `SECURITY.md`'s evidence entries are all in redaction placeholders (`<GH-PAT-REDACTED>`, `<GATUS-BEARER-REDACTED>`, `<BOT-TOKEN-REDACTED-2026-09-09-c4>`, `<MIXPANEL-SECRET-REDACTED>`, `<GRAFANA-PASS-REDACTED>`, `<GEMINI-KEY-REDACTED>`, `<API-HASH-REDACTED>`, `<N8N-JWT-REDACTED>`, `<GRAFANA-TOKEN-REDACTED>`, `<SSH-PASS-REDACTED>`, `[REDACTED-2026-09-08-1930Z]`). The only residue is unusable 10-char Grafana SA prefixes (`glsa_****...`), already flagged LOW by the 2026-09-08 c2 lens.
-- **Boundary observation (out of this lens's scope, no action against the five files):** the wide scan (not re-run here) previously surfaced a live Grafana SA token #3 at `rsi/improvements.md:2728`, plus full tokens in `rsi/history/*.md` and dozens in `memory/*.md`. The 2026-09-08 c2 lens recommended the owner extend the redaction ruling to `rsi/` or explicitly scope it out. `rsi/` ≠ `memory/`, and neither is one of the five files under review — recorded as a boundary note only.
+Every opencrabs-dev citation from AGENTS.md/TOOLS.md/MEMORY.md was resolved against the skill (file exists + header found, or sha in `git log`):
+
+| Citation | Resolution |
+|---|---|
+| fleet-directives §Direct dispatch (v0.4.131) | ✓ §Direct dispatch, line 277 |
+| fleet-directives §Creating new editors item 3 | ✓ editor item 3, line 181+ |
+| fleet-directives §Cross-lane message delivery discipline (`bb402cbf`) | ✓ line 264; sha `bb402cbf` in skill `git log` |
+| fleet-directives §Discussion links + fix-approval gate | ✓ line 122 |
+| fleet-directives §Tool-problem reports | ✓ line 197 |
+| fleet-directives §Upstream-merge cadence · HARVEST LAW · NO-HOLD | ✓ line 17 |
+| fleet-directives what-now/next anchor (`3ab07c68`) | ✓ sha in skill `git log` |
+| SKILL.md §Upstream relations | ✓ line 417 |
+| editor.md §Mid-cycle skill drift (oc-drift-check) | ✓ line 147 |
+| gatus-recovery / miidas / meta-factory / outreach-reply-sweep skills | ✓ all exist in skills/ |
+| tools/archive/compiler.md · HEALTH-CHECKS.md | ✓ exist |
+| session-notify.journal (TOOLS.md §session_notify) | ✓ exists, 264,688 B @22:42 |
+| oc-ping-proof tool (TOOLS.md register) | ✓ exists |
 
 ---
 
-## Move-with-verification & owner-approval gate
+## Overall Grade: **HIGH**
 
-- **Canonical copies verified present on disk this session** for: H-3 (`fd:246`), H-4 (`fd:243`), H-5 (`fd:253`+`fd:405`), H-6 (`fd:244`+`fd:112`+`fd:173`), H-1 (`fd:458–460`+`SKILL.md:60`+`editor.md:231`), H-2 (`SKILL.md:371`+`CHANGELOG.md:143`), M-4 (`fd:349`), M-5 (`fd:355`), M-9 (`fd:122`), L-3 (`fd:413–419`).
-- **No canonical home found** for: M-1 (HQ board routing — only `CHANGELOG.md:415` provenance), L-2 (Lane Management & Reuse). These require **land-in-skill-first** before any shrink.
-- **Gate:** brain files are **append-only**. Every recommendation above is a *proposal*; executing any shrink requires **explicit owner approval** plus `dedup_intent` / `cleanup_intent` (`fleet-directives.md:314`). This lens produces findings; it does not edit.
-- **Persistence:** the report persists via `oc-review-persist brain-scrub <text|@file>` — the index line IS the "persisted" receipt (`fd:316`). **Not executed here:** this session runs under the read-restricted registry (no shell), so the persist call must be made by the cycle harness / HQ on this report's text.
+Damage is concentrated in **mis-education** (3 load-bearing items: TOOLS.md §plan teaches the wrong tool shape, MEMORY.md teaches a retired standard, AGENTS.md duplicates four laws whose canonical condensation already exists) rather than in the anchor web (which is sound). The positive axis — every pointer into the skill resolves — means remediation is shrink/digest, not re-point, and is mechanical once the premise checks are done.
 
----
+## Recommended Remediation Order
 
-## What now/next
+1. **BS-H1 (shrink, canonical verified present):** reduce the four duplicated Execution Discipline entries to one-line pointers to `fleet-directives.md §Verification-discipline additions`. Owner approval for the shrink (brain files are append-only; `dedup_intent` path).
+2. **BS-H2:** replace TOOLS.md §plan with a two-line pointer to the live plan-tool schema + keep only the durable quirks (plan-as-memory-across-compaction). Never re-document the operations list.
+3. **BS-H3:** correct MEMORY.md CI-watcher lesson → native detached bash (`background: true`), drop oc-waiter, re-point or move to war-stories with correction baked in.
+4. **BS-H4:** confirm the 09-06 `modum` retirement premise with HQ/owner, then sync TOOLS.md:477 to MEMORY.md:42.
+5. **BS-M5 (land-first):** land the 3 homeless laws (compaction-snapshot, hashline-anchors, history-rewrite) in `war-stories.md` (HQ-only edit per single-writer law), then shrink AGENTS.md entries to pointers.
+6. **BS-M2:** digest the ≥18 phantom-family + 09-11 incident sections from MEMORY.md into `war-stories.md`; leave one-line dated pointers (per the header's own routing law).
+7. **BS-M1/M3/M4/M6/L1–L3:** housekeeping — rebalance Execution Discipline, add the resolution pointer to the cron-deliver_to entry, de-duplicate the three TOOLS.md clusters, redraw the §Telegram identity law section boundary, sync tool names, promote the ISSUE ROUTING header, fix the MEMORY.md H1s.
 
-- **In flight:** Cycle-5 brain-scrub report — complete, emitted above (read-only; no brain file touched).
-- **Next step + owner:** persist this report (`oc-review-persist brain-scrub @file`) and feed it into the Duty-6 review-battery consolidation → **HQ** (skill-only authorship) and the **cycle harness**. The two `land-in-skill-first` items (M-1 HQ board routing, L-2 Lane Management & Reuse) are **HQ** work before any `AGENTS.md` shrink.
-- **Blocked on Alexey:** every shrink recommendation (H-1…H-7, M-1…M-10, L-2, L-6, L-7) is owner-gated — brain files are append-only; nothing is removed without explicit owner approval + `dedup_intent`/`cleanup_intent`. **Highest-value single ask:** approve the H-1 stale-`oc-index-worktree` fix (four sites contradicting live v0.4.143 law) and the H-2 `modum` fix — these actively misdirect lanes today.
-
-*Bwoo. Report filed — beep.*
+All shrinks require owner approval (brain files append-only; `dedup_intent`/`cleanup_intent` gate). No skill file was modified by this review.

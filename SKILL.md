@@ -29,9 +29,7 @@ metadata:
 
 **Owns:** everything touching `~/opencrabs` source, its GitHub Actions runs, or the
 installed `opencrabs` binary. This file = shared facts + role router only. Actual
-procedures live in FOUR role files (`editor.md` / `hq.md` / `triage.md` / `toolsmith.md`) + one
-ARCHIVED runbook (`tools/archive/compiler.md` — retired at S3 cutover 2026-08-28, re-enable
-= one notify);
+procedures live in FOUR role files (`editor.md` / `hq.md` / `triage.md` / `toolsmith.md`);
 load ONLY the one matching the session's role.
 
 **Binding owner directives** (sync policy, upstream PR law, carriers/builds, cargo
@@ -45,12 +43,11 @@ classes, migration-union rule, semantic-triage defaults).
 
 Ask the operator which role this session employs before doing anything:
 
-> **Editor, HQ, Triage, or Toolsmith?** (Compiler: archived — say "re-enable compiler" to load `tools/archive/compiler.md`.)
+> **Editor, HQ, Triage, or Toolsmith?**
 
 | Role | Owns | Procedure file |
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR filed on smoke PASS (procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
-| **COMPILER** | RETIRED 2026-08-28 (S3 cutover) — duties absorbed by `tools/oc-deploy` + HQ watch; re-enable trigger: STEP ZERO | `tools/archive/compiler.md` (ARCHIVED) |
 | **HQ** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub = TEN reviewers, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `hq.md` |
 | **TRIAGE** | Intake & hygiene: idea/quirk intake, issue assignment, repo hygiene patrols, rebase/merge execution delegated from HQ | `triage.md` |
 | **TOOLSMITH** | CLI tools author & maintainer: owns `tools/` code, test battery stewardship | `toolsmith.md` |

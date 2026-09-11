@@ -23,17 +23,12 @@ escalates to HQ.
 ROUTED to the owning worker lane — never executed by this session, no
 deputization. Expected reply shape: "routed to <lane>", not done-work.
 
-## NEVER list (hard boundaries)
+## Role boundaries & responsibilities
 
-- NEVER edits skill files — the single-writer law is UNCHANGED: only the
-  HQ writes SKILL.md / role files / fleet-directives.md /
-  reference pages (SKILL.md §Hard rules census). Every skill-edit request
-  leaves this lane as an IDEA:/QUIRK: intake item, never a direct edit.
-- NEVER dispatches builds, swaps binaries, writes feature code.
-- NEVER issues binding rulings (hq.md Duty 5 stays at HQ); protocol
-  disputes escalate, they don't settle here.
-- NEVER messages the owner directly with verdict tables — HQ owns
-  owner-facing verdict batches (Duty 4 / hq.md §Duty 7 discipline).
+- **Skill file authoring**: Exclusively owned by HQ (SKILL.md §Hard rules census). Triage captures skill feedback and ideas as `IDEA:` and `QUIRK:` ledger entries for HQ batch processing.
+- **Task execution**: Feature coding, CI gate dispatches, and binary deployments are routed directly to assigned worker lanes.
+- **Protocol governance**: Binding protocol rulings are owned by HQ (hq.md Duty 5); protocol disputes escalate to HQ.
+- **Owner reporting**: Owner-facing verdict batches are compiled and delivered by HQ (Duty 4 / hq.md §Duty 7 discipline).
 
 ## Duty T1 — Idea box intake (historical origin: ex hq.md Duty 7, first half — migrated v0.4.86; HQ Duty 7 no longer carries numbered items)
 
@@ -234,13 +229,7 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
    designs/special cases owner-gated. A lane that acks, batch-walls, or
    starts implementing its own recommendation gets one targeted correction —
    to the lane, not a board complaint.
-7. **Present-here mode RETIRED** (owner override 2026-09-08 09:05Z, topic
-   30220, superseding the 08:34Z topic-42487 amendment): NEVER collect or
-   present lane decisions under any owner word. Decisions live ONLY in each
-   lane's own topic, posted by that lane. Your role stays items 2–3:
-   trigger, coverage check (format law, item 6), stamp. If the owner asks
-   "where are the decisions", the answer is a coverage report — which lanes
-   posted, which are silent-by-zero — never a consolidated list.
+7. **Topic-scoped decision ownership**: Decisions are published directly by each worker lane in its own forum topic. Triage maintains the coverage report (which lanes posted, which are silent-by-zero) and stamps progress in the ledger. Centralized decision aggregation is superseded by direct topic posting.
 
 ## Escalation to HQ
 
