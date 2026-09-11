@@ -187,6 +187,7 @@ selftest_impl() {
 
   # 13. an unregistered worktree dir is reported, never removed
   mkdir -p "$T/wt/orphan"
+  touch "$T/wt/orphan/.git"
   RC=0; OUT="$(run 2>&1)" || RC=$?
   case "$OUT" in *"orphan-worktrees"*) ok ;; *) bad "orphan-worktree-detected: $OUT" ;; esac
   run --reap >/dev/null 2>&1
@@ -263,10 +264,17 @@ fi
 
 # ---- 2. orphaned worktrees -------------------------------------------------
 if [ -d "$FORK/.git" ]; then
-  reg="$(git -C "$FORK" worktree list 2>/dev/null | tail -n +2 | awk '{print $1}' | sort)"
+  reg="$( { git -C "$FORK" worktree list 2>/dev/null | tail -n +2 | awk '{print $1}'; \
+            [ -d "$SKILL_CHECK/.git" ] && git -C "$SKILL_CHECK" worktree list 2>/dev/null | tail -n +2 | awk '{print $1}'; } | sort -u )"
   n_reg="$(printf '%s\n' "$reg" | grep -c . || true)"
-  # shellcheck disable=SC2086 — intentional word-splitting of the pattern list
-  ondisk="$(ls -d $WT_PATTERNS 2>/dev/null | sort)"
+  # Filter ondisk candidates to directories that actually contain .git (dir or file pointer)
+  ondisk_list=()
+  for p in $WT_PATTERNS; do
+    [ -d "$p" ] || continue
+    [ -e "$p/.git" ] || continue
+    ondisk_list+=("$p")
+  done
+  ondisk="$(printf '%s\n' "${ondisk_list[@]}" | sort -u)"
   n_disk="$(printf '%s\n' "$ondisk" | grep -c . || true)"
   orphan="$(comm -13 <(printf '%s\n' "$reg") <(printf '%s\n' "$ondisk") | grep -c . || true)"
   if [ "${orphan:-0}" -gt 0 ]; then

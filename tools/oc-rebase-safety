@@ -67,8 +67,8 @@ cmd_overlap() {
 
   # Merge-changed set.
   if [ -z "$tree" ]; then
-    # No tree given: merge-changed set unknown -> conservative (any shift = overlap).
-    : > "$tmp_merge"
+    # No tree given: merge-changed set unknown -> conservative (any shift in main requires gate).
+    cp "$tmp_main" "$tmp_merge"
     local conservative=1
   else
     local nparents tip
@@ -81,8 +81,8 @@ cmd_overlap() {
       git -C "$repo" diff --name-only "$tip^2" "$tip" | sort -u > "$tmp_merge" || die 3 "git diff failed"
       conservative=0
     else
-      # Single-parent tip: cannot derive the branch-side set here; conservative.
-      : > "$tmp_merge"
+      # Single-parent tip: cannot derive the branch-side set here; conservative (all main changes require gate).
+      cp "$tmp_main" "$tmp_merge"
       conservative=1
     fi
   fi

@@ -224,6 +224,8 @@ NSTUB
 # OC_TEST_SHIPWAIT_HEAD is set — run 555's head_sha tracks the shipped sha.
 if [ -n "${OC_TEST_SHIPWAIT_HEAD:-}" ]; then
   case "$*" in
+    *actions/runs/555/jobs*)
+      echo "{\"jobs\":[{\"name\":\"ORDER gates\"},{\"name\":\"Linux amd64 ($OC_TEST_SHIPWAIT_HEAD, telegram)\"}]}" ;;
     *actions/runs/555*)
       case "${OC_TEST_SHIPWAIT_CONCL:-}" in
         completed-success) echo "{\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"$OC_TEST_SHIPWAIT_HEAD\"}" ;;
@@ -1847,15 +1849,19 @@ case "$MODE" in
       # timeout. No --wait (or 0): classic fire-and-forget, poll leg chained
       # explicitly by the operator.
       if [ "$WAIT_SECS" != 0 ]; then
-        local POLL_INTERVAL SW_DEADLINE RID JN CONCL B_SHA
         POLL_INTERVAL="${OC_DEPLOY_POLL_INTERVAL:-15}"
         SW_DEADLINE=$(( $(date +%s) + WAIT_SECS ))
         while :; do
           RID=""
           for CANDID in $(RUNS_JSON="$("$GH" api "repos/$FORK/actions/workflows/$WF/runs?per_page=5" 2>/dev/null)" \
             && printf '%s' "$RUNS_JSON" | jq -r '.workflow_runs[].id // empty' 2>/dev/null); do
-            JN="$("$GH" api "repos/$FORK/actions/runs/$CANDID" 2>/dev/null | jq -r '.head_sha // empty' 2>/dev/null)"
-            [ "$JN" = "$SHA" ] || continue   # only the run WE dispatched
+            # Carrier runs (workflow_dispatch on ci/quick-build-linux) have head_sha == carrier tip,
+            # so decode target sha from the job names (or fallback to head_sha for test stubs).
+            CAND_SHA="$(run_built_sha "$CANDID" 2>/dev/null || true)"
+            if [ -z "$CAND_SHA" ]; then
+              CAND_SHA="$("$GH" api "repos/$FORK/actions/runs/$CANDID" 2>/dev/null | jq -r '.head_sha // empty' 2>/dev/null)"
+            fi
+            [ "$CAND_SHA" = "$SHA" ] || continue   # only the run WE dispatched
             RID="$CANDID"; break
           done
           if [ -n "$RID" ]; then
