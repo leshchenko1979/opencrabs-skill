@@ -4,10 +4,10 @@
 # scan. Verdicts a lane's compliance from the ops daily logs: finds TOOL_ACCUM
 # rows emitted by the accused session that carry a BANNED telegram surface
 # tool (telegram_send / tg_send_message / tg_edit_message / telegram_edit —
-# the SKILL.md §Telegram surface law set, supervisor.md Duty 7 A12 pattern).
+# the SKILL.md §Telegram surface law set, hq.md Duty 7 A12 pattern).
 # Falls back to "Executing tool: <name>" rows when a date has no TOOL_ACCUM
 # evidence. Read-only; sanctioned senders (Gatus DM reports, /tq-approve flow)
-# are the SUPERVISOR's judgment call — this tool reports evidence only.
+# are HQ's judgment call — this tool reports evidence only.
 #
 # Usage:
 #   oc-tg-audit <uuid> [--date YYYY-MM-DD] [--days N] [--log-dir P] | --selftest

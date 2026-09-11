@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # oc-drift-check — editor skill-drift ritual, mechanical (v0.4.58, Duty-6 lens C
-# #4: highest-frequency editor ritual was in the supervisor's head + prose).
+# #4: highest-frequency editor ritual was in HQ's head + prose).
 #
 # Usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]
 #   Compares the version a lane claimed at task-claim time against the LIVE

@@ -6,7 +6,7 @@
 # The live shadow log ($STATE_DIR/oc-deploy-shadow.log) is gitignored —
 # a SINGLE copy on disk. Rotation APPENDS the live content to the git-tracked
 # archive copy, then truncates the live file. Run at bump cadence
-# (supervisor.md bump steps). oc-deploy itself only ever appends to the live
+# (hq.md bump steps). oc-deploy itself only ever appends to the live
 # file, so truncate-after-archive loses nothing.
 #
 # CHAINED as the tail step of `oc-ledger sync` since v0.4.48 (merge A): the

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # oc-branch-sweep — branch-death proof + archive-then-delete (v0.4.58, Duty-6
-# lens C #1: standing supervisor duty, zero judgment).
+# lens C #1: standing HQ duty, zero judgment).
 #
 # Usage: oc-branch-sweep --repo <path> [--base <branch>] [--dry-run] [--keep RE]
 #   Classifies every local branch against <base> (default: repo HEAD branch):

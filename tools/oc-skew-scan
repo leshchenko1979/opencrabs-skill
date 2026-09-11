@@ -43,7 +43,7 @@ if [ "$SELFTEST" -eq 1 ]; then
   {"uuid":"u-ok","role":"editor","last_acked":{"version":"0.4.35"},"last_notified":{"version":"0.4.35"}},
   {"uuid":"u-grace","role":"editor","last_acked":{"version":"0.4.33"},"last_notified":{"version":"0.4.34"}},
   {"uuid":"u-chase","role":"editor","last_acked":{"version":"0.4.10"},"last_notified":{"version":"0.4.29"}},
-  {"uuid":"u-new","role":"supervisor"}
+  {"uuid":"u-new","role":"hq"}
 ],"events":[]}
 JSON
   OUT="$("$0" --ledger "$d/wl.json" --current 0.4.35 2>/dev/null)"; rc=$?
@@ -58,7 +58,7 @@ JSON
   {"uuid":"u-ok","role":"editor","last_acked":{"version":"0.4.36"},"last_notified":{"version":"0.4.36"}},
   {"uuid":"u-grace","role":"editor","last_acked":{"version":"0.4.36"},"last_notified":{"version":"0.4.36"}},
   {"uuid":"u-chase","role":"editor","last_acked":{"version":"0.4.36"},"last_notified":{"version":"0.4.36"}},
-  {"uuid":"u-new","role":"supervisor","last_acked":{"version":"0.4.36"},"last_notified":{"version":"0.4.36"}}
+  {"uuid":"u-new","role":"hq","last_acked":{"version":"0.4.36"},"last_notified":{"version":"0.4.36"}}
 ],"events":[]}
 JSON
   "$0" --ledger "$d/clean.json" --current 0.4.36 >/dev/null 2>&1; rc=$?

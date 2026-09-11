@@ -233,5 +233,5 @@ if [ "$AHEAD" -eq 0 ] && [ "$BEHIND" -eq 0 ]; then
   echo "$PROG: clean (fork $FORK_REF at upstream merge point)" >&2
   exit 0
 fi
-echo "$PROG: delta ahead=$AHEAD behind=$BEHIND absorbed=$ABSORBED — PROPOSE/WAIT is the supervisor's call (owner-word gates)" >&2
+echo "$PROG: delta ahead=$AHEAD behind=$BEHIND absorbed=$ABSORBED — PROPOSE/WAIT is HQ's call (owner-word gates)" >&2
 exit 1

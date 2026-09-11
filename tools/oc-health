@@ -333,7 +333,7 @@ if [ "${OC_HEALTH_SKIP_VERSION:-0}" = "1" ]; then
 else
 cv_out="$(cd "$TOOLS_DIR" && ./oc-ledger check-version 2>&1)"; cv_rc=$?
 case "$cv_out" in
-  *MISMATCH*) add_finding 7 QUIRK version-mismatch "$(printf '%s' "$cv_out" | head -1) — fix is oc-ledger sync (Supervisor release flow)" ;;
+  *MISMATCH*) add_finding 7 QUIRK version-mismatch "$(printf '%s' "$cv_out" | head -1) — fix is oc-ledger sync (HQ release flow)" ;;
   *) [ "$cv_rc" = "0" ] && clean_line "version: consistent" || add_finding 7 QUIRK version-unreadable "check-version rc=$cv_rc: $(printf '%s' "$cv_out" | head -1)" ;;
 esac
 fi

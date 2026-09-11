@@ -3,7 +3,7 @@
 # oc-attrib — attribute commits in a range to worker LANES via Session-Id
 # trailers joined against workers-ledger.json.
 #
-# War-story provenance (2026-08-26/27): the supervisor cracked THREE rogue CI
+# War-story provenance (2026-08-26/27): HQ cracked THREE rogue CI
 # dispatches by hand, pulling trailers off remote forks and cross-referencing
 # session UUIDs against the roster. This turns that ritual into one call.
 # Unsigned or ledger-unmapped sessions are NEVER silently dropped — they carry

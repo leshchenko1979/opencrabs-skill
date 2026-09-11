@@ -75,7 +75,7 @@ trap 'oc_log_finish $?' EXIT
 STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
 # Ledger resolution (v0.4.38, owner-approved 2026-08-29 "Go"): live runs MUST
 # hit the CANONICAL ledger. The old $STATE_DIR default kept a second ledger in
-# the skill dir — live swap stamps + fanout reads used it while supervisor
+# the skill dir — live swap stamps + fanout reads used it while HQ
 # stamps went to the canonical file: two-file drift, baseline/orders backup
 # paths pointing at an empty dir, cycle counter reset 25->1 (incident
 # 2026-08-29). OC_LEDGER overrides everything; an explicit OC_DEPLOY_STATE_DIR
@@ -1457,7 +1457,7 @@ swap_execute() {
   sidecar_sync() { # $1 = deployed binary sha ; GREEN path only
     local EXP="$1" EN=0 U PID PSHA ACT RRC NPID NSHA
     local RESTARTED=0 INSYNC=0 FAILED=0 DETAIL="[]"
-    # Ruling 1273 (supervisor, 2026-09-03, canonical): an ops-profile swap
+    # Ruling 1273 (HQ, 2026-09-03, canonical): an ops-profile swap
     # restarts opencrabs-ops.service ONLY — sibling daemons legitimately keep
     # the old binary + (deleted) exe. Sidecar sync is therefore OPT-IN
     # (supersedes the 2026-08-31 auto-sync, whose default restart of family
@@ -1934,7 +1934,7 @@ case "$MODE" in
       done
       if [ -z "$RUN_ID" ]; then
         [ "$(date +%s)" -lt "$POLL_DEADLINE" ] && { sleep "$POLL_INTERVAL"; continue; }
-        if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: no decodable carrier run found" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — supervisor not woken)" >&2; fi
+        if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: no decodable carrier run found" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — HQ not woken)" >&2; fi
         die 5 "poll: no decodable carrier runs within --wait ${WAIT_SECS}s"
       fi
       DEP="$(cat "$DEPLOYED" 2>/dev/null || echo none)"
@@ -1957,10 +1957,10 @@ case "$MODE" in
         if [ -n "$SHA" ] && [ "$B_SHA" = "$SHA" ]; then
           # Dispatched sha GREEN but swap didn't complete within the window —
           # a STUCK swap, never report "nothing new" (rc=5 miss family n=2003).
-          if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait STUCK: dispatched sha ${SHA:0:8} GREEN but swap not completed in ${WAIT_SECS}s (deployed=${DEP:0:8}) — SWAP PENDING, investigate" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — supervisor not woken)" >&2; fi
+          if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait STUCK: dispatched sha ${SHA:0:8} GREEN but swap not completed in ${WAIT_SECS}s (deployed=${DEP:0:8}) — SWAP PENDING, investigate" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — HQ not woken)" >&2; fi
           die 5 "poll --wait ${WAIT_SECS}s: dispatched sha ${SHA:0:8} GREEN but swap PENDING (stuck — deployed marker still ${DEP:0:8})"
         fi
-        if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: latest green $B_SHA already deployed — nothing new to swap" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — supervisor not woken)" >&2; fi
+        if [ -n "$NOTIFY_SESSION" ]; then NS_RC=0; notify_session "$NOTIFY_SESSION" "oc-deploy poll" "poll --wait ${WAIT_SECS}s timed out: latest green $B_SHA already deployed — nothing new to swap" || NS_RC=$?; [ "$NS_RC" = 0 ] || echo "oc-deploy: notify-session rc=$NS_RC (wake FAILED — HQ not woken)" >&2; fi
         die 5 "poll --wait ${WAIT_SECS}s timed out: $B_SHA already deployed (nothing new)"
       fi
       plan "poll --wait: $B_SHA already deployed — next attempt in ${POLL_INTERVAL}s"

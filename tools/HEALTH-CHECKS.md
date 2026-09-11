@@ -84,7 +84,7 @@ after sloppy lanes and hide the pattern.
 - **Check:** `tools/oc-ledger check-version` → MISMATCH means SKILL.md and the
   ledger disagree. Also `tools/oc-drift-check` for lanes whose `last_acked` is
   stale (>7 days) — the roster's version-compliance read depends on it.
-- **Remediation:** report; the fix is an `oc-ledger sync` (Supervisor release
+- **Remediation:** report; the fix is an `oc-ledger sync` (HQ release
   flow), not a tool action.
 
 ## 8. Cron liveness — `QUIRK` + `SAFE` (re-arm)
