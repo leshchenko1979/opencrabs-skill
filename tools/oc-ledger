@@ -50,14 +50,20 @@
 #                                          the old N.N regex could never record
 #                                          a real version; folds IDEA A core)
 #   enroll <uuid> <role> [--topic N] [--feature X]   roster row creation
-#   retire <uuid> [--why TEXT]             REMOVE a roster row: drops out of
+#   retire <uuid> [--topic N] [--role R] [--why TEXT]
+#                                          REMOVE ONE roster row: drops out of
 #                                          `oc-ledger roster` + `oc-roster` and
 #                                          loses signing (the sign gate keys on
 #                                          uuid presence). The only correction
 #                                          path for a wrongly-enrolled uuid —
 #                                          enroll refuses a dup, promote only
 #                                          mutates, neither can drop a row.
-#                                          Records the removed row's data in a
+#                                          ROW-scoped: --topic/--role are EXACT
+#                                          selectors, and a uuid matching >1 row
+#                                          with no selector is REFUSED rc 2
+#                                          (listing the rows) rather than
+#                                          revoking all of them. Records the
+#                                          removed row's data in a
 #                                          roster-retire event.
 #   commit-pending [--bundle]              sweep: commit uncommitted stamps /
 #                                          runtime artifacts (B1–B4 option b);
@@ -69,7 +75,7 @@
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
-#   --selftest                             fixture suite (181 cases)
+#   --selftest                             fixture suite (200 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -87,7 +93,10 @@
 #   lifecycle. enroll could create and promote could mutate, but NOTHING could
 #   drop a row, so a wrongly-enrolled uuid signed forever; the sign gate keys on
 #   uuid PRESENCE (oc-order-validate selects .role by uuid), which is why a
-#   demote revokes nothing and only removal works.)
+#   demote revokes nothing and only removal works. ROW-SCOPED since the same
+#   day's defect fix: retire takes --topic/--role EXACT selectors and refuses
+#   rc 2 when a uuid matches >1 row without one — it used to remove every
+#   row carrying the uuid while its event named only the first.)
 #   (skill-bump is stamp-REFUSED — it exists only via `sync`.)
 # Discipline: n = max(events[].n)+1 computed INSIDE the lock; read-only
 #   subcommands never lock; every mutation journals via lib/oc-log.sh; git is
@@ -525,7 +534,7 @@ cmd_promote() { # promote <uuid> <new-role> [--topic N] [--feature X] — update
 }
 
 # ---- retire (HQ ASK 2026-09-11) ---------------------------------------------
-cmd_retire() { # retire <uuid> [--why TEXT] — REMOVE an enrolled roster row.
+cmd_retire() { # retire <uuid> [--topic N] [--role R] [--why TEXT] — REMOVE one roster row.
   # The correction path the roster lifecycle was missing. enroll refuses a dup
   # uuid, promote only mutates in place, and the sign gate keys on uuid
   # PRESENCE (`oc-order-validate` selects .role by uuid) — so a wrongly-enrolled
@@ -535,39 +544,92 @@ cmd_retire() { # retire <uuid> [--why TEXT] — REMOVE an enrolled roster row.
   # belong to lane 6cd8175f — two editor rows for one topic, the wrong one
   # unable to be dropped.
   #
+  # ROW-SCOPED, NOT UUID-SCOPED (defect fix 2026-09-11, HQ report d72bd52d).
+  # The first cut removed `.workers |= map(select(.uuid != $u))` — EVERY row
+  # carrying that uuid — and snapshotted the event from `[0]`, so a uuid with
+  # two rows would have had both revoked by an event naming only one. That was
+  # LATENT on the roster of the day (every uuid held exactly one row) but the
+  # roster model plainly permits two: an editor row on one topic plus an
+  # auditor row on another. So the verb takes `--topic N` / `--role R`
+  # selectors — EXACT match, deliberately NOT the substring match that
+  # `roster --role` uses, because this verb DESTROYS a row and a fuzzy selector
+  # would be a foot-gun — and REFUSES rc 2 when the uuid matches more than one
+  # row and no selector disambiguates, listing the rows so the caller can pick.
+  # A guard with no selector would have been a dead end: a legitimately
+  # two-row uuid could then never be retired at all.
+  # Removal is by ARRAY INDEX (del(.workers[$i])), never by re-matching a
+  # predicate, so the row removed is exactly the row shown and snapshotted.
+  #
   # The row is REMOVED, so the event is the only surviving record: it carries
   # role/topic/feature plus the caller's --why. --why is OPTIONAL on purpose —
   # a correction verb must never be blocked when the fix is urgent; an absent
   # reason is recorded verbatim as "(no reason given)", which is itself a
   # visible signal in the audit trail rather than a silent omission.
-  # rc: 0 retired · 2 usage / bad uuid / not enrolled · 3 ledger unreadable.
-  local uuid="${1:-}" why=""; shift 2>/dev/null || true
+  # rc: 0 retired · 2 usage / bad uuid / bad selector / no row / ambiguous · 3 ledger unreadable.
+  local uuid="${1:-}" why="" sel_topic="" sel_role=""; shift 2>/dev/null || true
   while [ $# -gt 0 ]; do
     case "$1" in
-      --why) [ -n "${2:-}" ] || die 2 "retire: --why needs a value"; why="$2"; shift 2 ;;
-      -h|--help) echo "usage: oc-ledger retire <uuid> [--why TEXT]"; exit 0 ;;
-      *) die 2 "retire: unknown arg '$1' (usage: oc-ledger retire <uuid> [--why TEXT])" ;;
+      --why)   [ -n "${2:-}" ] || die 2 "retire: --why needs a value"; why="$2"; shift 2 ;;
+      --topic) [ -n "${2:-}" ] || die 2 "retire: --topic needs a value"; sel_topic="$2"; shift 2 ;;
+      --role)  [ -n "${2:-}" ] || die 2 "retire: --role needs a value"; sel_role="$2"; shift 2 ;;
+      -h|--help) echo "usage: oc-ledger retire <uuid> [--topic N] [--role R] [--why TEXT]"; exit 0 ;;
+      *) die 2 "retire: unknown arg '$1' (usage: oc-ledger retire <uuid> [--topic N] [--role R] [--why TEXT])" ;;
     esac
   done
-  [ -n "$uuid" ] || die 2 "usage: oc-ledger retire <uuid> [--why TEXT]"
+  [ -n "$uuid" ] || die 2 "usage: oc-ledger retire <uuid> [--topic N] [--role R] [--why TEXT]"
   echo "$uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
     || die 2 "retire: uuid shape invalid: '$uuid'"
+  # Selector shape is validated BEFORE the match query, so a malformed --topic
+  # can never be misread as "no row matches" — that confusion is exactly what
+  # the ambiguity selftest would otherwise paper over.
+  if [ -n "$sel_topic" ]; then
+    echo "$sel_topic" | grep -Eq '^[0-9]+$' \
+      || die 2 "retire: --topic must be an integer, got '$sel_topic'"
+  fi
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
-  jq -e --arg u "$uuid" '.workers[]? | select(.uuid == $u)' "$LEDGER" >/dev/null 2>&1 \
-    || die 2 "retire: uuid not enrolled (nothing to remove): $uuid"
+  # The MATCH SET: rows carrying the uuid, narrowed by the exact-match
+  # selectors when given. An absent topic_id can never equal a numeric
+  # --topic ("" != "49607"), so a selector never matches a null-topic row.
+  local n_match
+  n_match="$(jq -r --arg u "$uuid" --arg tp "$sel_topic" --arg rl "$sel_role" '
+    [ .workers[] | select(.uuid == $u)
+      | select($tp == "" or ((.topic_id // "") | tostring) == $tp)
+      | select($rl == "" or ((.role // "") == $rl)) ] | length' "$LEDGER" 2>/dev/null)" \
+    || die 3 "retire: ledger unreadable: $LEDGER"
+  case "$n_match" in ''|*[!0-9]*) die 3 "retire: ledger unreadable: $LEDGER" ;; esac
+  [ "$n_match" -gt 0 ] || die 2 "retire: no row matches $uuid${sel_topic:+ (topic $sel_topic)}${sel_role:+ (role $sel_role)} — nothing to remove"
+  if [ "$n_match" -gt 1 ]; then
+    echo "retire: ambiguous — $n_match rows carry $uuid; add --topic N and/or --role R to pick exactly one:" >&2
+    jq -r --arg u "$uuid" --arg tp "$sel_topic" --arg rl "$sel_role" '
+      .workers[] | select(.uuid == $u)
+      | select($tp == "" or ((.topic_id // "") | tostring) == $tp)
+      | select($rl == "" or ((.role // "") == $rl))
+      | "  " + (.role // "-") + "  topic " + ((.topic_id // "-") | tostring)
+        + "  feature " + (.feature // "-") + "  confirmed " + ((.confirmed // false) | tostring)' \
+      "$LEDGER" >&2
+    die 2 "retire: ambiguous uuid — refusing to remove more than one row"
+  fi
+  # Exactly one match: pin it to an ARRAY INDEX so the removal is exact.
+  local idx
+  idx="$(jq -r --arg u "$uuid" --arg tp "$sel_topic" --arg rl "$sel_role" '
+    [ .workers | to_entries[]
+      | select(.value.uuid == $u)
+      | select($tp == "" or ((.value.topic_id // "") | tostring) == $tp)
+      | select($rl == "" or ((.value.role // "") == $rl)) ][0].key' "$LEDGER")"
+  case "$idx" in ''|*[!0-9]*) die 3 "retire: ledger unreadable (no index for the matched row): $LEDGER" ;; esac
   [ -n "$why" ] || why="(no reason given)"
   # Snapshot the row BEFORE removal — the event is its only surviving record.
   local cur_role cur_topic cur_feature cur_confirmed
-  cur_role="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].role // "-"' "$LEDGER")"
-  cur_topic="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].topic_id // "-" | tostring' "$LEDGER")"
-  cur_feature="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].feature // "-"' "$LEDGER")"
-  cur_confirmed="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid == $u)][0].confirmed // false | tostring' "$LEDGER")"
+  cur_role="$(jq -r --argjson i "$idx" '.workers[$i].role // "-"' "$LEDGER")"
+  cur_topic="$(jq -r --argjson i "$idx" '(.workers[$i].topic_id // "-") | tostring' "$LEDGER")"
+  cur_feature="$(jq -r --argjson i "$idx" '.workers[$i].feature // "-"' "$LEDGER")"
+  cur_confirmed="$(jq -r --argjson i "$idx" '(.workers[$i].confirmed // false) | tostring' "$LEDGER")"
   _retire_locked() {
     local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
-    atomic_jq --arg u "$uuid" --arg r "$cur_role" --arg tp "$cur_topic" \
+    atomic_jq --argjson i "$idx" --arg u "$uuid" --arg r "$cur_role" --arg tp "$cur_topic" \
       --arg f "$cur_feature" --arg c "$cur_confirmed" --arg w "$why" \
       --arg n "$n" --arg t "$t" \
-      '.workers |= map(select(.uuid != $u))
+      '.workers |= del(.[$i])
        | .events += [{n: ($n|tonumber), t: $t, by: "oc-ledger retire", kind: "roster-retire",
                       what: ("retired " + $r + " " + $u + " (topic " + $tp + ", feature " + $f
                              + ", confirmed " + $c + "): " + $w)}]
@@ -635,7 +697,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (181 cases) -----------------------------------------------------
+# ---- selftest (200 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -799,6 +861,52 @@ EOF
   # retire assertions already ran against the removed state — this restores the
   # fixture, it does not undo them.
   bash "$ME" enroll 22222222-2222-2222-2222-222222222222 toolsmith --topic 39171 --feature tools >/dev/null 2>&1
+  # 29d: retire is ROW-SCOPED, not UUID-scoped (defect fix 2026-09-11, HQ report
+  # d72bd52d). A uuid CAN legitimately hold two rows — an editor row on one
+  # topic plus an auditor row on another — and the roster model plainly permits
+  # it. Build that state BY HAND: enroll refuses a dup uuid by design, which is
+  # exactly why a two-row uuid can only arrive via a migration/incident path.
+  # The first cut did `.workers |= map(select(.uuid != $u))` and snapshotted the
+  # event from `[0]`, so BOTH rows would have been revoked by an event naming
+  # one. Latent on the roster of the day (every uuid held one row), which is
+  # precisely why it needs a fixture that is not the live shape.
+  local U6=66666666-6666-6666-6666-666666666666
+  local REV0; REV0="$(jq '[.events[] | select(.by == "oc-ledger retire")] | length' "$OC_LEDGER")"
+  jq '.workers += [{uuid:"'"$U6"'", role:"editor", topic_id:49607, feature:"cron-session-isolation",
+                    confirmed:false, last_acked:null, notes:[], events:[]},
+                   {uuid:"'"$U6"'", role:"auditor", topic_id:30220, feature:"triage",
+                    confirmed:false, last_acked:null, notes:[], events:[]}]' \
+    "$OC_LEDGER" > "$T/dual.json" && mv "$T/dual.json" "$OC_LEDGER"
+  chk "retire-rowscope-fixture" "2" "$(jq --arg u "$U6" '[.workers[] | select(.uuid == $u)] | length' "$OC_LEDGER")"
+  # ambiguous without a selector: rc 2, NOTHING removed, NO event written
+  bash "$ME" retire "$U6" >/dev/null 2>&1; chk "retire-ambiguous-rc2" 2 $?
+  chk "retire-ambiguous-keeps-both" "2" "$(jq --arg u "$U6" '[.workers[] | select(.uuid == $u)] | length' "$OC_LEDGER")"
+  chk "retire-ambiguous-no-event" "$REV0" "$(jq '[.events[] | select(.by == "oc-ledger retire")] | length' "$OC_LEDGER")"
+  # a selector that matches nothing is rc 2, never a silent no-op
+  bash "$ME" retire "$U6" --topic 99999 >/dev/null 2>&1; chk "retire-selector-nomatch-rc2" 2 $?
+  chk "retire-selector-nomatch-keeps-both" "2" "$(jq --arg u "$U6" '[.workers[] | select(.uuid == $u)] | length' "$OC_LEDGER")"
+  # --topic disambiguates, and the event names the row ACTUALLY removed
+  bash "$ME" retire "$U6" --topic 30220 --why "auditor row on 30220" >/dev/null 2>&1; chk "retire-topic-selector-rc0" 0 $?
+  chk "retire-topic-removed-one" "1" "$(jq --arg u "$U6" '[.workers[] | select(.uuid == $u)] | length' "$OC_LEDGER")"
+  chk "retire-topic-kept-sibling" "editor" "$(jq -r --arg u "$U6" '[.workers[] | select(.uuid == $u)][0].role' "$OC_LEDGER")"
+  chk "retire-topic-event-names-removed" "true" "$(jq -r '[.events[] | select(.by == "oc-ledger retire")] | last | .what | startswith("retired auditor 66666666-6666-6666-6666-666666666666 (topic 30220, feature triage, confirmed false): auditor row on 30220")' "$OC_LEDGER")"
+  # --role is an EXACT match, NOT the substring match roster --role uses: this
+  # verb DESTROYS a row, so a fuzzy selector would be a foot-gun.
+  bash "$ME" retire "$U6" --role edit >/dev/null 2>&1; chk "retire-selector-exact" 2 $?
+  chk "retire-exact-kept-row" "1" "$(jq --arg u "$U6" '[.workers[] | select(.uuid == $u)] | length' "$OC_LEDGER")"
+  bash "$ME" retire "$U6" --role editor >/dev/null 2>&1; chk "retire-role-selector-rc0" 0 $?
+  chk "retire-role-removed-last" "0" "$(jq --arg u "$U6" '[.workers[] | select(.uuid == $u)] | length' "$OC_LEDGER")"
+  # selector arg validation — the uuid is enrolled FIRST so each case fails on
+  # the SELECTOR, not on not-enrolled (a vacuous rc 2 would pass either way)
+  bash "$ME" enroll "$U6" editor --topic 49607 >/dev/null 2>&1
+  bash "$ME" retire "$U6" --topic >/dev/null 2>&1;   chk "retire-topic-novalue-rc2" 2 $?
+  bash "$ME" retire "$U6" --role  >/dev/null 2>&1;   chk "retire-role-novalue-rc2" 2 $?
+  bash "$ME" retire "$U6" --topic abc >/dev/null 2>&1; chk "retire-topic-nonnum-rc2" 2 $?
+  chk "retire-badselector-removes-nothing" "1" "$(jq --arg u "$U6" '[.workers[] | select(.uuid == $u)] | length' "$OC_LEDGER")"
+  # fixture hygiene: drop the probe row so the later roster assertions still
+  # count exactly 3 workers (aaaa, 2222, W2)
+  bash "$ME" retire "$U6" >/dev/null 2>&1
+  chk "retire-rowscope-restored" "0" "$(jq --arg u "$U6" '[.workers[] | select(.uuid == $u)] | length' "$OC_LEDGER")"
   # 30-32: commit-pending
   bash "$ME" commit-pending | grep -q "clean" && ok || bad "commit-pending-clean"
   jq '.events += [{"n": 900, "t": "x", "by": "tool", "kind": "note", "what": "stray"}]' "$OC_LEDGER" > "$T/d.json" && mv "$T/d.json" "$OC_LEDGER"
