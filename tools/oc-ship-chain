@@ -14,8 +14,14 @@
 #
 # Usage:
 #   oc-ship-chain --sha <sha> --branch <branch> [--issue <n>] [--repo <fork-slug>]
-#                 [--gated-sha <sha>] [--gated-run <id>] [--wait <sec>] [--dry-run]
-#                 [--no-ledger] [--selftest] [--help]
+#                 [--gated-sha <sha>] [--gated-run <id>] [--wait <sec>]
+#                 [--gate-wait <sec>] [--dry-run] [--no-ledger] [--selftest] [--help]
+#
+# --wait <sec>       LEG4 ship/swap budget (default 900).
+# --gate-wait <sec>  LEG1 CI-gate budget (default 2700 = 45 min; the PR-lane
+#                    gate runs ~30 min here, and oc-prchecks' own default is
+#                    600 s, which is SHORTER than the gate — see Exit 5/7).
+#                    Env: OC_SHIPCHAIN_GATE_WAIT.
 #
 # Background execution:
 #   Runs across Legs 1-3 sequentially. Call with bash tool parameter background: true.
@@ -27,7 +33,11 @@
 #       4 GATE-RED (oc-prchecks rc 3) or CARRIER-RED (ship wait verdict RED)
 #       5 NON-FF (branch not fast-forwardable onto fork main — lane rebases
 #         via oc-rebase-safety, then re-runs the chain)
-#       6 dispatch/poll infra failure (prchecks rc 4/5/7/8, ship rc other)
+#       6 dispatch/poll infra failure (prchecks rc 4/7/8, ship rc other)
+#       7 gate still IN FLIGHT after its budget + resume-polls (prchecks rc 5,
+#         non-terminal). The run id is printed — do NOT re-dispatch (that
+#         concurrency-cancels the live run); wait for it and re-run with
+#         --gated-run <id>, which pre-verifies and skips dispatch.
 #
 # Chain-id: every leg stamps the ledger under one id (kind=shipchain)
 #   CHAIN-<shortsha>-<UTCstamp>  →  retrieve the whole run with
@@ -81,6 +91,11 @@ usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$SELF"; ex
 die() { printf 'oc-ship-chain: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0; GATED_SHA=""; GATED_RUN=""
+# LEG1 gate budget (defect fix 2026-09-11, lane 4b4463d5). The PR-lane gate on
+# this box takes ~30 min end-to-end; oc-prchecks' own --wait default is 600 s,
+# so a fresh chain ALWAYS timed out mid-build and died on a non-terminal code.
+GATE_WAIT="${OC_SHIPCHAIN_GATE_WAIT:-2700}"        # 45 min — one gate, comfortably
+GATE_RESUMES="${OC_SHIPCHAIN_GATE_RESUMES:-2}"     # max rc-5 resume-polls before an honest give-up
 [ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 exec bash "$SELF"
 [ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
 
@@ -91,6 +106,7 @@ while [ $# -gt 0 ]; do
     --issue)     ISSUE="${2:?}"; shift 2 ;;
     --repo)      REPO="${2:?}"; shift 2 ;;
     --wait)      WAIT="${2:?}"; shift 2 ;;
+    --gate-wait) GATE_WAIT="${2:?}"; shift 2 ;;
     --gated-sha) GATED_SHA="${2:?}"; shift 2 ;;
     --gated-run) GATED_RUN="${2:?}"; shift 2 ;;
     --dry-run)   DRY=1; shift ;;
@@ -203,11 +219,40 @@ elif [ -n "$GATED_SHA" ]; then
     die "gated-sha verification failed: no completed success run found for $SHA" 4
   fi
 else
-  journal "LEG1 gate start (oc-prchecks $SHA)"
+  journal "LEG1 gate start (oc-prchecks $SHA --wait $GATE_WAIT)"
   set +e
-  GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} 2>&1)"
+  GATE_OUT="$("$PRCHECKS_BIN" "$SHA" ${REPO:+--repo "$REPO"} --wait "$GATE_WAIT" 2>&1)"
   GATE_RC=$?
   set -e
+  # rc 5 is NON-TERMINAL, never infra (defect fix 2026-09-11, lane 4b4463d5).
+  # oc-prchecks documents rc 5 as "still in flight after --wait", with the live
+  # run id on stdout (`run=<id>`) for exactly this resume. The old `*)` arm
+  # funnelled it into a fatal `die 6`, so a FRESH chain killed itself while its
+  # own gate was still building — ledger n=2595 / n=2609 / n=2611: three
+  # chains, three identical deaths, ZERO SWAPPED rows ever. rc 5 now
+  # RESUME-POLLS the witnessed run instead of dying. Genuine infra codes stay
+  # fatal below (4 unknown run / 7 red-fault-scope / 8 ambiguous).
+  GATE_ATTEMPTS=0
+  while [ "$GATE_RC" = "5" ]; do
+    GATE_RUN_ID="$(printf '%s' "$GATE_OUT" | grep -oE 'run=[0-9]+' | head -1 | cut -d= -f2 || true)"
+    if [ -z "$GATE_RUN_ID" ]; then
+      journal "LEG1 gate INFRA rc=5 with no run id on stdout (cannot resume)"
+      printf '%s\n' "$GATE_OUT"
+      die "gate rc=5 but no run id on stdout — cannot resume" 6
+    fi
+    if [ "$GATE_ATTEMPTS" -ge "$GATE_RESUMES" ]; then
+      journal "LEG1 gate STILL IN FLIGHT run=$GATE_RUN_ID after $GATE_ATTEMPTS resume-poll(s) — giving up"
+      printf '%s\n' "$GATE_OUT"
+      die "gate still in flight (run=$GATE_RUN_ID) after $GATE_ATTEMPTS resume-poll(s) — wait for it, then re-run with --gated-run $GATE_RUN_ID" 7
+    fi
+    GATE_ATTEMPTS=$((GATE_ATTEMPTS + 1))
+    journal "LEG1 gate in flight (run=$GATE_RUN_ID) — resume-poll $GATE_ATTEMPTS/$GATE_RESUMES"
+    printf '%s\n' "oc-ship-chain: LEG1 gate still in flight run=$GATE_RUN_ID — resume-poll $GATE_ATTEMPTS/$GATE_RESUMES" >&2
+    set +e
+    GATE_OUT="$("$PRCHECKS_BIN" resume "$GATE_RUN_ID" ${REPO:+--repo "$REPO"} --wait "$GATE_WAIT" 2>&1)"
+    GATE_RC=$?
+    set -e
+  done
   case "$GATE_RC" in
     0) journal "LEG1 gate GREEN" ;;
     3) journal "LEG1 gate RED";  printf '%s\n' "$GATE_OUT"; die "GATE-RED" 4 ;;
@@ -473,6 +518,59 @@ EOF
   check_rc "journal-ok-rc" "$RC" 0
   case "$OUT" in *"journaling FAILED"*) bad "journal-ok-no-false-alarm" ;; *) ok "journal-ok-no-false-alarm" ;; esac
   case "$OUT" in *"line(s) lost"*) bad "journal-ok-no-false-summary" ;; *) ok "journal-ok-no-false-summary" ;; esac
+
+  # 9-11. LEG1 gate rc 5 is NON-TERMINAL, never infra (defect fix 2026-09-11,
+  # lane 4b4463d5). oc-prchecks rc 5 = "still in flight after --wait" with the
+  # live run id on stdout; the old `*)` arm made it fatal, so a FRESH chain
+  # killed itself while its own gate was still building — ledger n=2595 / n=2609
+  # / n=2611: three chains, three identical rc-5 deaths, ZERO SWAPPED rows ever.
+  # rc 5 must RESUME-POLL; only a genuinely exhausted budget may give up, and
+  # that gives up as rc 7 (in flight), distinct from rc 6 (infra).
+  cat > "$T/fake-prchecks-inflight" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "resume" ]; then
+  case "${GATE_MODE:-green}" in
+    green)  echo "VERDICT GREEN"; exit 0 ;;
+    always) echo "IN-FLIGHT run=888 https://x/runs/888 (still in_progress)"; exit 5 ;;
+  esac
+fi
+[ "${GATE_MODE:-green}" = "norunid" ] && { echo "IN-FLIGHT (still in_progress)"; exit 5; }
+echo "IN-FLIGHT run=888 https://x/runs/888 (still in_progress)"; exit 5
+EOF
+  chmod +x "$T/fake-prchecks-inflight"
+  run_chain_inflight() {
+    OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks-inflight" OC_DEPLOY_BIN="$T/fake-deploy" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+      bash "$SELF" "$@"
+  }
+
+  # 9. rc 5 then a GREEN resume → the chain completes (the whole point of the fix)
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(GATE_MODE=green run_chain_inflight --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  check_rc "gate-rc5-resumes-to-green" "$RC" 0
+  case "$OUT" in *SWAPPED*) ok "gate-rc5-chain-completed" ;; *) bad "gate-rc5-chain-completed: $OUT" ;; esac
+  grep -q "LEG1 gate in flight (run=888) — resume-poll 1/" "$T/journal.log" && ok "gate-rc5-journaled-resume" || bad "gate-rc5-journaled-resume"
+  grep -q "LEG1 gate GREEN" "$T/journal.log" && ok "gate-rc5-journaled-green" || bad "gate-rc5-journaled-green"
+
+  # 10. an ALWAYS-timing-out gate gives up as rc 7 (in flight), never rc 6 (infra)
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(GATE_MODE=always OC_SHIPCHAIN_GATE_RESUMES=2 run_chain_inflight --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  check_rc "gate-rc5-exhausted-rc7" "$RC" 7
+  case "$OUT" in *"still in flight (run=888)"*) ok "gate-rc5-exhausted-names-run" ;; *) bad "gate-rc5-exhausted-names-run: $OUT" ;; esac
+  case "$OUT" in *"resume-poll 2/2"*) ok "gate-rc5-exhausted-resume-count" ;; *) bad "gate-rc5-exhausted-resume-count" ;; esac
+  grep -q "LEG1 gate STILL IN FLIGHT run=888" "$T/journal.log" && ok "gate-rc5-exhausted-journaled" || bad "gate-rc5-exhausted-journaled"
+
+  # 11. rc 5 with NO run id cannot resume → rc 6 infra (the honest dead end)
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(GATE_MODE=norunid run_chain_inflight --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  check_rc "gate-rc5-no-runid-rc6" "$RC" 6
 
   echo "selftest: $PASS passed, $FAIL failed"
   return $?
