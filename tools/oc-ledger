@@ -30,7 +30,7 @@
 #                                          reads as "no such event", the same
 #                                          phantom-verb class as `roster`).
 #                                          rc 1 = NO-MATCH verdict. Read-only.
-#   sync --version <v> [--why <text>] [--catch-up]
+#   sync --version <v> [--why <text>] [--catch-up] [--allow-sweep]
 #                                          ONE atomic write: 3 version fields
 #                                          + skill-bump event; battery-receipt
 #                                          gate; skill-repo commit + tag; tail
@@ -42,7 +42,12 @@
 #                                          ahead of ledger meta — the dead zone
 #                                          (doc-first gate + +1-only step check
 #                                          admit no legal sequence otherwise);
-#                                          --why mandatory; downgrades refused
+#                                          --why mandatory; downgrades refused;
+#                                          --allow-sweep (v0.4.157): absorb
+#                                          unrelated dirty paths into the bump
+#                                          commit. WITHOUT it the sync REFUSES
+#                                          and names them (stray-guard) - a bump
+#                                          must never absorb another actor's work
 #   check-version                          SKILL.md vs 3 ledger fields (RO)
 #   cadence                                skill-bumps since last review (RO)
 #   ack <uuid> <0.N.N version> [--at <ts>]  worker last_acked + ack event
@@ -256,12 +261,13 @@ cmd_stamp() {
 # ---- sync -------------------------------------------------------------------
 battery_receipt() { echo "$SKILL_DIR/tools/tests/battery-last.json"; }
 cmd_sync() {
-  local v="" why="" catchup=0
+  local v="" why="" catchup=0 allow_sweep=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --version) v="${2:-}"; shift 2 ;;
       --why) why="${2:-}"; shift 2 ;;
       --catch-up) catchup=1; shift ;;
+      --allow-sweep) allow_sweep=1; shift ;;
       *) shift ;;
     esac
   done
@@ -342,6 +348,30 @@ cmd_sync() {
     git_state_commit "ledger n=$n: skill-bump v$v via oc-ledger sync"
     return 0
   }
+  # stray-guard (v0.4.157): a bump commit must never absorb another actor's work.
+  # The v0.4.63 root-fix stages the FULL tree so a tag can never point at a tree
+  # missing its payload (incident n=1405) - but `git add -A` also swept UNRELATED
+  # dirty paths, landing them under the bumper's commit message with the wrong
+  # provenance. Live repro 2026-09-12: commit 20c8df4f (HQ's v0.4.156 bump)
+  # carried tools/tests/battery-last.json, another lane's dirty receipt; earlier
+  # sweeps fda12336 / 28f7ef41 took a half-written oc-deploy the same way.
+  # Refuse-and-name instead of commit-and-sweep. The v0.4.63 guarantee holds:
+  # with --allow-sweep the full tree is still staged, and without it NO tag is
+  # created at all - a bump tag still never points at a tree missing payload.
+  # Exempt: the version docs (SKILL.md, CHANGELOG.md) and the battery receipt,
+  # which IS this bump's evidence (the gate above just read it).
+  if [ -d "$SKILL_DIR/.git" ] && [ "$allow_sweep" -ne 1 ]; then
+    local stray
+    stray="$(git -C "$SKILL_DIR" status --porcelain | sed 's/^...//' \
+      | grep -vE '^(SKILL\.md|CHANGELOG\.md|tools/tests/battery-last\.json)$' || true)"
+    if [ -n "$stray" ]; then
+      echo "sync: REFUSED - unrelated dirty paths in the skill repo would ride the bump commit:" >&2
+      printf '%s\n' "$stray" | sed 's/^/    /' >&2
+      echo "  commit them first (preferred - they keep their own message and provenance)," >&2
+      echo "  or re-run with --allow-sweep to absorb them into the bump deliberately." >&2
+      die 7 "sync: refusing to sweep unrelated dirty paths (stray-guard v0.4.157)"
+    fi
+  fi
   with_lock _sync_locked || exit $?
   # skill-repo git leg: commit the version docs + tag.
   # v0.4.63 root-fix (incident n=1405, three strikes v0.4.58/61/62): stage the
@@ -350,9 +380,13 @@ cmd_sync() {
   # LOUDLY on stderr so the sweep is visible in tools.log, never silent.
   if [ -d "$SKILL_DIR/.git" ]; then
     ( cd "$SKILL_DIR" || exit 1
-      swept="$(git status --porcelain | awk 'NF{p=$1; $1=""; sub(/^ +/,""); print p" "$0}' | grep -vE '^(.. )?(SKILL\.md|CHANGELOG\.md)$' || true)"
+      # v0.4.157: the old filter matched `^(.. )?` against a `p" "$0` render, but
+      # porcelain emits a ONE-char status for a worktree modification (" M SKILL.md"),
+      # so the exempt list was INERT - SKILL.md/CHANGELOG.md were reported as swept on
+      # every sync. `sed 's/^...//'` strips XY<space> exactly, so the list works now.
+      swept="$(git status --porcelain | sed 's/^...//' | grep -vE '^(SKILL\.md|CHANGELOG\.md|tools/tests/battery-last\.json)$' || true)"
       git add -A
-      [ -n "$swept" ] && echo "PAYLOAD SWEPT into bump commit (silent-stray class, pre-v0.4.63): $(printf '%s' "$swept" | tr '\n' '; ')" >&2
+      [ -n "$swept" ] && echo "PAYLOAD SWEPT into bump commit (--allow-sweep; silent-stray class, pre-v0.4.63): $(printf '%s' "$swept" | tr '\n' '; ')" >&2
       git commit -q -m "skill v$v: oc-ledger sync — ${why:-version sync}" 2>/dev/null \
         || echo "commit-lag: skill commit deferred" >&2
       git tag "v$v" 2>/dev/null || echo "tag v$v exists or failed" >&2 )
@@ -698,12 +732,17 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (205 cases) -----------------------------------------------------
+# ---- selftest (215 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
   local T P=0 F=0
   T="$(mktemp -d)"; mkdir -p "$T/state" "$T/skill/tools/tests"
+  # v0.4.157: keep tools/ TRACKED in the fixture. An entirely-untracked directory
+  # collapses to `?? tools/` in porcelain, which the stray-guard would (correctly)
+  # read as an unrelated dirty path — a fixture artifact, not a guard bug. A .keep
+  # file makes the receipt show as the untracked FILE it is in the real repo.
+  : > "$T/skill/tools/tests/.keep"
   ok() { P=$((P+1)); }; bad() { F=$((F+1)); echo "  FAIL selftest - $*" >&2; }
   chk() { # $1 desc, $2 want_rc, $3 got_rc
     if [ "$2" = "$3" ]; then ok; else bad "$1 (want rc=$2 got rc=$3)"; fi
@@ -767,11 +806,20 @@ EOF
   git -C "$T/state" log --oneline | grep "skill-bump v0.4.2" >/dev/null && ok || bad "sync-state-commit"   # no -q: pipefail v0.4.72 — grep -q early-close can SIGPIPE git log (141)
   git -C "$T/skill" tag | grep -q '^v0\.4\.2$' && ok || bad "sync-skill-tag"
   bash "$ME" sync --version 0.4.2 --why resync >/dev/null 2>&1; chk "sync-resync-equal" 0 $?
-  # 17b: payload-sweep root-fix (n=1405: v0.4.58/61/62 strayed payload via hardcoded add list)
-  echo "payload-leg" > "$T/skill/tools/payload-probe.sh"
+  # 17b-pre (v0.4.157): the stray-guard REFUSES an unrelated dirty path, names it,
+  # and writes NO skill-bump event (a refused sync must leave no drift behind).
   sed -i 's/version: 0.4.2/version: 0.4.3/' "$T/skill/SKILL.md"
   printf '\n## v0.4.3\npayload receipt\n' >> "$T/skill/CHANGELOG.md"
-  PSWEEP_OUT="$(bash "$ME" sync --version 0.4.3 --why payload-sweep 2>&1)"; chk "sync-payload-sweep" 0 $?
+  echo "stray-leg" > "$T/skill/tools/stray-probe.sh"
+  STRAY_OUT="$(bash "$ME" sync --version 0.4.3 --why stray 2>&1)"; chk "sync-stray-refused" 7 $?
+  case "$STRAY_OUT" in *"stray-probe.sh"*) ok ;; *) bad "sync-stray-names-path" ;; esac
+  chk "sync-stray-no-event" "0" "$(jq '[.events[] | select(.kind == "skill-bump" and ((.what // "") | startswith("v0.4.3 ")))] | length' "$OC_LEDGER")"
+  rm -f "$T/skill/tools/stray-probe.sh"
+  # 17b: payload-sweep root-fix (n=1405: v0.4.58/61/62 strayed payload via hardcoded add list)
+  # v0.4.157: the sweep is now EXPLICIT - --allow-sweep is the consent, so a bump can
+  # no longer absorb a path nobody agreed to (the 20c8df4f class).
+  echo "payload-leg" > "$T/skill/tools/payload-probe.sh"
+  PSWEEP_OUT="$(bash "$ME" sync --version 0.4.3 --why payload-sweep --allow-sweep 2>&1)"; chk "sync-payload-sweep" 0 $?
   case "$PSWEEP_OUT" in *"PAYLOAD SWEPT"*) ok ;; *) bad "sync-payload-warning" ;; esac
   git -C "$T/skill" show v0.4.3 --name-only | grep -q "payload-probe.sh" && ok || bad "sync-sweeps-payload"
   # 18-19: check-version
