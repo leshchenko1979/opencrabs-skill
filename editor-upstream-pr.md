@@ -52,19 +52,19 @@ git -C ~/opencrabs rev-parse adolfousier/main   # must equal the sha the port wa
 #     PR-BASE-PRE-OPEN in the Rules list below.
 
 # 2c. CI gate (upstream triad) (v0.4.22 — encodes adolfousier/opencrabs
-#     CONTRIBUTING.md: "You MUST pass all three before
-#     submitting a PR"). v0.4.28: the triad runs in CI via pr-checks.yml (cargo is
-#     FORBIDDEN on this box — box law); a green run URL IS the citation now.
-#     FIRST push the head branch (step 3's command — the workflow checks the
-#     branch out from the fork), then dispatch:
-gh workflow run pr-checks.yml --repo leshchenko1979/opencrabs \
-  --ref ci/quick-build-linux -f ref=leshchenko1979/<feature>
-#   (v0.4.46: one command does all of it — tools/oc-prchecks leshchenko1979/<feature>;
-#    prints the GREEN/RED verdict + run URL for the PR-body citation below)
+#     CONTRIBUTING.md: "You MUST pass all three before submitting a PR").
+#     v0.4.28: the triad runs in CI via pr-checks.yml (cargo is FORBIDDEN on this box — box law);
+#     a green run URL IS the citation.
+#     FIRST push the head branch (step 3's command — the workflow checks the branch out from the fork).
+#     MANDATORY FULL-GATE FORM (v0.4.149, owner order 2026-09-12):
+#     Pre-PR testing MUST use the full gate (cargo test + fmt + clippy, NO --fast):
+#       tools/oc-prchecks leshchenko1979/<feature>
+#     or blocking wait form:
+#       tools/oc-prchecks wait leshchenko1979/<feature>
+#     (Do NOT pass --fast for final pre-PR verification. Full gate ensures 100% upstream test parity.)
 #   Standing rules PR-GATE-STANDING in the Rules list below (flags verbatim
 #   from pr-checks.yml; ANY red = fix cycle + re-dispatch, never a filed PR;
-#   cite the green run URL in the PR body prep next to the smoke/run
-#   evidence).
+#   cite the green run URL in the PR body prep next to the smoke/run evidence).
 
 # 3. push the head branch to the FORK (PR heads live there)
 git -C ~/oc-wt-up-<feature> push -u origin leshchenko1979/<feature>
@@ -211,6 +211,15 @@ Contract:
 1. **Dedicated Worktree**: Create isolated worktree off `adolfousier/main` tip:
    `tools/oc-wt add up-<slug> leshchenko1979/fix/<slug> --create --from adolfousier/main`
 2. **Cherry-pick & Pre-Sweep**: Cherry-pick source commits preserving trailers (`-x` / `Issue-Ref`), then verify clean lineage with `tools/oc-harvest-sweep leshchenko1979/fix/<slug> --base adolfousier/main`.
-3. **Smoke & Gate Verification (Hard Gate, v0.4.146)**: Verify full 4-leg smoke pass (Lineage, Identity, CI Gate, Behavioral probe) is recorded with live receipts in `smoke-verdicts.log`. NEVER file an unsmoked PR. Push branch to origin (`leshchenko1979/opencrabs`) and trigger `tools/oc-prchecks leshchenko1979/fix/<slug>`.
+3. **Smoke & Gate Verification (Hard Gate, v0.4.146 / v0.4.149)**:
+   - **4-Leg Smoke Pass**: Verify full 4-leg smoke pass (Lineage, Identity, CI Gate, Behavioral probe) is recorded with live receipts in `smoke-verdicts.log`. NEVER file an unsmoked PR.
+   - **Mandatory Full PR Gate**: Push branch to origin (`leshchenko1979/opencrabs`) and trigger full PR checks (NO `--fast` mode):
+     ```bash
+     # Single-command blocking full PR gate:
+     tools/oc-prchecks wait leshchenko1979/fix/<slug>
+     # Or standard dispatch:
+     tools/oc-prchecks leshchenko1979/fix/<slug>
+     ```
+     `--fast` is strictly prohibited for pre-PR testing; upstream PRs require 100% full test suite verification.
 4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log`, Editor files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug>`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue.
 5. **Ack & Cleanup**: Remove harvest worktree, stamp completion in ledger, and notify Triage via `session_notify`.

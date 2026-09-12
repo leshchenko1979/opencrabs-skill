@@ -1,3 +1,11 @@
+# Changelog
+
+## v0.4.149 (2026-09-12) — Autonomous Editor Goal Mandate & Full-Gate Pre-PR Testing Law
+
+- **Autonomous Editor Goal Mandate (`editor.md`, `fleet-directives.md`)**: Mandated that upon claiming/waking on an issue, editors MUST execute `/goal follow the skill until the smoke test phase` (owner order 2026-09-12). Closes the premature-stop failure mode: editors drive continuously through Phase 1 to Phase 6b smoke testing on the live swapped binary without stopping after code edits or intermediate ship legs.
+- **Full-Gate Pre-PR Testing Law (`editor-upstream-pr.md`, `fleet-directives.md`)**: Mandated that final pre-PR verification MUST use the full gate (`cargo test --all-features` + fmt + clippy) via `oc-prchecks wait <branch>` or `oc-prchecks <branch>` without `--fast`. The `--fast` flag remains restricted to internal daytime merge cycles (`oc-ship-chain`).
+- **BATTERY**: 166 PASS / 0 FAIL.
+
 ## v0.4.148 (2026-09-12) — Carrier Build Coalescence, Ancestry Matching & Host Swap Mutex
 
 - **Carrier Concurrency & Coalescence Law (`fleet-directives.md`, `editor.md`)**: Codified that carrier workflow `ci/quick-build-linux` concurrency coalesces pending queued builds. Editors push fast-forwarded commits immediately without pre-dispatch lock serialization.

@@ -269,16 +269,9 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
 
 ## Phase 1 — Claim on the fork BEFORE editing
 
-0. **Claim-time fresh re-read (v0.4.14, proposal P2)**: FIRST action after
-   claiming — re-read `SKILL.md` + `editor.md` + `fleet-directives.md` from disk
-   (never from recalled memory) — SKILL.md and editor.md in FULL, fleet-directives
-   at thematic-index minimum with every `[LANE]`-tagged section in FULL. A claim
-   opens a fresh working window; pre-read memory from earlier turns carries stale
-   mechanics. DONE = all three files re-read THIS turn. **RELOAD LAW (v0.4.95,
-   owner order 2026-09-07 19:47Z):** briefing dies at compaction — the binding
-   owner law (cadence, PR naming, telegram surface, upstream etiquette) lives in
-   fleet-directives.md on disk, not in session memory.
-
+0. **Claim-time fresh re-read & Goal Mandate (v0.4.14 / v0.4.149, owner order 2026-09-12)**:
+   - **Fresh Re-read**: FIRST action after claiming/waking — re-read `SKILL.md` + `editor.md` + `fleet-directives.md` from disk (never from recalled memory) — SKILL.md and editor.md in FULL, fleet-directives at thematic-index minimum with every `[LANE]`-tagged section in FULL. DONE = all three files re-read THIS turn.
+   - **Autonomous Goal Mandate**: Immediately upon starting a task or claiming an issue, the editor MUST execute `/goal follow the skill until the smoke test phase` (via `slash_command` with `/goal follow the skill until the smoke test phase` or setting the goal prompt). The Editor is mandated to drive autonomously and continuously from Phase 1 through Phase 6b smoke testing (claim → worktree → code → sign → ship via `oc-ship-chain` → live behavioral smoke test on swapped binary → record 4-leg smoke verdict in `smoke-verdicts.log`). **Editors MUST NOT stop or ask for confirmation after Phase 4 (writing code) or after intermediate ship legs.** The task is only complete once the live behavioral smoke test is recorded in `smoke-verdicts.log`.
 1. Search existing issues first — MECHANIZED: `tools/oc-issue-sweep '<query>'`
    (closed-issue hygiene sweep: fork open + fork closed + upstream closed,
    harvests `close-reason:` lines from comments, TSV; the raw form is
