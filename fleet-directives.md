@@ -24,6 +24,7 @@
 - **H-5 claim lifecycle close-out:** a `claim` row whose issue reaches CLOSED state with no `confirm`/`release` row is stale-debt - the actor's next `oc-commit` mints an Issue-Ref against a closed issue (329bf3a3/#32, closed 7 days before detection). Law: when a claimed issue closes, the claiming lane stamps `confirm` (done) or `release` (not mine) same-session; T4 sweeps check closed-issues-with-open-claims.
 - **Journal retention (owner ruling 2026-09-09 18:55Z):** `waiters/journal/*.jsonl` older than 7 days are archived to the state repo (`opencrabs-dev/incident-evidence-<date>/waiters-journal-archive/`) then removed — AFTER a grep confirms no open ledger event cites the waiter id. Journals cited by an open ledger event are kept indefinitely. Duty-4/T4 executes the sweep; the 176→165 file archive-then-wipe on 2026-09-09 is the worked example.
 - **Canonical smoke log:** the single `smoke-verdicts.log` lives in the STATE repo (`opencrabs-dev/smoke-verdicts.log`) — it already hosts the workers-ledger. Smoke stamps go there and nowhere else; the skill repo copy was removed (f0775f83) and all fragment logs' unique lines were merged in before archival (owner ruling 2026-09-09 18:55Z).
+- **Canonical smoke log — ABSOLUTE PATH, stamp it literally (v0.4.158, QUIRK from lane 6cd8175f):** `/root/.opencrabs/profiles/ops/opencrabs-dev/smoke-verdicts.log`. Every `smoke-verdicts.log` reference in this file and in `editor.md`/`triage.md` means THAT path. A bare filename resolved from the ops profile root hit a stale pre-move decoy at `/root/.opencrabs/profiles/ops/smoke-verdicts.log` and silently captured 2 rows (c10cd97b 22:38:00Z; 6cd8175f 09:09:39Z BLOCKED-INFRA) — both already SUPERSEDED in canonical (the BLOCKED-INFRA by a 09:46:44Z PASS; the 22:38:00Z row was a pre-screenshot draft), so neither was merged. Decoy RETIRED 2026-09-12: archived to `incident-evidence-20260912/smoke-verdicts.log.decoy-20260912.bak` and the old path now SYMLINKS to canonical, so a wrong-path write self-heals instead of being lost. `oc-smoke-evidence` PRINTS a leg and never appends — the write is hand-typed, which is why the path must be copied, never resolved.
 
 **PORT-WORK OWNERSHIP — three-role split (owner ruling 2026-09-08 17:04Z, button pick option 0 "Agreed - codify the split: editors build, Triage queues, HQ gates"; recovered from daemon callback log after the #1226 mid-turn swallow; v0.4.107):**
 
@@ -591,6 +592,7 @@ rule above governs until these ship.
 3. **Nighttime (Batch Merge & Batch Harvest Window — Operator-Initiated ONLY):**
    - Fleet-wide synchronization and rebases against upstream `adolfousier/main` are executed in **one consolidated batch** ONLY when explicitly ordered by the operator.
    - **Batch Harvesting:** Upstream harvest PRs are generated, rebased, and CI-gated in consolidated waves following operator command, with strict 4-leg smoke verification recorded in `smoke-verdicts.log`.
+   - **Batch Issue Triage (v0.4.157):** the window CLOSES with every idle editor holding an assigned issue — open issues are swept, classified, and dispatched to idle lanes so the daytime window starts warm. This phase is covered by the window's operator trigger; it is NOT a separate command. Full procedure: §Phase 3 — Idle-Lane Issue Triage.
 
 ## Atomic Write Executable Preservation Law (v0.4.142)
 
@@ -598,12 +600,27 @@ When modifying executable scripts (`tools/oc-*`, bash helpers) via temporary sta
 - Standard temp file creation (`touch`, `tempfile`) defaults to mode `0644`. `mv` preserves the source inode permissions, stripping the `+x` bit on the target executable.
 - **Mandatory rule:** Always explicitly apply `chmod --reference="$target" "$temp"` (or `chmod 755 "$temp"`) prior to moving the temp file over the target.
 
-## Post-Harvest Issue Assignment & Lane Allocation (v0.4.143)
+## Phase 3 — Idle-Lane Issue Triage (v0.4.157; supersedes §Post-Harvest Issue Assignment v0.4.143)
 
-At the conclusion of the nightly batch sync and harvest run:
-1. **Outstanding Issue Sweep**: Triage sweeps open, vetted issues on `leshchenko1979/opencrabs` that carry clear problem statements and acceptance criteria.
-2. **Lane Allocation**: Outstanding issues are assigned to existing idle editor lanes via `session_notify` and ledger claim stamps.
-3. **Lane Expansion**: If open vetted issues exceed the capacity of idle lanes, Triage creates new editor lanes (reusing idle forum topics where available or provisioning dedicated topics) so editors start the daytime window with assigned work on their worktrees.
+**Position:** the CLOSING phase of the Night Shift window — runs after Phase 2 (Batch Harvest) closes, inside the same operator-initiated window. It is covered by the window's trigger; it is NOT a separate command.
+
+**Owner:** Triage — standing lane-allocation authority (v0.4.143) plus Duty T3 (editor creation) and Duty T5 (issue sweep).
+
+**Purpose:** the daytime window starts warm — every idle editor holds an assigned issue with a design in progress.
+
+**Procedure:**
+1. **Census** — `gh issue list -R leshchenko1979/opencrabs --state open`. Fresh receipt every run, never from memory (Duty T5).
+2. **Classify** — each open issue lands in exactly ONE bucket:
+   - **CLAIMED** — an open claim-ref exists in the workers-ledger → no action; the owning lane's chain owns it.
+   - **PARKED** — owner standdown / no-go → never re-ignite.
+   - **UNVETTABLE** — no problem statement or acceptance criteria → park with the reason; never guess the work.
+   - **DISPATCHABLE** — unclaimed AND vetted.
+3. **Capacity** — `oc-ledger roster --live --role editor` → idle editors (zero unfinished claims). **Reuse-first is mandatory** (owner order 2026-09-11: reuse existing lanes over spawning new ones).
+4. **Dispatch** — `[ISSUE TRIAGE DISPATCH: #N]` via `session_notify` (turn-end), with a ledger claim stamp. **Verify-unclaimed FIRST** (PHOP stage 2, Verify-Unclaimed & Idle Law): grep the workers-ledger for open claim-refs on that issue before routing — two recorded violations, #106 and #107, were both already held when a fan-out routed them.
+5. **Expansion — the exception, never the default** — create new editors ONLY when the dispatchable backlog exceeds idle capacity, and only up to the measured shortfall. Each creation follows Duty T3 (topic FIRST → spawn → brief via `session_notify` → `oc-ledger enroll`), and the phase exit line records the shortfall count that justified it.
+6. **Overnight contract — LOAD-BEARING** — an editor dispatched inside the window produces **analysis + design** and **PARKS at the owner design gate**. It MUST NOT open its autonomous `/goal`: the v0.4.149 Autonomous Editor Goal mandate begins only AFTER the owner confirms the design. The park row names the issue, the design artifact, and the owner action required.
+
+**Exit:** `triaged=N · dispatched=M · expanded=K · parked=P · waiting=0` — the L2 shift shape. Any non-zero `waiting` means the phase is not done; unclosed candidates roll to the next cycle, never chased across it.
 
 ## Code-Structure Exploration & Scoutgraph Indexing Law (v0.4.143)
 
