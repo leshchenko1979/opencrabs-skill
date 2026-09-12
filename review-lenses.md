@@ -136,6 +136,15 @@ on census evidence + owner word (hq.md step 7).
      state-derivable, including one-shot checks and any set or list a lane is told to
      hold in context. One site, one lens: object is law text → J; object is a
      procedure → C.
+     BOUNDARY vs D/H (v0.4.162, from I-7.1) — the ARTIFACTS family owns the
+     ARTIFACT and its verdict: D asks what still reads or writes a file, flag or
+     marker, H asks whether the ledger's own record is coherent, and both end in an
+     HQ poll triple-check + owner word. J owns the LAW SENTENCE that assigns the
+     decision. So a rule telling a lane to look up whether an artifact is still
+     referenced is J's finding — the lookup is state-derivable and belongs in a
+     tool — while the DELETE / ARCHIVE / KEEP verdict stays D's. One site, one lens:
+     object is an artifact on disk → D/H; object is law text whose decision is
+     state-derivable → J.
 
 #### FAMILY: TOOLS — the tools/ surface (gaps / shape / implementation)
 
@@ -199,7 +208,7 @@ on census evidence + owner word (hq.md step 7).
      (RC-CONTRACT.md = SOLE tool register). Every Duty-6 pass re-weighs
      SKILL.md against this rule; growth beyond router scope = findings.
 
-#### FAMILY: ARTIFACTS — files, state, ledgers, flags (deletion verdicts — the family IS the owner gate; C usage-log YAGNI evidence feeds it from TOOLS)
+#### FAMILY: ARTIFACTS — files, state, ledgers, flags (deletion verdicts — the family IS the owner gate; C usage-log YAGNI evidence feeds it from TOOLS; BOUNDARY vs J, v0.4.162 — this family owns the ARTIFACT and its verdict, J owns the law sentence that assigns a state-derivable decision: object is an artifact on disk → here, object is law text → J)
 
    - **Reviewer D — DELETION SAFETY:** enumerate retired / stale /
      duplicate-looking artifacts in the skill scope (files, state files,
