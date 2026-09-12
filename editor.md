@@ -499,7 +499,7 @@ When shipping features via `oc-ship-chain` or deploying via `oc-deploy`, failure
   git -C ~/oc-wt-<task> push --force-with-lease origin <branch>
   ```
   ⚠️ **`oc-rebase-safety` is NOT the rebase engine** — it is a READ-ONLY safety auditor (`audit` / `overlap`). Use standard git commands to resolve conflicts, verify zero lost edits with `oc-rebase-safety audit`, and re-run `oc-ship-chain`.
-- **Exit 6 — INFRA / ORDER-GATE:** dispatch or poll infrastructure failure (`oc-prchecks` rc 4/7/8, or ship rc other) — **or an ORDER-gate rejection post-push.** ⚠️ **The UNSIGNED case lands HERE, and it is NOT an infra fault:** a head commit carrying no `Session-Id` trailer is refused by ORDER gate 4 (`oc-order-validate: UNSIGNED … attribution mandatory`), and the chain exits 6. Read the message before you act — if it says UNSIGNED, do not go hunting for a network or carrier problem. Fix = land an empty trailer-signed marker commit on the head (tree-identical, forward-only; `upstream-merge-runbook.md` step 9) and re-run. Every synthesis/merge head is unsigned **by construction**, so this recurs on every sync.
+- **Exit 6 — INFRA / ORDER-GATE:** dispatch or poll infrastructure failure (`oc-prchecks` rc 4/7/8, or ship rc other) — **or an ORDER-gate rejection post-push.** ⚠️ **The UNSIGNED case lands HERE, and it is NOT an infra fault:** a head commit carrying no `Session-Id` trailer is refused by ORDER gate 4 (`oc-order-validate: UNSIGNED … attribution mandatory`), and the chain exits 6. Read the message before you act — if it says UNSIGNED, do not go hunting for a network or carrier problem. Fix = land an empty trailer-signed marker commit on the head (tree-identical, forward-only; `upstream-merge-runbook.md` step 9) and re-run. Every synthesis/merge head is unsigned **by construction**, so this recurs on every sync. **A lineage-guard refusal ALSO exits 6:** `oc-deploy swap-execute` refusing a post-rewrite swap (`non-monotonic-swap`) surfaces here. Recovery = **re-run the same `oc-ship-chain` leg** — the guard is rebase-aware (v0.4.151) and accepts the swap as `rewrite-equivalent-swap`. **NEVER hand-edit `deployed.sha`** to re-point around a refusal (`fleet-directives.md §Post-Rewrite Swap Recovery`).
 - **Exit 7 — GATE IN FLIGHT:** the gate was still running after the chain's budget and resume-polls (`oc-prchecks` rc 5, non-terminal). The run id is printed — do **NOT** re-dispatch (that concurrency-cancels the live run); wait for it and re-run with `--gated-run <id>`, which pre-verifies and skips dispatch.
 
 **Conflict-quality gate — MANDATORY after any rebase with hand-resolved code:**
@@ -561,6 +561,21 @@ smoke evidence (precedent: #92 no-runtime-string finding) — never silent-skip.
 A verdict citing only legs 1–3 is INCOMPLETE and gets returned to the lane.
 (A stripped binary that compiles the fix but crashes on the path must FAIL —
 that is the exact hole this rule closes; origin: ship-38585459 smoke n=2036.)
+
+**Owner-dependent leg → PARK, never wait (v0.4.152, owner order 2026-09-12):**
+if the only remaining behavioral evidence needs the OWNER — a visual pass, a tap,
+an eye-confirm on a card — the leg is **NOT a blocking gate**. Stamp the legs you
+can prove (lineage, identity, CI, any agent-runnable probe), append a
+`PARKED-OWNER-EYE` row to `smoke-verdicts.log` naming the owner action required
+and the packaging sha, then **RELEASE the lane** and move to your next task. A
+lane idling on an owner leg is in violation; a lane that parks and moves on is
+compliant. Owner-absent windows (nights) are exactly when this binds. Owner
+verdicts must be explicit AND post-hoc — a passing remark made mid-flight is not
+a verdict (row 87 → row 90: the owner's "Smoke passed" landed 16 s after their
+own discard and 3 m 17 s before the review finished, so it certified a defect
+that did not yet exist; the PASS was revoked). If the remark is ambiguous, record
+`OWNER-REMARK (not a verdict)` and leave the leg OPEN/PARKED. Full law:
+`fleet-directives.md §Owner-Dependent Smoke Legs — Park, Don't Chase`.
 
 **Swap timing is NOT coordinated with smokes** (owner decision, closing editor
 proposal #8): NO advance announce, NO swap delay — deploys land whenever the

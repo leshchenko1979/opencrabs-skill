@@ -211,8 +211,10 @@ Contract:
 1. **Dedicated Worktree**: Create isolated worktree off `adolfousier/main` tip:
    `tools/oc-wt add up-<slug> leshchenko1979/fix/<slug> --create --from adolfousier/main`
 2. **Cherry-pick & Pre-Sweep**: Cherry-pick source commits preserving trailers (`-x` / `Issue-Ref`), then verify clean lineage with `tools/oc-harvest-sweep leshchenko1979/fix/<slug> --base adolfousier/main`.
-3. **Smoke & Gate Verification (Hard Gate, v0.4.146 / v0.4.149)**:
+3. **Smoke & Gate Verification (Hard Gate, v0.4.146 / v0.4.149 / v0.4.152)**:
    - **4-Leg Smoke Pass**: Verify full 4-leg smoke pass (Lineage, Identity, CI Gate, Behavioral probe) is recorded with live receipts in `smoke-verdicts.log`. NEVER file an unsmoked PR.
+   - **Packaging-sha stamps (v0.4.152)**: the row's `sha=` MUST be the packaging tip being filed (the branch head), never an ancestor. A row citing an ancestor does not cover the candidate — append a fresh row after the full gate; never edit the superseded one.
+   - **Owner-dependent leg → PARK, don't chase (v0.4.152, owner order 2026-09-12)**: if the remaining behavioral evidence needs the OWNER (visual pass, tap, eye-confirm), it is NOT a blocking gate. Stamp the provable legs, append `PARKED-OWNER-EYE` (owner action + packaging sha), RELEASE the lane, and let the candidate roll to the next owner-present window. Never idle on an owner leg — the owner being away is exactly when this binds. Full law: `fleet-directives.md §Owner-Dependent Smoke Legs — Park, Don't Chase`.
    - **Mandatory Full PR Gate**: Push branch to origin (`leshchenko1979/opencrabs`) and trigger full PR checks (NO `--fast` mode):
      ```bash
      # Single-command blocking full PR gate:
@@ -221,5 +223,5 @@ Contract:
      tools/oc-prchecks leshchenko1979/fix/<slug>
      ```
      `--fast` is strictly prohibited for pre-PR testing; upstream PRs require 100% full test suite verification.
-4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log`, Editor files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug>`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue.
+4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log`, Editor files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug>`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue. **A PR number is not FILED until a same-turn `gh pr create` (or `gh pr view <N>`) output names it** — if a guard flags the claim (`phantom_blocked`) or the output was not witnessed, the PR is UNFILED: re-verify and re-dispatch (v0.4.152 §Guard-Flag Escalation Law; worked example: an announced PR #1514 that never existed cost ~3 h).
 5. **Ack & Cleanup**: Remove harvest worktree, stamp completion in ledger, and notify Triage via `session_notify`.

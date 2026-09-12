@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.150
+version: 0.4.152
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -261,6 +261,23 @@ runtime path on the running box (full rule: editor.md Phase 6b). A verdict
 citing only bookkeeping legs is INCOMPLETE — returned to the lane, never GREEN.
 Origin: the ship-38585459 smoke (n=2036) passed all bookkeeping legs while its
 "behavioral" leg was only CI test counts.
+
+**Owner-dependent leg → PARK, never wait (v0.4.152, owner order 2026-09-12):** when
+the only remaining behavioral evidence requires the OWNER (a visual pass, a tap, an
+eye-confirm), the leg is NOT a blocking gate. Stamp the provable legs, append a
+`PARKED-OWNER-EYE` row naming the owner action and the packaging sha, and RELEASE
+the lane. A lane idling on an owner leg is in violation; a lane that parks and moves
+on is compliant. Full law: `fleet-directives.md §Owner-Dependent Smoke Legs — Park,
+Don't Chase` (L1–L4: parking, shift exit condition, owner-verdict timing, packaging-sha
+stamps).
+
+**Tool-description changes have no log-based probe (lane 1a63f103, 2026-09-12):** the
+daemon's provider log records tool ARGS only (`[TOOL_ACCUM] name=bash`) and NEVER tool
+schemas — so no log line can prove a description string was served. Smoking a
+`Tool::description()`/`input_schema()` change uses **binary strings on the running exe +
+the shipped constants in source**; any description fragment found in the log is
+self-contamination from the prober's own commands. A "live schema served" receipt from
+the log is a FALSE receipt.
 
 ## Glossary — official terms (v0.4.62; one concept = one name)
 
