@@ -201,6 +201,47 @@ lineage_next_step() { # <verdict> <prev> <sha> <twin>
   esac
 }
 
+# ------------------------------------------------ cgroup safety (v0.4.153) --
+# A DIRECT `swap-execute` inherits the cgroup of whoever launched it. When that
+# launcher is a session hosted by the very unit the swap is about to bounce
+# (opencrabs-ops.service), step 8's `systemctl --user restart` tears that cgroup
+# down and SIGKILLs this process AT the restart line. Steps 9-12 (post-verify,
+# sidecar-sync, receipt, fanout) never run — and because the swap-result ledger
+# stamp is deliberately LAST (v0.4.78 F-M1: receipt evidence must exist before
+# the stamp, so a crash can never leave an unbacked DEPLOYED row), NO row is
+# written at all. The host ends up fully swapped with a SILENT ledger: a
+# false-negative audit trail, the dangerous direction of error.
+# Evidence 2026-09-12: journal swap-acb8e205-1789199968-2602580.jsonl stops at
+# seq 7 marker-write (mtime == swapped_at second), while
+# swap-74d85785-1789182884-2365240.jsonl — handed to a `systemd-run` transient
+# unit by `poll --execute`, i.e. OUTSIDE the unit — carries all 11 seqs.
+# Fix: re-exec under a transient scope outside the bounce cgroup BEFORE any work
+# starts. Called pre-lock (main's swap-execute case runs it before the
+# host-swap.lock flock) so a re-entry can never self-deadlock on a held lock.
+# Overrides: OC_SWAP_UNIT (default opencrabs-ops.service) · OC_SWAP_IN_UNIT_CGROUP
+# (auto|1|0 — test hook; auto inspects /proc/self/cgroup) · OC_SWAP_DETACH_CMD
+# (default `systemd-run --user --scope --collect`) · OC_SWAP_DETACHED (loop guard,
+# also set by the poll handoff so the transient-unit path never re-detaches).
+swap_in_bounce_cgroup() { # rc 0 = this process IS inside the unit's cgroup
+  local unit="${OC_SWAP_UNIT:-opencrabs-ops.service}" cg
+  case "${OC_SWAP_IN_UNIT_CGROUP:-auto}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [ -r /proc/self/cgroup ] || return 1
+  cg="$(cat /proc/self/cgroup 2>/dev/null || true)"
+  case "$cg" in *"/$unit"|*"/$unit/"*) return 0 ;; esac
+  return 1
+}
+
+swap_ensure_detached() { # re-exec outside the bounce cgroup (argv from ORIG_ARGS)
+  [ "${OC_SWAP_DETACHED:-0}" = "1" ] && return 0   # already detached (loop guard)
+  swap_in_bounce_cgroup || return 0
+  local cmd="${OC_SWAP_DETACH_CMD:-systemd-run --user --scope --collect}"
+  echo "oc-deploy: swap-execute is INSIDE ${OC_SWAP_UNIT:-opencrabs-ops.service}'s cgroup — the step-8 bounce would SIGKILL it before the receipt/fanout/ledger steps (v0.4.153 silent-ledger defect). Re-executing outside the unit via: $cmd" >&2
+  OC_SWAP_DETACHED=1 exec $cmd "$SELF" "$MODE" "${ORIG_ARGS[@]}"
+}
+
 lineage_check_run() { # [--prev P] [--sha S] [--repo R] [--json]
   local repo="${OC_DEPLOY_REPO:-/root/opencrabs}" prev="" sha="" json=0
   while [ $# -gt 0 ]; do
@@ -301,6 +342,10 @@ selftest() {
   local T pass=0 fail=0 rc out
   T="$(mktemp -d)" || return 1
   export OC_DEPLOY_NO_WATCH=1  # piggyback OFF in selftest (explicit watch tests below run it for real)
+  # v0.4.153: hermetic cgroup. The battery itself runs INSIDE opencrabs-ops.service,
+  # so auto-detection would make every nested swap-execute re-exec via systemd-run.
+  # Forced OFF here; section 22 sets it per-invocation to exercise the detach path.
+  export OC_SWAP_IN_UNIT_CGROUP=0
   local SD="$T/state"
   mkdir -p "$SD/tools" "$SD/backups" "$T/bin"
   local SELF_BIN="${1:-$SELF}"   # v0.4.38: $SELF is readlink -f'd at top; bare $0 died rc 127 when --selftest was invoked via relative path (re-exec after cd into tmp could not resolve it)
@@ -2128,6 +2173,9 @@ kill_brake() {
 }
 
 MODE="${1:-}"; [ $# -gt 0 ] && shift
+# v0.4.153: preserve the argv BEFORE the flag loop below consumes $@ into
+# globals — the cgroup detach must re-exec with the original flags.
+ORIG_ARGS=("$@")
 # C-F5 (v0.4.71): --help / -h exits 0 on stdout, before any validation
 case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
 # issue #24 D1: contributors takes its own arg shape (positional range /
@@ -2491,7 +2539,7 @@ case "$MODE" in
       if [ "$EXECUTE" = 1 ]; then
         plan "swap chain: download artifact run=$RUN_ID -> oc-artifact-verify -> backup to $BACKUP_DIR -> atomic install -> seal -> marker writes -> bounce -> disk==proc verify -> ledger stamp -> receipt (auto-rollback on verify fail)"
         UNIT="oc-swap-${B_SHA:0:8}-$(date +%s)"
-        $LAUNCH --unit="$UNIT" --collect "$SELF" swap-execute --sha "$B_SHA" --run "$RUN_ID" --features "$FEATURES" \
+        OC_SWAP_DETACHED=1 $LAUNCH --unit="$UNIT" --collect "$SELF" swap-execute --sha "$B_SHA" --run "$RUN_ID" --features "$FEATURES" \
           || { shadow_log swap "$B_SHA" "$FEATURES" "launch-fail"; die 4 "systemd-run handoff failed — nothing touched"; }
         shadow_log swap "$B_SHA" "$FEATURES" "handed-off:$UNIT"
         echo "HANDOFF: Phase B transient unit $UNIT owns the swap (sha=$B_SHA run=$RUN_ID) — poll (Phase A) exits pre-bounce by design"
@@ -2509,7 +2557,11 @@ case "$MODE" in
   # ------------------------------------------------------------ swap-execute --
   swap-execute)
     kill_brake
-    [ -n "$SHA" ] && [ -n "$RUN_ID" ] || die 1 "swap-execute needs --sha <40-hex> and --run <id>"
+    # v0.4.153: detach BEFORE the lock and before any work. A swap launched from
+    # inside the unit it bounces is SIGKILLed at step 8 — steps 9-12 (receipt,
+    # fanout, ledger stamp) are then lost and the swap goes unrecorded.
+    swap_ensure_detached "$@"
+    swap_ensure_detached
     echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
     # NOTE (n=1878): NO local cat-file guard here — swap-execute targets the
     # remote host; its sha is authenticated by the carrier-run job-name decode
