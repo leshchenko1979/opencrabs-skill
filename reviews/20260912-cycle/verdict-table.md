@@ -11,7 +11,7 @@
 
 | # | Sev | Finding | Verdict | Disk truth (verified this turn) |
 |---|---|---|---|---|
-| **I-6.1** | HIGH | Cycle-spawn coverage is unowned; 6 of 10 lenses absent from `20260911-cycle` with no alarm | **ACCEPT** (remediation re-scoped) | `reviews/20260911-cycle/reports/` holds exactly **4** `skill-review-*.md` (A, E, F, brain-scrub) vs **10** in `20260910-cycle` — confirmed by `ls` + cycle-local index |
+| **I-6.1** | HIGH | Cycle-spawn coverage is unowned — **the coverage COUNT was read from the wrong corpus; see §5 CORRECTION** | **ACCEPT** (remediation re-scoped; premise partially retracted) | ~~`reviews/20260911-cycle/reports/` holds exactly **4** `skill-review-*.md` (A, E, F, brain-scrub) vs **10** in `20260910-cycle`~~ — **RETRACTED §5**: that dir is the SKILL repo's HQ-side mirror, not the 09-11 Duty-6 cycle. The real cycles (`20260911-c5..c8`) live in the STATE repo and ran **10 of 11** lenses each |
 | **I-6.2** | LOW | Enumeration drift: `SKILL.md:51` reads *"ten-lens skill review … = ELEVEN reviewers"* | **ACCEPT** | verbatim confirmed at `SKILL.md:51`; `review-lenses.md:3` says *"eleven Duty-6 review lenses (A–J + standing brain-scrub)"* — the two disagree on the unit |
 | **I-7.1** | MED→LOW | No boundary clause between Reviewer J and ARTIFACTS (D/H) | **ACCEPT** | J brief (`review-lenses.md:99-134`) carries **BOUNDARY vs C only**; no D/H text; neither D's nor H's brief mentions J |
 | **I-7.2** | LOW | brain-scrub brief lives in `fleet-directives.md`, not the catalog | **KERNEL** | deliberate, documented split (`review-lenses.md:6` names the location). Moving it duplicates a brief across two files — violates one-concept-one-home. Reason recorded, no action |
@@ -47,4 +47,51 @@ I proposed two remedies. **One of them is itself the defect class the owner name
 - **Law edits HELD under the CPU pause** — I-6.2 (`SKILL.md:51` one-line fix) and I-7.1 (J↔D/H boundary clause) are written, ready, and ship with the next version batch on the owner's word. They are NOT shipped now: a law edit without a bump leaves an unsynced second drift window on top of the open 0.4.161↔0.4.159 one.
 - **Tool half DISPATCHED** — `oc-review-persist check-cycle` (I-6.1 remedy 2) + the "close the cycle" gate → Toolsmith lane.
 - **I-7.2 closed as KERNEL** with reason on record.
-- **Reviewer I's own report is not self-reviewed** (self-reference cap): §3 above is HQ's validation, not a lens pass.
+---
+
+## 5. CORRECTION (2026-09-12, post-dispatch) — I-6.1 premise partially retracted; one new finding
+
+Toolsmith's `check-cycle` delivery (`834ce6ca`) carried a correction to **this table**, and it is right. Verified first-hand this turn, both directions.
+
+### 5.1 The coverage count was read from the wrong corpus — RETRACTED
+
+**What I claimed:** `reviews/20260911-cycle` holds 4 reports vs 10 in `20260910-cycle`, so "6 of 10 lenses absent, no alarm".
+
+**Why it was wrong:** there are **two review corpora** and I read the wrong one.
+
+| Corpus | Path | 09-11 cycles | Report naming |
+|---|---|---|---|
+| **STATE repo** | `opencrabs-dev/reviews/20260911-c5..c8` | the **real Duty-6 cycles** | `review-lens-<L>.md`, `lens-<L>-<date>.md`, combined `lens-B-C-D-E-<date>.md` |
+| **SKILL repo** | `skills/opencrabs-dev/reviews/20260911-cycle` | an **HQ-side mirror** (4 reports) | `skill-review-<L>-<date>.md` |
+
+**Disk truth:** `reviews/20260911-c8/reports/` holds ten `review-lens-*.md`; `git log` for it reads *"record Duty 6 Cycle 8 reviews (**10 lenses**)"* (`f2b3c58e`). `check-cycle` on c8 → **MISSING 1 of 11 (lens J only)**; on c7 → **1 (lens J)**; on c6 → **1 (lens J)**. **The 09-11 cycles ran 10 of 11 — the one absent lens is J, which did not exist yet.** My "6 silently absent" reading is **false** and is retracted.
+
+### 5.2 What survives — and it is a better finding than the retracted one
+
+The corpus is **unaddressable**: two repos, four report-naming conventions, and closing artifacts that disagree (`verdict-table.md` in the skill repo's 0907 cycles vs `review-cN-summary.md` in the state repo's c6/c7; **c8 has neither**). That is *why* the lens whose entire job is auditing this machinery read the wrong directory and published a false number. Restated:
+
+- **I-6.1 (corrected):** the defect is **not** "lenses silently skipped" — it is **"coverage cannot be computed without a rule for where to look."** `check-cycle` derives the **catalog** at gate time (good, and it works), but the **corpus root is still the caller's word**. A gate handed the wrong directory answers the question wrongly — the same false-clean/false-alarm failure mode the gate was built to prevent, inverted. **Mechanical, same family as M2-1.**
+
+### 5.3 Second correction: "no census for three consecutive cycles" was also wrong
+
+§3 claim 1 is **partially retracted**. `reviews/20260911-c6/review-c6-summary.md` and `...-c7/review-c7-summary.md` both exist and both carry a *"Tally by lens"* section — i.e. a census **was** computed for c6 and c7. What is genuinely absent is the **`verdict-table.md` closing artifact** in the state repo (c8 has none; c1–c5 have none) — a *naming/artifact* gap, not a census gap. Restated as: **the closing artifact is not standardised, so "did the cycle close?" is not decidable from the tree.**
+
+### 5.4 NEW FINDING (ship-chain) — `oc-ship-audit` reports FALSE ORPHANS from selftest contamination
+
+Toolsmith flagged 6 ORPHANED dispatch rows. Reproduced (`oc-ship-audit --grace 120`, rc=1) — but the attribution is different, and worse:
+
+**`56f892a` is not a duplicate stamp and not a real dispatch. It is `oc-deploy`'s own selftest fixture, written into the PRODUCTION `tools.log`.**
+
+Evidence (all same-turn reads):
+- 23 rows in the single second `2026-09-12T01:16:5xZ`, **21 of them `oc-deploy`**, every one `"actor":"unknown"`, `secs` 0.0–0.2.
+- The argv set is the selftest's `check_rc` matrix: `ship --bogus`→1, `contributors`→1, `ship`→2, `--wait 30`→2, `--notify-session aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`→2 (placeholder UUID), `--features code-graph,telegram`→0.
+- Row `ship --sha 4c0115ba9aa052f5cfeda01383c0d20be9e2392e` exit 1 — **that is `oc-deploy:694 local PHANTOM=`, the selftest's phantom-sha constant, verbatim.**
+- `SHA2` is `git -C "$T/repo" rev-parse HEAD` — a **temp-repo** commit, which is why no swap journal exists: the sha never existed in production.
+- `deployed.sha` = `234c0d51…`, unrelated.
+
+**Mechanism (for Toolsmith to confirm):** `lib/oc-log.sh` suppresses only when argv carries the **`--selftest` flag** (`case " $OC_LOG_ARGS " in *" --selftest "*)`). `oc-deploy:2976` dispatches **both** `--selftest` **and** the bare **`selftest`** subcommand — the latter does **not** match, so no `OC_TOOLS_NOLOG` export happens and every child fixture invocation logs to the real log. `tools/tests/run.sh:21` exports `OC_TOOLS_NOLOG=1` globally, which **masks this in the battery** — the leak only appears when the selftest is invoked outside it.
+
+**Impact:** `oc-ship-audit` returns rc=1 (false ORPHANED) → gates `oc-ledger commit-pending`. A gate that cries wolf on phantom dispatches is the "gate gets ignored" failure mode, here caused by a tool's selftest polluting production telemetry. **Dispatched to Toolsmith.**
+
+*`f1ee470` / `b252509` (09-11 19:28Z) are single rows, same shape — likely the same origin, not yet confirmed.*
+
