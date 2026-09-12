@@ -152,6 +152,11 @@ GATE_RESUMES="${OC_SHIPCHAIN_GATE_RESUMES:-2}"     # max rc-5 resume-polls befor
 [ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 exec bash "$SELF"
 [ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
 
+# #21 (LAW 17): the detach re-execs this tool with its ORIGINAL argv, so the
+# argv must be captured BEFORE the arg loop consumes it (a re-exec with an
+# already-drained "$@" would launch a chain with no --sha and die rc 2).
+ORIG_ARGS=("$@")
+
 FAST_GATE=1
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -196,6 +201,47 @@ if [ -f "$FREEZE_FILE" ] && [ "${OC_SHIPCHAIN_FREEZE_OVERRIDE:-0}" != "1" ]; the
   die "FREEZE — fork rebase window is open (plan step 3); new chains are blocked. Remove $FREEZE_FILE at unfreeze, or set OC_SHIPCHAIN_FREEZE_OVERRIDE=1 for an HQ-sanctioned exception." 3
 fi
 
+# ---- cgroup detach (LAW 17, defect #21, 2026-09-12) ------------------------
+# A chain launched from a session is a child of the daemon and therefore sits
+# INSIDE the unit cgroup that a swap's `systemctl --user restart` tears down.
+# The chain is then SIGTERM'd mid-leg and simply STOPS: no ledger row, no
+# failure report, rc=-1 to the background task with no diagnosis. Two chains
+# died exactly this way at the 11:36:46Z swap (CHAIN-b6fcbcb0 died `gate infra
+# rc=143`; a second, correctly QUEUED on the ship lock, was killed for waiting
+# — serialisation gave it a false sense of safety).
+#
+# Same class as LAW 15 for oc-notify-fanout, and the same fix: re-exec outside
+# the bounce cgroup via a transient scope, BEFORE the ship lock is taken, so a
+# re-entry can never self-deadlock on a lock this process already holds. That
+# pre-lock ordering matters MORE here than for a wave: the chain holds its lock
+# across LEG3/LEG4 and a queued chain can wait minutes.
+# Overrides: OC_SHIPCHAIN_UNIT (default opencrabs-ops.service) ·
+# OC_SHIPCHAIN_IN_UNIT_CGROUP (auto|1|0 — test hook; auto inspects /proc/self/cgroup)
+# OC_SHIPCHAIN_DETACH_CMD (default `systemd-run --user --scope --collect`; MUST
+# BLOCK and pass the child's rc through — use `setsid -w`, never bare `setsid`,
+# or the chain's exit code is lost and a NON-FF refusal reads as success) ·
+# OC_SHIPCHAIN_DETACHED (loop guard).
+shipchain_in_bounce_cgroup() { # rc 0 = this process IS inside the unit's cgroup
+  local unit="${OC_SHIPCHAIN_UNIT:-opencrabs-ops.service}" cg
+  case "${OC_SHIPCHAIN_IN_UNIT_CGROUP:-auto}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [ -r /proc/self/cgroup ] || return 1
+  cg="$(cat /proc/self/cgroup 2>/dev/null || true)"
+  case "$cg" in *"/$unit"|*"/$unit/"*) return 0 ;; esac
+  return 1
+}
+
+shipchain_ensure_detached() { # re-exec outside the bounce cgroup (argv from ORIG_ARGS)
+  [ "${OC_SHIPCHAIN_DETACHED:-0}" = "1" ] && return 0   # already detached (loop guard)
+  shipchain_in_bounce_cgroup || return 0
+  local cmd="${OC_SHIPCHAIN_DETACH_CMD:-systemd-run --user --scope --collect}"
+  echo "oc-ship-chain: chain is INSIDE ${OC_SHIPCHAIN_UNIT:-opencrabs-ops.service}'s cgroup — a swap's restart would SIGKILL it mid-leg, truncating the run with NO failure report (LAW 17, defect #21). Re-executing outside the unit via: $cmd" >&2
+  OC_SHIPCHAIN_DETACHED=1 exec $cmd "$SELF" "${ORIG_ARGS[@]}"
+}
+shipchain_ensure_detached
+
 # ---- chain id -------------------------------------------------------------
 SHORT="$(printf '%s' "$SHA" | cut -c1-8)"
 CHAIN="CHAIN-${SHORT}-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -236,7 +282,19 @@ journal() {
         printf '%s\n' "  oc-ledger said: $out" >&2
         printf '%s\n' "  first lost line: $line" >&2
         printf '%s\n' "  the chain CONTINUES, but this run will have NO ledger trail." >&2
-        printf '%s\n' "  fix: oc-ledger must accept kind 'shipchain' (see tools/oc-ledger KINDS)." >&2
+        # #21 (LAW 17): this line used to print the SAME hypothesis for ANY
+        # non-zero rc — including rc=143 SIGTERM from a swap's cgroup teardown.
+        # But oc-ledger DOES accept kind 'shipchain' (every row of the killed
+        # chain stamped cleanly), so the message sent the operator to repair a
+        # component that was not broken, in the one failure mode where the
+        # right advice is "re-run it". Branch on the cause; keep the rc visible
+        # either way — it was the only clue that pointed at the restart.
+        case "$rc" in
+          143|137)
+            printf '%s\n' "  cause: rc=$rc (SIGTERM/SIGKILL) — this chain was KILLED, most likely by a swap's cgroup teardown. Do NOT repair oc-ledger; RE-RUN the chain (LAW 17 now re-execs it outside the unit cgroup, so a re-run survives the next swap)." >&2 ;;
+          *)
+            printf '%s\n' "  fix: oc-ledger must accept kind 'shipchain' (see tools/oc-ledger KINDS). rc=$rc" >&2 ;;
+        esac
       fi
     fi
   fi
@@ -685,6 +743,9 @@ selftest_impl() {
   cat > "$T/fake-prchecks" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "${FAKE_PRCHECKS_LOG:-/dev/null}"
+# #21: optional gate latency, so the cgroup-detach survival test has a window
+# to kill inside. Unset for every other test -> byte-identical behaviour.
+[ -n "${FAKE_SLOW_GATE:-}" ] && sleep "$FAKE_SLOW_GATE"
 # green unless FAKE_GATE=red
 [ "${FAKE_GATE:-green}" = "red" ] && exit 3
 exit 0
@@ -715,6 +776,7 @@ EOF
     OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
     OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
     OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
+    OC_SHIPCHAIN_IN_UNIT_CGROUP=0 \
       bash "$SELF" "$@"
   }
 
@@ -1131,6 +1193,122 @@ EOF
   check_rc "docs-skip-override-chain-green" "$RC" 0
   grep -q "GATE-SKIPPED-DOCS" "$T/journal.log" && bad "docs-skip-override-disables" || ok "docs-skip-override-disables"
   grep -q "$DOCS_SHA" "$T/prchecks.log" && ok "docs-skip-override-gates" || bad "docs-skip-override-gates"
+
+  # 21. CGROUP DETACH (LAW 17, defect #21). A chain launched from a session is
+  #     a child of the daemon and sits INSIDE the unit cgroup a swap's
+  #     `systemctl --user restart` tears down, so it is SIGTERM'd mid-leg and
+  #     simply stops. The fix re-execs outside that cgroup before the ship lock
+  #     is taken. A fixture cannot build cgroups, so the proxy is a NEW SESSION
+  #     (`setsid`): exactly what `systemd-run --scope` hands the payload — a
+  #     process group the unit's teardown cannot reach. The assertions below
+  #     therefore test the property that matters (the payload is unreachable
+  #     from the launcher's group), not the systemd call itself.
+  cat > "$T/fake-detach" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "${FAKE_DETACH_LOG:-/dev/null}"
+exec setsid -w "$@"
+EOF
+  chmod +x "$T/fake-detach"
+  # fresh branch cut at the point of use (earlier tests move origin/main)
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  git -C "$T/clone" checkout -qb detach-fixture
+  echo d > "$T/clone/d.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm detach --trailer "Session-Id: $FIXTURE_SESSION"
+  DSHA="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" push -q -f origin detach-fixture
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+
+  # 21a. INSIDE the cgroup -> the detach MUST fire, and the re-exec'd chain
+  #      must still carry the SAME argv (a drained "$@" would die rc 2 with
+  #      "--sha required" — the failure mode ORIG_ARGS exists to prevent).
+  rm -f "$T/journal.log" "$T/detach-a.log"
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
+    OC_SHIPCHAIN_IN_UNIT_CGROUP=1 OC_SHIPCHAIN_DETACH_CMD="$T/fake-detach" \
+    FAKE_DETACH_LOG="$T/detach-a.log" FAKE_PRCHECKS_LOG="$T/prchecks.log" \
+      bash "$SELF" --sha "$DSHA" --branch detach-fixture --wait 5 2>&1)" || RC=$?
+  check_rc "detach-inside-cgroup-rc" "$RC" 0
+  [ -s "$T/detach-a.log" ] && ok "detach-fired" || bad "detach-fired"
+  grep -q -- "--sha $DSHA" "$T/detach-a.log" && ok "detach-preserves-argv" || bad "detach-preserves-argv"
+  grep -q "DONE SWAPPED" "$T/journal.log" && ok "detach-chain-completed" || bad "detach-chain-completed"
+
+  # 21b. LOOP GUARD: a re-entered chain (OC_SHIPCHAIN_DETACHED=1) must NOT
+  #      re-exec — otherwise the detach recurses forever.
+  rm -f "$T/journal.log" "$T/detach-b.log"
+  git -C "$T/clone" checkout -q main; git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
+    OC_SHIPCHAIN_IN_UNIT_CGROUP=1 OC_SHIPCHAIN_DETACHED=1 OC_SHIPCHAIN_DETACH_CMD="$T/fake-detach" \
+    FAKE_DETACH_LOG="$T/detach-b.log" FAKE_PRCHECKS_LOG="$T/prchecks.log" \
+      bash "$SELF" --sha "$DSHA" --branch detach-fixture --wait 5 2>&1)" || RC=$?
+  check_rc "detach-loopguard-rc" "$RC" 0
+  [ -s "$T/detach-b.log" ] && bad "detach-loopguard-no-reexec" || ok "detach-loopguard-no-reexec"
+
+  # 21c. NOT in the cgroup -> no detach at all. The detach must be a response
+  #      to the environment, never an unconditional re-exec (every ordinary
+  #      chain would otherwise pay a scope creation it does not need).
+  rm -f "$T/journal.log" "$T/detach-c.log"
+  git -C "$T/clone" checkout -q main; git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
+    OC_SHIPCHAIN_IN_UNIT_CGROUP=0 OC_SHIPCHAIN_DETACH_CMD="$T/fake-detach" \
+    FAKE_DETACH_LOG="$T/detach-c.log" FAKE_PRCHECKS_LOG="$T/prchecks.log" \
+      bash "$SELF" --sha "$DSHA" --branch detach-fixture --wait 5 2>&1)" || RC=$?
+  check_rc "detach-outside-cgroup-rc" "$RC" 0
+  [ -s "$T/detach-c.log" ] && bad "detach-not-taken-outside-cgroup" || ok "detach-not-taken-outside-cgroup"
+
+  # 21d/21e. SURVIVAL + its NEGATIVE CONTROL, both in-selftest. The driver
+  #     launches the chain in its OWN session, waits for it to be inside the
+  #     gate, then SIGTERMs that session's process group — the closest a
+  #     fixture gets to the swap's cgroup teardown. HOOK=1 must SURVIVE;
+  #     HOOK=0 (detach disabled) must TRUNCATE. Without 21e, 21d would only
+  #     prove the fixture is slow — the detach, not luck, has to be what saves
+  #     the run.
+  cat > "$T/survive-driver.sh" <<'DRIVER'
+#!/usr/bin/env bash
+# $1=T  $2=SELF  $3=SHA  $4=HOOK (1 = detach on, 0 = detach off)
+T="$1"; SELF="$2"; SHA="$3"; HOOK="$4"
+J="$T/surv-journal.log"; D="$T/detach-surv.log"
+rm -f "$J" "$D"
+setsid env \
+  OC_SHIPCHAIN_IMPL=0 OC_SHIPCHAIN_IN_UNIT_CGROUP="$HOOK" \
+  OC_SHIPCHAIN_DETACH_CMD="$T/fake-detach" FAKE_DETACH_LOG="$D" \
+  FAKE_SLOW_GATE=3 \
+  OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+  OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
+  OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$J" \
+  OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
+  bash "$SELF" --sha "$SHA" --branch detach-fixture --wait 5 > "$T/surv.out" 2>&1 &
+CHAIN_PID=$!
+i=0
+while [ "$i" -lt 300 ]; do
+  grep -q "LEG1 gate start" "$J" 2>/dev/null && break
+  i=$((i+1)); sleep 0.05
+done
+kill -TERM -"$CHAIN_PID" 2>/dev/null
+wait "$CHAIN_PID" 2>/dev/null
+i=0
+while [ "$i" -lt 400 ]; do
+  grep -q "DONE SWAPPED" "$J" 2>/dev/null && break
+  i=$((i+1)); sleep 0.05
+done
+grep -q "DONE SWAPPED" "$J" && echo SURVIVED || echo TRUNCATED
+DRIVER
+  chmod +x "$T/survive-driver.sh"
+  git -C "$T/clone" checkout -q main; git -C "$T/clone" reset -q --hard origin/main
+  SURV="$(bash "$T/survive-driver.sh" "$T" "$SELF" "$DSHA" 1 2>/dev/null | tail -1)"
+  [ "$SURV" = "SURVIVED" ] && ok "detach-survives-group-kill" || bad "detach-survives-group-kill (got '$SURV')"
+  git -C "$T/clone" checkout -q main; git -C "$T/clone" reset -q --hard origin/main
+  TRUNC="$(bash "$T/survive-driver.sh" "$T" "$SELF" "$DSHA" 0 2>/dev/null | tail -1)"
+  [ "$TRUNC" = "TRUNCATED" ] && ok "no-detach-truncates-on-kill" || bad "no-detach-truncates-on-kill (got '$TRUNC')"
 
   echo "selftest: $PASS passed, $FAIL failed"
   # Contract fix 2026-09-11: was `return $?`, which returned ECHO's status (0),
