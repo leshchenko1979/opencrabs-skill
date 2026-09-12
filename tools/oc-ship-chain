@@ -39,6 +39,9 @@
 #         precondition is the LANE's to fix — it is never an infra fault.
 #       4 GATE-RED (oc-prchecks rc 3) or CARRIER-RED (ship wait verdict RED)
 #       5 NON-FF (branch not fast-forwardable onto fork main — lane rebases
+#         via oc-rebase-safety and re-runs) · 5 TIP-MOVED (the branch tip no
+#         longer equals --sha: a rebase/force-push happened while the gate
+#         ran, so LEG3 must not land an ungated tip — re-gate and relaunch)
 #         via oc-rebase-safety, then re-runs the chain)
 #       6 dispatch/poll infra failure (prchecks rc 4/7/8, ship rc other).
 #         A lineage-guard refusal surfaces here too (oc-deploy swap rc 2).
@@ -650,8 +653,25 @@ acquire_ship_lock "${SHIP_LOCK_TIMEOUT:-600}"
 git -C "$FORK_REPO" fetch origin --quiet || true
 CUR="$(git -C "$FORK_REPO" rev-parse --abbrev-ref HEAD)"
 [ "$CUR" = "main" ] || die "fork checkout on '$CUR', not main — check out main first" 3
+# TIP PIN (defect fix 2026-09-12, lane c6b1a539 report). The merge below
+# resolved $BRANCH BY NAME, and a lane rebase + force-push mid-gate is a
+# NORMAL operation in this workflow. Without this pin LEG3 fast-forwards
+# fork main onto a tip NO GATE VALIDATED and LEG4 then ships the ORIGINAL
+# $SHA — main and the shipped artifact diverge while the ledger still reads
+# `DONE SWAPPED sha=$SHA`. That defeats the `--gated-sha must EQUAL --sha`
+# contract the flags themselves enforce. Near-miss (real, ~10 min window):
+# chain 3811585 pinned c5fc4203, the lane force-pushed 234c0d51 mid-gate,
+# and FORK_REPO already carried a local branch at 234c0d51 — `merge --ff-only
+# <branch>` would have landed the ungated tip. The merge then uses $TIP, so
+# there is no second resolution for the ref to move under.
+TIP="$(git -C "$FORK_REPO" rev-parse --verify --quiet "refs/heads/$BRANCH" || true)"
+[ -n "$TIP" ] || die "branch $BRANCH not found in $FORK_REPO — push it to the fork remote first" 3
+if [ "$TIP" != "$SHA" ]; then
+  journal "LEG3 TIP-MOVED branch=$BRANCH tip=$(printf '%s' "$TIP" | cut -c1-8) expected=$(printf '%s' "$SHA" | cut -c1-8)"
+  die "branch tip moved under the chain: $BRANCH is now $(printf '%s' "$TIP" | cut -c1-8), expected $SHA — the gate validated $SHA, so re-gate and relaunch" 5
+fi
 set +e
-git -C "$FORK_REPO" merge --ff-only "$BRANCH" >/dev/null 2>&1
+git -C "$FORK_REPO" merge --ff-only "$TIP" >/dev/null 2>&1
 FF_RC=$?
 set -e
 if [ "$FF_RC" != "0" ]; then
@@ -681,23 +701,44 @@ case "$SHIP_RC" in
   *) journal "LEG4 ship INFRA rc=$SHIP_RC"; die "ship infra rc=$SHIP_RC" 6 ;;
 esac
 
-# ---- leg 5: swap poll ------------------------------------------------------
+# ---- leg 5: swap confirmation ---------------------------------------------
+# THE PREDICATE IS THE MARKER, NOT A STDOUT TOKEN (defect fix 2026-09-12,
+# editor 462181e9 report, receipted live). This loop scanned the poll's
+# stdout for `*SWAPPED*` — a token oc-deploy has NEVER emitted: a
+# case-sensitive sweep of the whole tool returns ZERO occurrences (only
+# comments and JSON fixtures carrying swapped_at/auto-swap; the uppercase
+# hits are variable names such as SWAP_TARGET). `poll --execute` hands off
+# to a transient Phase B unit and exits 0 PRE-bounce BY DESIGN, so its
+# stdout can never carry a completion marker. Consequence: EVERY successful
+# chain exited rc 6 "swap not confirmed" on a box that was already swapped —
+# and a lane that trusts the exit code believes the ship FAILED, whose
+# natural next move is to RE-RUN the chain, i.e. a double-swap on an
+# already-swapped host. The selftest could not see it because its
+# fake-deploy stub DID print the token: the fixture was more permissive
+# than the real tool and encoded the bug away.
+# The authoritative signal is the deployed.sha marker, read through
+# oc-deploy's own read-only `status --json`.
 journal "LEG5 swap poll start (oc-deploy poll --execute)"
 SWAPPED=0
+CUR_DEPLOYED=""
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
   set +e
   POLL_OUT="$(cd "$FORK_REPO" && OC_TOOLS_NOLOG=1 NOTIFY_SESSION= "$DEPLOY_BIN" poll --execute 2>&1)"
   POLL_RC=$?
   set -e
-  case "$POLL_OUT" in
-    *SWAPPED*) SWAPPED=1; break ;;
-  esac
   [ "$POLL_RC" = "0" ] || { journal "LEG5 poll rc=$POLL_RC"; die "swap poll rc=$POLL_RC" 6; }
+  set +e
+  ST_OUT="$(cd "$FORK_REPO" && OC_TOOLS_NOLOG=1 NOTIFY_SESSION= "$DEPLOY_BIN" status --json 2>/dev/null)"
+  set -e
+  # The sed range scopes the match to the `deployed` object, so a future
+  # sibling sha field cannot satisfy the check by accident.
+  CUR_DEPLOYED="$(printf '%s\n' "$ST_OUT" | sed -n '/"deployed"[[:space:]]*:/,/}/s/.*"sha"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' | head -1)"
+  if [ "$CUR_DEPLOYED" = "$SHA" ]; then SWAPPED=1; break; fi
   sleep 10
 done
 if [ "$SWAPPED" != "1" ]; then
-  journal "LEG5 swap NOT confirmed after 12 polls"
-  die "swap not confirmed — check oc-deploy state" 6
+  journal "LEG5 swap NOT confirmed after 12 polls (deployed=${CUR_DEPLOYED:-none} expected=$SHA)"
+  die "swap not confirmed — deployed.sha is ${CUR_DEPLOYED:-none}, expected $SHA" 6
 fi
 journal "DONE SWAPPED sha=$SHA"
 echo "SHIP-CHAIN $CHAIN: SWAPPED sha=$SHA"
@@ -782,12 +823,33 @@ EOF
 #!/usr/bin/env bash
 case "$1" in
   ship) [ "${FAKE_CARRIER:-green}" = "red" ] && exit 3
+        # record WHAT was shipped and RESET the poll counter: the marker is
+        # written by the SWAP, not by the ship call (real oc-deploy writes it
+        # during the Phase B bounce, after the handoff).
+        s=""; shift; while [ $# -gt 0 ]; do case "$1" in --sha) s="$2"; shift 2 ;; *) shift ;; esac; done
+        d="${OC_DEPLOY_STATE_DIR:-/tmp}"; mkdir -p "$d" 2>/dev/null || true
+        printf '%s\n' "$s" > "$d/pending.sha" 2>/dev/null || true
+        rm -f "$d/deployed.sha" "$d/polls" 2>/dev/null || true
         echo "carrier run GREEN (fake)"; exit 0 ;;
-  poll) if [ "${FAKE_POLL_ROUNDS:-0}" -gt 0 ]; then
-          export FAKE_POLL_ROUNDS=$((FAKE_POLL_ROUNDS-1))
+  poll) # CONTRACT-FAITHFUL (defect fix 2026-09-12): the real `poll --execute`
+        # exits 0 PRE-bounce and prints a HANDOFF line, NEVER a completion
+        # token. Printing `SWAPPED (fake)` here is exactly how the rc-6 defect
+        # stayed invisible — the fixture was more permissive than the tool.
+        # Completion is modelled by the MARKER; FAKE_POLL_ROUNDS is now a REAL
+        # counter (the old env decrement never persisted across processes), so
+        # it can delay the marker to exercise the wait loop.
+        d="${OC_DEPLOY_STATE_DIR:-/tmp}"; mkdir -p "$d" 2>/dev/null || true
+        n=0; [ -f "$d/polls" ] && n="$(cat "$d/polls" 2>/dev/null || echo 0)"
+        n=$((n+1)); printf '%s\n' "$n" > "$d/polls" 2>/dev/null || true
+        if [ "$n" -lt "${FAKE_POLL_ROUNDS:-1}" ]; then
           echo "S2 pending (fake)"; exit 0
         fi
-        echo "SWAPPED (fake)"; exit 0 ;;
+        [ -f "$d/pending.sha" ] && cp "$d/pending.sha" "$d/deployed.sha" 2>/dev/null || true
+        echo "HANDOFF: Phase B transient unit owns the swap (fake) — poll exits pre-bounce by design"
+        exit 0 ;;
+  status) # read-only marker view — the same surface the real tool exposes
+        d="${OC_DEPLOY_STATE_DIR:-/tmp}"
+        printf '{\n  "deployed": {\n    "sha": "%s"\n  }\n}\n' "$(cat "$d/deployed.sha" 2>/dev/null)" ;;
 esac
 exit 9
 EOF
@@ -809,9 +871,16 @@ EOF
   }
 
   # 1. full GREEN chain (default --fast)
-  OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 2>&1)"; RC=$?
+  # GUARDED (2026-09-12): `set -e` + a bare `OUT="$(...)"` aborts the WHOLE
+  # selftest on the first failing chain — rc 6, zero output, no assertion
+  # printed. A harness that cannot report a failure cannot be trusted green.
+  RC=0; OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 2>&1)" || RC=$?
   check_rc "full-chain-green" "$RC" 0
   case "$OUT" in *SWAPPED*) ok "swapped-marker" ;; *) bad "swapped-marker: $OUT" ;; esac
+  # The chain's own final line is now the ONLY SWAPPED token in this test:
+  # the stub no longer prints one, so a regression to a stdout-token
+  # predicate dies here instead of passing on a fixture that lies.
+  grep -q "LEG5 swap poll start" "$T/journal.log" && ok "leg5-ran" || bad "leg5-ran"
   grep -q "LEG4 ship GREEN" "$T/journal.log" && ok "journal-ship-leg" || bad "journal-ship-leg"
   grep -q "DONE SWAPPED" "$T/journal.log" && ok "journal-done" || bad "journal-done"
   grep -q -e "--fast" "$T/prchecks.log" && ok "default-gate-is-fast" || bad "default-gate-is-fast"
@@ -820,7 +889,7 @@ EOF
   # 1b. full GREEN chain with --full (opts out of --fast)
   rm -f "$T/journal.log" "$T/prchecks.log"
   git -C "$T/clone" reset -q --hard origin/main
-  OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 --full 2>&1)"; RC=$?
+  RC=0; OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 --full 2>&1)" || RC=$?
   check_rc "full-chain-fast" "$RC" 0
   grep -q -e "--fast" "$T/prchecks.log" && bad "full-opt-in-passed-fast" || ok "full-opt-in-omits-fast"
   grep "LEG1 gate start" "$T/journal.log" | grep -q -- "--fast" && bad "journal-leg1-argv-truth-full-claims-fast" || ok "journal-leg1-argv-truth-full-omits-fast"
@@ -855,6 +924,38 @@ EOF
   git -C "$T/clone" reset -q --hard origin/main   # main = diverged tip; feat diverged from it → ff impossible
   RC=0; OUT="$(run_chain --sha "$FSHA2" --branch feat 2>&1)" || RC=$?
   check_rc "non-ff" "$RC" 5
+
+  # RESTORE the fixture precondition: tests 5..19 ship `--sha $FSHA --branch
+  # feat`, and LEG3 now REQUIRES the branch tip to EQUAL the gated sha (a tip
+  # that moved under the chain is the defect). Test 4 left feat at FSHA2.
+  git -C "$T/clone" branch -f feat "$FSHA"
+
+  # 4b. TIP MOVED under the chain (defect fix 2026-09-12, lane c6b1a539).
+  #     LEG3 merged the branch BY NAME, so a rebase + force-push while the
+  #     gate ran would land a tip NO GATE VALIDATED while LEG4 shipped the
+  #     ORIGINAL $SHA. The pin must refuse rc 5 AND leave main untouched —
+  #     a refusal that still moved main would be the same defect with a
+  #     louder message.
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  git -C "$T/clone" checkout -q feat
+  git -C "$T/clone" reset -q --hard origin/main
+  echo "tip-a" > "$T/clone/tip.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm tip-a
+  TSHA="$(git -C "$T/clone" rev-parse HEAD)"
+  # the lane rebases + force-pushes AFTER the gate pinned TSHA
+  echo "tip-b" >> "$T/clone/tip.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm tip-b
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  MAIN_BEFORE="$(git -C "$T/clone" rev-parse HEAD)"
+  RC=0; OUT="$(run_chain --sha "$TSHA" --branch feat 2>&1)" || RC=$?
+  check_rc "tip-moved-rc5" "$RC" 5
+  case "$OUT" in *"branch tip moved under the chain"*) ok "tip-moved-message" ;; *) bad "tip-moved-message: $OUT" ;; esac
+  grep -q "LEG3 TIP-MOVED" "$T/journal.log" && ok "tip-moved-journal" || bad "tip-moved-journal"
+  [ "$(git -C "$T/clone" rev-parse HEAD)" = "$MAIN_BEFORE" ] && ok "tip-moved-main-untouched" || bad "tip-moved-main-untouched"
+  git -C "$T/clone" branch -f feat "$FSHA"   # restore for the tests that follow
 
   # 5. gated-sha with fake gh shim
   cat > "$T/fake-gh" <<'EOF'
@@ -985,7 +1086,7 @@ EOF
     OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks-inflight" OC_DEPLOY_BIN="$T/fake-deploy" \
     OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
     OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
-    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
       bash "$SELF" "$@"
   }
 
@@ -1120,8 +1221,18 @@ EOF2
 #!/usr/bin/env bash
 case "$1" in
   ship) printf '%s\n' "${OC_ACTOR:-<unset>}" > "${FAKE_ACTOR_FILE:-/dev/null}"
+        s=""; shift; while [ $# -gt 0 ]; do case "$1" in --sha) s="$2"; shift 2 ;; *) shift ;; esac; done
+        d="${OC_DEPLOY_STATE_DIR:-/tmp}"; mkdir -p "$d" 2>/dev/null || true
+        printf '%s\n' "$s" > "$d/pending.sha" 2>/dev/null || true
+        rm -f "$d/deployed.sha" "$d/polls" 2>/dev/null || true
         echo "carrier run GREEN (fake)"; exit 0 ;;
-  poll) echo "SWAPPED (fake)"; exit 0 ;;
+  poll) # no completion token — the MARKER is the completion signal
+        d="${OC_DEPLOY_STATE_DIR:-/tmp}"; mkdir -p "$d" 2>/dev/null || true
+        [ -f "$d/pending.sha" ] && cp "$d/pending.sha" "$d/deployed.sha" 2>/dev/null || true
+        echo "HANDOFF: Phase B transient unit owns the swap (fake) — poll exits pre-bounce by design"
+        exit 0 ;;
+  status) d="${OC_DEPLOY_STATE_DIR:-/tmp}"
+        printf '{\n  "deployed": {\n    "sha": "%s"\n  }\n}\n' "$(cat "$d/deployed.sha" 2>/dev/null)" ;;
 esac
 exit 9
 EOF
