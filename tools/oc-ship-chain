@@ -15,7 +15,11 @@
 # Usage:
 #   oc-ship-chain --sha <sha> --branch <branch> [--issue <n>] [--repo <fork-slug>]
 #                 [--gated-sha <sha>] [--gated-run <id>] [--wait <sec>]
-#                 [--gate-wait <sec>] [--dry-run] [--no-ledger] [--selftest] [--help]
+#                 [--gate-wait <sec>] [--full] [--dry-run] [--no-ledger] [--selftest] [--help]
+#
+# Flags:
+#   --fast           Default gate mode (passes fast=true to oc-prchecks).
+#   --full|--no-fast Opt-in full test suite gate (~30 min).
 #
 # --wait <sec>       LEG4 ship/swap budget (default 900).
 # --gate-wait <sec>  LEG1 CI-gate budget (default 2700 = 45 min; the PR-lane
@@ -121,7 +125,7 @@ GATE_RESUMES="${OC_SHIPCHAIN_GATE_RESUMES:-2}"     # max rc-5 resume-polls befor
 [ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 exec bash "$SELF"
 [ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
 
-FAST_GATE=0
+FAST_GATE=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --sha)       SHA="${2:?}"; shift 2 ;;
@@ -132,7 +136,8 @@ while [ $# -gt 0 ]; do
     --gate-wait) GATE_WAIT="${2:?}"; shift 2 ;;
     --gated-sha) GATED_SHA="${2:?}"; shift 2 ;;
     --gated-run) GATED_RUN="${2:?}"; shift 2 ;;
-    --fast)      FAST_GATE=1; shift ;;
+    --fast)            FAST_GATE=1; shift ;;
+    --full|--no-fast)  FAST_GATE=0; shift ;;
     --dry-run)   DRY=1; shift ;;
     --no-ledger) NOLEDGER=1; shift ;;
     --help|-h)   usage ;;
@@ -559,19 +564,20 @@ EOF
       bash "$SELF" "$@"
   }
 
-  # 1. full GREEN chain
-  OUT="$(run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 2>&1)"; RC=$?
+  # 1. full GREEN chain (default --fast)
+  OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 2>&1)"; RC=$?
   check_rc "full-chain-green" "$RC" 0
   case "$OUT" in *SWAPPED*) ok "swapped-marker" ;; *) bad "swapped-marker: $OUT" ;; esac
   grep -q "LEG4 ship GREEN" "$T/journal.log" && ok "journal-ship-leg" || bad "journal-ship-leg"
   grep -q "DONE SWAPPED" "$T/journal.log" && ok "journal-done" || bad "journal-done"
+  grep -q -e "--fast" "$T/prchecks.log" && ok "default-gate-is-fast" || bad "default-gate-is-fast"
 
-  # 1b. full GREEN chain with --fast
+  # 1b. full GREEN chain with --full (opts out of --fast)
   rm -f "$T/journal.log" "$T/prchecks.log"
   git -C "$T/clone" reset -q --hard origin/main
-  OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 --fast 2>&1)"; RC=$?
+  OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$FSHA" --branch feat --issue 42 --wait 5 --full 2>&1)"; RC=$?
   check_rc "full-chain-fast" "$RC" 0
-  grep -q "\-\-fast" "$T/prchecks.log" && ok "fast-flag-passed-to-prchecks" || bad "fast-flag-passed-to-prchecks"
+  grep -q -e "--fast" "$T/prchecks.log" && bad "full-opt-in-passed-fast" || ok "full-opt-in-omits-fast"
 
   # 2. gate RED → exit 4, merge must NOT happen
   rm -f "$T/journal.log"
