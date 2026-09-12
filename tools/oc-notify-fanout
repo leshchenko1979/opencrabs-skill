@@ -51,6 +51,17 @@
 #      skipped with `SKIP <uuid> <role> DUPLICATE` — a re-run of the same wave
 #      completes only the remaining lanes (resume semantics), never double-
 #      notifies.
+#   9. ACTIVE-ROWS-ONLY TARGET SET (2026-09-12, defect #6): a roster row whose
+#      `state` is anything other than ACTIVE is NEVER a dispatch target. The
+#      ledger carries 12 RETIRED rows whose sessions are still live and still
+#      bound to the forum chat, so they passed every guard above (uuid shape,
+#      live session, forum scope) and were notified on EVERY wave — e756b84b
+#      (retired_compiler) was FIRST in HQ's v0.4.156 wave, burning the slowest
+#      slot (75.6s) on a lane that can never act on a skill brief. Absent
+#      `state` == active (oc-ledger enroll writes no state key at all), so the
+#      test is `""|ACTIVE -> sendable`, anything else -> `SKIP <uuid> <role>
+#      INACTIVE(state=...)`. Fail-safe by construction: a state this tool does
+#      not know yet is skipped, never notified.
 #
 # Usage:
 #   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
@@ -105,12 +116,14 @@ if [ "${1:-}" = "--selftest" ]; then
   L3="33333333-3333-4333-8333-333333333333"  # live + UNBOUND (leak path)
   L4="44444444-4444-4444-8444-444444444444"  # malformed shape
   L5="00000000-0000-0000-0000-000000000000"  # all-zero (n=2167 class)
+  L6="66666666-6666-4666-8666-666666666666"  # live + forum-bound + RETIRED (defect #6)
   FORUM="-1999999999"
   sqlite3 "$T/db.sqlite" <<SQL
 CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, archived_at INTEGER);
 CREATE TABLE session_bindings (session_id TEXT PRIMARY KEY, channel TEXT, chat_id TEXT, thread_id INTEGER, updated_at INTEGER DEFAULT 0);
-INSERT INTO sessions VALUES ('$L1','lane1',NULL),('$L2','outside',NULL),('$L3','unbound',NULL),('$L4','bad',NULL),('$L5','zero',NULL);
+INSERT INTO sessions VALUES ('$L1','lane1',NULL),('$L2','outside',NULL),('$L3','unbound',NULL),('$L4','bad',NULL),('$L5','zero',NULL),('$L6','retired',NULL);
 INSERT INTO session_bindings VALUES ('$L1','telegram','$FORUM',123,0);
+INSERT INTO session_bindings VALUES ('$L6','telegram','$FORUM',126,0);
 INSERT INTO session_bindings VALUES ('$L2','telegram','-1000000000',1,0);
 SQL
   cat > "$T/fake-notify" <<'EOF'
@@ -130,7 +143,8 @@ EOF
   {"uuid": "$L2", "role": "editor", "topic_id": 2},
   {"uuid": "$L3", "role": "editor", "topic_id": 3},
   {"uuid": "$L4", "role": "editor", "topic_id": 4},
-  {"uuid": "$L5", "role": "editor", "topic_id": 5}
+  {"uuid": "$L5", "role": "editor", "topic_id": 5},
+  {"uuid": "$L6", "role": "editor", "topic_id": 6, "state": "RETIRED"}
 ], "events": []}
 JSON
 
@@ -144,15 +158,41 @@ JSON
   chk() { if [ "$1" = 0 ]; then P=$((P+1)); else F=$((F+1)); echo "FAIL: $2"; fi }
   mkdir -p "$T/run-default"
 
-  # 1. Default roster (all 4 non-self workers): ONLY L1 sendable.
+  # 1. Default roster (all 5 non-self workers): ONLY L1 sendable — L6 is live
+  #    and forum-bound but RETIRED, so law 9 is the only guard that stops it.
   out="$(run_fanout)"
   echo "$out" | grep -q "SENT $L1" && chk 0 sent-in-scope || chk 1 sent-in-scope
   echo "$out" | grep -q "SKIP $L2 .*SCOPE" && chk 0 skip-bound-elsewhere || chk 1 skip-bound-elsewhere
   echo "$out" | grep -q "SKIP $L3 .*SCOPE" && chk 0 skip-unbound || chk 1 skip-unbound
   echo "$out" | grep -q "SKIP $L4" && chk 0 skip-malformed || chk 1 skip-malformed
   echo "$out" | grep -q "SKIP $L5" && chk 0 skip-zero-seg || chk 1 skip-zero-seg
+  # LAW 9 (defect #6, 2026-09-12): L6 passes EVERY guard above it (uuid shape,
+  # live session, forum binding) — the state filter is the only thing that can
+  # stop it, which is what makes these two assertions non-vacuous. Remove the
+  # guard on a throwaway copy and L6 is SENT (negative control, 2026-09-12).
+  echo "$out" | grep -q "SKIP $L6 .*INACTIVE(state=RETIRED)" && chk 0 skip-retired-row || chk 1 skip-retired-row
+  grep -qF "$L6" "$T/fake-notify-log" && chk 1 retired-never-sent || chk 0 retired-never-sent
   grep -qF "$L2" "$T/fake-notify-log" && chk 1 leak-bound-elsewhere || chk 0 leak-bound-elsewhere
   grep -qF "$L3" "$T/fake-notify-log" && chk 1 leak-unbound || chk 0 leak-unbound
+  # 1b. The OTHER arm of law 9: an explicitly ACTIVE row must still be
+  #     sendable. L1 above carries NO state key at all (the enroll default), so
+  #     it proves only the ABSENT arm — a rewrite that special-cases RETIRED and
+  #     drops explicit ACTIVE would sail straight past it. Isolated fixture and
+  #     its OWN log, so this extra target cannot perturb the send counts the
+  #     shared-fixture assertions below rely on.
+  STL="$T/ledger-state.json"
+  cat > "$STL" <<JSON
+{"workers": [
+  {"uuid": "$L1", "role": "editor", "topic_id": 1, "state": "ACTIVE"}
+], "events": []}
+JSON
+  : > "$T/fake-notify-log-1b"
+  out="$(OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$STL" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$T/run-state" \
+    FAKE_NOTIFY_LOG="$T/fake-notify-log-1b" \
+      bash "$0" --title T --text "brief {{UUID}}" --no-stamp 2>&1)"
+  echo "$out" | grep -q "SENT $L1" && chk 0 state-active-sendable || chk 1 state-active-sendable
 
   # 2. Law-1 guard still fires: a brief with an unresolvable token aborts.
   out="$(OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
@@ -419,11 +459,30 @@ validate_target() { # $1=uuid -> 0 ok; else echo reason
   return 0
 }
 
+sendable_state() { # $1=roster .state -> 0 if the row is a valid dispatch target
+  # LAW 9 (defect #6, 2026-09-12). The live ledger's state vocabulary is
+  # {absent, ACTIVE, RETIRED}: `oc-ledger enroll` writes NO state key (absent
+  # means active) and RETIRED is the only other value in the roster (12 of 48
+  # rows). The test is therefore "ACTIVE or absent", NOT "not RETIRED", so an
+  # unknown future state is skipped rather than notified.
+  case "$(printf '%s' "${1:-}" | tr 'a-z' 'A-Z')" in
+    ""|ACTIVE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 sent=0 skipped=0 failed=0 receipts="" ids=""
-while IFS=$'\t' read -r uuid role topic; do
+while IFS=$'\t' read -r uuid role topic wstate; do
   [ -n "$uuid" ] || continue
   [ "$uuid" = "$self_uuid" ] && [ "$include_self" = 0 ] && continue
   want_role "$role" || continue
+  # LAW 9 — target-set filter, applied BEFORE per-target validation: a retired
+  # row is not a target at all, so it is reported as such rather than dressed
+  # up as a scope/shape failure. Placed AFTER want_role so a wave that does not
+  # select the row's role emits no receipt for it.
+  if ! sendable_state "$wstate"; then
+    receipts+="SKIP ${uuid} ${role} INACTIVE(state=${wstate})"$'\n'; skipped=$((skipped+1)); continue
+  fi
   if excluded "$uuid" "$topic"; then
     receipts+="SKIP ${uuid} ${role} excluded(${topic:-no-topic})"$'\n'; skipped=$((skipped+1)); continue
   fi
@@ -488,7 +547,7 @@ while IFS=$'\t' read -r uuid role topic; do
   else
     receipts+="FAIL ${uuid} ${role} rc=${rc} ${LAT_MS}ms"$'\n'; failed=$((failed+1))
   fi
-done < <(jq -r '.workers[] | [(.uuid // ""), (.role // "editor"), ((.topic_id // 0) | tostring)] | @tsv' "$LEDGER")
+done < <(jq -r '.workers[] | [(.uuid // ""), (.role // "editor"), ((.topic_id // 0) | tostring), (.state // "ACTIVE")] | @tsv' "$LEDGER")
 
 echo "--- receipts ---"; printf '%s' "$receipts"
 echo "--- summary ---"

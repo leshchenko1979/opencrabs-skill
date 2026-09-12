@@ -12,7 +12,7 @@
 #   lessons [--kind <lesson|incident|all>] [--class <text>]
 #                                          extract lesson/incident rows by class
 #                                          (H-2 v0.4.116; read-only)
-#   roster [--role <substr>] [--live] [--json]
+#   roster [--role <substr>] [--live] [--include-retired] [--json]
 #                                          role -> FULL uuid resolution for
 #                                          Direct Dispatch (2026-09-11 defect
 #                                          fix, lane d18ce16a: the skill cited
@@ -1075,7 +1075,16 @@ EOF
   # 56-66 (2026-09-11, defect fix lane d18ce16a): roster — role -> FULL uuid
   # resolution, the verb the skill cited in 3 role files while it did not exist
   # (`oc-ledger roster` fell through to the usage branch, rc 2). Fixture state
-  # here: aaaa=tester2 (promoted), 2222=toolsmith/topic 39171, W2=tester/topic 42.
+  # here: aaaa=tester2 (promoted), 2222=toolsmith/topic 39171, W2=tester/topic 42,
+  # plus one LEGACY retired row (WR, state=RETIRED, injected with jq): the real
+  # ledger carries 12 such rows predating v1.3 retire-removal (2026-09-11), and
+  # e756b84b (retired_compiler) was FIRST in two HQ fanout waves because both
+  # the fanout target set and this resolver ignored .state. Law 9 (owner order
+  # 2026-09-12): default target/resolution surfaces exclude RETIRED.
+  local WR="99999999-9999-9999-9999-999999999999"
+  bash "$ME" enroll "$WR" retired_compiler >/dev/null 2>&1
+  jq --arg u "$WR" '.workers |= map(if .uuid == $u then (. + {state: "RETIRED"}) else . end)' \
+    "$OC_LEDGER" > "$T/rl.tmp" && mv "$T/rl.tmp" "$OC_LEDGER"
   bash "$ME" roster > "$T/roster-all.out" 2>/dev/null; chk "roster-all-rc" 0 $?
   chk "roster-all-count" "3" "$(grep -c . "$T/roster-all.out")"
   awk -F'\t' -v u="$W2" '$1==u {found=1} END{exit !found}' "$T/roster-all.out" && ok || bad "roster-prints-full-uuid"
@@ -1085,6 +1094,18 @@ EOF
   # substring (case-insensitive) match: 'TESTER' hits BOTH tester and tester2
   bash "$ME" roster --role TESTER > "$T/roster-sub.out" 2>/dev/null; chk "roster-role-ci-rc" 0 $?
   chk "roster-role-substring" "2" "$(grep -c . "$T/roster-sub.out")"
+  # law 9 (2026-09-12, defect #6): RETIRED rows are excluded by default and
+  # --include-retired is the ONLY way to see them; a retired-only role is a
+  # rc-1 NO-MATCH whose stderr names retirement as the reason, and the plain
+  # roster listing keeps its pre-law count with a retired row present.
+  bash "$ME" roster --role retired_compiler > "$T/roster-ret.out" 2>"$T/roster-ret.err"; chk "roster-retired-excluded-rc1" 1 $?
+  [ -s "$T/roster-ret.out" ] && bad "roster-retired-excluded-empty" || ok
+  grep -q "RETIRED row" "$T/roster-ret.err" && ok || bad "roster-retired-stderr-reason"
+  bash "$ME" roster --role retired_compiler --include-retired > "$T/roster-reti.out" 2>/dev/null; chk "roster-include-retired-rc" 0 $?
+  chk "roster-include-retired-count" "1" "$(grep -c . "$T/roster-reti.out")"
+  awk -F'\t' -v u="$WR" '$1==u' "$T/roster-reti.out" | grep -q . && ok || bad "roster-include-retired-row"
+  bash "$ME" roster --include-retired > "$T/roster-ir.out" 2>/dev/null; chk "roster-include-retired-all-rc" 0 $?
+  chk "roster-include-retired-all-count" "4" "$(grep -c . "$T/roster-ir.out")"
   bash "$ME" roster --role zzznope > "$T/roster-none.out" 2>/dev/null; chk "roster-nomatch-rc1" 1 $?
   [ -s "$T/roster-none.out" ] && bad "roster-nomatch-empty" || ok
   bash "$ME" roster --json > "$T/roster.json" 2>/dev/null; chk "roster-json-rc" 0 $?
@@ -1335,19 +1356,29 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   #   --live           keep only rows whose uuid is a LIVE session (profile
   #                    session DB, read-only, ~0s — same source as
   #                    oc-notify-fanout law 3). OC_LEDGER_DB overrides the path.
+  #   --include-retired  ALSO list rows whose .state == "RETIRED". Default
+  #                      EXCLUDES them (law 9, owner order 2026-09-12): a
+  #                      retired lane must never be a dispatch target, and a
+  #                      role-to-uuid resolver that returns one is the same
+  #                      defect from the resolution side — e756b84b
+  #                      (retired_compiler) was FIRST in two HQ fanout waves
+  #                      and resolved via `roster --live --role` until this
+  #                      fix. Legacy rows written before `retire` learned to
+  #                      REMOVE (v1.3, 2026-09-11) still sit in .workers[].
   #   --json           JSON array of {uuid,role,topic_id,feature,last_acked}
   # Output (TSV, ledger order): uuid <TAB> role <TAB> topic <TAB> feature <TAB> ack
   # rc 0 rows printed · 1 NO-MATCH (a VERDICT, deliberately not a silent empty:
   # a caller that gets 1 must fall back to session_search, NEVER assemble an id)
   # · 2 usage · 3 ledger or session DB unreadable.
-  local role="" live=0 json=0
+  local role="" live=0 json=0 include_retired=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --role) [ -n "${2:-}" ] || die 2 "roster: --role needs a value"; role="$2"; shift 2 ;;
       --live) live=1; shift ;;
+      --include-retired) include_retired=1; shift ;;
       --json) json=1; shift ;;
-      -h|--help) echo "usage: oc-ledger roster [--role <substr>] [--live] [--json]"; exit 0 ;;
-      *) die 2 "roster: unknown arg '$1' (usage: oc-ledger roster [--role <substr>] [--live] [--json])" ;;
+      -h|--help) echo "usage: oc-ledger roster [--role <substr>] [--live] [--include-retired] [--json]"; exit 0 ;;
+      *) die 2 "roster: unknown arg '$1' (usage: oc-ledger roster [--role <substr>] [--live] [--include-retired] [--json])" ;;
     esac
   done
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
@@ -1377,13 +1408,24 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   # resolves, so the pair cannot drift apart.
   [ "$lrole" = "hq-supervisor" ] && lrole="hq"
   local sel rc
-  sel="$(jq -r --arg lr "$lrole" \
+  sel="$(jq -r --arg lr "$lrole" --argjson ir "$include_retired" \
     '.workers[]?
+     | select(($ir == 1) or ((.state // "") != "RETIRED"))
      | select(($lr == "") or (((.role // "") | ascii_downcase) | contains($lr)))
      | [(.uuid // ""), (.role // "-"), ((.topic_id // "-") | tostring),
         ((.feature // "-") | tostring | .[0:60]), (.last_acked.version // "-")]
      | @tsv' "$LEDGER")"
   rc=$?
+  # RETIRED-exclusion diagnostics (law 9, defect #6, 2026-09-12): when the
+  # default filter excludes rows, a rc-1 NO-MATCH must say whether retirement
+  # is the reason, so a lane does not read it as "no such lane ever existed".
+  local retired_n=0
+  if [ "$include_retired" -eq 0 ]; then
+    retired_n="$(jq -r --arg lr "$lrole" \
+      '[.workers[]? | select((.state // "") == "RETIRED")
+        | select(($lr == "") or (((.role // "") | ascii_downcase) | contains($lr)))] | length' "$LEDGER" 2>/dev/null)" || retired_n=0
+    case "$retired_n" in ''|*[!0-9]*) retired_n=0 ;; esac
+  fi
   [ $rc -eq 0 ] || { [ -n "$livef" ] && rm -f "$livef"; die 3 "roster: jq failed (rc $rc) — ledger unreadable or query error"; }
 
   local out="" uuid
@@ -1398,6 +1440,9 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   [ -n "$out" ] || {
     local lsfx=""; [ "$live" -eq 1 ] && lsfx=" (live sessions only)"
     echo "roster: no row matches${role:+ role~'$role'}${lsfx} — fall back to session_search; NEVER hand-assemble a uuid" >&2
+    if [ "$include_retired" -eq 0 ] && [ "$retired_n" -gt 0 ]; then
+      echo "roster: ${retired_n} RETIRED row(s) match this role and are excluded by default — pass --include-retired to list them; a RETIRED row must never be dispatched" >&2
+    fi
     exit 1
   }
 
