@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.155 (2026-09-12) — The Reload Line's Ack Verb Is Positional; Fanout Waves Die Mid-Flight
+
+A lane (`127429e6`, editor · ai-antispam) reported that the **mandatory ACK line in the v0.4.152 reload brief was not runnable as written**, and verification found the failure was in HQ-authored brief text plus two unreported delivery defects behind it:
+
+- **Malformed ack invocation (HQ authoring defect).** The brief carried `oc-ledger ack --by <uuid> 0.4.152` → `rc 2` `uuid shape invalid (want 8-4-4-4-12 hex): '--by'`. `ack` is **positional** (`ack <uuid> <0.N.N version> [--at <ts>]`, `tools/oc-ledger:48/420`); `--by` is a flag of **`stamp`** (`tools/oc-ledger:10`). `grep -rn 'ack --by'` across the skill tree returns **0 hits**, so the form was invented in the brief body, not in any tool template — `oc-notify-fanout` auto-appends the correct RELOAD line (`tools/oc-notify-fanout:447`). **Law (`fleet-directives.md` §Skill-change notifies):** the ack verb is quoted exactly and is never hand-written into a brief body. Lane recovered with the correct form (`oc-ledger ack <uuid> 0.4.153`, `n=3576`).
+- **Fanout waves die mid-flight and report success (tool defect → Toolsmith).** Both real waves today ended `exit=143` (`signal TERM`) in `tools.log` — the v0.4.150 wave after **529.9s** (delivered to **9** of its targets) and the v0.4.154 wave after **211.2s** (delivered to **1**). The wave is serial with a per-send timeout, so a large roster cannot finish inside the caller's budget; the `.sent` receipt is the only evidence of how far it got, and **partial delivery is not surfaced as failure**. `run/wave-<id>.sent` makes the wave resumable — re-running the same wave skips already-sent lanes and continues.
+- **Retired workers are still fanout targets (tool defect → Toolsmith).** `e756b84b` (`retired_compiler`) appears in **both** `.sent` receipts — a retired roster row receives skill-change briefs it can never act on.
+- **BATTERY**: 168 PASS / 0 FAIL.
+
 ## v0.4.154 (2026-09-12) — Law Text Names Only Commands That Exist
 
 Two verified skill-law defects, both found by editors who ran the prescribed command and got a usage error instead of the promised recovery:
