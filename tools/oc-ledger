@@ -263,6 +263,32 @@ derive_by() { # default stamp attribution (v0.4.58, Duty-4 IDEA from lane 7e1ebb
         printf '%s\n' "  Pass a roster role label or a session uuid as OC_ACTOR/--by." >&2
         echo "$uuid"; return ;;
     esac
+    # M2-24 (2026-09-12): the value derive_by PRODUCES must be round-trippable.
+    # It emits the composed form `<role> <uuid>`, but every lookup above accepts
+    # only a BARE uuid — the composed form carries a space, hits the LABEL branch
+    # (`*[!0-9a-f-]*`), and fell through to the sentinel. Feeding a prior row's
+    # `by` back is the natural caller pattern, not a slip: `oc-ledger roster
+    # --live --role R` prints a TSV whose first two columns ARE the uuid and the
+    # role, so composing 'role uuid' from that output is the obvious reading.
+    # Live repro: n=3989 was written 'unrostered-actor toolsmith 2fae1230-...'
+    # (retracted n=3990). Resolve the TRAILING token; when it names exactly one
+    # worker, stamp the CANONICAL `<role> <uuid>` from the roster — the same
+    # normalisation as the M2-3 prefix branch (the roster's role, never the
+    # caller's guess). Placed AFTER the M2-23 guard so a sentinel stays verbatim.
+    case "$uuid" in
+      *\ *)
+        local _cb_tail="${uuid##* }"
+        case "$_cb_tail" in
+          *[!0-9a-f-]*) : ;;   # tail is not a uuid/fragment -> a LABEL, keep the sentinel
+          *)
+            if [ "${#_cb_tail}" -ge 4 ]; then
+              hit="$(jq -r --arg p "$_cb_tail" '[.workers[] | select((.uuid // "") | startswith($p))] | if length == 1 then (.[0].role + " " + .[0].uuid) else "" end' "$LEDGER" 2>/dev/null || true)"
+              if [ -n "$hit" ]; then echo "$hit"; return; fi
+            fi
+            ;;
+        esac
+        ;;
+    esac
     # an unresolvable actor is LOUD and names the remedy — never a silent label
     printf '%s\n' "oc-ledger: WARNING — actor '$uuid' is not in the roster ($LEDGER) — row stamped 'unrostered-actor $uuid'." >&2
     printf '%s\n' "  If it is a session: oc-ledger enroll $uuid <role> [--topic N]. A factory/lane LABEL is not an actor — stamp as your ROSTER ROLE." >&2
@@ -825,7 +851,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (267 cases) -----------------------------------------------------
+# ---- selftest (271 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -1197,6 +1223,18 @@ ACKEOF
   chk "derive-by-sentinel-idem-rc" 0 $?
   chk "derive-by-sentinel-idem-verbatim" "unrostered-actor 2fae1230" "$(jq -r '[.events[] | select(.what=="sentinel-idem-stamp")][0].by' "$OC_LEDGER")"
   chk "derive-by-sentinel-idem-warns" "true" "$(grep -qF 'already carries' "$T/idem.err" && echo true || echo false)"
+  # M2-24 (2026-09-12): the composed `<role> <uuid>` form derive_by EMITS must
+  # be consumable — feeding a prior row's `by` back is the natural caller
+  # pattern (the roster TSV's first two columns are uuid and role).
+  OC_ACTOR="tester aaaaaaaa" bash "$ME" stamp note "composed-stamp" >/dev/null 2>"$T/comp.err"
+  chk "derive-by-composed-rc" 0 $?
+  # expected is DERIVED from the fixture roster (role + FULL uuid), never hardcoded:
+  # the fixture's role for this uuid is not `tester` at this point in the run.
+  chk "derive-by-composed-canonical" "$(jq -r '.workers[] | select(.uuid=="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") | .role + " " + .uuid' "$OC_LEDGER")" "$(jq -r '[.events[] | select(.what=="composed-stamp")][0].by' "$OC_LEDGER")"
+  chk "derive-by-composed-not-sentinel" "false" "$(jq -r '[.events[] | select(.what=="composed-stamp")][0].by | startswith("unrostered-actor")' "$OC_LEDGER")"
+  # a two-word LABEL whose tail is NOT a uuid must still take the sentinel
+  OC_ACTOR="some lane label" bash "$ME" stamp note "composed-label-stamp" >/dev/null 2>&1
+  chk "derive-by-composed-label-sentinel" "true" "$(jq -r '[.events[] | select(.what=="composed-label-stamp")][0].by | startswith("unrostered-actor")' "$OC_LEDGER")"
   # a meaningful LABEL is not a fragment: --by is written VERBATIM (HQ stamps
   # hq/opencrabs-dev-factory; refusing the label form would break it outright)
   bash "$ME" stamp note "label-stamp" --by "hq/opencrabs-dev-factory" >/dev/null 2>&1; chk "stamp-label-rc" 0 $?
