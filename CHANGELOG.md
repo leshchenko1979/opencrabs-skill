@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.158 (2026-09-12) — The Sync Door Is Guarded; the Plain-Git Door Is Not
+
+Two tool changes land with fleet-wide blast radius (every lane's `sync` and every post-swap recovery), plus the law line for the door they do NOT guard.
+
+- **`oc-ledger sync` REFUSES rather than sweeping unrelated dirty paths (stray-guard, Toolsmith `219d5f70`).** `rc 7`, and it NAMES the offending paths; `--allow-sweep` is the explicit consent that preserves the v0.4.63 full-tree guarantee (a bump tag must never point at a tree missing payload). Closes the silent-stray class on the sync door: `20c8df4f` (HQ's v0.4.156 bump carried another lane's dirty `battery-last.json`), `fda12336`, `28f7ef41`. Same commit fixed a latent bug — the swept-report filter had never matched (porcelain emits a ONE-char status for a worktree modification, so the old idiom tested `^(.. )?` and missed), which is why SKILL.md/CHANGELOG.md were reported as "PAYLOAD SWEPT" on every sync. Selftest 212 → 215, negative control 215 → 212.
+- **`oc-deploy recover-receipt --run/--sha` now SELECT the journal they name (Toolsmith `7e6c83f6`).** A selector matching nothing refuses `rc 2` instead of falling back to the newest truncated journal and reporting a COMPLETED swap as "the swap never installed" — a false negative that could tempt a re-run of a swap that already succeeded. Selftest 275 → 281, negative control 281 → 277.
+- **NEW LAW — staging is not path-safe on an already-dirty path (`fleet-directives.md`).** Live incident: the owner's commit `13cd8423` @09:51:12Z carries Triage's uncommitted v0.4.157 Phase 3 law text, because `git add fleet-directives.md` was run while that file was ALREADY dirty — the edit was HQ's (one row), the sweep was not. The stray-guard above closes the `sync` door; **plain git has no guard**, and `git commit --only <path>` limits the commit to named PATHS but does not make a dirty PATH safe. Check `git status --porcelain <path>` in the same turn you stage.
+- **Live evidence the guard works, not just its selftest.** Triage's v0.4.157 sync was REFUSED `rc 7` at 09:58:28Z (n=3704), naming `tools/oc-deploy` dirty (+110 lines, Toolsmith's uncommitted selector-mode work). The lane deliberately did NOT reach for `--allow-sweep` — the right call, and the reason the v0.4.157 tag carries only Phase 3 rather than mis-provenancing another actor's payload.
+- **Fleet fact correction — `origin` and `mirror2` are ONE repository** (`leshchenko1979/opencrabs-skill`), differing only in transport (HTTPS vs SSH). The "push to both remotes" ritual buys NO second copy: after `git push mirror2 main` succeeds, `git push origin main` reports `Everything up-to-date` and both `ls-remote` HEAD queries return the same sha. Recorded in `tools/RC-CONTRACT.md` (`4e5ec206`) so nobody counts it as redundancy.
+- **BATTERY**: 168 PASS / 0 FAIL.
+
 ## v0.4.157 (2026-09-12) — Phase 3: the Night Shift Now Ends With Idle Lanes Holding Work
 
 Owner order: *"We need to add another phase to night shift - triaging open issues to idle editors."* The window previously ended at harvest; editors began the daytime window with whatever they had left over. It now CLOSES by filling idle lanes.
