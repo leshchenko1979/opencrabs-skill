@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.159 (2026-09-12) — The Law Prescribed Two Writes for One Adoption
+
+Two independent lanes reported the same defect against the canonical reload instruction: it told lanes to ack twice.
+
+- **NEW LAW — `--ack` IS the ack; never prescribe a second `oc-ledger ack` after it (`fleet-directives.md`, `editor.md` §Mid-cycle skill drift).** `oc-drift-check --ack` delegates to `oc-ledger ack` (`tools/oc-drift-check:78`), so a reload line reading "…then STAMP oc-ledger ack" ordered a SECOND row for ONE adoption. Fleet-wide and chronic — duplicate `(uuid, version)` pairs for 20+ lanes going back to 0.4.143: lane `1a63f103` n=3717/3718 two seconds apart, `d18ce16a` n=3713/3714, `61161247` and `462181e9` ×3, `127429e6` ×2. State was never harmed (`last_acked` is idempotent on the same version) — the cost is permanent ledger noise on EVERY version bump, inflating the ack-row count an auditor reads. **Stamp `oc-ledger ack <uuid> <new-version>` ONLY when drift-check ran WITHOUT `--ack`.**
+- **The canonical reload receipt, named (closes the v0.4.156/v0.4.157 shape conflict).** The receipt for a reload is the single `oc-ledger ack` row — written once, by `--ack` if it was passed, otherwise by the hand-stamp. Two consecutive briefs specified different shapes (v0.4.156 "a ledger note row is the receipt"; v0.4.157 "Stamp `oc-ledger ack`"), which left lanes unable to tell which was canonical.
+- **Not a defect in `oc-notify-fanout`.** The auto-appended RELOAD line (`tools/oc-notify-fanout:506`, "ACK after drift-check") is CORRECT and needed no change — only the hand-authored law text prescribed the second write.
+- **BATTERY**: 168 PASS / 0 FAIL.
+
 ## v0.4.158 (2026-09-12) — The Sync Door Is Guarded; the Plain-Git Door Is Not
 
 Two tool changes land with fleet-wide blast radius (every lane's `sync` and every post-swap recovery), plus the law line for the door they do NOT guard.

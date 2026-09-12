@@ -158,8 +158,13 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
 2. Drift → re-read SKILL.md + editor.md in full from disk, then stamp
    `oc-ledger ack <your-roster-uuid> <new-version>` (shape `0.N.N`, `v`
    prefix tolerated — v0.4.55 fixed the N.N-only regex that made every real
-   version un-ackable) — the ack row is the
-   mechanical adoption record (HQ Duty 3 reads it for skew-chase).
+   version un-ackable) — **ONLY when step 1 ran WITHOUT `--ack`**. With
+   `--ack`, step 1 already wrote the adoption row (`tools/oc-drift-check:78`
+   delegates to `oc-ledger ack`), so stamping here is a SECOND row for ONE
+   adoption: **`--ack` IS the ack.** The canonical reload receipt is the
+   single `oc-ledger ack` row — written once, by `--ack` if it was passed,
+   otherwise by this hand-stamp. The ack row is the mechanical adoption
+   record (HQ Duty 3 reads it for skew-chase).
 3. Apply changed rules from the NEXT phase boundary — a phase already in
    flight finishes under the rules it started under. Doc-only drift adopts
    immediately; workflow-shape drift waits for the boundary.
