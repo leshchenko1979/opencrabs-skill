@@ -179,17 +179,17 @@ incident suggests drift.
 
 Method:
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
-   one per lens (A/B/C/D/E/F/G/H/I + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
+   one per lens (A/B/C/D/E/F/G/H/I/J + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
    are ALWAYS sub-agent work, never HQ-only inline reading. Same-day
    second passes of one lens suffix the report name (`-run2`) and split scopes
    (`B2`/`A2`) — the lens catalog (review-lenses.md) is unchanged by that;
-   family map letters stay A–I. Findings
+   family map letters stay A–J. Findings
    must carry verbatim quotes; HQ verifies every accepted quote against
    disk before acting. Hollow report → ONE retry with the prompt narrowed to
    that single lens; a second hollow result unlocks inline fallback, which
    must be flagged as such in the review record.
 2. Split lenses for independence by family (DOCS=A,B,G · TOOLS=C,E,F ·
-   ARTIFACTS=D+H · META=I) — letters keep chronological birth order (stable
+   MECHANICAL=J · ARTIFACTS=D+H · META=I) — letters keep chronological birth order (stable
    report/persist keys, not an ordering). FULL LENS CATALOG: `review-lenses.md`
    (same dir as this file) — read it before spawning reviewers; each brief
    names the lens scope, exclusions, and evidence format.

@@ -48,7 +48,7 @@ Ask the operator which role this session employs before doing anything:
 | Role | Owns | Procedure file |
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR filed on smoke PASS (procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
-| **HQ** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), nine-lens skill review (Duty 6, Reviewers A–I + standing brain-scrub = TEN reviewers, grouped by target — DOCS A/B/G · TOOLS C/E/F · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure — briefs: review-lenses.md) | `hq.md` |
+| **HQ** | Owning the skill itself: apply owner directives + validated editor proposals, keep the worker-version ledger, publish versions to shared disk (v0.4.19: workers absorb at their own boundaries; targeted pings only), poll workers for input (Duty 4 — STANDING, every five bumps), idea-box + QUIRK INTAKE delegated to the TRIAGE lane (Duty 7 carve-out v0.4.86 — batched escalations + ACCEPT-MECHANICAL queue land here; ledger kinds `idea` / `idea-verdict`), ten-lens skill review (Duty 6, Reviewers A–J + standing brain-scrub = ELEVEN reviewers, grouped by target — DOCS A/B/G · TOOLS C/E/F · MECHANICAL J (law that should be a tool, v0.4.161) · ARTIFACTS D+H (H = ledger health, v0.4.114) · META I (meta-review of the catalog itself, v0.4.114); incl. Reviewer F tools-code, Reviewer G role-file structure, Reviewer J mechanical enforcement — briefs: review-lenses.md) | `hq.md` |
 | **TRIAGE** | Intake & hygiene: idea/quirk intake, issue assignment, repo hygiene patrols, rebase/merge execution delegated from HQ | `triage.md` |
 | **TOOLSMITH** | CLI tools author & maintainer: owns `tools/` code, test battery stewardship | `toolsmith.md` |
 
@@ -326,7 +326,7 @@ the log is a FALSE receipt.
   `session_search`, never uuid-from-memory.
 - **Roster** — the worker registry in `workers-ledger.json` (enroll / claim /
   ack rows); `oc-attrib` joins Session-Id trailers against it.
-- **Lens (Reviewer A–I)** — one Duty-6 read-only review perspective
+- **Lens (Reviewer A–J)** — one Duty-6 read-only review perspective
   (hq.md §Duty 6; full briefs: `review-lenses.md`).
 - **HQ** — the skill-owning lane. The former name *Supervisor* is RETIRED
   (owner order 2026-09-11 folded the term into HQ — one role, one term);

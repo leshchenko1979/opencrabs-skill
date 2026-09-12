@@ -1,6 +1,6 @@
 # review-lenses.md — Duty-6 reviewer lens catalog (B4+G-F4 split, v0.4.78)
 
-Full briefs for the ten Duty-6 review lenses (A–I + standing brain-scrub; regrouped v0.4.81 with C joining TOOLS and D sole in ARTIFACTS — H later joined D in ARTIFACTS, v0.4.113/115). hq.md §Duty 6 owns the
+Full briefs for the eleven Duty-6 review lenses (A–J + standing brain-scrub; regrouped v0.4.81 with C joining TOOLS and D sole in ARTIFACTS — H later joined D in ARTIFACTS, v0.4.113/115; the MECHANICAL family + Reviewer J added v0.4.161 on owner order). hq.md §Duty 6 owns the
 method (read-only sub-agents, verbatim-quote verification, oc-review-persist
 persistence, poll triple-check, verdict table) and keeps only the family map
 there; this file owns the per-lens scope briefs (brain-scrub brief lives at fleet-directives.md § Review lens brain-scrub). Letters keep chronological
@@ -96,6 +96,47 @@ on census evidence + owner word (hq.md step 7).
      lands only in a file that role never opens. A split that breaks the
      load path is a REGRESSION finding against itself, not a cleanup.
 
+#### FAMILY: MECHANICAL — the law corpus read against on-disk state (enforceability class; family + Reviewer J added v0.4.161 on owner order)
+
+   - **Reviewer J — MECHANICAL ENFORCEMENT (law that should be a tool):** the LAW
+     CORPUS itself — `SKILL.md`, `fleet-directives.md`, `editor.md`,
+     `editor-upstream-pr.md`, `hq.md`, `triage.md`, `toolsmith.md`,
+     `tools/RC-CONTRACT.md` — read as a specification of WHO DECIDES, and asked of
+     every rule: **is this decision a pure function of state on disk?** If it is, the
+     rule is a TOOL SPEC THAT HAS NOT BEEN WRITTEN YET and the finding names the tool
+     half. Owner principle (2026-09-12, verbatim): *"that should be purely
+     mechanical"* — law must not assign to an agent any decision a tool can settle
+     from the tree, the ledger, the journal, git, or an API.
+     THE TEST — quote it in every report:
+     **T1** the decision is a pure function of state on disk (no human judgement, no
+     owner taste) · **T2** a tool already touches that state, or an existing tool is
+     the natural host · **T3** the rule currently asks an AGENT to remember, derive,
+     or re-check that state by hand. **T3 is the tell:** a rule phrased as an
+     instruction to a reader (*"always verify…"*, *"never forget to…"*, *"run X
+     before Y"*, *"re-derive the set"*) is the defect class. Failing T3 = already
+     mechanical, the prose is descriptive, NO ACTION. Failing T1 = a GATE
+     (owner/design/verdict) and prose is its correct home — automating it would
+     delete the human, which is the point of the gate; a gate is NEVER a J finding.
+     EVIDENCE FORMAT — each finding carries (a) the law site, file + verbatim quote,
+     (b) the state the decision reads, (c) the tool that should own it and its
+     single-command interface, (d) the cost already paid (incident, ledger row, run
+     id) or the word `unpriced`. A finding with no (c) is not a finding — it is the
+     rule restated in other words, and HQ REJECTS it.
+     THE STANDING EXEMPLAR (the finding that created this lens): the docs-only LEG1
+     exclusion set — law shipped a 21-path snapshot PLUS a `grep` telling a lane to
+     re-derive it, i.e. agent memory as a gate input. Amended v0.4.161 so the TOOL
+     derives the set at gate time and the paths are illustrative only; the tool half
+     is defect #20.
+     NOT THIS LENS — whether a law-cited verb or flag EXISTS on the tool it names
+     (the phantom-verb class: `--resume`, `stamp proposal`) is a corpus LINT (audit
+     M2-18, Toolsmith), not a reviewer pass; J does the class no lint can decide: is
+     the decision state-derivable at all, and where does the tool half belong.
+     BOUNDARY vs C — C owns recurring multi-step PROCEDURE rituals that should
+     collapse into one command; J owns law TEXT whose single decision is
+     state-derivable, including one-shot checks and any set or list a lane is told to
+     hold in context. One site, one lens: object is law text → J; object is a
+     procedure → C.
+
 #### FAMILY: TOOLS — the tools/ surface (gaps / shape / implementation)
 
    - **Reviewer C — CLI-AUTOMATION + USAGE GAPS:** recurring multi-step MANUAL
@@ -121,6 +162,11 @@ on census evidence + owner word (hq.md step 7).
      `oc-prchecks --wait` used as a verdict waiter (double-duty). Each
      violation names the session id from the log row. Boundary watch vs A/B: C's dimension is
      GAPS (what should be a command), not doc wording or weight.
+     BOUNDARY vs J (v0.4.161): C's object is a PROCEDURE carrying a recurring
+     multi-step ritual; J's object is LAW TEXT carrying a single decision that is a
+     pure function of state on disk — including one-shot checks and any set or list
+     a lane is told to hold in context. One site, one lens; the two never both claim
+     the same finding.
 
    - **Reviewer E — INTERFACE/TOPOLOGY:** the TOOL SURFACE itself — pairs of
      tools whose invocations are bound to come one after another in practice
@@ -185,7 +231,7 @@ on census evidence + owner word (hq.md step 7).
    - **Reviewer I — META-REVIEW (added v0.4.114, owner pick 2026-09-08 ~20:4xZ, recommended shape 1):**
      reviews the LENS CATALOG AND ITS OUTPUT — the only reviewer whose object
      is the review machinery itself. Scope: (1) BRIEF CORRECTNESS — each brief
-     in this file (A–I) still matches what its reviewer actually checked in
+     in this file (A–J) still matches what its reviewer actually checked in
      the latest persisted report (scope drift, stale check classes), (2)
      OVERLAP — findings double-covered by two lenses, or coverage GAPS where
      no lens owns an artifact class, (3) FALSE-POSITIVE/NEGATIVE HISTORY —
