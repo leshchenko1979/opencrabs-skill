@@ -198,6 +198,59 @@ journal_summary() { # call before exit: one line if any journal write was lost
 # ---- pre-flight -----------------------------------------------------------
 [ -d "$FORK_REPO/.git" ] || die "fork checkout not found: $FORK_REPO" 3
 # resolve the worktree that actually holds main (this repo may be a secondary
+# ---- pre-flight: state dir & landing lock helpers --------------------------
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}"
+SHIP_LOCK_FILE="$STATE_DIR/ship.lock"
+SHIP_LOCK_FD=200
+LOCK_HELD=0
+
+release_ship_lock() {
+  if [ "$LOCK_HELD" = "1" ]; then
+    journal "SHIP-LOCK released"
+    eval "exec ${SHIP_LOCK_FD}>&-" 2>/dev/null || true
+    LOCK_HELD=0
+  fi
+}
+
+acquire_ship_lock() {
+  local timeout="${1:-600}"
+  local start_ts now elapsed
+  mkdir -p "$STATE_DIR"
+  eval "exec ${SHIP_LOCK_FD}>\"\$SHIP_LOCK_FILE\"" 2>/dev/null || true
+  
+  start_ts="$(date +%s)"
+  if flock -n "$SHIP_LOCK_FD" 2>/dev/null; then
+    LOCK_HELD=1
+    journal "SHIP-LOCK acquired immediately (uncontended)"
+    printf '%s\n' "oc-ship-chain: landing lock acquired (uncontended)" >&2
+    return 0
+  fi
+
+  journal "SHIP-LOCK contended — waiting in queue (timeout=${timeout}s)..."
+  printf '%s\n' "oc-ship-chain: landing lock contended — waiting in queue..." >&2
+
+  while true; do
+    if flock -n "$SHIP_LOCK_FD" 2>/dev/null; then
+      LOCK_HELD=1
+      now="$(date +%s)"
+      elapsed=$((now - start_ts))
+      journal "SHIP-LOCK acquired after ${elapsed}s wait"
+      printf '%s\n' "oc-ship-chain: landing lock acquired after ${elapsed}s" >&2
+      return 0
+    fi
+    now="$(date +%s)"
+    elapsed=$((now - start_ts))
+    if [ "$elapsed" -ge "$timeout" ]; then
+      journal "SHIP-LOCK timeout after ${elapsed}s"
+      printf '%s\n' "oc-ship-chain: landing lock timeout after ${elapsed}s" >&2
+      die "ship lock acquisition timed out after ${timeout}s — another ship is in progress" 6
+    fi
+    sleep 3
+  done
+}
+
+trap 'release_ship_lock' EXIT INT TERM
+
 # worktree pinned to another branch — git forbids main twice)
 MAIN_WT="$(git -C "$FORK_REPO" worktree list --porcelain | awk '/^worktree /{wt=$2} /^branch refs\/heads\/main$/{found=wt} END{if (found) print found}')"
 if [ -n "$MAIN_WT" ] && [ "$MAIN_WT" != "$FORK_REPO" ]; then
@@ -353,7 +406,8 @@ else
   journal "LEG2 issue-log skipped (--issue not given)"
 fi
 
-# ---- leg 3: ff-merge into fork main ----------------------------------------
+# ---- leg 3: ff-merge into fork main (under ship lock) ----------------------
+acquire_ship_lock "${SHIP_LOCK_TIMEOUT:-600}"
 git -C "$FORK_REPO" fetch origin --quiet
 CUR="$(git -C "$FORK_REPO" rev-parse --abbrev-ref HEAD)"
 [ "$CUR" = "main" ] || die "fork checkout on '$CUR', not main — check out main first" 3
@@ -766,6 +820,24 @@ EOF2
     *"gate infra"*) bad "gate-precondition-not-labelled-infra" ;;
     *) ok "gate-precondition-not-labelled-infra" ;;
   esac
+
+  # Ship Lock contention selftest:
+  # Hold lock in background -> chain wait -> release lock -> chain completes
+  mkdir -p "$T/state"
+  LOCK_FD_TEST=199
+  eval "exec ${LOCK_FD_TEST}>\"\$T/state/ship.lock\""
+  flock -x "$LOCK_FD_TEST"
+  ( sleep 1 && eval "exec ${LOCK_FD_TEST}>&-" ) &
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_DEPLOY_STATE_DIR="$T/state" OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+      OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" OC_TOOLS_NOLOG=1 \
+      OC_SHIPCHAIN_LEDGER="$T/journal.log" OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
+      bash "$SELF" --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  check_rc "ship-lock-contention-resolved" "$RC" 0
+  grep -q "SHIP-LOCK acquired after" "$T/journal.log" && ok "journal-ship-lock-waited" || bad "journal-ship-lock-waited"
+  grep -q "SHIP-LOCK released" "$T/journal.log" && ok "journal-ship-lock-released" || bad "journal-ship-lock-released"
 
   echo "selftest: $PASS passed, $FAIL failed"
   # Contract fix 2026-09-11: was `return $?`, which returned ECHO's status (0),

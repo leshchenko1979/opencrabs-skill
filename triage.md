@@ -106,21 +106,12 @@ per that section. Owner veto overrides retroactively, as with rulings.
   `./tools/oc-upstream-delta` and post the tiered backlog census (Tier-1/2/3
   candidates + counter line: fork-only commit count + open upstream PR count)
   to board topic 30220 — one line even on zero-change days (heartbeat).
-  Standing order (fleet-directives.md §Upstream-merge cadence, HARVEST LAW):
-  when census shows ≥3 Tier-1 candidates with green tests, commission probes
-  and present ready PRs on PASS for filing under the PR SHIPMENT law
-  (SKILL.md §ISSUE ROUTING, PR SHIPMENT row — single home) —
-  several open upstream PRs may run concurrently
-  (fleet-directives.md §Upstream-merge cadence is canonical; PR-freeze law
-  governs filed PRs after filing). Port WORK (cherry onto upstream base,
-  4-leg verify, build) is commissioned to an editor lane per PORT-WORK
-  OWNERSHIP (Triage queues, editors build); on the lane's GREEN + smoke-PASS
-  receipt the ready PR is FILED automatically — frozen at filing (PR-freeze
-  law). FILING: file as soon as tests are green AND the
-  behavioral smoke PASSES — parallel PRs allowed; NO holding state exists.
-  On probe commission the editor fires the smoke immediately; probe PASS
-  files the ready PR — NO owner wait needed (PR SHIPMENT law).
-  PR filing follows the full Upstream PR law.
+  **Operator-Command Only (owner order 2026-09-12):** The patrol reports census
+  status ONLY. Batch harvest execution, probe commissioning, and upstream PR filing
+  are triggered **ONLY by explicit operator command** (e.g. `/goal harvest ...`).
+  Zero autonomous harvest triggers from census thresholds. When ordered by the operator,
+  port WORK is commissioned to editor lanes per PORT-WORK OWNERSHIP; all PRs require
+  strict 4-leg smoke pass recorded in `smoke-verdicts.log` prior to filing.
 - **Upstream PR-state patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** on each harvest census,
   re-verify the state of every OPEN upstream PR of ours

@@ -16,7 +16,7 @@
 
 ## Upstream-merge cadence · HARVEST LAW · NO-HOLD
 
-(owner 2026-09-02, "yes, add this rule"): two tiers on top of the fork-main sync policy above — (1) **Pre-PR sync is MANDATORY**: any long-lived branch (sync branches, PR chains) **rebases onto `adolfousier/main`** immediately before opening a PR, so upstream review sees only our delta, never stale-base noise (under the pre-2026-09-11 merge model this was a merge; the requirement is unchanged — only the mechanism is now rebase, per the sync policy above); (2) **Event-driven syncs**: same-day or next-day sync when upstream lands commits touching files that carry fork `port(fork→merge)` deltas (watch `channels/`, `brain/agent/service/` first). NOT "before every push" — each sync still costs a fidelity pass + disposition + its own CI. Rationale: round 2 of the 2026-09-02 merge went RED with 29 errors, all seams where big-bang fork-era resolution fought upstream-new files — error count scales with diff size, so frequent small syncs keep the diff readable. Drift detection stays with cron `harvest-watch-4h` (4h `ls-remote`; same-day drift is real: `8846de72` → `72b11629` within the merge day). **HARVEST LAW (owner 2026-09-08, “Go” on daily enforcement, v0.4.97):** the consolidated patrol runs every 4 hours (`harvest-watch-4h`), running `oc-upstream-delta` and posting the tiered backlog census (Tier-1/2/3 + counter line: fork-only commit count + open upstream PR count) to board topic 30220 / triage queue. Standing order (owner override 2026-09-08 13:51Z): file PRs AS SOON AS tests are green AND smokes are confirmed (v0.4.104 behavioral rubric) — no serial-PR waiting; the previous one-PR-at-a-time rule is RETIRED (owner: “this law is incorrect, Adolfo never told this”). NO-HOLD law (owner override 2026-09-08 15:2xZ, topic 42487): there is NO holding STATE — no waiting-period, no serial-PR queue, no parked batch. Editor fires the behavioral smoke (v0.4.104 rubric) IMMEDIATELY on probe commission. **PR filing is governed by PR SHIPMENT law, single home SKILL.md §ISSUE ROUTING (PR SHIPMENT row).** Smoke PASS (v0.4.104 rubric, four legs) → file/ship immediately; the owner is notified AFTER the act. Gates that survive: all mechanical CI/gate legs, the v0.4.104 smoke rubric, post-swap rollback-is-owner's-call. Standing autonomous trigger: census shows ≥3 Tier-1 candidates with green tests → Triage commissions probes, **files ready PRs on PASS (PR SHIPMENT law; batch filing acceptable; several open upstream PRs concurrently once filed). Zero-change days still post a one-line census (heartbeat = patrol alive).
+(owner 2026-09-02, "yes, add this rule"): two tiers on top of the fork-main sync policy above — (1) **Pre-PR sync is MANDATORY**: any long-lived branch (sync branches, PR chains) **rebases onto `adolfousier/main`** immediately before opening a PR, so upstream review sees only our delta, never stale-base noise (under the pre-2026-09-11 merge model this was a merge; the requirement is unchanged — only the mechanism is now rebase, per the sync policy above); (2) **Event-driven syncs**: same-day or next-day sync when upstream lands commits touching files that carry fork `port(fork→merge)` deltas (watch `channels/`, `brain/agent/service/` first). NOT "before every push" — each sync still costs a fidelity pass + disposition + its own CI. Rationale: round 2 of the 2026-09-02 merge went RED with 29 errors, all seams where big-bang fork-era resolution fought upstream-new files — error count scales with diff size, so frequent small syncs keep the diff readable. Drift detection stays with cron `harvest-watch-4h` (4h `ls-remote`; same-day drift is real: `8846de72` → `72b11629` within the merge day). **HARVEST LAW (owner 2026-09-08, “Go” on daily enforcement, v0.4.97):** the consolidated patrol runs every 4 hours (`harvest-watch-4h`), running `oc-upstream-delta` and posting the tiered backlog census (Tier-1/2/3 + counter line: fork-only commit count + open upstream PR count) to board topic 30220 / triage queue. Standing order (owner override 2026-09-08 13:51Z): file PRs AS SOON AS tests are green AND smokes are confirmed (v0.4.104 behavioral rubric) — no serial-PR waiting; the previous one-PR-at-a-time rule is RETIRED (owner: “this law is incorrect, Adolfo never told this”). NO-HOLD law (owner override 2026-09-08 15:2xZ, topic 42487): there is NO holding STATE — no waiting-period, no serial-PR queue, no parked batch. Editor fires the behavioral smoke (v0.4.104 rubric) IMMEDIATELY on probe commission. **PR filing is governed by PR SHIPMENT law, single home SKILL.md §ISSUE ROUTING (PR SHIPMENT row).** Smoke PASS (v0.4.104 rubric, four legs) → file/ship immediately; the owner is notified AFTER the act. Gates that survive: all mechanical CI/gate legs, the v0.4.104 smoke rubric, post-swap rollback-is-owner's-call. **OPERATOR COMMAND ONLY (owner order 2026-09-12):** Harvest execution, batch merge/sync windows, probe commissioning, and upstream PR filing waves are triggered **ONLY by explicit operator command** (e.g. `/goal harvest ...` or direct owner directive). Crons and automated patrols (`harvest-watch-4h`) perform reporting and census sweeps only — they NEVER autonomously trigger harvest waves or PR generation. Zero-change days still post a one-line census (heartbeat = patrol alive).
 
 **Ledger hygiene laws (lens-H cycle-2 codifications, v0.4.127):**
 - **H-3 fork-skill push remote:** the skill repo's canonical push remote is `mirror2` (git@github.com:leshchenko1979/opencrabs-skill.git). A push naming bare `leshchenko1979` (no remote of that name) fails - n=2125 class. SKILL.md's mirror sentence is descriptive; this row is the operational name.
@@ -48,7 +48,7 @@ Standard protocol for parallel harvesting of downstream fork commits to upstream
 | **1. Candidate Vetting** | Triage | **Upstream Absence Proof**: Confirm commit delta is non-empty on upstream tip (`git diff adolfousier/main -- <files>`), patch-id is not an ancestor/merged, upstream PR settling authority confirms unharvested, and candidate is not superseded. | `tools/oc-harvest-dispatch vet <issue-or-commits>` |
 | **2. Lane Availability** | Triage | **Verify-Unclaimed & Idle Law**: Scan `workers-ledger.json` for active `claim` rows. Target lane must have status `idle` and zero unfinished claims. Never dispatch to a busy lane (e.g. active plan or in-flight gate). | `tools/oc-harvest-dispatch dispatch <issue> <commits> [--to <uuid>]` (enforces rc 4 on busy lanes) |
 | **3. Dispatch Envelope** | Triage | **Atomic Dispatch**: Deliver standard payload via `session_notify` (`delivery.mode="turn-end"`). Zero Telegram noise to worker topics. | Standard wire envelope `[HARVEST DISPATCH: #N]` |
-| **4. Autonomous Ship & Ack** | Editor | **Auto-Ship**: Dedicated worktree off `adolfousier/main`, cherry-pick with trailers, `oc-harvest-sweep`, push, `oc-prchecks`. On GREEN gate → file upstream PR, link fork issue, notify Triage. | `editor-upstream-pr.md` Phase 7c |
+| **4. Mechanized Ship & Ack** | Editor | **Ship Gate (v0.4.146)**: Dedicated worktree off `adolfousier/main`, cherry-pick with trailers, `oc-harvest-sweep`, push, `oc-prchecks`. On GREEN gate AND verified 4-leg smoke pass in `smoke-verdicts.log` → file upstream PR citing smoke receipt, link fork issue, notify Triage. Never file unsmoked PRs. | `editor-upstream-pr.md` Phase 7c |
 
 ### 2. Standard Dispatch Wire Envelope
 
@@ -62,9 +62,10 @@ Commands:
   1. tools/oc-wt add up-{slug} {branch} --create --from adolfousier/main
   2. git cherry-pick {commits}
   3. tools/oc-harvest-sweep {branch} --base adolfousier/main
-  4. git push origin {branch}
-  5. tools/oc-prchecks {branch}
-Contract: AUTO-SHIP on GREEN CI gate. File PR on adolfousier/opencrabs:main citing gate run ID, link fork #{issue}, notify Triage.
+  4. Verify 4-leg smoke pass in smoke-verdicts.log
+  5. git push origin {branch}
+  6. tools/oc-prchecks {branch}
+Contract: SHIP on GREEN CI gate + verified 4-leg smoke pass. File PR on adolfousier/opencrabs:main citing gate run ID + smoke evidence, link fork #{issue}, notify Triage.
 ```
 
 ### 3. Orchestration Sequence
@@ -462,16 +463,17 @@ rule above governs until these ship.
 - **Not only an agent-edit hazard.** Issue #167 notes that `git checkout` / `git pull` write working-tree files in place too, so a lane checking out a different revision mid-chain can kill a sibling's chain. The rename form is the only safe write during a live chain.
 - Filed as `leshchenko1979/opencrabs#167` (verified OPEN 2026-09-11T13:23:42Z). The tool-side fix — snapshot the running script to the same directory and re-exec behind an env guard, for the four long-running tools only — is Toolsmith-owned, design signed off, pending a quiet tree.
 
-## Daytime-Editing & Nighttime-Batch-Sync Cadence (v0.4.142)
+## Daytime-Editing & Nighttime-Batch-Sync Cadence (v0.4.146)
 
-**Separation of Concerns across diurnal cycle:**
-1. **Daytime (Active Operator Window / Interactive Hours):**
+**Cadence & Trigger Law (owner order 2026-09-12):**
+1. **The SOLE trigger for the Night Shift (Batch Merge & Batch Harvest Window) is an explicit operator command.** All automated triggers (quiescence heuristics, census threshold auto-triggers, background auto-batching) are strictly removed. In the absence of an explicit operator command, the fleet remains in standard daytime editing / passive patrol mode.
+2. **Daytime (Active Operator Window / Interactive Hours):**
    - Focus is exclusively on **feature editing, design approvals, and smoke verification**.
    - No large upstream merge/rebase synchronization is performed across the fleet during daytime.
    - Editors advance topic branches and smoke-test against the stable deployed fork base.
-2. **Nighttime (Batch Merge & Batch Harvest Window):**
-   - Fleet-wide synchronization and rebases against upstream `adolfousier/main` are executed in **one consolidated batch** when editing activity stops.
-   - **Batch Harvesting:** Upstream harvest PRs are generated, rebased, and CI-gated in consolidated waves following the nighttime sync, eliminating daytime CI slot contention and unharvested dependency collision cascades.
+3. **Nighttime (Batch Merge & Batch Harvest Window — Operator-Initiated ONLY):**
+   - Fleet-wide synchronization and rebases against upstream `adolfousier/main` are executed in **one consolidated batch** ONLY when explicitly ordered by the operator.
+   - **Batch Harvesting:** Upstream harvest PRs are generated, rebased, and CI-gated in consolidated waves following operator command, with strict 4-leg smoke verification recorded in `smoke-verdicts.log`.
 
 ## Atomic Write Executable Preservation Law (v0.4.142)
 

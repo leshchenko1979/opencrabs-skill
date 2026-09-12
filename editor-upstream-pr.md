@@ -203,14 +203,14 @@ cherry-pick round toward a PR head (v0.4.14, proposal P4)**: before investing a
 round, fresh `gh pr view <n> --json state` — if MERGED/CLOSED, STOP and report,
 do not invest the round.
 
-## Phase 7c — Autonomous Harvest Execution (v0.4.136, 2026-09-10)
+## Phase 7c — Mechanized Harvest Execution (v0.4.136, 2026-09-10; tightened v0.4.146)
 
-Trigger: Editor lane receives a `[HARVEST DISPATCH: #N]` wire envelope from Triage via `session_notify`.
+Trigger: Operator harvest command (e.g. `/goal harvest ...`) dispatched to Editor lane via `session_notify` `[HARVEST DISPATCH: #N]` wire envelope from Triage.
 
 Contract:
 1. **Dedicated Worktree**: Create isolated worktree off `adolfousier/main` tip:
    `tools/oc-wt add up-<slug> leshchenko1979/fix/<slug> --create --from adolfousier/main`
 2. **Cherry-pick & Pre-Sweep**: Cherry-pick source commits preserving trailers (`-x` / `Issue-Ref`), then verify clean lineage with `tools/oc-harvest-sweep leshchenko1979/fix/<slug> --base adolfousier/main`.
-3. **Push & Gate**: Push branch to origin (`leshchenko1979/opencrabs`) and trigger `tools/oc-prchecks leshchenko1979/fix/<slug>`.
-4. **Auto-Ship Authorization**: When gate run exits GREEN (SUCCESS), Editor is **pre-authorized** to file the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug>`) citing the gate run ID and linking the fork issue. No human pre-confirmation turn needed.
+3. **Smoke & Gate Verification (Hard Gate, v0.4.146)**: Verify full 4-leg smoke pass (Lineage, Identity, CI Gate, Behavioral probe) is recorded with live receipts in `smoke-verdicts.log`. NEVER file an unsmoked PR. Push branch to origin (`leshchenko1979/opencrabs`) and trigger `tools/oc-prchecks leshchenko1979/fix/<slug>`.
+4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log`, Editor files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug>`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue.
 5. **Ack & Cleanup**: Remove harvest worktree, stamp completion in ledger, and notify Triage via `session_notify`.
