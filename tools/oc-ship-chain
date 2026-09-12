@@ -149,7 +149,7 @@ FAST=0
 # so a fresh chain ALWAYS timed out mid-build and died on a non-terminal code.
 GATE_WAIT="${OC_SHIPCHAIN_GATE_WAIT:-2700}"        # 45 min — one gate, comfortably
 GATE_RESUMES="${OC_SHIPCHAIN_GATE_RESUMES:-2}"     # max rc-5 resume-polls before an honest give-up
-[ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 exec bash "$SELF"
+[ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 OC_SHIPCHAIN_SELFTEST=1 exec bash "$SELF"
 [ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
 
 # #21 (LAW 17): the detach re-execs this tool with its ORIGINAL argv, so the
@@ -210,20 +210,44 @@ fi
 # rc=143`; a second, correctly QUEUED on the ship lock, was killed for waiting
 # — serialisation gave it a false sense of safety).
 #
+# TWO TEARDOWNS, NOT ONE (residual, reported by editor 462181e9 2026-09-12):
+# the cgroup is not the only thing the launching tool call owns. A chain started
+# from a captured tool call inherits that call's stdout/stderr PIPES, so the
+# re-exec'd scope survives the cgroup teardown while its stderr still dies with
+# the call that launched it: the first stderr write raises EPIPE and the chain
+# ends silently — 0-byte log, no LEG row, no rc field. Field case: CHAIN-
+# 6f62b2c1-20260912T115518Z died 26 minutes in, immediately after `SHIP-LOCK
+# acquired`, whose `printf ... >&2` was the first stderr write. The re-exec
+# therefore binds its stdio to a FILE — a caller-side redirect only covers
+# callers who remember, and the tool must not depend on that.
+#
 # Same class as LAW 15 for oc-notify-fanout, and the same fix: re-exec outside
 # the bounce cgroup via a transient scope, BEFORE the ship lock is taken, so a
 # re-entry can never self-deadlock on a lock this process already holds. That
 # pre-lock ordering matters MORE here than for a wave: the chain holds its lock
 # across LEG3/LEG4 and a queued chain can wait minutes.
 # Overrides: OC_SHIPCHAIN_UNIT (default opencrabs-ops.service) ·
-# OC_SHIPCHAIN_IN_UNIT_CGROUP (auto|1|0 — test hook; auto inspects /proc/self/cgroup)
+# OC_SHIPCHAIN_IN_UNIT_CGROUP (auto|1|0 — test hook; auto inspects /proc/self/cgroup) ·
+# OC_SHIPCHAIN_SELFTEST (1 = the selftest exports it, so `auto` resolves to 0 and
+# the selftest never depends on the host's cgroup; detach tests set =1 explicitly)
 # OC_SHIPCHAIN_DETACH_CMD (default `systemd-run --user --scope --collect`; MUST
 # BLOCK and pass the child's rc through — use `setsid -w`, never bare `setsid`,
 # or the chain's exit code is lost and a NON-FF refusal reads as success) ·
-# OC_SHIPCHAIN_DETACHED (loop guard).
+# OC_SHIPCHAIN_DETACHED (loop guard) ·
+# OC_SHIPCHAIN_LOG (where the detached re-exec binds stdout+stderr; default
+# /tmp/oc-ship-chain-detached-<pid>.log).
 shipchain_in_bounce_cgroup() { # rc 0 = this process IS inside the unit's cgroup
-  local unit="${OC_SHIPCHAIN_UNIT:-opencrabs-ops.service}" cg
-  case "${OC_SHIPCHAIN_IN_UNIT_CGROUP:-auto}" in
+  local unit="${OC_SHIPCHAIN_UNIT:-opencrabs-ops.service}" cg dflt=auto
+  # SELFTEST HERMETICITY (2026-09-12): under `auto` this reads the HOST's
+  # /proc/self/cgroup, so the selftest's result depended on WHERE it ran.
+  # Inside opencrabs-ops.service the detach fired in seven tests that have
+  # nothing to do with detaching, and they passed only because the re-exec
+  # inherited the captured pipe — binding the re-exec's stdio to a file
+  # (LAW 17 residual) removed that accident and they went red. The selftest
+  # export below makes "outside the unit" the default there; the detach
+  # tests set OC_SHIPCHAIN_IN_UNIT_CGROUP=1 explicitly.
+  [ "${OC_SHIPCHAIN_SELFTEST:-0}" = "1" ] && dflt=0
+  case "${OC_SHIPCHAIN_IN_UNIT_CGROUP:-$dflt}" in
     1) return 0 ;;
     0) return 1 ;;
   esac
@@ -238,7 +262,11 @@ shipchain_ensure_detached() { # re-exec outside the bounce cgroup (argv from ORI
   shipchain_in_bounce_cgroup || return 0
   local cmd="${OC_SHIPCHAIN_DETACH_CMD:-systemd-run --user --scope --collect}"
   echo "oc-ship-chain: chain is INSIDE ${OC_SHIPCHAIN_UNIT:-opencrabs-ops.service}'s cgroup — a swap's restart would SIGKILL it mid-leg, truncating the run with NO failure report (LAW 17, defect #21). Re-executing outside the unit via: $cmd" >&2
-  OC_SHIPCHAIN_DETACHED=1 exec $cmd "$SELF" "${ORIG_ARGS[@]}"
+  # Bind stdio to a FILE. The scope is what survives the cgroup teardown; the
+  # launching tool call still owns the pipes, so an unredirected re-exec dies
+  # EPIPE on its first stderr write (see the block comment above).
+  local dlog="${OC_SHIPCHAIN_LOG:-/tmp/oc-ship-chain-detached-$$.log}"
+  OC_SHIPCHAIN_DETACHED=1 exec $cmd "$SELF" "${ORIG_ARGS[@]}" </dev/null >>"$dlog" 2>&1
 }
 shipchain_ensure_detached
 
@@ -1206,6 +1234,9 @@ EOF
   cat > "$T/fake-detach" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "${FAKE_DETACH_LOG:-/dev/null}"
+# stdio-binding probe: this runs AS the child of the redirected re-exec, so the
+# marker reaches a file only if the redirect exists.
+echo "FAKE-DETACH-STDIO-BOUND" >&2
 exec setsid -w "$@"
 EOF
   chmod +x "$T/fake-detach"
@@ -1223,17 +1254,25 @@ EOF
   # 21a. INSIDE the cgroup -> the detach MUST fire, and the re-exec'd chain
   #      must still carry the SAME argv (a drained "$@" would die rc 2 with
   #      "--sha required" — the failure mode ORIG_ARGS exists to prevent).
-  rm -f "$T/journal.log" "$T/detach-a.log"
+  rm -f "$T/journal.log" "$T/detach-a.log" "$T/detach-stdio.log"
   RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
     OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
     OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
     OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
     OC_SHIPCHAIN_IN_UNIT_CGROUP=1 OC_SHIPCHAIN_DETACH_CMD="$T/fake-detach" \
+    OC_SHIPCHAIN_LOG="$T/detach-stdio.log" \
     FAKE_DETACH_LOG="$T/detach-a.log" FAKE_PRCHECKS_LOG="$T/prchecks.log" \
       bash "$SELF" --sha "$DSHA" --branch detach-fixture --wait 5 2>&1)" || RC=$?
   check_rc "detach-inside-cgroup-rc" "$RC" 0
   [ -s "$T/detach-a.log" ] && ok "detach-fired" || bad "detach-fired"
   grep -q -- "--sha $DSHA" "$T/detach-a.log" && ok "detach-preserves-argv" || bad "detach-preserves-argv"
+  # LAW 17 residual: the re-exec must bind stdio to a FILE. The marker is
+  # written by the fixture's own stderr, which is inherited from the redirected
+  # re-exec — so it can reach a file only when the redirect exists. Without
+  # this, the scope survives the cgroup teardown and then dies EPIPE on its
+  # first stderr write, silently (field case: 26 minutes in, 0-byte log).
+  grep -q "FAKE-DETACH-STDIO-BOUND" "$T/detach-stdio.log" \
+    && ok "detach-stdio-bound-to-file" || bad "detach-stdio-bound-to-file"
   grep -q "DONE SWAPPED" "$T/journal.log" && ok "detach-chain-completed" || bad "detach-chain-completed"
 
   # 21b. LOOP GUARD: a re-entered chain (OC_SHIPCHAIN_DETACHED=1) must NOT
