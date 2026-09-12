@@ -19,6 +19,25 @@
 #
 # Exit codes: 0 persisted + re-read verified · 2 usage (bad lens/empty input)
 #   · 3 re-read sha256 mismatch (storage NOT trusted) · 4 write failure.
+#
+# usage: oc-review-persist check-cycle <cycle-dir> [--catalog DIR] [--strict-receipt]
+#   The Duty-6 CENSUS GATE (I-6.1 remedy 2, v0.4.162). "Did every catalog lens
+#   run?" is a pure function of state on disk, so it is a gate, not a reviewer's
+#   memory -- assigning it to a reviewer is agent-memory-as-gate-input, the exact
+#   defect class lens J exists to kill.
+#   Derives the expected lens set from the CATALOG AT GATE TIME: reviewer letters
+#   from review-lenses.md, standing lenses from the `## Review lens <name>`
+#   headings in fleet-directives.md. Hardcoding A-J + brain-scrub here would be
+#   the same rot class as the docs-only 21-path list -- the catalog moves, the
+#   gate must move with it.
+#   A deliberately-skipped lens is a DECISION, not a hole: record it in
+#   <cycle-dir>/waivers.log as `ts|lens|by|reason` and it is reported as WAIVED.
+# Exit: 0 all lenses accounted for (persisted or waived) · 2 usage
+#   · 3 catalog UNDERIVABLE (refuses to call a clean cycle off a bad path)
+#   · 5 lens(es) missing, or -- under --strict-receipt -- unreceipted/unpersisted
+# A report on disk under a NON-canonical name (e.g. review-lens-B.md, the pre-tool
+#   convention) is UNPERSISTED, never "missing": the lens ran, the receipt is what
+#   is absent. A gate that cries wolf on a present report gets ignored.
 # Discipline: re-read verify after every write — storage is not trusted until
 #   the bytes round-trip (same law as the ledger's tmp->validate->mv).
 # =============================================================================
@@ -31,7 +50,94 @@ trap 'oc_log_finish $?' EXIT
 
 LENSES=" A B C D E F G H I J self redundancy-ontology efficiency-creep cli-automation deletion-safety brain-scrub "   # E F G added v0.4.72; H (ledger health) v0.4.114; I (meta-review) v0.4.115; J (mechanical enforcement) v0.4.161 — whitelist var itself missed in v0.4.114 (message-only edit), fixed v0.4.115. F-6 v0.4.119: single letters A–J are now ENFORCED whitelist entries — adding a letter here is the only path to accepting it (previously the case-glob short-circuit made these 9 entries dead). v0.4.161: the case-globs in the dispatch below MUST widen in the same edit — a whitelist-only change leaves J accepted (via the *) arm) while J1 still dies on the stale [A-I][0-9] glob.
 die() { echo "oc-review-persist: $2" >&2; exit "$1"; }
-[ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { echo "usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]"; echo "Exit: 0 persisted + re-read verified / 2 usage / 3 re-read sha-mismatch / 4 write-fail"; exit 0; }  # C-#3: help=0
+[ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { echo "usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]"; echo "       oc-review-persist check-cycle <cycle-dir> [--catalog DIR] [--strict-receipt]"; echo "Exit: 0 persisted + re-read verified / 2 usage / 3 re-read sha-mismatch / 4 write-fail"; echo "      check-cycle: 0 census complete / 2 usage / 3 catalog underivable / 5 lenses missing (with --strict-receipt: unreceipted/unpersisted)"; exit 0; }  # C-#3: help=0
+
+# ---- check-cycle (I-6.1 remedy 2, v0.4.162) ------------------------------------
+# Gate, not memory. See the exit-code block at the top of this file for the
+# rationale; the short version is that the census is decidable from disk and a
+# reviewer who "forgets" to run a lens leaves no trace.
+if [ "${1:-}" = "check-cycle" ]; then
+  CY="${2:-}"; shift 2 2>/dev/null || true
+  ROOT="$(cd "$_OC_DIR/.." && pwd)"; STRICT=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --catalog)        ROOT="${2:-}"; shift 2 ;;
+      --strict-receipt) STRICT=1; shift ;;
+      *)                shift ;;
+    esac
+  done
+  [ -n "$CY" ] || die 2 "usage: oc-review-persist check-cycle <cycle-dir> [--catalog DIR] [--strict-receipt]"
+  [ -d "$CY" ] || die 2 "cycle dir not found: $CY"
+  LENSES_MD="$ROOT/review-lenses.md"; FD_MD="$ROOT/fleet-directives.md"
+
+  # (a) derive the expected set from the catalog AT GATE TIME
+  EXP=""
+  [ -f "$LENSES_MD" ] && EXP="$(sed -n 's/^ *- \*\*Reviewer \([A-Z]\) .*/\1/p' "$LENSES_MD")"
+  [ -f "$FD_MD" ] && EXP="$EXP
+$(sed -n 's/^## Review lens `\([a-z0-9-]*\)`.*/\1/p' "$FD_MD")"
+  EXP="$(printf '%s\n' "$EXP" | sed '/^[[:space:]]*$/d' | sort -u | tr '\n' ' ')"
+  NEXP="$(printf '%s\n' $EXP | sed '/^[[:space:]]*$/d' | wc -l)"
+  # An empty expected-set is INDISTINGUISHABLE from a clean cycle, so an
+  # underivable catalog must fail LOUD rather than report "0 expected, 0 missing".
+  [ "$NEXP" -gt 0 ] || die 3 "catalog UNDERIVABLE: no lenses found in $LENSES_MD or $FD_MD -- refusing to call $CY clean off an unreadable catalog"
+
+  RD="$CY/reports"; [ -d "$RD" ] || RD="$CY"
+  WLOG="$CY/waivers.log"
+  MISSING=""; WAIVED=""; UNRECEIPTED=""; UNPERSISTED=""; DONE=""
+  for L in $EXP; do
+    # Canonical (tool-written) report first: skill-review-<L>[-<n>]-<YYYYMMDD>.md
+    f="$(ls -1 "$RD" 2>/dev/null | grep -iE "^skill-review-${L}([0-9])?-[0-9]{8}\.md$" | head -1)"
+    # A report under a NON-canonical name (e.g. review-lens-<L>.md, the pre-tool
+    # convention) proves the lens RAN -- it is state on disk. It is UNPERSISTED,
+    # never "missing": the RECEIPT is what is absent, not the review. Announcing a
+    # present report as missing is how a gate earns the right to be ignored.
+    loose=""
+    if [ -z "$f" ]; then
+      # Token-boundary match, not a suffix match: a COMBINED report
+      # (lens-B-C-D-E-<date>.md) proves all four lenses ran, and crediting only
+      # the last token would report the other three MISSING. [0-9]? keeps
+      # multipass names (A2, G2) on their base lens; case-folded for lowercase names.
+      loose="$(ls -1 "$RD" 2>/dev/null | awk -v l="$L" '{ o=$0; if (o !~ /\.md$/) next; n=o; sub(/\.md$/,"",n); sub(/-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$/,"",n); if (tolower(n) ~ ("(^|-)" tolower(l) "[0-9]?(-|$)")) print o }' | head -1)"
+    fi
+    if [ -n "$f" ]; then
+      DONE="$DONE $L"
+      # the index line IS the receipt -- a file without one is not a verified persist
+      tok="$(printf '%s' "$f" | sed -n 's/^skill-review-\(.*\)-[0-9]\{8\}\.md$/\1/p')"
+      grep -qiF "|$tok|" "$RD/skill-review-index.log" 2>/dev/null || UNRECEIPTED="$UNRECEIPTED $L"
+    elif [ -n "$loose" ]; then
+      UNPERSISTED="$UNPERSISTED $L($loose)"
+    elif [ -f "$WLOG" ] && awk -F'|' -v l="$L" 'tolower($2)==tolower(l){f=1} END{exit !f}' "$WLOG" 2>/dev/null; then
+      WAIVED="$WAIVED $L"
+    else
+      MISSING="$MISSING $L"
+    fi
+  done
+  cnt() { printf '%s\n' $1 | sed '/^[[:space:]]*$/d' | wc -l; }
+  NMISS="$(cnt "$MISSING")"; NWAIV="$(cnt "$WAIVED")"; NUNR="$(cnt "$UNRECEIPTED")"; NUNP="$(cnt "$UNPERSISTED")"
+
+  if [ "$NMISS" -gt 0 ]; then
+    echo "check-cycle: MISSING $NMISS of $NEXP catalog lens(es) in $CY"
+    for L in $MISSING; do
+      echo "  missing: lens $L -- expected $RD/skill-review-$L-<YYYYMMDD>.md"
+    done
+    echo "  (a deliberately-skipped lens is a DECISION, not a hole -- record it in $WLOG as 'ts|lens|by|reason')"
+  fi
+  [ "$NWAIV" -gt 0 ] && echo "check-cycle: waived $NWAIV lens(es):$WAIVED"
+  if [ "$NUNR" -gt 0 ]; then
+    echo "check-cycle: UNRECEIPTED $NUNR lens(es) (report file present, no index line -- not a verified persist):$UNRECEIPTED"
+  fi
+  if [ "$NUNP" -gt 0 ]; then
+    echo "check-cycle: UNPERSISTED $NUNP lens(es) (report present under a NON-canonical name -- the lens RAN, the receipt is what is absent):$UNPERSISTED"
+    echo "  re-persist with: oc-review-persist <lens> @<that file>  (writes the canonical name + the index receipt)"
+  fi
+  echo "check-cycle: catalog=$ROOT expected=$NEXP lens(es): $EXP"
+  if [ "$NMISS" -gt 0 ] || { [ "$STRICT" = "1" ] && { [ "$NUNR" -gt 0 ] || [ "$NUNP" -gt 0 ]; }; }; then
+    echo "check-cycle: FAIL"
+    exit 5
+  fi
+  echo "check-cycle: OK ($(cnt "$DONE") persisted, $NWAIV waived, $((NUNR+NUNP)) unreceipted)"
+  exit 0
+fi
 
 # ---- selftest (22 cases) -------------------------------------------------------
 if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
@@ -79,6 +185,54 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   [ -f "$MOCK_CORPUS/skill-review-C-$day.md" ] && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - corpus-default-file" >&2; }
   grep -qF "|C|$MOCK_CORPUS/skill-review-C-$day.md|" "$MOCK_CORPUS/skill-review-index.log" 2>/dev/null && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - corpus-default-index" >&2; }
   rm -rf "$MOCK_SKILL"
+  # ---- check-cycle (I-6.1 remedy 2, v0.4.162) --------------------------------
+  # Fixture is an ISOLATED mock skill root -- the live catalog is never touched.
+  CR="$(mktemp -d -t oc-cycle-root.XXXXXX)"
+  mkdir -p "$CR/reviews/20260101-cycle/reports"
+  printf '# catalog\n   - **Reviewer A -- REDUNDANCY:** x\n   - **Reviewer B -- EFFICIENCY:** x\n' > "$CR/review-lenses.md"
+  printf '# fd\n## Review lens `brain-scrub` (owner order)\nbody\n' > "$CR/fleet-directives.md"
+  CC="$CR/reviews/20260101-cycle"; COUT="$CC/out.txt"
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >/dev/null 2>&1; chk "cycle-all-missing" 5 $?
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1; grep -qF "missing: lens A -- expected $CC/reports/skill-review-A-<YYYYMMDD>.md" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-names-missing-path" >&2; }
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1; grep -qF "expected=3 lens(es): A B brain-scrub" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-derives-catalog" >&2; }
+  for l in A B brain-scrub; do printf 'r\n' > "$CC/reports/skill-review-$l-20260101.md"; printf 'ts|%s|%s|sha|1\n' "$l" "$CC/reports/skill-review-$l-20260101.md" >> "$CC/reports/skill-review-index.log"; done
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >/dev/null 2>&1; chk "cycle-all-present" 0 $?
+  rm -f "$CC/reports/skill-review-B-20260101.md"
+  printf 'ts|B|hq|not applicable this cycle\n' > "$CC/waivers.log"
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1; grep -qF "waived 1 lens(es): B" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-waiver-ack" >&2; }
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >/dev/null 2>&1; chk "cycle-waiver-satisfies" 0 $?
+  rm -f "$CC/waivers.log"
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >/dev/null 2>&1; chk "cycle-unwaived-fails" 5 $?
+  printf 'ts|B|hq|waived again\n' > "$CC/waivers.log"
+  : > "$CC/reports/skill-review-index.log"
+  printf 'ts|A|%s|sha|1\n' "$CC/reports/skill-review-A-20260101.md" >> "$CC/reports/skill-review-index.log"
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1; grep -qF "UNRECEIPTED 1 lens(es)" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-unreceipted-named" >&2; }
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >/dev/null 2>&1; chk "cycle-unreceipted-not-fatal" 0 $?
+  bash "$ME" check-cycle "$CC" --catalog "$CR" --strict-receipt >/dev/null 2>&1; chk "cycle-strict-receipt-fails" 5 $?
+  # A PRESENT report under the pre-tool naming must never read as "missing".
+  rm -f "$CC/waivers.log"
+  printf 'r\n' > "$CC/reports/review-lens-B.md"
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1; RC=$?
+  grep -qF "UNPERSISTED 1 lens(es)" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-unpersisted-named" >&2; }
+  grep -qF "B(review-lens-B.md)" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-unpersisted-filename" >&2; }
+  grep -qF "missing: lens B" "$COUT" && { F=$((F+1)); echo "  FAIL rp - cycle-loose-not-missing" >&2; } || P=$((P+1))
+  [ "$RC" = "0" ] && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-loose-not-fatal rc=$RC" >&2; }
+  bash "$ME" check-cycle "$CC" --catalog "$CR" --strict-receipt >/dev/null 2>&1; chk "cycle-loose-strict-fails" 5 $?
+  rm -f "$CC/reports/review-lens-B.md"
+  # A COMBINED report names several lenses -- each of them RAN. Crediting only the
+  # last token would report the others missing.
+  mv "$CC/reports/skill-review-A-20260101.md" "$CC/reports/.hold-A"
+  printf 'r\n' > "$CC/reports/lens-A-B-20260101.md"
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1
+  grep -qF "A(lens-A-B-20260101.md)" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-combined-first-lens" >&2; }
+  grep -qF "B(lens-A-B-20260101.md)" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-combined-second-lens" >&2; }
+  rm -f "$CC/reports/lens-A-B-20260101.md"
+  mv "$CC/reports/.hold-A" "$CC/reports/skill-review-A-20260101.md"
+  ER="$(mktemp -d -t oc-empty-root.XXXXXX)"
+  bash "$ME" check-cycle "$CC" --catalog "$ER" >/dev/null 2>&1; chk "cycle-catalog-underivable" 3 $?
+  bash "$ME" check-cycle "$CR/nope" --catalog "$CR" >/dev/null 2>&1; chk "cycle-missing-dir" 2 $?
+  bash "$ME" check-cycle --catalog "$CR" >/dev/null 2>&1; chk "cycle-no-arg" 2 $?
+  rm -rf "$CR" "$ER"
   rm -rf "$T"
   echo "oc-review-persist selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]; exit $?
