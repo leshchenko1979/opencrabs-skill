@@ -94,11 +94,23 @@
 #     {{UUID}} -> lane's own session uuid   {{VERSION}} -> SKILL.md version
 #   Any surviving {{...}} token after substitution -> abort that send (law 1).
 #
+#   LAW 15 (defect #15, 2026-09-12): a wave inherits the cgroup of whoever
+#   launched it. When that launcher is a session hosted by the unit a swap is
+#   about to bounce (opencrabs-ops.service), the swap's `systemctl --user
+#   restart` tears the cgroup down and SIGKILLs the wave MID-FLIGHT — the
+#   survivors got their briefs, the rest never heard, and nothing reported the
+#   truncation. The wave re-execs under a transient scope OUTSIDE the unit
+#   before taking its lock, exactly as oc-deploy does for the swap itself.
+#
 # Exit codes: 0 all sent/skipped-clean · 2 usage/roster error · 3 ledger ·
 #             4 partial send failures (receipts say which) · 5 abort (placeholder leak guard)
 #             7 concurrent wave in progress (live lock held by another pid)
 set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# LAW 15: the detach re-exec replays this exact invocation, so capture both the
+# script path and the original argv BEFORE the arg parse consumes "$@".
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ORIG_ARGS=("$@")
 # shellcheck source=lib/oc-notify.sh
 source "$SKILL_DIR/tools/lib/oc-notify.sh"
 _OC_LIB="$SKILL_DIR/tools/lib/oc-log.sh"
@@ -114,6 +126,48 @@ PROFILE="${OC_NOTIFY_PROFILE:-ops}"
 SENDER="oc-notify-fanout"
 
 die() { echo "oc-notify-fanout: $*" >&2; exit "${2:-2}"; }
+
+# ---- cgroup safety (LAW 15, defect #15, 2026-09-12) ------------------------
+# Same class as oc-deploy's v0.4.153 silent-ledger defect, one layer out: a wave
+# inherits the cgroup of whoever launched it. When that launcher is a session
+# hosted by the very unit a swap is about to bounce (opencrabs-ops.service), the
+# swap's step-8 `systemctl --user restart` tears that cgroup down and SIGKILLs
+# the wave AT the restart line. Evidence 2026-09-12 (HQ report d72bd52d): wave
+# wave-2b2a99d25bd2 (lock ts 1789205498 = 09:31:38Z) last wrote .sent at
+# 09:38:18Z after exactly 5 lanes and had no live process by 09:45 — the
+# 09:39:02Z swap restarted the daemon and killed it mid-wave. Prior waves died
+# the same way (SIGTERM at 211s and 530s). A truncated wave is the WORST shape
+# of failure here: the lanes that were already reached got their briefs, the
+# rest never heard, and the tool never said so — the caller sees a wave that
+# simply stopped.
+# Fix: re-exec under a transient scope outside the bounce cgroup BEFORE the wave
+# lock is taken, so a re-entry can never self-deadlock on a held lock (the same
+# pre-lock ordering oc-deploy uses for its own detach).
+# Overrides: OC_FANOUT_UNIT (default opencrabs-ops.service) ·
+# OC_FANOUT_IN_UNIT_CGROUP (auto|1|0 — test hook; auto inspects /proc/self/cgroup)
+# OC_FANOUT_DETACH_CMD (default `systemd-run --user --scope --collect`; MUST BLOCK
+# and pass the child's rc through — use `setsid -w`, never bare `setsid`, or the
+# wave's exit code is lost and a refusal reads as success) · OC_FANOUT_DETACHED
+# (loop guard).
+fanout_in_bounce_cgroup() { # rc 0 = this process IS inside the unit's cgroup
+  local unit="${OC_FANOUT_UNIT:-opencrabs-ops.service}" cg
+  case "${OC_FANOUT_IN_UNIT_CGROUP:-auto}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [ -r /proc/self/cgroup ] || return 1
+  cg="$(cat /proc/self/cgroup 2>/dev/null || true)"
+  case "$cg" in *"/$unit"|*"/$unit/"*) return 0 ;; esac
+  return 1
+}
+
+fanout_ensure_detached() { # re-exec outside the bounce cgroup (argv from ORIG_ARGS)
+  [ "${OC_FANOUT_DETACHED:-0}" = "1" ] && return 0   # already detached (loop guard)
+  fanout_in_bounce_cgroup || return 0
+  local cmd="${OC_FANOUT_DETACH_CMD:-systemd-run --user --scope --collect}"
+  echo "oc-notify-fanout: wave is INSIDE ${OC_FANOUT_UNIT:-opencrabs-ops.service}'s cgroup — a swap's restart would SIGKILL it mid-wave, truncating delivery with NO failure report (LAW 15, defect #15). Re-executing outside the unit via: $cmd" >&2
+  OC_FANOUT_DETACHED=1 exec $cmd "$SELF" "${ORIG_ARGS[@]}"
+}
 if [ "${1:-}" = "--selftest" ]; then
   # SELFTEST — forum-scope guard + law-1 placeholder guard, fully fixture-based
   # (OC_NOTIFY_DB points at a throwaway sqlite DB; OC_NOTIFY_BIN at a fake
@@ -357,6 +411,102 @@ SLOWEOF
   ls "$T"/run-default/wave-*.targets >/dev/null 2>&1 && chk 0 manifest-written || chk 1 manifest-written
   grep -qxF "$L1" "$T"/run-default/wave-*.targets && chk 0 manifest-has-attempted-lane || chk 1 manifest-has-attempted-lane
   grep -qxF "$L6" "$T"/run-default/wave-*.targets && chk 1 manifest-never-retired || chk 0 manifest-never-retired
+  # LAW 15 (defect #15, 2026-09-12): a wave inherits the cgroup of its launcher.
+  # When the launcher is a session hosted by the unit a swap bounces, the swap's
+  # restart tears that cgroup down and SIGKILLs the wave mid-flight — the lanes
+  # already reached got their briefs, the rest never heard, and nothing said so.
+  # The wave must re-exec OUTSIDE the unit before it takes its lock.
+  cat > "$T/fake-detach" <<'DEOF'
+#!/usr/bin/env bash
+echo "DETACH-CALLED" >> "$DETACH_LOG"
+env OC_FANOUT_DETACHED=1 "$@"
+DEOF
+  chmod +x "$T/fake-detach"
+  # 15a. inside the unit cgroup -> the detach path fires ONCE and the re-exec
+  #      replays the original argv, so the wave still completes.
+  : > "$T/detach.log"
+  tout="$(DETACH_LOG="$T/detach.log" OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$LEDG" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_IN_UNIT_CGROUP=1 OC_FANOUT_DETACH_CMD="$T/fake-detach" \
+    OC_FANOUT_RUN_DIR="$T/run-detach" FAKE_NOTIFY_LOG="$T/fn-detach.log" \
+    bash "$0" --title TD --text "brief {{UUID}}" --no-stamp 2>&1; echo "RC=$?")"
+  echo "$tout" | grep -q "RC=0" && chk 0 detach-reexec-rc0 || chk 1 detach-reexec-rc0
+  chk "$([ "$(grep -c DETACH-CALLED "$T/detach.log" 2>/dev/null)" = 1 ] && echo 0 || echo 1)" detach-called-once
+  echo "$tout" | grep -q "INSIDE opencrabs-ops.service" && chk 0 detach-names-unit || chk 1 detach-names-unit
+  grep -q "$L1" "$T/fn-detach.log" 2>/dev/null && chk 0 detach-wave-delivered || chk 1 detach-wave-delivered
+  # 15b. loop guard: a re-entered wave (OC_FANOUT_DETACHED=1) must NOT re-exec
+  #      again — otherwise the detach recurses.
+  : > "$T/detach.log"
+  OC_FANOUT_IN_UNIT_CGROUP=1 OC_FANOUT_DETACHED=1 OC_FANOUT_DETACH_CMD="$T/fake-detach" \
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_RUN_DIR="$T/run-guard" \
+    FAKE_NOTIFY_LOG="$T/fn-guard.log" DETACH_LOG="$T/detach.log" \
+    bash "$0" --title TG --text "brief {{UUID}}" --no-stamp >/dev/null 2>&1
+  chk "$([ "$(grep -c DETACH-CALLED "$T/detach.log" 2>/dev/null)" = 0 ] && echo 0 || echo 1)" detach-loop-guard
+  # 15c. outside the cgroup -> no detach at all (the common case: no re-exec tax).
+  : > "$T/detach.log"
+  OC_FANOUT_IN_UNIT_CGROUP=0 OC_FANOUT_DETACH_CMD="$T/fake-detach" \
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_RUN_DIR="$T/run-outside" \
+    FAKE_NOTIFY_LOG="$T/fn-outside.log" DETACH_LOG="$T/detach.log" \
+    bash "$0" --title TO --text "brief {{UUID}}" --no-stamp >/dev/null 2>&1
+  chk "$([ "$(grep -c DETACH-CALLED "$T/detach.log" 2>/dev/null)" = 0 ] && echo 0 || echo 1)" detach-skipped-outside
+  # 15d. SURVIVAL (acceptance criterion): the launcher sits in its OWN process
+  #      group; SIGKILLing that whole group — exactly what a swap's cgroup
+  #      teardown does to every process still inside it — must NOT truncate a
+  #      DETACHED wave. The notify is gated so the kill provably lands
+  #      MID-WAVE, and the second send only happens if the wave survived.
+  cat > "$T/fake-notify-gated" <<'GEOF'
+#!/usr/bin/env bash
+echo "sent: $*" >> "$FAKE_NOTIFY_LOG"
+i=0
+while [ ! -f "$GATE" ] && [ "$i" -lt 150 ]; do sleep 0.1; i=$((i+1)); done
+echo "notification id 99999999-9999-4999-8999-999999999999"
+exit 0
+GEOF
+  chmod +x "$T/fake-notify-gated"
+  cat > "$T/surv-launch.sh" <<'LEOF'
+#!/usr/bin/env bash
+echo "$$" > "$SURV_PGID"
+exec env OC_NOTIFY_DB="$SURV_DB" OC_NOTIFY_BIN="$SURV_BIN" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+  OC_FANOUT_LEDGER="$SURV_LEDG" OC_FANOUT_FORUM_CHAT="$SURV_FORUM" OC_FANOUT_IN_UNIT_CGROUP=1 \
+  OC_FANOUT_DETACH_CMD="$SURV_DETACH" OC_FANOUT_RUN_DIR="$SURV_RUN" FAKE_NOTIFY_LOG="$SURV_LOG" \
+  GATE="$SURV_GATE" bash "$SURV_SELF" --title TS --text "brief {{UUID}}" --no-stamp
+LEOF
+  chmod +x "$T/surv-launch.sh"
+  # The kill/launch choreography runs in a DRIVER so the shell's own "Killed"
+  # job notification lands in the driver's stderr (captured below) instead of
+  # the selftest's — the SIGKILL is INTENTIONAL, and an alarming line in a green
+  # selftest trains the reader to ignore it.
+  cat > "$T/surv-drive.sh" <<'DREOF'
+#!/usr/bin/env bash
+: > "$SURV_LOG"; rm -f "$SURV_GATE" "$SURV_PGID_FILE"
+SURV_PGID="$SURV_PGID_FILE" SURV_DB="$SURV_DB" SURV_BIN="$SURV_BIN" SURV_LEDG="$SURV_LEDG" \
+SURV_FORUM="$SURV_FORUM" SURV_DETACH="setsid -w" SURV_RUN="$SURV_RUN" SURV_LOG="$SURV_LOG" \
+SURV_GATE="$SURV_GATE" SURV_SELF="$SURV_SELF" \
+  setsid "$SURV_LAUNCH" >"$SURV_OUT" 2>&1 &
+i=0
+while [ ! -s "$SURV_LOG" ] && [ "$i" -lt 60 ]; do sleep 0.1; i=$((i+1)); done
+SPG="$(cat "$SURV_PGID_FILE" 2>/dev/null || echo 0)"
+[ -n "$SPG" ] && [ "$SPG" != 0 ] && kill -9 -"$SPG" 2>/dev/null
+sleep 0.3
+: > "$SURV_GATE"                      # release the gated notify
+i=0
+while [ "$(grep -c '^sent:' "$SURV_LOG" 2>/dev/null)" -lt 2 ] && [ "$i" -lt 60 ]; do sleep 0.1; i=$((i+1)); done
+echo "SENT=$(grep -c '^sent:' "$SURV_LOG" 2>/dev/null)"
+wait 2>/dev/null
+exit 0
+DREOF
+  chmod +x "$T/surv-drive.sh"
+  drv_out="$(SURV_PGID_FILE="$T/surv.pgid" SURV_DB="$T/db.sqlite" SURV_BIN="$T/fake-notify-gated" \
+    SURV_LEDG="$T/ledg2.json" SURV_FORUM="$FORUM" SURV_RUN="$T/run-surv" SURV_LOG="$T/fn-surv.log" \
+    SURV_GATE="$T/gate" SURV_SELF="$(readlink -f "$0")" SURV_LAUNCH="$T/surv-launch.sh" \
+    SURV_OUT="$T/surv.out" bash "$T/surv-drive.sh" 2>"$T/surv-drive.err")"
+  n_surv="$(printf '%s\n' "$drv_out" | sed -n 's/^SENT=//p' | head -1)"
+  [ -n "$n_surv" ] || n_surv=0
+  [ "$n_surv" -ge 2 ] && chk 0 detach-survives-pgkill || chk 1 "detach-survives-pgkill (sent=$n_surv)"
+  grep -q "INSIDE opencrabs-ops.service" "$T/surv.out" 2>/dev/null && chk 0 detach-surv-fired || chk 1 detach-surv-fired
+
   echo "oc-notify-fanout selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
   exit $?
@@ -404,6 +554,11 @@ if [ -n "$verify_id" ]; then
   } >&2
   exit 8
 fi
+# LAW 15: detach BEFORE the version/title/ledger checks and the wave lock, so a
+# re-entry can never deadlock on a lock this same invocation already holds.
+# --verify returned above (read-only, no lock), so it never detaches.
+fanout_ensure_detached
+
 version="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL_DIR/SKILL.md" | head -1)"
 [ -n "$version" ] || die "cannot read version from SKILL.md"
 [ -n "$title" ] || die "usage: --title required"
