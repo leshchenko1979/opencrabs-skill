@@ -606,6 +606,13 @@ run_selftest oc-smoke-evidence
 if tool oc-smoke-evidence; then
   "$TOOLS_DIR/oc-smoke-evidence" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
   "$TOOLS_DIR/oc-smoke-evidence" --unit oc-no-such-unit --strings m1 >/dev/null 2>&1; [ $? -eq 3 ] && ok "--strings deprecated alias parses (unit-fail rc 3, E2 #6)" || bad "--strings alias -> expected 3"
+  # M2-2: the decoy-path guard. A bare/relative --append-log must resolve to the
+  # CANONICAL log (no divergence note); a foreign absolute path must announce itself.
+  SED_TMP="$(mktemp -d)"
+  OC_DEPLOY_STATE_DIR="$SED_TMP" "$TOOLS_DIR/oc-smoke-evidence" --append-log --unit oc-no-such-unit 2>&1 | grep -q 'NOT the canonical' && bad "bare --append-log diverged from canonical" || ok "bare --append-log -> canonical log (M2-2)"
+  OC_DEPLOY_STATE_DIR="$SED_TMP" "$TOOLS_DIR/oc-smoke-evidence" --append-log smoke-verdicts.log --unit oc-no-such-unit 2>&1 | grep -q 'NOT the canonical' && bad "relative --append-log escaped STATE_DIR" || ok "relative --append-log resolves to STATE_DIR, not CWD (M2-2)"
+  OC_DEPLOY_STATE_DIR="$SED_TMP" "$TOOLS_DIR/oc-smoke-evidence" --append-log /tmp/oc-elsewhere.log --unit oc-no-such-unit 2>&1 | grep -q 'NOT the canonical' && ok "divergent absolute --append-log announces itself (M2-2)" || bad "divergent --append-log was silent"
+  rm -rf "$SED_TMP"
 fi
 
 section "oc-issue-log"

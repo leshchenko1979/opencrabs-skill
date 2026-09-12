@@ -12,13 +12,19 @@
 #
 # Usage: oc-smoke-evidence [--unit opencrabs-ops] [--markers m1,m2]
 #                          [--negative-control <backup-binary>] [--selftest]
-#                          [--append-log <path>]
-#   --append-log <path> (defect #13, lane c10cd97b, 2026-09-12): appends the
+#                          [--append-log [<path>]]
+#   --append-log [<path>] (defect #13, lane c10cd97b, 2026-09-12): appends the
 #   evidence block to <path> NEWLINE-SAFELY — if the log was last written
 #   without a trailing newline, that row is terminated first, so rows can
 #   never glue. Appends on rc 0/1 (verdict rows are evidence either way);
 #   usage/infra failures (rc 2/3) write nothing. This is the sanctioned
 #   append path — a plain shell >> is what glued c10cd97b's verdict rows.
+#   M2-2 (2026-09-12): <path> is OPTIONAL and defaults to the canonical ABSOLUTE
+#   log ($STATE_DIR/smoke-verdicts.log). A RELATIVE path resolves against
+#   STATE_DIR, never the caller's CWD — a bare `smoke-verdicts.log` used to be
+#   written to whatever directory the caller happened to be in, a decoy holding
+#   none of the evidence (2 rows lost). A divergent ABSOLUTE path is honoured but
+#   announced LOUDLY on stderr, naming the canonical one.
 #   --markers is canonical (matches oc-artifact-verify); --strings is a
 #   deprecated alias kept for back-compat (E2 finding 6, v0.4.72).
 # Exit:  0 IDENTITY-MATCH / 1 MISMATCH / 2 usage / 3 unit-or-proc-fail
@@ -43,13 +49,25 @@ append_log() { # newline-safe append (defect #13): a log left unterminated by a
 }
 
 STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
+CANON_LOG="$STATE_DIR/smoke-verdicts.log"   # M2-2: the ONLY sanctioned target
 UNIT="opencrabs-ops"; MARKERS=""; NEGCTRL=""; APPEND_LOG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --unit) UNIT="${2:-}"; shift 2 ;;
     --markers|--strings) MARKERS="${2:-}"; shift 2 ;;   # --strings = deprecated alias
     --negative-control) NEGCTRL="${2:-}"; shift 2 ;;
-    --append-log) APPEND_LOG="${2:-}"; shift 2 ;;
+    --append-log)
+      # M2-2 (2026-09-12): a WRONG path must be unrepresentable. The canonical
+      # log is absolute; a bare `smoke-verdicts.log` used to land in the CALLER'S
+      # CWD -- a decoy that looks right and holds none of the evidence (2 rows
+      # lost). Relative now resolves against STATE_DIR, and a bare flag means
+      # "the canonical log".
+      shift
+      case "${1:-}" in
+        ''|--*|-h) APPEND_LOG="$CANON_LOG" ;;            # bare -> canonical
+        /*) APPEND_LOG="$1"; shift ;;                    # absolute -> honoured
+        *)  APPEND_LOG="$STATE_DIR/$1"; shift ;;         # relative -> STATE_DIR, never CWD
+      esac ;;
     --selftest)
       d="$(mktemp -d)"
       printf 'x%.0s' {1..100} > "$d/a"; cp "$d/a" "$d/b"; printf 'x%.0s' {1..100} > "$d/c"; printf 'y' >> "$d/c"
@@ -79,6 +97,11 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
+
+# M2-2: never let a divergent target pass silently -- name the canonical one.
+if [ -n "$APPEND_LOG" ] && [ "$APPEND_LOG" != "$CANON_LOG" ]; then
+  echo "oc-smoke-evidence: NOTE -- appending to $APPEND_LOG, NOT the canonical $CANON_LOG" >&2
+fi
 
 emit_evidence() {
 [ -f "$STATE_DIR/deployed.meta.json" ] || die 3 "deployed.meta.json missing in $STATE_DIR"
