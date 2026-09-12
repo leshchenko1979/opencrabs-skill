@@ -515,7 +515,32 @@ cmd_ack() {
   jq -e --arg u "$uuid" '.workers[]? | select(.uuid == $u)' "$LEDGER" >/dev/null 2>&1 \
     || die 3 "ack: unknown uuid $uuid — roster discovery first (Duty 2), or: oc-ledger enroll"
   _ack_locked() {
-    local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
+    local n t dup; n=$(( $(max_n) + 1 )); t="$(now_iso)"
+    # M2-4 (2026-09-12): idempotent re-ack, mirroring _sync_locked's dup guard.
+    # An ack of a (uuid, version) already ON RECORD is not new information — the
+    # roster's last_acked already says it. It fired in the wild because
+    # `oc-drift-check --ack` DELEGATES here (oc-drift-check:78), so one adoption
+    # that both drift-checked and acked wrote TWO byte-identical rows seconds
+    # apart (lane 1a63f103 n=3717/3718; d18ce16a n=3713/3714; 462181e9 x3).
+    # Shape mirrors sync's "event already present — idempotent, no dup": refresh
+    # last_acked + updated_at, append NO event, still rc 0 (oc-drift-check does
+    # `|| die 3`, so a non-zero here would break the delegated ack outright).
+    # The KEY is (uuid, version) — a different worker at the same version, or the
+    # same worker at a new version, is new information and still appends. The
+    # compare is EXACT string equality on the composed `what`, never `contains`:
+    # a substring test would make 0.4.1 match 0.4.10 and swallow a real bump.
+    dup="$(jq --arg u "$uuid" --arg v "$version" \
+      '[.events[]? | select(.kind == "ack" and ((.what // "") == ("worker " + $u + " acked " + $v)))] | length' "$LEDGER")"
+    if [ "${dup:-0}" -gt 0 ]; then
+      # fields STILL refreshed (--at may carry a new timestamp) — a lane that
+      # re-acks after a failed git leg must not keep a stale last_acked.at
+      atomic_jq --arg u "$uuid" --arg v "$version" --arg at "$at" --arg t "$t" \
+        '(.workers[] | select(.uuid == $u)).last_acked = {version: $v, at: $at}
+         | .updated_at = $t' || return $?
+      echo "acked $uuid at $version (already on record — idempotent, no dup event)"
+      git_state_commit "ledger: ack $uuid v$version re-ack via oc-ledger"
+      return 0
+    fi
     atomic_jq --arg u "$uuid" --arg v "$version" --arg at "$at" --arg n "$n" --arg t "$t" \
       '(.workers[] | select(.uuid == $u)).last_acked = {version: $v, at: $at}
        | .events += [{n: ($n|tonumber), t: $t, by: "oc-ledger ack", kind: "ack", what: ("worker " + $u + " acked " + $v)}]
@@ -786,7 +811,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (239 cases) -----------------------------------------------------
+# ---- selftest (264 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -927,6 +952,73 @@ EOF
   chk "ack-written" "0.4.2" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
   bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee v0.4.3 >/dev/null 2>&1; chk "ack-vprefix" 0 $?
   chk "ack-vprefix-normalized" "0.4.3" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
+  # M2-4 (2026-09-12): ack is IDEMPOTENT per (uuid, version), mirroring sync's
+  # dup guard. `oc-drift-check --ack` DELEGATES here, so one adoption that both
+  # drift-checked and acked wrote two byte-identical rows seconds apart (lane
+  # 1a63f103 n=3717/3718; d18ce16a n=3713/3714; 462181e9 x3).
+  # NOTE the shared legs below are deliberately STATE-NEUTRAL: promote CARRIES
+  # last_acked across a role change (it never writes the field), so the later
+  # `promote-ack-carries` assertion needs the shared fixture to still read 0.4.3
+  # when this block ends. Every leg that MOVES last_acked to a new version runs
+  # on the isolated ledger below. (v1 missed that: promote-ack-carries red.)
+  local A0; A0="$(jq '[.events[]? | select(.kind == "ack")] | length' "$OC_LEDGER")"
+  bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.3 >/dev/null 2>&1; chk "ack-reack-rc0" 0 $?
+  chk "ack-reack-no-dup-event" "$A0" "$(jq '[.events[]? | select(.kind == "ack")] | length' "$OC_LEDGER")"
+  chk "ack-reack-last-acked-kept" "0.4.3" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
+  A0="$(jq '[.events[]? | select(.kind == "ack")] | length' "$OC_LEDGER")"
+  # the v-prefix display spelling normalizes to the SAME (uuid, version) -> still a dup
+  bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee v0.4.3 >/dev/null 2>&1; chk "ack-reack-vprefix-rc0" 0 $?
+  chk "ack-reack-vprefix-no-dup" "$A0" "$(jq '[.events[]? | select(.kind == "ack")] | length' "$OC_LEDGER")"
+  # the dup path still REFRESHES last_acked.at — a re-ack after a failed git leg
+  # must not leave a stale timestamp behind (the roster's last_acked reads it)
+  A0="$(jq '[.events[]? | select(.kind == "ack")] | length' "$OC_LEDGER")"
+  bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.3 --at 2026-01-02T03:04:05Z >"$T/reack.out" 2>&1
+  chk "ack-reack-at-rc0" 0 $?
+  chk "ack-reack-refreshes-at" "2026-01-02T03:04:05Z" "$(jq -r '.workers[0].last_acked.at' "$OC_LEDGER")"
+  chk "ack-reack-at-no-dup" "$A0" "$(jq '[.events[]? | select(.kind == "ack")] | length' "$OC_LEDGER")"
+  chk "ack-reack-says-idempotent" "true" "$(grep -qF 'idempotent' "$T/reack.out" && echo true || echo false)"
+  # ---- isolated ledger: every leg that MOVES last_acked ----------------------
+  mkdir -p "$T/ack2"
+  cat > "$T/ack2/led.json" <<'ACKEOF'
+{"current_skill_version":"0.4.1","meta":{"skill_version":"0.4.1","current_skill_version":"0.4.1"},
+ "updated_at":"2026-01-01T00:00:00Z","workers":[
+ {"uuid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","role":"tester","topic_id":1,"feature":"-","confirmed":true,"last_acked":null,"notes":[],"events":[]},
+ {"uuid":"cccccccc-dddd-eeee-ffff-000000000000","role":"editor","topic_id":2,"feature":"-","confirmed":true,"last_acked":null,"notes":[],"events":[]}],"events":[]}
+ACKEOF
+  AL="$T/ack2/led.json"
+  # DELTA-BASED, deliberately: an ABSOLUTE count would CASCADE — a wrongly
+  # appended event in one leg shifts every later count and turns 4 assertions
+  # red for 1 root cause (measured: the v2 control red-lined 10 for 6 causes).
+  # Each assertion below measures its OWN step, so the control's red set is
+  # exactly the no-dup assertions.
+  ackn() { jq '[.events[]? | select(.kind == "ack")] | length' "$1"; }
+  local B; B="$(ackn "$AL")"
+  OC_LEDGER="$AL" bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.5 >/dev/null 2>&1; chk "ack2-first-rc0" 0 $?
+  chk "ack2-first-appends" "$((B + 1))" "$(ackn "$AL")"
+  B="$(ackn "$AL")"
+  OC_LEDGER="$AL" bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.5 >/dev/null 2>&1; chk "ack2-reack-rc0" 0 $?
+  chk "ack2-reack-no-dup" "$B" "$(ackn "$AL")"
+  chk "ack2-reack-last-acked" "0.4.5" "$(jq -r '[.workers[] | select(.uuid == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")][0].last_acked.version' "$AL")"
+  B="$(ackn "$AL")"
+  # a NEW version IS new information -> appends
+  OC_LEDGER="$AL" bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.1 >/dev/null 2>&1; chk "ack2-newver-rc0" 0 $?
+  chk "ack2-newver-appends" "$((B + 1))" "$(ackn "$AL")"
+  B="$(ackn "$AL")"
+  # PREFIX TRAP: 0.4.1 is on record; 0.4.10 must NOT be deduped by it (an
+  # exact-equality key, never `contains`) — it must land as its own event
+  OC_LEDGER="$AL" bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.10 >/dev/null 2>&1; chk "ack2-prefixtrap-rc0" 0 $?
+  chk "ack2-prefixtrap-appends" "$((B + 1))" "$(ackn "$AL")"
+  B="$(ackn "$AL")"
+  OC_LEDGER="$AL" bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.10 >/dev/null 2>&1; chk "ack2-prefixtrap-reack-rc0" 0 $?
+  chk "ack2-prefixtrap-reack-no-dup" "$B" "$(ackn "$AL")"
+  B="$(ackn "$AL")"
+  # the dedup KEY includes the uuid: ANOTHER worker at the SAME version appends
+  OC_LEDGER="$AL" bash "$ME" ack cccccccc-dddd-eeee-ffff-000000000000 0.4.5 >/dev/null 2>&1; chk "ack2-otheruuid-rc0" 0 $?
+  chk "ack2-otheruuid-appends" "$((B + 1))" "$(ackn "$AL")"
+  B="$(ackn "$AL")"
+  OC_LEDGER="$AL" bash "$ME" ack cccccccc-dddd-eeee-ffff-000000000000 0.4.5 >/dev/null 2>&1; chk "ack2-otheruuid-reack-rc0" 0 $?
+  chk "ack2-otheruuid-reack-no-dup" "$B" "$(ackn "$AL")"
+  chk "ack2-both-workers-tracked" "2" "$(jq '[.workers[] | select(.last_acked != null)] | length' "$AL")"
   # 27-29: enroll
   bash "$ME" enroll nope editor >/dev/null 2>&1; chk "enroll-bad-uuid" 2 $?
   bash "$ME" enroll 22222222-2222-2222-2222-222222222222 editor --topic 42 >/dev/null 2>&1; chk "enroll-happy" 0 $?
