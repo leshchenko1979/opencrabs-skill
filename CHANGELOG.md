@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.153 (2026-09-12) — Reading a Delivery Verdict: `no wake observed` Is Not a Failure
+
+Toolsmith correction 2026-09-12, on its own v0.4.151 handover. Two facts, both verified against source by the reporter:
+
+- **A `session_notify` confirm verdict of `routed … no wake was observed within 10s` means the TARGET IS MID-TURN**, not that the message was dropped: it injects at the target's next tool-loop boundary. A re-send on that verdict is a duplicate, not a fix.
+- **`session-notify.journal` absence is NOT evidence of failure.** `journal_line` has exactly one caller — `src/cli/session_notify.rs:344` — so the journal records the **CLI** path only; in-agent `session_notify` tool calls (`src/brain/tools/subagent/notify.rs`) never journal. Confirm delivery from the daemon log (`Stamped N notify receipt(s) injected for session <uuid>`) before declaring anything lost.
+
+Canon: `fleet-directives.md` §Cross-lane message delivery discipline. Origin: the reporter read its own confirm verdict as "did not wake you", re-sent a handover that had already been delivered, and then read the source before filing the journal gap as a defect — the check that kept it off the defect board.
+
+- **BATTERY**: 168 PASS / 0 FAIL.
+
 ## v0.4.152 (2026-09-12) — Park-Don't-Chase, Guard-Flag Escalation & Attribution/Goal Hygiene
 
 Owner order 2026-09-12 ~08:0xZ, on the post-night-shift findings report: *"I saw you stranded on waiting for a smoke — that shouldn't happen, no human smoke will be confirmed as I was away. Why not just leave these PRs for the next cycle?"* — "Codify the six amendments". All six codified; a seventh finding (tool-description probes) landed in `SKILL.md` §Test ontology.
