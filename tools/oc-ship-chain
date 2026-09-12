@@ -78,6 +78,14 @@
 #   OC_FORK_REPO     default ~/opencrabs (the fork checkout)
 #   OC_SHIPCHAIN_LEDGER  path for chain journal lines (default: oc-ledger)
 #   OC_TOOLS_NOLOG=1     suppress ledger stamps (battery/selftest)
+#
+# Actor (attribution — v0.4.152 §Attribution & Goal Hygiene A1):
+#   OC_ACTOR wins when set. Otherwise the chain derives the actor from the
+#   `Session-Id` trailer on the --sha commit (every editor commit carries one)
+#   and EXPORTS it, so this run's journal rows — and every child tool's rows —
+#   are attributed instead of landing as `(unattributed — pass --by or export
+#   OC_ACTOR)`. Nothing is invented: with no trailer and no OC_ACTOR the actor
+#   stays unset and oc-ledger keeps its loud unattributed message.
 
 # --- oc-snap guard: run from an immutable mirror (fork #167; tools/lib/oc-snap.sh)
 _OC_SNAP="$(cd "$(dirname "$0")" && pwd)/lib/oc-snap.sh"
@@ -231,6 +239,33 @@ journal_summary() { # call before exit: one line if any journal write was lost
 
 # ---- pre-flight -----------------------------------------------------------
 [ -d "$FORK_REPO/.git" ] || die "fork checkout not found: $FORK_REPO" 3
+
+# ---- actor defaulting (v0.4.152 §Attribution & Goal Hygiene A1) ------------
+# A tool that ALREADY KNOWS the owning session MUST default the actor to it —
+# an `(unattributed — pass --by or export OC_ACTOR)` row is a TOOL defect, not
+# lane sloppiness (fleet-directives.md §Attribution & Goal Hygiene A1, owner
+# order 2026-09-12).
+# This chain is handed the commit it is shipping (--sha), and every editor
+# commit carries a `Session-Id: <full-uuid>` trailer (SKILL.md §Session-notify
+# loop) — so the owning session is ON DISK, inside a sha the chain already
+# holds. 34 unattributed rows landed in the 2026-09-12 night shift (n=3515
+# class) with that very trailer sitting in the commit being shipped.
+# Precedence: an explicit OC_ACTOR WINS (the caller knows better than a
+# trailer) -> the --sha Session-Id trailer -> nothing invented, so oc-ledger
+# keeps its loud unattributed message instead of a fabricated actor.
+# Placed here deliberately: after the fork repo is proven to exist (so `git
+# log` can run at all) and BEFORE the first journal() write, so every row of
+# the run carries the actor.
+ship_chain_default_actor() {
+  if [ -n "${OC_ACTOR:-}" ]; then return 0; fi
+  local t=""
+  t="$(git -C "$FORK_REPO" log -1 --format='%(trailers:key=Session-Id,valueonly)' "$SHA" 2>/dev/null || true)"
+  t="$(printf '%s\n' "$t" | grep -E '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' | tail -1 || true)"
+  if [ -z "$t" ]; then return 0; fi
+  export OC_ACTOR="$t"
+  journal "actor defaulted to $OC_ACTOR (v0.4.152 A1 — from --sha Session-Id trailer; OC_ACTOR was unset)"
+}
+ship_chain_default_actor
 # resolve the worktree that actually holds main (this repo may be a secondary
 # ---- pre-flight: state dir & landing lock helpers --------------------------
 STATE_DIR="${OC_DEPLOY_STATE_DIR:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}"
@@ -509,6 +544,10 @@ selftest_impl() {
   T="$(mktemp -d)"
   trap 'rm -rf "$T"' EXIT
   PASS=0; FAIL=0
+  # The owning session the fixture commits declare via a Session-Id trailer —
+  # the same trailer every editor commit carries (SKILL.md §Session-notify
+  # loop). Test 12 proves oc-ship-chain defaults OC_ACTOR from it.
+  FIXTURE_SESSION="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
   ok()   { PASS=$((PASS+1)); echo "ok $1"; }
   bad()  { FAIL=$((FAIL+1)); echo "FAIL $1"; }
   check_rc() { [ "$2" = "$3" ] && ok "$1 (rc=$2)" || bad "$1 (want rc=$3 got $2)"; }
@@ -524,7 +563,7 @@ selftest_impl() {
   git -C "$T/clone" push -q origin main
   git -C "$T/clone" checkout -qb feat
   echo feat > "$T/clone/feat.txt"
-  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm feat
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm feat --trailer "Session-Id: $FIXTURE_SESSION"
   FSHA="$(git -C "$T/clone" rev-parse HEAD)"
   # The remote-branch pre-flight (defect fix 2026-09-11) requires $BRANCH to
   # exist on the fork remote, because LEG1's gate needs it there. Every test
@@ -873,6 +912,73 @@ EOF2
   check_rc "ship-lock-contention-resolved" "$RC" 0
   grep -q "SHIP-LOCK acquired after" "$T/journal.log" && ok "journal-ship-lock-waited" || bad "journal-ship-lock-waited"
   grep -q "SHIP-LOCK released" "$T/journal.log" && ok "journal-ship-lock-released" || bad "journal-ship-lock-released"
+
+  # 12. ACTOR DEFAULTING (v0.4.152 §Attribution & Goal Hygiene A1; defect fix
+  # 2026-09-12, toolsmith). A tool that ALREADY KNOWS the owning session MUST
+  # default the actor to it — an `(unattributed — pass --by or export OC_ACTOR)`
+  # row is a TOOL defect, not lane sloppiness. The chain is handed the commit it
+  # ships (--sha) and every editor commit carries a `Session-Id: <uuid>`
+  # trailer, so the owning session is ON DISK inside a sha the chain already
+  # holds. 34 unattributed rows landed in the 2026-09-12 night shift (n=3515
+  # class) with that trailer sitting in the very commit shipped.
+  # The probe reads ${OC_ACTOR} out of the CHILD's environment (the fake deploy
+  # runs as a child of the chain), so it proves what the chain actually
+  # EXPORTED — not what a later log line merely claims.
+  cat > "$T/fake-deploy-actor" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  ship) printf '%s\n' "${OC_ACTOR:-<unset>}" > "${FAKE_ACTOR_FILE:-/dev/null}"
+        echo "carrier run GREEN (fake)"; exit 0 ;;
+  poll) echo "SWAPPED (fake)"; exit 0 ;;
+esac
+exit 9
+EOF
+  chmod +x "$T/fake-deploy-actor"
+  actor_probe() { # $1 = file the child writes its OC_ACTOR into; rest = chain args
+    OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy-actor" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
+    FAKE_ACTOR_FILE="$1" \
+      bash "$SELF" "${@:2}"
+  }
+  rm -f "$T/journal.log" "$T/actor.seen"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  # (a) OC_ACTOR unset in the caller's env -> the --sha trailer supplies it
+  RC=0; OUT="$( unset OC_ACTOR; actor_probe "$T/actor.seen" --sha "$FSHA" --branch feat --wait 5 2>&1 )" || RC=$?
+  check_rc "actor-default-rc" "$RC" 0
+  SEEN="$(cat "$T/actor.seen" 2>/dev/null || true)"
+  [ "$SEEN" = "$FIXTURE_SESSION" ] && ok "actor-default-from-sha-trailer" \
+    || bad "actor-default-from-sha-trailer (want $FIXTURE_SESSION got '$SEEN')"
+  grep -q "actor defaulted to $FIXTURE_SESSION" "$T/journal.log" \
+    && ok "actor-default-journaled" || bad "actor-default-journaled"
+  # (b) an explicit OC_ACTOR WINS over the trailer (the caller knows better)
+  rm -f "$T/journal.log" "$T/actor.seen"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$( export OC_ACTOR="11111111-2222-3333-4444-555555555555"; actor_probe "$T/actor.seen" --sha "$FSHA" --branch feat --wait 5 2>&1 )" || RC=$?
+  check_rc "actor-env-wins-rc" "$RC" 0
+  SEEN="$(cat "$T/actor.seen" 2>/dev/null || true)"
+  [ "$SEEN" = "11111111-2222-3333-4444-555555555555" ] && ok "actor-env-wins-over-trailer" \
+    || bad "actor-env-wins-over-trailer (got '$SEEN')"
+  grep -q "actor defaulted" "$T/journal.log" && bad "actor-env-no-default-row" || ok "actor-env-no-default-row"
+  # (c) NO trailer on the sha and no env -> NOTHING INVENTED. The old loud
+  # unattributed path must survive: a fabricated actor is worse than none.
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  echo notrailer > "$T/clone/nt.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm notrailer
+  NTSHA="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" branch -f feat HEAD
+  git -C "$T/clone" push -q -f origin feat
+  git -C "$T/clone" reset -q --hard origin/main
+  rm -f "$T/journal.log" "$T/actor.seen"
+  RC=0; OUT="$( unset OC_ACTOR; actor_probe "$T/actor.seen" --sha "$NTSHA" --branch feat --wait 5 2>&1 )" || RC=$?
+  check_rc "actor-no-trailer-rc" "$RC" 0
+  SEEN="$(cat "$T/actor.seen" 2>/dev/null || true)"
+  [ "$SEEN" = "<unset>" ] && ok "actor-never-invented" \
+    || bad "actor-never-invented (want <unset> got '$SEEN')"
 
   echo "selftest: $PASS passed, $FAIL failed"
   # Contract fix 2026-09-11: was `return $?`, which returned ECHO's status (0),
