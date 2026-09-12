@@ -21,6 +21,8 @@
 #   oc-deploy fanout --run <id> [--dry-run]   # issue #24: mechanical notify fan-out
 #   oc-deploy lineage-check [--prev P] [--sha S] [--repo R] [--json]
 #                                        # read-only swap-guard verdict (v0.4.151)
+#   oc-deploy recover-receipt [--journal J] [--run R] [--sha S] [--dry-run] [--historical] [--json]
+#                                        # repair a truncated swap's missing ledger row (v0.4.153)
 #   oc-deploy --selftest
 #
 # S2 WIRING (2026-08-28, per s2-swap-journal-spec.md + owner tool-logging law):
@@ -71,6 +73,37 @@
 #   `--allow-rewritten-lineage "<justification>" [--actor A]` — justification
 #   is MANDATORY (bare flag -> rc 2, OC_DEPLOY_GATE=override-needs-justification)
 #   and acceptance is journaled with justification + actor.
+#
+# RESTART SURVIVAL / CGROUP SAFETY (v0.4.153):
+#   A DIRECT `swap-execute` inherits the cgroup of whoever launched it. When that
+#   launcher is a session hosted by the very unit the swap bounces
+#   (opencrabs-ops.service), step 8's `systemctl --user restart` tears the cgroup
+#   down and SIGKILLs the swap AT the restart line. Steps 9-12 (post-verify,
+#   sidecar-sync, receipt, fanout) never run, and because the swap-result ledger
+#   stamp is deliberately LAST (v0.4.78 F-M1: receipt evidence must precede the
+#   stamp, so a crash can never leave an unbacked DEPLOYED row) NO row is written
+#   at all — the host is fully swapped and the ledger is SILENT. A false-negative
+#   audit trail is the dangerous direction of error.
+#   EVIDENCE 2026-09-12: journal swap-acb8e205-…jsonl stops at seq 7 marker-write
+#   (mtime == swapped_at second; daemon restarted the SAME second), while
+#   swap-74d85785-…jsonl — handed to a `systemd-run` transient unit by
+#   `poll --execute`, i.e. OUTSIDE the unit — carries all 11 seqs.
+#   FIX: swap-execute re-execs under a transient scope outside the bounce cgroup
+#   BEFORE any work (pre-lock, so a re-entry can never self-deadlock on the held
+#   host-swap.lock). The detach command MUST BLOCK and pass the child's rc
+#   through (`systemd-run --user --scope`, `setsid -w`) — a non-blocking launcher
+#   returns 0 immediately and a guard refusal would read as success.
+#   RECOVERY: `oc-deploy recover-receipt` repairs the missing row for a swap that
+#   already truncated. It stamps ONLY when the journal shows install exit=0 AND
+#   marker-write exit=0, has NO receipt step, the sha resolves, and no existing
+#   swap-result row quotes sha+run (idempotent — a re-run is a no-op). rc 0 =
+#   handled (recovered, or correctly nothing to do) · rc 2 = refused (the journal
+#   does not describe a recoverable real swap). `--historical` records a swap
+#   whose sha was later SUPERSEDED instead of refusing; `--dry-run`/`--json`
+#   inspect without writing. Fan-out is NOT replayed (use `oc-deploy fanout
+#   --run <id>` — it has its own done-marker and a replay would re-notify).
+#   Selftest section 22 covers this end-to-end with a restart shim that kills the
+#   swap's own process group.
 #
 # HARD SAFETY RULES (v0.4.27 + S2):
 #   - Plan-only UNLESS --execute. Every planned action prints as "PLAN: ...".

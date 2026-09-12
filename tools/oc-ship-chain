@@ -50,6 +50,13 @@
 #         refusal — that is the regression the guard exists to catch. A genuine
 #         stale build is refused with `OC_DEPLOY_SWAP_GUARD=stale-build`; the
 #         fix is a fresh build from fork main, not a bypass.
+#       NOTE — a swap whose journal stops at marker-write (no receipt step)
+#       COMPLETED: the host is swapped, only the tail bookkeeping died. The
+#       usual cause is a swap launched inside the very unit it bounces (cgroup
+#       teardown at the restart line; fixed v0.4.153 by re-exec outside the
+#       cgroup). Do NOT re-run the swap — repair the missing ledger row with
+#       `oc-deploy recover-receipt` (rc 0 handled / rc 2 refused; `--dry-run`
+#       to inspect first) and confirm the result with `oc-deploy status`.
 #       7 gate still IN FLIGHT after its budget + resume-polls (prchecks rc 5,
 #         non-terminal). The run id is printed — do NOT re-dispatch (that
 #         concurrency-cancels the live run); wait for it and re-run with
