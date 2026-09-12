@@ -5,7 +5,7 @@
 # correction: a report that lives only in session memory is NOT persisted.
 #
 # usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]
-#   lens ∈ A-I + self + named lenses (see LENSES whitelist below)
+#   lens ∈ A-J + self + named lenses (see LENSES whitelist below)
 #          deletion-safety
 #   @file reads the report body from a file; - reads stdin; anything else is
 #         literal report text (quote it).
@@ -29,11 +29,11 @@ _OC_LIB="$_OC_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-review-persist" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
-LENSES=" A B C D E F G H I self redundancy-ontology efficiency-creep cli-automation deletion-safety brain-scrub "   # E F G added v0.4.72; H (ledger health) v0.4.114; I (meta-review) v0.4.115 — whitelist var itself missed in v0.4.114 (message-only edit), fixed v0.4.115. F-6 v0.4.119: single letters A–I are now ENFORCED whitelist entries — adding a letter here is the only path to accepting it (previously the case-glob short-circuit made these 9 entries dead).
+LENSES=" A B C D E F G H I J self redundancy-ontology efficiency-creep cli-automation deletion-safety brain-scrub "   # E F G added v0.4.72; H (ledger health) v0.4.114; I (meta-review) v0.4.115; J (mechanical enforcement) v0.4.161 — whitelist var itself missed in v0.4.114 (message-only edit), fixed v0.4.115. F-6 v0.4.119: single letters A–J are now ENFORCED whitelist entries — adding a letter here is the only path to accepting it (previously the case-glob short-circuit made these 9 entries dead). v0.4.161: the case-globs in the dispatch below MUST widen in the same edit — a whitelist-only change leaves J accepted (via the *) arm) while J1 still dies on the stale [A-I][0-9] glob.
 die() { echo "oc-review-persist: $2" >&2; exit "$1"; }
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { echo "usage: oc-review-persist <lens> <text | @file | -> [--dir DIR]"; echo "Exit: 0 persisted + re-read verified / 2 usage / 3 re-read sha-mismatch / 4 write-fail"; exit 0; }  # C-#3: help=0
 
-# ---- selftest (8 cases) -------------------------------------------------------
+# ---- selftest (22 cases) -------------------------------------------------------
 if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   export OC_TOOLS_NOLOG=1
   T="$(mktemp -d)"; P=0; F=0; day="$(date -u +%Y%m%d)"
@@ -48,7 +48,16 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   okf "grep -q '|G2|$T/skill-review-G2-$day.md|' '$T/skill-review-index.log'" "multipass-index"
   bash "$ME" Z9 "x" --dir "$T" >/dev/null 2>&1; chk "bad-lens-out-of-range" 2 $?
   bash "$ME" A "" --dir "$T" >/dev/null 2>&1; chk "empty-input" 2 $?
-  bash "$ME" J "x" --dir "$T" >/dev/null 2>&1; chk "whitelist-reject-J" 2 $?
+  # lens J (v0.4.161, HQ order d72bd52d; owner order: "make it a separate
+  # lens"). This case asserted J REJECTED until v0.4.161 -- it is INVERTED, not
+  # deleted. J alone proves only the whitelist; J1 proves the case-globs widened
+  # with it (a whitelist-only edit leaves J1 dead -- the v0.4.114 failure mode);
+  # K/K9 prove the range moved rather than merely growing.
+  bash "$ME" J "mechanical-enforcement persist smoke" --dir "$T" >/dev/null 2>&1; chk "lens-J-accepted" 0 $?
+  okf "grep -q '|J|$T/skill-review-J-$day.md|' '$T/skill-review-index.log'" "lens-J-index"
+  bash "$ME" J1 "multi-pass J" --dir "$T" >/dev/null 2>&1; chk "lens-J1-accepted" 0 $?
+  bash "$ME" K "x" --dir "$T" >/dev/null 2>&1; chk "whitelist-reject-K" 2 $?
+  bash "$ME" K9 "x" --dir "$T" >/dev/null 2>&1; chk "whitelist-reject-K9" 2 $?
   # F-6 (v0.4.119): lowercase 'a' must NOT collide with 'A' (locale collation
   # hazard) — and a letter removed from LENSES must now actually reject.
   bash "$ME" a "x" --dir "$T" >/dev/null 2>&1; chk "lowercase-reject" 2 $?
@@ -89,9 +98,9 @@ while [ $# -gt 0 ]; do case "$1" in --dir) DIR="${2:-}"; shift 2 ;; *) shift ;; 
 # the old [A-I] case-glob short-circuit made the 9 letter entries dead and a
 # letter-only whitelist edit silently no-op (the v0.4.114 failure mode).
 case "$lens" in
-  [A-I][0-9]) case "$LENSES" in *" ${lens:0:1} "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES or A1-I9)" ;; esac ;;
-  [A-I])      case "$LENSES" in *" $lens "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES or A-I)" ;; esac ;;
-  *)          case "$LENSES" in *" $lens "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES or A-I / A1-I9)" ;; esac ;;
+  [A-J][0-9]) case "$LENSES" in *" ${lens:0:1} "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES or A1-J9)" ;; esac ;;
+  [A-J])      case "$LENSES" in *" $lens "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES or A-J)" ;; esac ;;
+  *)          case "$LENSES" in *" $lens "*) ;; *) die 2 "unknown lens '$lens' (whitelist:$LENSES or A-J / A1-J9)" ;; esac ;;
 esac
 [ -n "$src" ] || die 2 "report input is empty (pass text, @file, or -)"
 
