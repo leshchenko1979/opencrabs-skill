@@ -208,9 +208,11 @@ Format for direct quirk dispatch to Toolsmith: `QUIRK: <tool> <observed> BECAUSE
 | Prescribed (wrong) | Real surface | Where it was written |
 |---|---|---|
 | `oc-ship-chain --resume` | flag never existed — 0 occurrences; the arg loop's catch-all dies `unknown arg` rc=2. Real recovery = read `deployed.sha`, then re-run the same chain with `--gated-run <id>` | `editor.md` Failure Mode 4 (fixed v0.4.154) |
-| `oc-ledger stamp proposal` | `KINDS` enum omits `proposal` → stamp rc=2, `events --kind proposal` rc=1 empty. Resolution = add the kind (precedent: `shipchain` v1.2, `roster-retire` v1.3) | `editor.md:69`, this file, `hq.md` |
+| `oc-ledger stamp proposal` | `KINDS` enum omitted `proposal` → stamp rc=2, `events --kind proposal` rc=1 empty. **RESOLVED** — kind admitted by Toolsmith `be7bfd09`, verified live on a fixture ledger (v0.4.156; precedent: `shipchain` v1.2, `roster-retire` v1.3) | `editor.md:69`, this file, `hq.md` |
 
 Verification is one line either way: `grep -c -- '<flag>' <tool>` for a flag, or read the tool's `KINDS` / case-arm list for a verb. Do this BEFORE the law ships. Fix ownership splits: **HQ** owns the law text, **Toolsmith** owns the tool surface when the missing verb should exist rather than be removed.
+
+**And law text must be RETIRED when the named defect is fixed (2026-09-12, same day, third instance of this family).** A changelog entry or defect-board row that prescribes a **workaround** becomes actively harmful once the tool is fixed — it recreates the dead channel in the opposite direction. Instance: the v0.4.154/155 text told lanes that `stamp proposal` "can never yield a row" and to mirror Duty-4 proposals as `kind=note` with a `duty4-proposal` prefix; Toolsmith's `be7bfd09` admitted the kind **~1 minute later**, so a lane following that brief would have written proposals where `events --kind proposal` — the audit verb — can never see them. Two lanes (`c2ba4ef2`, `aaa8d8ae`) caught it independently. **Rule:** when a fix ships, the SAME turn marks the prescribing text `RESOLVED` and names the fixing commit sha; a workaround that outlives its defect is itself a defect.
 
 ## Unified Event Capture: Urgent Routing vs. Batched Evolution (v0.4.145)
 

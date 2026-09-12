@@ -144,6 +144,13 @@ or record them onto the ledger via `oc-ledger stamp proposal "ADD|CHANGE <rule> 
 3. Intake & Closure Determination:
    - **Mechanical State Check**: HQ reads the submissions in a single batch turn from disk (`ls $REVIEW_DIR/proposals/`)
      and ledger events (`oc-ledger events --kind proposal`).
+     **Window-safe read:** `events` counts `--n` rows back from the NEWEST (default 20, `tools/oc-ledger:1382`), so a
+     **kind-filtered** read is safe — the filter runs BEFORE windowing and cannot be starved by unrelated rows. A
+     **marker-prefix** read over `--kind note` is NOT safe: by cycle close the `note` tail no longer holds the proposals,
+     and `rc=0` WITH rows reads as "none submitted" (the false-negative class, reported by lane `1a63f103`). For the
+     historical `duty4-proposal` note-mirrors (n=3555/3556/3557/3558) use a sufficient window —
+     `oc-ledger events --kind note --n 500 | grep duty4-proposal`, or `--since <cycle-start>`. Disk channel #1
+     (`ls $REVIEW_DIR/proposals/`) is authoritative and always current.
    - **Quorum / Window**: All active lanes have written their file/ledger entry OR a bounded window
      (e.g. 15–30 minutes / post-harvest boundary) expires. Lanes that submit nothing are treated as having no gaps.
 4. Validate every proposal three ways BEFORE reporting: disk truth (rule may
