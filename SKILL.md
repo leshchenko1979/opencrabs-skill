@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.162
+version: 0.4.163
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -98,7 +98,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ledger <verb>` | workers-ledger: stamp/sync/check-version/cadence/ack/enroll/roster/commit-pending/claim-ref/confirm/events — `--verbs` lists registered subcommands; unrecognized verbs emit vocabulary hints; `roster --live --role <role>` is the ROLE-RESOLUTION verb (it works; `oc-roster --role` does NOT — see the `oc-roster` row below) |
 | `./tools/oc-shadow-rotate [--dry-run]` | INTERNAL tail step of `oc-ledger sync` (standalone = manual fallback) |
 | `./tools/oc-review-persist <lens> <text\|@file\|-> [--dir DIR]` | persist a Duty-6 review report — the index line IS the "persisted" receipt |
-| `./tools/oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2] [--negative-control <bin>]` | mechanical identity + presence evidence for a Phase 6b smoke verdict; behavioral judgment stays human |
+| `./tools/oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2] [--negative-control <bin>] [--append-log [<path>]]` | mechanical identity + presence evidence for a Phase 6b smoke verdict; behavioral judgment stays human; `--append-log` is the SANCTIONED writer of the canonical `smoke-verdicts.log` (bare = the canonical absolute; a wrong path is unrepresentable, M2-2) |
 | `./tools/oc-issue-log <issue-n> <sha> [--state <text>] [--repo <slug>] [--dry-run]` | per-commit implementation comment via gh `--body-file` ONLY |
 | `./tools/oc-commit -m <msg> [--issue N] [--no-comment] [--state <dir>] [--repo <path>]` | gated commit wrapper: derives `Issue-Ref` from the actor's latest ledger claim, adds Session-Id + Issue-Ref trailers, folds in the post-commit comment |
 | `./tools/oc-ship-audit [--hours N] [--log f] [--journal-dir d] [--grace min]` | dispatch-WITHOUT-swap alarm |
