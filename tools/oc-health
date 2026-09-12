@@ -38,6 +38,7 @@ WT_PATTERNS="${OC_HEALTH_WT_PATTERNS:-/root/oc-work/* /root/oc-wt-*}"
 LOCK_MAX_AGE_H="${OC_HEALTH_LOCK_MAX_AGE_H:-24}"
 BAK_KEEP="${OC_HEALTH_BAK_KEEP:-3}"
 TMP_MAX_AGE_H="${OC_HEALTH_TMP_MAX_AGE_H:-48}"
+WATCHER_WINDOW_H="${OC_HEALTH_WATCHER_WINDOW_H:-24}"   # runtime_procs: audit window (hours); 0 = all history
 SKILL_DIR="$(cd "$TOOLS_DIR/.." && pwd)"
 LOGF="${OC_HEALTH_LOG:-$STATE/tools.log}"
 DAEMON_LOG_DIR="${OC_HEALTH_DAEMON_LOG_DIR:-$HOME/.opencrabs/profiles/$PROFILE/logs}"
@@ -186,12 +187,33 @@ selftest_impl() {
   chk "persistence-backups-pruned" 3 "$left"
   rm -f "$T/state"/workers-ledger.json.*bak*
 
-  # 8. Class: runtime_procs — unthrottled watcher detection
-  printf '{"command":"gh run watch 12345","detached_at":"2026-09-11T00:00:00Z","pid":999999}\n' > "$T/detached/test-watch.json"
+  # 8. Class: runtime_procs — unthrottled watcher detection (inside the window)
+  NOW_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"command":"gh run watch 12345","detached_at":"%s","pid":999999}\n' "$NOW_TS" > "$T/detached/test-watch.json"
   RC=0; OUT="$(run --class runtime_procs 2>&1)" || RC=$?
   chk "runtime_procs-unthrottled-rc1" 1 "$RC"
   case "$OUT" in *"unthrottled-watch"*) ok ;; *) bad "unthrottled-watch-detected: $OUT" ;; esac
-  rm -f "$T/detached/test-watch.json"
+
+  # 8b. The reported count is the real array length, never a fabricated 1.
+  #     Regression: the old `.get("violation_count")` raised on a JSON ARRAY and
+  #     the `|| echo 1` fallback made every sweep report exactly 1 violation.
+  printf '{"command":"gh run watch 12346 --exit-status","detached_at":"%s","state":"Completed"}\n' "$NOW_TS" > "$T/detached/test-watch2.json"
+  RC=0; OUT="$(run --class runtime_procs --json 2>/dev/null)" || RC=$?
+  n_reported="$(printf '%s' "$OUT" | python3 -c '
+import json, sys, re
+d = json.load(sys.stdin)
+f = [x for x in d.get("findings", []) if x.get("slug") == "unthrottled-watch"]
+m = re.match(r"^(\d+) ", f[0]["message"]) if f else None
+print(m.group(1) if m else "none")
+' 2>/dev/null)"
+  chk "runtime_procs-real-count-2" "2" "$n_reported"
+  rm -f "$T/detached/test-watch.json" "$T/detached/test-watch2.json"
+
+  # 8c. Rolling window: a violation older than the window is not re-reported
+  printf '{"command":"gh run watch 12347 --exit-status","detached_at":"2020-01-01T00:00:00Z","state":"Completed"}\n' > "$T/detached/test-watch-old.json"
+  RC=0; OUT="$(run --class runtime_procs 2>&1)" || RC=$?
+  chk "runtime_procs-old-violation-windowed-out" 0 "$RC"
+  rm -f "$T/detached/test-watch-old.json"
 
   # 9. Class: git_vcs — orphan worktree detection
   mkdir -p "$T/wt/orphan/.git"
@@ -410,12 +432,73 @@ fi
 if is_class_active "runtime_procs"; then
   # Check detached jobs & watcher discipline
   if [ -f "$TOOLS_DIR/oc-watcher-audit" ]; then
-    w_out="$(cd "$TOOLS_DIR" && ./oc-watcher-audit --dir "$DETACHED_DIR" --json 2>/dev/null)"; w_rc=$?
+    # Rolling window (defect fix 2026-09-12): only detached tasks spawned inside
+    # the last WATCHER_WINDOW_H hours are audited. Without a window a long-terminal
+    # task's violation re-alarms on every sweep forever. 0 = audit all history.
+    watcher_since=""
+    if [ "$WATCHER_WINDOW_H" -gt 0 ]; then
+      watcher_since="$(date -u -d "$WATCHER_WINDOW_H hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")"
+    fi
+    if [ "$WATCHER_WINDOW_H" -eq 0 ]; then WATCHER_SCOPE="all history"; else WATCHER_SCOPE="window ${WATCHER_WINDOW_H}h"; fi
+    if [ -n "$watcher_since" ]; then
+      w_out="$(cd "$TOOLS_DIR" && ./oc-watcher-audit --dir "$DETACHED_DIR" --since "$watcher_since" --json 2>/dev/null)"; w_rc=$?
+    else
+      w_out="$(cd "$TOOLS_DIR" && ./oc-watcher-audit --dir "$DETACHED_DIR" --json 2>/dev/null)"; w_rc=$?
+    fi
     if [ "$w_rc" = "1" ]; then
-      v_count="$(printf '%s' "$w_out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("violation_count",0))' 2>/dev/null || echo 1)"
-      add_finding 12 WARN unthrottled-watch "$v_count unthrottled or non-compliant watcher(s) in $DETACHED_DIR"
+      # oc-watcher-audit --json emits a JSON ARRAY of violation objects, never a
+      # dict — count the array. The old `.get("violation_count",0)` raised on a
+      # list and the `|| echo 1` fallback fabricated a count of 1 on every sweep.
+      # An unparseable payload is a MEASUREMENT FAILURE, never a fabricated count.
+      w_summary="$(printf '%s' "$w_out" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if isinstance(d, list):
+    kinds = {}
+    live = 0
+    for r in d:
+        if isinstance(r, dict):
+            k = r.get("violation", "UNKNOWN")
+            if r.get("live") is True:
+                live += 1
+        else:
+            k = "UNKNOWN"
+        kinds[k] = kinds.get(k, 0) + 1
+    print(len(d))
+    print(" ".join(f"{k}x{v}" for k, v in sorted(kinds.items())))
+    print(live)
+elif isinstance(d, dict):
+    print(d.get("violation_count", 0))
+    print("")
+    print(0)
+else:
+    sys.exit(1)
+' 2>/dev/null)"; w_prc=$?
+      v_count="$(printf '%s\n' "$w_summary" | sed -n '1p')"
+      v_kinds="$(printf '%s\n' "$w_summary" | sed -n '2p')"
+      v_live="$(printf '%s\n' "$w_summary" | sed -n '3p')"
+      if [ "$w_prc" != "0" ] || [ -z "$v_count" ]; then
+        FAILED=$((FAILED + 1))
+        add_finding 12 QUIRK unthrottled-watch-unparsed "oc-watcher-audit --json output not parseable — measurement failure, not a violation"
+      elif [ "$v_count" -gt 0 ]; then
+        [ -n "$v_kinds" ] && v_kinds=" [$v_kinds]"
+        v_live_note=""
+        case "$v_live" in ''|0) ;; *) v_live_note=", $v_live still running" ;; esac
+        w_scope="$WATCHER_SCOPE"
+        add_finding 12 WARN unthrottled-watch "$v_count non-compliant watcher(s)$v_kinds in $DETACHED_DIR ($w_scope$v_live_note)"
+      else
+        clean_line "watchers: compliant ($WATCHER_SCOPE)"
+      fi
     elif [ "$w_rc" = "0" ]; then
-      clean_line "watchers: compliant (throttled and nohup-free)"
+      clean_line "watchers: compliant ($WATCHER_SCOPE)"
+    elif [ "$w_rc" = "3" ]; then
+      clean_line "watchers: no detached dir at $DETACHED_DIR"
+    else
+      FAILED=$((FAILED + 1))
+      add_finding 12 QUIRK unthrottled-watch-failed "oc-watcher-audit exited $w_rc — measurement failure"
     fi
   else
     clean_line "runtime_procs: oc-watcher-audit not installed"

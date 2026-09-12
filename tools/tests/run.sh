@@ -699,12 +699,12 @@ printf '%s' "$NFOUT" | grep -q "sent=0" \
 section "oc-health (hourly health & cleanliness sweep)"
 HZ="$TOOLS_DIR/oc-health"
 # 62a. hermetic selftest: fixture state dir + tmp glob + sqlite DB + git repos,
-#      so the reaping cases run without touching live state. 25 assertions cover
-#      stale-lock reap, live-pid never-reap, backup keep-window, tmp age gate,
-#      dead-mirror reap vs live-mirror never-reap (fork #167), JSON contract,
-#      cron DM-leak vs blank-deliver_to, orphan worktrees.
+#      so the reaping cases run without touching live state. The assertion count
+#      is read from the selftest's own PASS= line (never hardcoded — a hardcoded
+#      count silently goes stale every time a case is added).
 HOUT="$(bash "$HZ" --selftest 2>&1)"; HRC=$?
-[ "$HRC" -eq 0 ] && ok "oc-health --selftest PASS (25 assertions)" \
+HN="$(printf '%s' "$HOUT" | sed -n 's/.*PASS=\([0-9]*\).*/\1/p' | tail -1)"
+[ "$HRC" -eq 0 ] && ok "oc-health --selftest PASS (${HN:-?} assertions)" \
   || bad "oc-health --selftest rc=$HRC: $(printf '%s' "$HOUT" | tail -3)"
 # 62b. read-only run must NOT mutate: no --reap, no writes; rc is 0 (clean) or 1
 #      (findings) — never 2/3 on a healthy box.
@@ -718,6 +718,16 @@ printf '%s' "$HOUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/
   || bad "oc-health --json not parseable: $(printf '%s' "$HOUT" | head -2)"
 # 62c. --help exits 0 (rc-contract row)
 bash "$HZ" --help >/dev/null 2>&1 && ok "oc-health --help rc=0" || bad "oc-health --help rc!=0"
+# 62d. watcher-window override: 0 = all history must still be a valid measurement
+#      (rc 0|1, parseable JSON) — the knob must never turn into a measurement failure.
+WOUT="$(OC_HEALTH_WATCHER_WINDOW_H=0 bash "$HZ" --class runtime_procs --json 2>&1)"; WRC=$?
+case "$WRC" in
+  0|1) ok "oc-health watcher-window override rc=$WRC (0 clean / 1 findings)" ;;
+  *)   bad "oc-health watcher-window override rc=$WRC (want 0|1)" ;;
+esac
+printf '%s' "$WOUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
+  && ok "oc-health --class runtime_procs --json parses" \
+  || bad "oc-health runtime_procs json not parseable: $(printf '%s' "$WOUT" | head -2)"
 
 # ---- 63. oc-watcher-audit (detached watcher compliance audit, Cycle 5 Review C-2)
 section "oc-watcher-audit (detached watcher compliance audit)"

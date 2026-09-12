@@ -99,6 +99,55 @@ after sloppy lanes and hide the pattern.
 - **Remediation:** Report only — never rewrite or delete audit evidence.
   Known historical non-JSON evidentiary lines (e.g. line 443 actor-correction) remain immutable.
 
+## 12. Detached watcher compliance — `WARN` (report only)
+
+- **Where:** `$HOME/.opencrabs/profiles/ops/tmp/detached/*.json` (`OC_HEALTH_DETACHED_DIR` overrides).
+- **Invariant:** No detached task inside the **rolling window** may run `gh run watch`
+  with no `--interval` (the forbidden 3s default) or at an interval other than 30/60;
+  no `nohup` launches; no hand-rolled `while … sleep` pollers.
+- **Window:** `OC_HEALTH_WATCHER_WINDOW_H` (default **24**; `0` = all history). Tasks
+  spawned before `now − N hours` are not re-audited, so a long-terminal task stops
+  re-alarming once it ages out.
+- **Count semantics:** the finding carries the **real** number of violations plus a
+  per-type breakdown (`[UNTHROTTLED_WATCHx3 NOHUP_SPAWNx1]`) and the count of
+  violations whose task state is still `Running`. A payload that cannot be parsed is
+  a **measurement failure** (`QUIRK unthrottled-watch-unparsed`, rc 3), never a
+  fabricated count.
+- **Remediation:** Report only — the audit names the offending lane; a sweep must not
+  rewrite another lane's detached-task record.
+
+## 13. Ledger JSON integrity — `URGENT` (report only)
+
+- **Where:** `$OC_DEV_STATE/workers-ledger.json`.
+- **Invariant:** File parses as JSON.
+- **Remediation:** Report only; corrupting evidence is never the fix.
+
+## 14. Ledger roster consistency — `QUIRK` (report only)
+
+- **Where:** `$OC_DEV_STATE/workers-ledger.json`.
+- **Invariant:** Every enrolled worker carries the fields the roster verbs require.
+- **Remediation:** Report only — HQ owns roster repair.
+
+## 15. Tool failure-rate — `REPORT`
+
+- **Where:** `$OC_DEV_STATE/tools.log` (`OC_HEALTH_LOG` overrides).
+- **Invariant:** For any tool with ≥10 invocations, a failure rate above 15% is reported.
+- **Remediation:** Report to operator/Toolsmith — a high-rate tool is a tool defect signal.
+
+## 16. Daemon error volume — `WARN` (report only)
+
+- **Where:** `$HOME/.opencrabs/profiles/ops/logs/opencrabs.<today>`.
+- **Invariant:** Warn above 50 ` ERROR ` lines in the current UTC day.
+- **Remediation:** Report only. A nonzero baseline is expected: ordinary non-zero tool
+  exits (`[TOOL_EXEC] … failed: code X`) are logged as errors, so the check flags
+  volume, not correctness.
+
+## 17. Issue claim structure — `REPORT`
+
+- **Where:** `$OC_DEV_STATE/workers-ledger.json` claim events.
+- **Invariant:** No open claim without an owning session uuid.
+- **Remediation:** Report to Triage/HQ, who own issue routing.
+
 ---
 
 ## Never touch (evidence / live state)

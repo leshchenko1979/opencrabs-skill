@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.150 (2026-09-12) — Design-Gate Precondition on the Autonomous Editor Goal
+
+- **Design-gate precondition (`editor.md` Phase 1 Step 0, `fleet-directives.md §Autonomous Editor Goal & Continuous Phase Execution Law`)**: The autonomous `/goal follow the skill until the smoke test phase` is issued **ONLY AFTER the owner has confirmed the design** (owner design gate, v0.4.128). Until that confirmation lands the editor stays in the design/approval phase; an early goal would carry it past the very gate that requires owner approval BEFORE code. Fixed sequence: design → owner confirms → `/goal` → continuous execution through Phase 6b. Amends v0.4.149, whose wording said "immediately upon claiming an issue".
+- **BATTERY**: 168 PASS / 0 FAIL (receipt `tools/tests/battery-last.json`, 2026-09-12T07:49:35Z).
+
 ## v0.4.149 (2026-09-12) — Autonomous Editor Goal Mandate & Full-Gate Pre-PR Testing Law
 
 - **Autonomous Editor Goal Mandate (`editor.md`, `fleet-directives.md`)**: Mandated that upon claiming/waking on an issue, editors MUST execute `/goal follow the skill until the smoke test phase` (owner order 2026-09-12). Closes the premature-stop failure mode: editors drive continuously through Phase 1 to Phase 6b smoke testing on the live swapped binary without stopping after code edits or intermediate ship legs.

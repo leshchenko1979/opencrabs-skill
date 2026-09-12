@@ -57,12 +57,15 @@ into two tiers:
 
 ### Class 2: `runtime_procs`
 - **Objects Audited:** Live processes, detached jobs (`tmp/detached/*.json`), background watchers.
+- **Window:** `OC_HEALTH_WATCHER_WINDOW_H` — rolling audit window in hours (default 24, `0` = all history).
 - **Invariants Checked:**
-  - Unthrottled `gh run watch` invocations (missing `--interval 30|60`).
-  - Banned `nohup` subshell launches.
-  - Handrolled sleep/polling loops.
+  - `gh run watch` with no `--interval` (forbidden 3s default) → `UNTHROTTLED_WATCH`.
+  - `gh run watch` at an interval other than 30/60 → `OFF_SPEC_INTERVAL`.
+  - Banned `nohup` subshell launches → `NOHUP_SPAWN`.
+  - Handrolled sleep/polling loops → `HANDROLLED_SLEEP_LOOP`.
   - Zombie/orphan background worker processes.
-- **Remediation:** Report via `QUIRK`; notify owning lanes if processes are orphaned.
+- **Count semantics:** the finding reports the real violation count, a per-type breakdown, and how many are still `Running`; an unparseable audit payload is a measurement failure (rc 3), never a fabricated count.
+- **Remediation:** Report via `WARN`; notify owning lanes if processes are orphaned.
 
 ### Class 3: `persistence`
 - **Objects Audited:** `opencrabs.db`, `workers-ledger.json`, backup artifacts.
@@ -157,7 +160,9 @@ oc-health [--class <name>|--all] [--rotate] [--status] [--reap] [--json] [--quie
 - `--reap`: Apply safe remediations (stale locks, backups > keep, dead mirrors, tmp > 48h).
 - `--json`: Output machine-readable JSON matching the cron delivery contract.
 - `--quiet`: Print only findings, suppressing clean lines.
-- `--selftest`: Hermetic offline test suite verifying all 8 classes and rotation engine.
+- `--selftest`: Hermetic offline test suite verifying all 8 classes and rotation engine (27 assertions).
+
+**Environment overrides (hermetic testing / tuning):** `OC_HEALTH_STATE`, `OC_HEALTH_FORK`, `OC_HEALTH_DB`, `OC_HEALTH_TMP_GLOB`, `OC_HEALTH_SKILL_DIR`, `OC_HEALTH_WT_PATTERNS`, `OC_HEALTH_SKIP_VERSION`, `OC_HEALTH_LOG`, `OC_HEALTH_ROTATION_FILE`, `OC_HEALTH_DETACHED_DIR`, `OC_HEALTH_WATCHER_WINDOW_H`.
 
 ---
 

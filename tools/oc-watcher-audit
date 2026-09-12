@@ -4,12 +4,24 @@
 # and background execution compliance audit.
 #
 # Scans detached task definitions in tmp/detached/*.json for policy violations:
-#   1. UNTHROTTLED_WATCH: 'gh run watch' executed without '--interval 30' or '--interval 60'
-#   2. NOHUP_SPAWN: 'nohup' used for background execution (bypasses detached tasks)
-#   3. HANDROLLED_SLEEP_LOOP: Hand-rolled 'while ... sleep' or 'for ... sleep' pollers
+#   1. UNTHROTTLED_WATCH: 'gh run watch' with NO --interval (the forbidden 3s default)
+#   2. OFF_SPEC_INTERVAL: 'gh run watch' throttled, but not at the law's 30 or 60
+#   3. NOHUP_SPAWN: 'nohup' used for background execution (bypasses detached tasks)
+#   4. HANDROLLED_SLEEP_LOOP: Hand-rolled 'while ... sleep' or 'for ... sleep' pollers
 #
 # Usage:
 #   oc-watcher-audit [--since <ts>] [--json] [--dir <dir>] | --selftest
+#
+# --since <ts>  Rolling audit window (ISO-8601). Tasks spawned BEFORE <ts> are
+#               skipped, so a long-terminal task stops re-alarming once it ages
+#               out. Timestamps are parsed as datetimes (fractional seconds and
+#               +00:00 offsets included); a task whose timestamp cannot be parsed
+#               is INCLUDED — its age is unprovable, so it is never silently
+#               dropped. Callers pass `date -u -d 'N hours ago' +%Y-%m-%dT%H:%M:%SZ`.
+#
+# --json        Emits a JSON ARRAY of violation objects (never an object), each:
+#               task_id, session_id, spawned_at, state, live, violation, detail,
+#               command. `live` is true when the recorded task state is Running.
 #
 # Exit codes:
 #   0 clean (zero violations)
@@ -148,15 +160,83 @@ JSON
   python3 -c "import json, sys; data=json.loads(sys.argv[1]); sys.exit(0 if isinstance(data, list) and len(data) == 1 else 1)" "$json_out" && json_valid=0
   assert_eq "--json outputs valid JSON array" "0" "$json_valid"
 
-  # Test 9: Missing dir -> 3
+  # Test 9: --interval 30 is compliant -> 0
+  mkdir -p "$d/t9"
+  cat > "$d/t9/ok_watch.json" <<'JSON'
+{
+  "id": "task-ok-interval",
+  "session_id": "sess-ok",
+  "task": "gh run watch 4242 --repo leshchenko1979/opencrabs --interval 30 --exit-status",
+  "spawned_at": "2026-09-11T10:00:00Z",
+  "state": "Completed"
+}
+JSON
   local rc9=0
-  "$SELF" --dir "$d/nonexistent_dir_12345" >/dev/null 2>&1 || rc9=$?
-  assert_eq "missing dir returns 3" "3" "$rc9"
+  "$SELF" --dir "$d/t9" >/dev/null 2>&1 || rc9=$?
+  assert_eq "--interval 30 is compliant" "0" "$rc9"
 
-  # Test 10: Unknown flag -> 2
+  # Test 10: off-spec interval -> 1, typed OFF_SPEC_INTERVAL (not UNTHROTTLED_WATCH)
+  mkdir -p "$d/t10"
+  cat > "$d/t10/offspec.json" <<'JSON'
+{
+  "id": "task-offspec",
+  "session_id": "sess-offspec",
+  "task": "gh run watch 4243 -R leshchenko1979/opencrabs --exit-status --interval 45 > /tmp/w.log 2>&1; echo done",
+  "spawned_at": "2026-09-11T10:00:00Z",
+  "state": "Completed"
+}
+JSON
   local rc10=0
-  "$SELF" --unknown-flag-xyz >/dev/null 2>&1 || rc10=$?
-  assert_eq "unknown flag returns 2" "2" "$rc10"
+  local out10
+  out10="$("$SELF" --dir "$d/t10" 2>/dev/null)" || rc10=$?
+  assert_eq "off-spec interval returns 1" "1" "$rc10"
+  echo "$out10" | grep -q "OFF_SPEC_INTERVAL"
+  assert_eq "reports OFF_SPEC_INTERVAL" "0" "$?"
+  echo "$out10" | grep -q "UNTHROTTLED_WATCH"
+  assert_eq "off-spec is not mislabelled UNTHROTTLED_WATCH" "1" "$?"
+
+  # Test 11: --since parses fractional-second +00:00 timestamps
+  mkdir -p "$d/t11"
+  cat > "$d/t11/old_frac.json" <<'JSON'
+{
+  "id": "task-old-frac",
+  "session_id": "sess-frac",
+  "task": "gh run watch 4244 --exit-status",
+  "spawned_at": "2020-01-01T00:00:00.123456789+00:00",
+  "state": "Completed"
+}
+JSON
+  local rc11=0
+  "$SELF" --dir "$d/t11" --since "2026-01-01T00:00:00Z" >/dev/null 2>&1 || rc11=$?
+  assert_eq "--since filters fractional +00:00 timestamps" "0" "$rc11"
+
+  # Test 12: an undated task is fail-open (age unprovable -> never silently dropped)
+  mkdir -p "$d/t12"
+  cat > "$d/t12/no_ts.json" <<'JSON'
+{
+  "id": "task-no-ts",
+  "session_id": "sess-nots",
+  "task": "gh run watch 4245 --exit-status",
+  "state": "Running"
+}
+JSON
+  local rc12=0
+  local out12
+  out12="$("$SELF" --dir "$d/t12" --since "2026-01-01T00:00:00Z" --json 2>/dev/null)" || rc12=$?
+  assert_eq "undated task is not dropped by --since" "1" "$rc12"
+  local lv=1
+  python3 -c "import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if len(d)==1 and d[0].get('live') is True and d[0].get('state')=='Running' else 1)" "$out12" && lv=0
+  assert_eq "json carries state+live for a Running task" "0" "$lv"
+
+  # Test 13: Missing dir -> 3
+  local rc13=0
+  "$SELF" --dir "$d/nonexistent_dir_12345" >/dev/null 2>&1 || rc13=$?
+  assert_eq "missing dir returns 3" "3" "$rc13"
+
+  # Test 14: Unknown flag -> 2
+  local rc14=0
+  "$SELF" --unknown-flag-xyz >/dev/null 2>&1 || rc14=$?
+  assert_eq "unknown flag returns 2" "2" "$rc14"
 
   rm -rf "$d"
   echo "oc-watcher-audit selftest: PASS=$pass FAIL=$fail"
@@ -205,7 +285,7 @@ fi
 
 # Execute audit via python3
 python3 - "$TARGET_DIR" "$SINCE" "$JSON_MODE" << 'PYEOF'
-import sys, os, glob, json, re
+import sys, os, glob, json, re, datetime
 
 target_dir = sys.argv[1]
 since_ts = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -216,11 +296,17 @@ def check_task(task_text):
     if not task_text:
         return violations
     
-    # 1. gh run watch
-    if re.search(r'\bgh\s+run\s+watch\b', task_text):
-        if not re.search(r'(--help\b|-h\b)', task_text):
-            if not re.search(r'(--interval\s+(30|60)\b|--interval=(30|60)\b|-i\s+(30|60)\b|-i=(30|60)\b)', task_text):
-                violations.append(("UNTHROTTLED_WATCH", "gh run watch lacking --interval 30|60"))
+    # 1. gh run watch — scoped to the watch command's own segment so an unrelated
+    #    '-i N' later in a compound command cannot be mistaken for its interval.
+    mw = re.search(r'\bgh\s+run\s+watch\b(.*)', task_text, re.S)
+    if mw:
+        seg = re.split(r'[;\n|]|&&|\s&\s', mw.group(1), 1)[0]
+        if not re.search(r'(--help\b|-h\b)', seg):
+            mi = re.search(r'(?:--interval[= ]|-i[= ])(\d+)', seg)
+            if mi is None:
+                violations.append(("UNTHROTTLED_WATCH", "gh run watch with no --interval (forbidden 3s default)"))
+            elif mi.group(1) not in ("30", "60"):
+                violations.append(("OFF_SPEC_INTERVAL", "gh run watch --interval %s (law: 30 or 60)" % mi.group(1)))
                 
     # 2. nohup
     if re.search(r'\bnohup\b', task_text):
@@ -231,6 +317,50 @@ def check_task(task_text):
         violations.append(("HANDROLLED_SLEEP_LOOP", "hand-rolled sleep loop in background task"))
         
     return violations
+
+def parse_ts(value):
+    """Parse an ISO-8601 timestamp to an aware datetime, or None if undecidable."""
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    for attempt in (candidate,):
+        try:
+            return datetime.datetime.fromisoformat(attempt)
+        except Exception:
+            pass
+    # Tolerant fallback for shapes fromisoformat rejects on older interpreters:
+    # truncate fractional seconds to 6 digits and normalise a '+0000' offset.
+    m = re.match(r'^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$', raw)
+    if not m:
+        return None
+    frac = (m.group(2) or "")[:7]
+    tz = m.group(3) or "+00:00"
+    if tz == "Z":
+        tz = "+00:00"
+    elif re.fullmatch(r'[+-]\d{4}', tz):
+        tz = tz[:3] + ":" + tz[3:]
+    try:
+        return datetime.datetime.fromisoformat(m.group(1) + frac + tz)
+    except Exception:
+        return None
+
+def in_window(spawned_at, since_dt, since_ts):
+    """True when the task is inside the audit window. Fail-open: an undecidable or
+    missing timestamp is INCLUDED (age cannot be proven, so never silently dropped)."""
+    if since_dt is None or not spawned_at:
+        return True
+    dt = parse_ts(spawned_at)
+    if dt is not None:
+        try:
+            return dt >= since_dt
+        except TypeError:
+            pass  # naive vs aware — fall through to the lexicographic guard
+    return not (str(spawned_at) < since_ts)
+
+since_dt = parse_ts(since_ts)
 
 task_files = glob.glob(os.path.join(target_dir, "*.json"))
 results = []
@@ -245,10 +375,11 @@ for file_path in task_files:
         
     task_id = str(data.get("id", os.path.basename(file_path).replace(".json", "")))
     session_id = str(data.get("session_id", "unknown"))
-    spawned_at = str(data.get("spawned_at", data.get("created_at", "")))
+    spawned_at = str(data.get("spawned_at", data.get("created_at", data.get("detached_at", ""))))
+    state = str(data.get("state", "")).strip()
     task_cmd = str(data.get("task", data.get("command", "")))
     
-    if since_ts and spawned_at and spawned_at < since_ts:
+    if not in_window(spawned_at, since_dt, since_ts):
         continue
         
     total_checked += 1
@@ -258,6 +389,8 @@ for file_path in task_files:
             "task_id": task_id,
             "session_id": session_id,
             "spawned_at": spawned_at,
+            "state": state,
+            "live": state.lower() == "running",
             "violation": vtype,
             "detail": detail,
             "command": task_cmd.strip().replace("\n", " ")[:120]
@@ -267,9 +400,9 @@ if json_mode:
     print(json.dumps(results, indent=2))
 else:
     if results:
-        print(f"TASK_ID\tSESSION_ID\tSPAWNED_AT\tVIOLATION\tDETAIL\tCOMMAND")
+        print(f"TASK_ID\tSESSION_ID\tSPAWNED_AT\tLIVE\tVIOLATION\tDETAIL\tCOMMAND")
         for r in results:
-            print(f"{r['task_id']}\t{r['session_id']}\t{r['spawned_at']}\t{r['violation']}\t{r['detail']}\t{r['command']}")
+            print(f"{r['task_id']}\t{r['session_id']}\t{r['spawned_at']}\t{r['live']}\t{r['violation']}\t{r['detail']}\t{r['command']}")
         print(f"\nAudit alarm: {len(results)} violations found across {total_checked} detached tasks checked.")
     else:
         print(f"Audit clean: 0 violations found across {total_checked} detached tasks checked.")
