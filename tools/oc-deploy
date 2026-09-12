@@ -330,13 +330,16 @@ recover_receipt_run() { # [--journal PATH] [--run R] [--sha S] [--dry-run] [--js
   [ -n "$run" ] || run="$jrun"
   [ -n "$sha" ] || sha="$jsha"
 
-  local cur existing reason="" ok=1
+  local cur existing reason="" ok=1 superseded=0
   cur="$(cat "$DEPLOYED" 2>/dev/null || echo MISSING)"
   if [ "$has_receipt" != 0 ]; then reason="journal already carries a receipt step — swap completed, nothing to recover"; ok=0
   elif [ "$has_install" = 0 ]; then reason="journal has no install exit=0 — the swap never installed; refusing to stamp"; ok=0
   elif [ "$has_marker" = 0 ]; then reason="journal has no marker-write exit=0 — markers never written; refusing to stamp"; ok=0
   elif [ -z "$sha" ]; then reason="journal names no deployed sha (and --sha not given) — cannot judge"; ok=0
-  elif [ "$cur" != "$sha" ]; then reason="deployed.sha ($cur) != journal sha ($sha) — a later swap superseded this one; refusing to stamp"; ok=0
+  elif [ "$cur" != "$sha" ]; then
+    if [ "$hist" = 1 ]; then superseded=1
+    else reason="deployed.sha ($cur) != journal sha ($sha) — a later swap superseded this one; refusing to stamp (pass --historical to record it as a superseded swap)"; ok=0
+    fi
   fi
   if [ "$ok" = 1 ]; then
     existing="$(jq -r --arg s "sha=$sha" --arg r "run=$run" \
@@ -363,10 +366,12 @@ recover_receipt_run() { # [--journal PATH] [--run R] [--sha S] [--dry-run] [--js
     [ "$json" = 1 ] || echo "verdict:      RECOVERABLE (dry-run — no stamp written)"
     return 0
   fi
+  local kw="RECOVERED" note=""
+  [ "$superseded" = 1 ] && { kw="SUPERSEDED"; note=" (superseded by a later swap — deployed.sha is now $cur)"; }
   ledger_stamp "oc-deploy recover-receipt" \
-    "swap-result RECOVERED sha=$sha run=$run: install(exit=0)+marker-write(exit=0) present but the receipt step was lost to a truncated run; row reconstructed post-hoc from journal=$jf (v0.4.153 cgroup-kill defect)" \
+    "swap-result $kw sha=$sha run=$run: install(exit=0)+marker-write(exit=0) present but the receipt step was lost to a truncated run; row reconstructed post-hoc from journal=$jf$note (v0.4.153 cgroup-kill defect)" \
     "swap-result"
-  [ "$json" = 1 ] || echo "verdict:      RECOVERED — swap-result row stamped"
+  [ "$json" = 1 ] || echo "verdict:      $kw — swap-result row stamped"
   return 0
 }
 
