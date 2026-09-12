@@ -437,6 +437,8 @@ before `oc-commit`; a fmt failure is a diagnostic to fix and re-run — never a
 hard abort ahead of git (that forces manual trailers + a hand-posted
 implementation comment).
 
+**Local fmt drift on files you did NOT touch is EXPECTED — and it is not yours to fix (SKILL.md §Box law; sharpened 2026-09-12, lane `462181e9` re-derived it from scratch because this rule lives in the box-law bullet while the check runs here).** The `/usr/local/bin/rustfmt` wrapper is **NEWER than CI's rustfmt**, so it flags cosmetic diffs on **CI-green committed code**. Rule: **KEEP AS-IS; fix only formatting artifacts you introduced yourself.** Two mechanics that make foreign drift look like your defect — (a) the wrapper **RECURSES through `mod.rs` into child modules**, so `--check src/tests/mod.rs` reports diffs from files your branch never touched; (b) `--skip-children` is **not supported** by this wrapper, and a `mod.rs` copied to /tmp fails to resolve its child modules. Isolation recipe: **check each TOUCHED file as a standalone copy; never `--check mod.rs` itself.** Do not spend three receipts re-deriving this — if fmt reports a file your diff does not contain, the answer is this paragraph.
+
 **Post-fmt scope audit BEFORE staging (Duty-4 P7, v0.4.80):** after any fmt
 pass, audit the diff before staging — rustfmt can reformat unrelated
 pre-existing lines (2026-09-01: flow.rs:418); revert out-of-scope hunks and
