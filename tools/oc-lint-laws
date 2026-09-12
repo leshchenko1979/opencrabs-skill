@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-lint-laws — M2-18: law-vs-tool CORPUS LINT (HQ mechanical audit, n=3845).
+#
+# LAW TEXT NAMES TOOLS AND FLAGS. Nothing checked that those verbs and flags
+# exist. Two phantom invocations reached editors and cost real time —
+# `oc-ship-chain --resume` and `oc-ledger stamp proposal` — both found by an
+# editor RUNNING the dead verb, never by a check. This tool is the check.
+#
+# PREDICATE — deliberately conservative: a linter that cries wolf gets ignored,
+# and a false accusation against a correct law is worse than a miss.
+#
+# AN INVOCATION IS SCOPED TO ITS MARKDOWN UNIT, not to the line. Outside a code
+# fence only BACKTICK SPANS are scanned; inside a fence the whole line is one
+# unit. That is what makes this usable — the first two drafts scoped to the
+# line and reported 40 then 13 findings on a corpus that was clean, every one of
+# them noise from a flag that belonged to a DIFFERENT command further along the
+# same line (`cargo test --locked` after `oc-prchecks`; `--gated-run` after
+# `oc-deploy`). A span is what a reader copies, so a span is what is checked.
+#
+#   PHANTOM-FLAG : a span invokes `oc-tool --flag`, and the tool's OWN SOURCE
+#                  contains ZERO occurrences of `--flag`. It cannot accept it.
+#                  (Catches the `--resume` class exactly.)
+#   PHANTOM-VERB : `oc-tool verb --flag`, the tool dispatches subcommands, and
+#                  its source contains ZERO occurrences of `verb`.
+#   UNKNOWN-TOOL : a span invokes `oc-tool` and no such file exists.
+#
+# CITATIONS. A law that says "there is no `--resume` flag" is naming a phantom
+# on purpose, and failing it would make the lint unusable — the incident table
+# that RECORDS the family would itself fail forever. So when the line carries a
+# strong absence marker (never existed · does not exist · no such · 0/zero
+# occurrences · phantom · unavailable · is rejected · rejected with rc ·
+# silently ignored) the hit is downgraded to a CITATION: counted, printable with
+# --show-citations, and EXIT-NEUTRAL. This is a heuristic and its false-negative
+# window is real — a prescription on a line that also says "phantom" is
+# suppressed. The markers are deliberately narrow; `Do not forget to run X` does
+# NOT suppress (asserted in the selftest).
+#
+# KNOWN means the tool's source mentions the flag anywhere (default) or — with
+# --strict — declares it as a case arm (`^\s+--flag)`). Default under-reports;
+# --strict catches a flag documented in prose but never wired.
+#
+# NOT checked: shell syntax, argument ORDER, value shapes, or whether a flag
+# means what the law says. This verifies EXISTENCE, nothing more.
+#
+# Env: OC_LINT_LAWS_TOOLS_DIR  (TEST HOOK — point the tool scan at a fixture
+#     tools/ dir. It exists so the selftest never depends on the live corpus.)
+#
+# Exit: 0 clean / 1 findings / 2 usage / 3 tools dir or named corpus file missing
+# =============================================================================
+set -u
+set -o pipefail
+
+# Unified tools log (one JSONL line on exit) — mandatory for every live tool.
+# The selftest's temp dir is cleaned from the SAME trap: a `trap ... EXIT` set
+# inside a function REPLACES a top-level one, so a second trap would silently
+# displace the logger for the whole selftest run.
+_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-lint-laws" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?; [ -n "${ST_TMPDIR:-}" ] && rm -rf "$ST_TMPDIR"' EXIT
+
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+TOOLS_DIR="${OC_LINT_LAWS_TOOLS_DIR:-$(dirname "$SELF")}"
+SKILL_DIR="$(dirname "$TOOLS_DIR")"
+
+# The LAW corpus: the skill's normative markdown. Two exclusions, both
+# deliberate — CHANGELOG.md and war-stories.md quote historical invocations that
+# were correct when written and may legitimately name a retired flag; failing on
+# history makes the lint unusable. Law files are the live contract.
+DEFAULT_CORPUS="SKILL.md fleet-directives.md editor.md editor-phase7-rules.md editor-upstream-pr.md hq.md triage.md toolsmith.md review-lenses.md upstream-merge-runbook.md s2-swap-journal-spec.md"
+
+usage() { awk 'NR>2 && /^#/ { sub(/^# ?/, ""); print; next } NR>2 { exit }' "$SELF"; exit 0; }
+
+FILES=""; JSON=0; STRICT=0; SHOWCIT=0; MODE=scan
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --file)   FILES="${FILES} ${2:?--file needs a path}"; shift 2 ;;
+    --strict) STRICT=1; shift ;;
+    --json)   JSON=1; shift ;;
+    --show-citations) SHOWCIT=1; shift ;;
+    --help|-h) usage ;;
+    --selftest) MODE=selftest; shift ;;
+    *) printf 'oc-lint-laws: unknown arg: %s (see --help)\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
+FINDINGS=0; CITATIONS=0
+OUT=""; OUTJ=""; OUTC=""
+
+add() { # $1=file $2=line $3=class $4=tool $5=token $6=detail
+  FINDINGS=$((FINDINGS + 1))
+  OUT="${OUT}${1}:${2}: ${3} ${4} ${5} — ${6}
+"
+  OUTJ="${OUTJ}$(printf '{"file":"%s","line":%s,"class":"%s","tool":"%s","token":"%s"}' "$1" "$2" "$3" "$4" "$5")
+"
+}
+
+add_cit() { # $1=file $2=line $3=tool $4=flag
+  CITATIONS=$((CITATIONS + 1))
+  OUTC="${OUTC}${1}:${2}: CITATION ${3} ${4} — the law names this flag as absent (it has zero occurrences in the tool)
+"
+}
+
+# A law line that DOCUMENTS an absence is a citation, not a prescription.
+citation_line() { # $1=file $2=line
+  sed -n "$2p" "$1" 2>/dev/null | grep -qE 'never existed|does not exist|no such|0 occurrences|zero occurrences|phantom|unavailable|is rejected|rejected with rc|silently ignored'
+}
+
+flag_known() { # $1=tool src  $2=flag
+  if [ "$STRICT" = 1 ]; then
+    grep -qE "^[[:space:]]*$2\)" "$1" 2>/dev/null
+  else
+    grep -qF -- "$2" "$1" 2>/dev/null
+  fi
+}
+
+dispatches() { grep -qE '^[[:space:]]*[a-z][a-z0-9-]*\)' "$1" 2>/dev/null; }
+
+# ---------------------------------------------------------------------------
+# SELFTEST — fixture-based. Never touches the live corpus, never writes the
+# live home. The tool is re-invoked as a SUBPROCESS with --file (no recursion
+# into --selftest), against a fixture tools/ dir via the OC_LINT_LAWS_TOOLS_DIR
+# test hook.
+# ---------------------------------------------------------------------------
+_selftest_impl() {
+  local T; T="$(mktemp -d "${TMPDIR:-/tmp}/oc-lint-laws-st.XXXXXX")" || { echo "selftest: mktemp failed"; return 3; }
+  # Cleanup runs from the GLOBAL exit trap (see the top of this file), not from
+  # a trap set here: a function-level EXIT trap would replace the logger's. The
+  # var must be global-ish for the trap to see it, and `${ST_TMPDIR:-}` guards
+  # the case where the trap fires before this assignment (set -u).
+  ST_TMPDIR="$T"
+  local pass=0 fail=0
+  ok()  { pass=$((pass + 1)); printf 'ok   - %s\n' "$1"; }
+  bad() { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
+
+  # run <fixture> [extra args] -> sets RC and OUTP
+  RC=0; OUTP=""; ERR=""
+  run() { # $1=fixture  rest=extra args — stdout and stderr captured SEPARATELY:
+    # the split matters, because a CLEAN run writes its "clean" line to STDERR,
+    # and merging the streams made the empty-stdout assertion fail on a clean run.
+    local fx="$1"; shift
+    OUTP="$(OC_LINT_LAWS_TOOLS_DIR="$T/tools" bash "$SELF" --file "$fx" "$@" 2>"$T/err")"; RC=$?
+    ERR="$(cat "$T/err")"
+  }
+  # chk <name> <want-rc> <want-needle> [<forbid-needle>]
+  chk() {
+    if [ "$RC" != "$2" ]; then bad "$1 (rc=$RC want=$2)"; return; fi
+    if [ -n "$3" ] && ! { printf '%s\n%s' "$OUTP" "$ERR"; } | grep -qF -- "$3"; then bad "$1 (missing: $3)"; return; fi
+    if [ -n "${4:-}" ] && { printf '%s\n%s' "$OUTP" "$ERR"; } | grep -qF -- "$4"; then bad "$1 (unexpected: $4)"; return; fi
+    ok "$1"
+  }
+
+  mkdir -p "$T/tools"
+  cat > "$T/tools/oc-good" <<'EOT'
+usage: oc-good [--alpha] [--beta]
+  stamp   stamp a row
+case "$1" in
+  stamp) shift ;;
+  --alpha) shift ;;
+  --beta) shift ;;
+esac
+EOT
+  cat > "$T/tools/oc-noverb" <<'EOT'
+usage: oc-noverb [--alpha]
+case "$1" in
+  --alpha) shift ;;
+esac
+EOT
+
+  printf 'Recover with `oc-good --resume <id>` before re-running the chain.\n'            > "$T/planted-flag.md"
+  printf 'Then `oc-good propose --alpha` writes the ledger row.\n'                        > "$T/planted-verb.md"
+  printf 'Run `oc-nope --alpha` to do the thing.\n'                                       > "$T/unknown-tool.md"
+  printf 'Run `oc-good stamp --alpha`, then `oc-good --beta`.\n'                          > "$T/clean.md"
+  printf '`oc-good` executes the stamp and never looks back.\n'                           > "$T/prose.md"
+  printf 'There is no `oc-good --resume` flag - it never existed (0 occurrences).\n'      > "$T/citation.md"
+  printf 'Dispatches `oc-good` (`cargo test --locked --all-features`).\n'                 > "$T/cargo-span.md"
+  printf '`oc-good`'"'"'s `--gamma` flag is rejected with rc 2.\n'                        > "$T/possessive.md"
+  printf 'Do not forget to run `oc-good --bogus` before you start.\n'                     > "$T/weak-negation.md"
+  cat > "$T/fence.md" <<'EOT'
+Recovery:
+
+```bash
+oc-good --resume <id>
+```
+EOT
+
+  # --- the checks that must FAIL loudly when the law is wrong ---------------
+  run "$T/planted-flag.md";  chk "planted phantom flag -> rc 1"        1 "PHANTOM-FLAG oc-good --resume"
+  run "$T/planted-verb.md";  chk "planted phantom verb -> rc 1"        1 "PHANTOM-VERB oc-good propose"
+  run "$T/unknown-tool.md";  chk "unknown tool -> rc 1"                1 "UNKNOWN-TOOL oc-nope"
+  run "$T/fence.md";         chk "invocation inside a fence -> rc 1"   1 "PHANTOM-FLAG oc-good --resume"
+  run "$T/weak-negation.md"; chk "weak negation does NOT suppress"     1 "PHANTOM-FLAG oc-good --bogus"
+
+  # --- the checks that must stay SILENT (the false-positive wall) ----------
+  run "$T/clean.md";       chk "clean corpus -> rc 0"                 0 "" ""
+  run "$T/prose.md";       chk "prose mention -> rc 0"                0 "" "PHANTOM"
+  run "$T/citation.md";    chk "documented-absent flag -> rc 0"       0 "" "PHANTOM-FLAG"
+  run "$T/cargo-span.md";  chk "foreign tool flag in another span"    0 "" "PHANTOM"
+  run "$T/possessive.md";  chk "possessive is not a tool name"        0 "" "UNKNOWN-TOOL"
+
+  # citations are counted and printable, just not failing
+  run "$T/citation.md" --show-citations
+  if printf '%s' "$OUTP" | grep -qF "CITATION oc-good --resume"; then ok "citation is reported with --show-citations"; else bad "citation not reported with --show-citations"; fi
+  run "$T/clean.md" --json
+  if [ "$RC" = 0 ] && [ -z "$OUTP" ]; then ok "--json on a clean corpus is empty, rc 0"; else bad "--json clean (rc=$RC stdout=$OUTP)"; fi
+
+  # The live false positive, as a regression guard: a flag five tokens past the
+  # tool token belongs to prose, not to that tool.
+  printf 'standalone `oc-good` stays the fallback only when --gamma is unavailable.\n' > "$T/wide-gap.md"
+  run "$T/wide-gap.md"; chk "flag 5 tokens past the tool is NOT attributed" 0 "" "oc-good --gamma"
+
+  # --- usage / arg contract ------------------------------------------------
+  run "$T/clean.md" --bogus-arg; chk "unknown arg -> rc 2" 2 "unknown arg"
+  OUTP="$(OC_LINT_LAWS_TOOLS_DIR="$T/tools" bash "$SELF" --file "$T/nope.md" 2>&1)"; RC=$?
+  chk "missing corpus file -> rc 3 (never a silent empty verdict)" 3 ""
+
+  printf 'selftest: %d passed, %d failed\n' "$pass" "$fail"
+  [ "$fail" = 0 ] || return 1
+  return 0
+}
+
+if [ "$MODE" = selftest ]; then
+  _selftest_impl; exit $?
+fi
+
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
+[ -d "$TOOLS_DIR" ] || { printf 'oc-lint-laws: tools dir missing: %s\n' "$TOOLS_DIR" >&2; exit 3; }
+
+ABS=""
+for f in ${FILES:- $DEFAULT_CORPUS}; do
+  case "$f" in
+    /*) p="$f" ;;
+    *)  p="$SKILL_DIR/$f" ;;
+  esac
+  # A probe against a path that does not exist returns silence, not a verdict —
+  # so a missing corpus file is a HARD error, never an empty clean run.
+  [ -r "$p" ] || { printf 'oc-lint-laws: corpus file missing or unreadable: %s\n' "$p" >&2; exit 3; }
+  ABS="$ABS $p"
+done
+
+# GAPMAX bounds how far a flag may sit from the tool token that owns it. An
+# invocation is `oc-tool [verb] [value] --flag`, so 3 covers verb+value; a wider
+# gap means the line moved on to PROSE and the flag belongs to a DIFFERENT
+# command. Live case: "standalone oc-index-worktree stays the fallback only when
+# --create is unavailable" — that --create is oc-wt's, named three lines earlier,
+# and oc-index-worktree does not declare it. Gap 5 correctly refuses to attribute.
+CANDS="$(awk -v GAPMAX=3 '
+  { line = $0
+    if (line ~ /^[ \t]*(```|~~~)/) { fence = !fence; next }
+    if (fence) { unit(line, FNR, FILENAME); next }
+    n = split(line, parts, "`")
+    for (i = 2; i <= n; i += 2) unit(parts[i], FNR, FILENAME)
+    next }
+  function unit(u, ln, fn,   m, i, tok, t, f) {
+    gsub(/[",;:()\[\]`]/, " ", u)
+    m = split(u, toks, /[ \t]+/)
+    cur = ""; pv = ""; gap = 0; seenf = 0
+    for (i = 1; i <= m; i++) {
+      tok = toks[i]
+      sub(/[.,*!?]+$/, "", tok)
+      if (tok == "") continue
+      if (tok ~ /^oc-[a-z0-9]/) { t = tok; sub(/[^a-z0-9-].*$/, "", t); cur = t; pv = ""; gap = 0; seenf = 0; continue }
+      if (cur == "") continue
+      if (tok ~ /^--[a-z0-9]/) {
+        f = tok; sub(/=.*$/, "", f)
+        printf "%s\t%d\t%s\t%s\t%s\n", fn, ln, cur, f, (seenf ? "" : pv)
+        seenf = 1; pv = ""; gap = 0; continue
+      }
+      if (tok ~ /^[a-z][a-z0-9-]*$/) { if (gap == 0) pv = tok; gap++; if (gap > GAPMAX) cur = ""; continue }
+      gap++; if (gap > GAPMAX) cur = ""
+    }
+  }
+' $ABS)"
+
+SEEN_UNKNOWN=""
+OLDIFS="$IFS"; IFS='
+'
+for cand in $CANDS; do
+  IFS="$(printf '\t')" read -r cfile cln ctool cflag cverb <<EOC
+$cand
+EOC
+  [ -n "${ctool:-}" ] || continue
+  rel="${cfile#"$SKILL_DIR"/}"
+  if [ ! -f "$TOOLS_DIR/$ctool" ]; then
+    key="$cfile:$cln:$ctool"
+    case " $SEEN_UNKNOWN " in *" $key "*) continue ;; esac
+    SEEN_UNKNOWN="$SEEN_UNKNOWN $key"
+    add "$rel" "$cln" "UNKNOWN-TOOL" "$ctool" "$cflag" "no such file in tools/ — the law invokes a tool that does not exist"
+    continue
+  fi
+  if ! flag_known "$TOOLS_DIR/$ctool" "$cflag"; then
+    if citation_line "$cfile" "$cln"; then
+      add_cit "$rel" "$cln" "$ctool" "$cflag"
+    else
+      add "$rel" "$cln" "PHANTOM-FLAG" "$ctool" "$cflag" "the tool's source contains ZERO occurrences of this flag"
+    fi
+  fi
+  if [ -n "${cverb:-}" ] && dispatches "$TOOLS_DIR/$ctool" && ! grep -qF -- "$cverb" "$TOOLS_DIR/$ctool" 2>/dev/null; then
+    add "$rel" "$cln" "PHANTOM-VERB" "$ctool" "$cverb" "the tool's source contains ZERO occurrences of this verb"
+  fi
+done
+IFS="$OLDIFS"
+
+if [ "$JSON" = 1 ]; then
+  [ -n "$OUTJ" ] && printf '%s' "$OUTJ"
+else
+  [ -n "$OUT" ] && printf '%s' "$OUT"
+  [ "$SHOWCIT" = 1 ] && [ -n "$OUTC" ] && printf '%s' "$OUTC"
+fi
+
+if [ "$FINDINGS" -gt 0 ]; then
+  printf 'oc-lint-laws: %d finding(s) — the law names a verb or flag the tool does not have\n' "$FINDINGS" >&2
+  exit 1
+fi
+printf 'oc-lint-laws: clean — every oc-* invocation in the law corpus resolves against its tool (%d documented-absent citation(s) skipped)\n' "$CITATIONS" >&2
+exit 0
