@@ -19,6 +19,8 @@
 #   oc-deploy status [--json]            # read-only deployment / daemon state summary
 #   (contributors RETIRED v0.4.91 — use oc-attrib --contributors)
 #   oc-deploy fanout --run <id> [--dry-run]   # issue #24: mechanical notify fan-out
+#   oc-deploy lineage-check [--prev P] [--sha S] [--repo R] [--json]
+#                                        # read-only swap-guard verdict (v0.4.151)
 #   oc-deploy --selftest
 #
 # S2 WIRING (2026-08-28, per s2-swap-journal-spec.md + owner tool-logging law):
@@ -42,6 +44,33 @@
 #     GREEN carrier run + artifact verify IS the authorization -> auto-swap.
 #     Post-SMOKE-FAIL rollback stays the owner's call (no auto-rollback there);
 #     the swap-chain auto-rollback on post-bounce verify fail is unchanged.
+#
+# LINEAGE GUARD (v0.4.148 ancestry; REBASE-AWARE v0.4.151):
+#   swap-execute refuses to install an incoming sha that does not CARRY the
+#   currently deployed change — that is what stops a stale/delayed build from
+#   regressing the live binary. A fork-main rebase REWRITES shas and orphans
+#   the deployed commit, so the v0.4.148 ancestry-only test refused EVERY
+#   legitimate post-rewrite swap: fleet-blocking, reported 2026-09-12.
+#   Verdicts:
+#     monotonic — PREV is an ancestor of SHA -> accept (fast path, unchanged)
+#     rewritten — PREV orphaned, but a commit in merge-base(PREV,SHA)..SHA has
+#                 the SAME patch-id -> accept; journal reason
+#                 rewrite-equivalent-swap + rewritten_twin
+#     absent    — both objects exist and PREV's change is genuinely NOT carried
+#                 -> refuse rc 2, journal non-monotonic-swap, stderr token
+#                 OC_DEPLOY_SWAP_GUARD=stale-build
+#     unknown   — either object missing from OC_DEPLOY_REPO -> guard SKIPPED
+#                 (pre-v0.4.151 "if both exist" behaviour preserved)
+#   POST-REWRITE LANE RUNBOOK: after a rebase, just re-run the oc-ship-chain
+#   leg — the swap is accepted automatically as rewrite-equivalent-swap.
+#   NEVER hand-edit deployed.sha to re-point around a refusal (that is exactly
+#   the regression the guard exists to catch). Diagnose read-only with
+#   `oc-deploy lineage-check [--prev P] [--sha S] [--repo R] [--json]`
+#   (rc 0 monotonic|rewritten, rc 2 absent|unknown; prints verdict, twin and
+#   next step). A deliberate, audited regression uses
+#   `--allow-rewritten-lineage "<justification>" [--actor A]` — justification
+#   is MANDATORY (bare flag -> rc 2, OC_DEPLOY_GATE=override-needs-justification)
+#   and acceptance is journaled with justification + actor.
 #
 # HARD SAFETY RULES (v0.4.27 + S2):
 #   - Plan-only UNLESS --execute. Every planned action prints as "PLAN: ...".
@@ -125,6 +154,85 @@ LAUNCH="${OC_SWAP_LAUNCH:-systemd-run --user}"
 
 die() { echo "oc-deploy: $2" >&2; exit "$1"; }
 plan() { echo "PLAN: $*"; }
+
+# ------------------------------------------------- lineage verdict (v0.4.151) --
+# Rebase-aware swap-guard decision. A fork-main rebase REWRITES shas: the
+# currently deployed sha is left orphaned (it is no longer an ancestor of the
+# incoming build) even though its CHANGE is fully present under a new sha. The
+# pre-v0.4.151 guard tested ancestry only, so after every rewrite it refused
+# EVERY legitimate forward swap — fleet-blocking (reported 2026-09-12).
+#
+#   monotonic  PREV is an ancestor of SHA                    -> accept
+#   rewritten  PREV is orphaned, but a commit in BASE..SHA carries the SAME
+#              patch-id (identical change, new sha)           -> accept (twin sha printed)
+#   absent     both objects exist and PREV's change is genuinely NOT in SHA's
+#              lineage (a real stale/delayed build)           -> refuse
+#   unknown    one of the objects is not in this repo — cannot judge -> skip
+#              (preserves the pre-v0.4.151 "if both exist" behaviour)
+#
+# Prints "<verdict> <twin-sha-or-empty>" on stdout. Always rc 0.
+lineage_verdict() { # <repo> <prev_sha> <sha>
+  local repo="$1" prev="$2" sha="$3" base pid twin
+  git -C "$repo" cat-file -e "$prev^{commit}" 2>/dev/null || { echo "unknown "; return 0; }
+  git -C "$repo" cat-file -e "$sha^{commit}"  2>/dev/null || { echo "unknown "; return 0; }
+  if git -C "$repo" merge-base --is-ancestor "$prev" "$sha" 2>/dev/null; then
+    echo "monotonic "; return 0
+  fi
+  # Fast path failed. Compare CONTENT: the deployed commit's patch-id vs every
+  # commit in the incoming lineage since the fork point (single pass).
+  pid="$(git -C "$repo" show "$prev" 2>/dev/null | git patch-id --stable 2>/dev/null | awk '{print $1}')"
+  [ -n "$pid" ] || { echo "absent "; return 0; }
+  base="$(git -C "$repo" merge-base "$prev" "$sha" 2>/dev/null || true)"
+  [ -n "$base" ] || { echo "absent "; return 0; }
+  twin="$(git -C "$repo" log -p --no-merges --format='commit %H' "$base..$sha" 2>/dev/null \
+    | git patch-id --stable 2>/dev/null | awk -v p="$pid" '$1==p {print $2; exit}')"
+  [ -n "$twin" ] && { echo "rewritten $twin"; return 0; }
+  echo "absent "
+  return 0
+}
+
+# Post-rewrite runbook line, shared by the guard and the lineage-check verb.
+lineage_next_step() { # <verdict> <prev> <sha> <twin>
+  case "$1" in
+    monotonic) echo "next: proceed — the incoming build is a descendant of the deployed sha." ;;
+    rewritten) echo "next: proceed — the deployed change is preserved as $4 in the incoming lineage (accepted automatically; no action needed)." ;;
+    absent)    echo "next: DO NOT swap. The incoming build does not carry the deployed change. Re-dispatch a fresh build from fork main (oc-ship-chain), or, if the regression is intentional and audited, re-run with --allow-rewritten-lineage \"<justification>\"." ;;
+    unknown)   echo "next: cannot judge — $2 or $3 is not an object in this repo. Check OC_DEPLOY_REPO and that both shas were fetched." ;;
+  esac
+}
+
+lineage_check_run() { # [--prev P] [--sha S] [--repo R] [--json]
+  local repo="${OC_DEPLOY_REPO:-/root/opencrabs}" prev="" sha="" json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --prev) prev="${2:-}"; shift ;;
+      --sha)  sha="${2:-}";  shift ;;
+      --repo) repo="${2:-}"; shift ;;
+      --json) json=1 ;;
+      *) die 1 "lineage-check: unknown arg: $1" ;;
+    esac
+    shift || true
+  done
+  [ -n "$prev" ] || prev="$(cat "$DEPLOYED" 2>/dev/null || true)"
+  [ -n "$sha" ]  || sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$prev" ] || die 1 "lineage-check: no deployed sha (pass --prev)"
+  [ -n "$sha" ]  || die 1 "lineage-check: cannot resolve --sha (pass it explicitly)"
+  local out kind twin
+  out="$(lineage_verdict "$repo" "$prev" "$sha")"
+  kind="${out%% *}"; twin="${out#* }"
+  if [ "$json" = 1 ]; then
+    jq -cn --arg v "$kind" --arg p "$prev" --arg s "$sha" --arg t "$twin" --arg r "$repo" \
+      '{verdict:$v, current_deployed:$p, incoming_sha:$s, rewritten_twin:$t, repo:$r}'
+  else
+    echo "repo:              $repo"
+    echo "current_deployed:  $prev"
+    echo "incoming_sha:      $sha"
+    echo "verdict:           $kind"
+    [ "$kind" = "rewritten" ] && echo "rewritten_twin:    $twin"
+    lineage_next_step "$kind" "$prev" "$sha" "$twin"
+  fi
+  case "$kind" in monotonic|rewritten) return 0 ;; *) return 2 ;; esac
+}
 stage() { jq -r '.meta.oc_deploy_stage // "S0"' "$LEDGER" 2>/dev/null || echo S0; }
 shadow_log() { # <op> <sha> <features> <result>
   printf '%s\t%s\t%s\t%s\t%s\tstage=%s\n' \
@@ -1043,6 +1151,155 @@ NSTUB
     fail=$((fail+1)) \
       ; echo "SELFTEST FAIL: concurrent fanouts not single-flight (rcA=$RCA rcB=$RCB inflight=$(grep -l 'reason=inflight' "$FOUTA" "$FOUTB" | wc -l) notifylines=$(wc -l < "$NOTIFY_LOG"))"
   fi
+  # =========================================================================
+  # 21. lineage guard (v0.4.148; rebase-aware v0.4.151) — REAL fixture repo.
+  #     The pre-v0.4.151 guard tested ancestry ONLY, so a fork-main rebase —
+  #     which rewrites shas and orphans the currently deployed commit — made it
+  #     refuse EVERY legitimate forward swap: fleet-blocking, reported
+  #     2026-09-12 by lane 2fbfb2f8 (10 refusals; a second lane stamped the
+  #     same blocker at n=3508). Patch-id equivalence over merge-base..SHA is
+  #     the fix; the negative control below is what keeps it honest.
+  #     NOTE: the guard no-ops when the shas are not real objects (cat-file -e
+  #     fails -> verdict "unknown"), so these cases MUST use real commits. The
+  #     aaaa…/bbbb… fixtures elsewhere exercise the SKIP path, not the guard.
+  local LREPO="$T/lrepo" LC0 LDEP LREW LNEW LSTALE LNEG
+  git init -q -b main "$LREPO"
+  git -C "$LREPO" config user.email t@t; git -C "$LREPO" config user.name t
+  echo a > "$LREPO/fa"; git -C "$LREPO" add fa; git -C "$LREPO" commit -qm base
+  LC0="$(git -C "$LREPO" rev-parse HEAD)"
+  # pre-rewrite deployed lineage: c0 -> "deployed change" (this was LIVE)
+  git -C "$LREPO" checkout -q -b old "$LC0"
+  echo b > "$LREPO/fb"; git -C "$LREPO" add fb; git -C "$LREPO" commit -qm "deployed change"
+  LDEP="$(git -C "$LREPO" rev-parse HEAD)"
+  # rewritten fork main: upstream moved, the deployed change was REPLAYED on it
+  # -> different parent, different sha, IDENTICAL patch = the rebase twin
+  git -C "$LREPO" checkout -q -b rwmain "$LC0"
+  echo z > "$LREPO/fz"; git -C "$LREPO" add fz; git -C "$LREPO" commit -qm "upstream change"
+  git -C "$LREPO" cherry-pick "$LDEP" >/dev/null 2>&1
+  LREW="$(git -C "$LREPO" rev-parse HEAD)"
+  echo c > "$LREPO/fc"; git -C "$LREPO" add fc; git -C "$LREPO" commit -qm "incoming change"
+  LNEW="$(git -C "$LREPO" rev-parse HEAD)"
+  # a genuinely stale/delayed build off the OLD base, unrelated content
+  git -C "$LREPO" checkout -q -b stale "$LC0"
+  echo s > "$LREPO/fs"; git -C "$LREPO" add fs; git -C "$LREPO" commit -qm "stale build"
+  LSTALE="$(git -C "$LREPO" rev-parse HEAD)"
+  # negative control: looks like the twin but its CONTENT changed -> patch-id differs
+  git -C "$LREPO" checkout -q -b neg "$LC0"
+  echo z > "$LREPO/fz"; git -C "$LREPO" add fz; git -C "$LREPO" commit -qm "upstream change"
+  git -C "$LREPO" cherry-pick "$LDEP" >/dev/null 2>&1
+  echo tampered >> "$LREPO/fb"; git -C "$LREPO" add fb; git -C "$LREPO" commit -q --amend --no-edit
+  LNEG="$(git -C "$LREPO" rev-parse HEAD)"
+  git -C "$LREPO" checkout -q main
+  # 21-pre. the fixture itself must hold: LDEP orphaned AND LREW a true twin
+  git -C "$LREPO" merge-base --is-ancestor "$LDEP" "$LNEW" 2>/dev/null \
+    && { fail=$((fail+1)); echo "SELFTEST FAIL: lineage fixture broken — LDEP still an ancestor of LNEW"; } \
+    || pass=$((pass+1))
+  [ "$(git -C "$LREPO" show "$LDEP" | git patch-id --stable | awk '{print $1}')" \
+    = "$(git -C "$LREPO" show "$LREW" | git patch-id --stable | awk '{print $1}')" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: lineage fixture broken — twin patch-ids differ"; }
+  # 21a. lineage-check verb: monotonic accept (fast path)
+  out="$("$SELF_BIN" lineage-check --repo "$LREPO" --prev "$LREW" --sha "$LNEW" 2>&1)"; rc=$?
+  check_rc "lineage-check-monotonic-rc" $rc 0
+  printf '%s\n' "$out" | grep -qE '^verdict: +monotonic$' && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: lineage-check monotonic verdict wrong: $out"; }
+  # 21b. lineage-check verb: rewritten accept, twin named
+  out="$("$SELF_BIN" lineage-check --repo "$LREPO" --prev "$LDEP" --sha "$LNEW" 2>&1)"; rc=$?
+  check_rc "lineage-check-rewritten-rc" $rc 0
+  printf '%s\n' "$out" | grep -qE '^verdict: +rewritten$' && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: lineage-check rewritten verdict wrong: $out"; }
+  check_has "lineage-check-rewritten-twin" "$out" "rewritten_twin:    $LREW"
+  # 21b-json. machine-readable shape (reporters/lanes key on this)
+  out="$("$SELF_BIN" lineage-check --repo "$LREPO" --prev "$LDEP" --sha "$LNEW" --json 2>&1)"; rc=$?
+  check_rc "lineage-check-json-rc" $rc 0
+  printf '%s' "$out" | jq -e --arg t "$LREW" '.verdict=="rewritten" and .rewritten_twin==$t' >/dev/null 2>&1 \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: lineage-check --json wrong: $out"; }
+  # 21c. lineage-check verb: genuinely absent change -> rc 2
+  out="$("$SELF_BIN" lineage-check --repo "$LREPO" --prev "$LSTALE" --sha "$LNEW" 2>&1)"; rc=$?
+  check_rc "lineage-check-absent-rc" $rc 2
+  printf '%s\n' "$out" | grep -qE '^verdict: +absent$' && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: lineage-check absent verdict wrong: $out"; }
+  # 21d. NEGATIVE CONTROL: a rewrite whose content CHANGED is still refused —
+  #      this is what proves acceptance keys on patch CONTENT, not on "some
+  #      commit exists in the range"
+  out="$("$SELF_BIN" lineage-check --repo "$LREPO" --prev "$LDEP" --sha "$LNEG" 2>&1)"; rc=$?
+  check_rc "lineage-check-negctrl-rc" $rc 2
+  printf '%s\n' "$out" | grep -qE '^verdict: +absent$' && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: tampered rewrite NOT refused (patch-id not content-sensitive): $out"; }
+  # 21e. unknown (object not in this repo) is SKIPPED, not refused — preserves
+  #      the pre-v0.4.151 "if both exist" behaviour
+  out="$("$SELF_BIN" lineage-check --repo "$LREPO" --prev deadbeefdeadbeefdeadbeefdeadbeefdeadbeef --sha "$LNEW" 2>&1)"; rc=$?
+  check_rc "lineage-check-unknown-rc" $rc 2
+  printf '%s\n' "$out" | grep -qE '^verdict: +unknown$' && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: lineage-check unknown verdict wrong: $out"; }
+  # 21f-21j. swap-execute E2E on the real fixture. NON-drill on purpose: the
+  #          guard is skipped under --drill, so a drill case would assert nothing.
+  local SD6="$T/state6" LOUT LERR LRC LJF
+  mkdir -p "$SD6/tools" "$SD6/backups"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD6/tools/oc-artifact-verify"; chmod +x "$SD6/tools/oc-artifact-verify"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SD6/tools/oc-seal-state";     chmod +x "$SD6/tools/oc-seal-state"
+  printf 'v1-artifact' > "$T/art/opencrabs"; chmod +x "$T/art/opencrabs"
+  printf 'v0-current' > "$T/bin/oc-lin-target"; chmod +x "$T/bin/oc-lin-target"
+  : > "$NOTIFY_LOG"
+  lin_swap() { # <prev> <sha> [extra...] -> LOUT/LERR/LRC/LJF
+    local prev="$1" sha="$2"; shift 2
+    printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD6/workers-ledger.json"
+    printf '%s\n' "$prev" > "$SD6/deployed.sha"
+    printf 'v0-current' > "$T/bin/oc-lin-target"
+    LOUT="$(OC_DEPLOY_STATE_DIR="$SD6" OC_SWAP_TARGET="$T/bin/oc-lin-target" \
+      OC_SWAP_BACKUP_DIR="$SD6/backups" OC_SWAP_RESTART_CMD=true \
+      OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+      OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+      OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_NOFANOUT=1 \
+      OC_DEPLOY_REPO="$LREPO" OC_DEPLOY_SEAL="$SD6/tools/oc-seal-state" \
+      OC_DEPLOY_ARTVERIFY="$SD6/tools/oc-artifact-verify" \
+      "$SELF_BIN" swap-execute --sha "$sha" --run 777 --features telegram \
+      --artifact-dir "$T/art" "$@" 2>"$T/lin.err")"
+    LRC=$?
+    LERR="$(cat "$T/lin.err")"
+    LJF="$(ls -t "$SD6/oc-deploy/journal/"swap-"${sha:0:8}"-*.jsonl 2>/dev/null | head -1)"
+  }
+  # 21f. monotonic fast path UNCHANGED: swap proceeds and writes NO guard row
+  #      (the common case still costs exactly one --is-ancestor)
+  lin_swap "$LREW" "$LNEW"
+  check_rc "swap-lineage-monotonic-rc" $LRC 0
+  check_has "swap-lineage-monotonic-complete" "$LOUT" "SWAP COMPLETE"
+  [ -z "$(grep '"step":"guard"' "$LJF" 2>/dev/null)" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: monotonic fast path wrote a guard journal row"; }
+  # 21g. post-rewrite ACCEPT: deployed sha orphaned, its change preserved under
+  #      a new sha in the incoming lineage -> swap proceeds, equivalence journaled
+  lin_swap "$LDEP" "$LNEW"
+  check_rc "swap-lineage-rewritten-rc" $LRC 0
+  check_has "swap-lineage-rewritten-complete" "$LOUT" "SWAP COMPLETE"
+  grep -q '"reason":"rewrite-equivalent-swap"' "$LJF" 2>/dev/null \
+    && grep -q "\"rewritten_twin\":\"$LREW\"" "$LJF" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: rewrite-equivalent-swap not journaled with the twin"; }
+  check_has "swap-lineage-rewritten-note" "$LERR" "preserved as $LREW"
+  # 21h. genuine STALE build refused: rc 2 + distinct gate token, and neither
+  #      the target binary nor the deployed marker moved
+  lin_swap "$LSTALE" "$LNEW"
+  check_rc "swap-lineage-stale-rc" $LRC 2
+  check_has "swap-lineage-stale-token" "$LERR" "OC_DEPLOY_SWAP_GUARD=stale-build"
+  grep -q '"reason":"non-monotonic-swap"' "$LJF" 2>/dev/null && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: stale refusal not journaled as non-monotonic-swap"; }
+  [ "$(cat "$T/bin/oc-lin-target")" = "v0-current" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: stale refusal still installed the binary"; }
+  [ "$(cat "$SD6/deployed.sha")" = "$LSTALE" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: stale refusal moved the deployed marker"; }
+  # 21i. audited override: the same refusal with --allow-rewritten-lineage
+  #      proceeds and journals justification + actor (never a silent bypass)
+  lin_swap "$LSTALE" "$LNEW" --allow-rewritten-lineage "selftest: audited override" --actor selftest
+  check_rc "swap-lineage-override-rc" $LRC 0
+  check_has "swap-lineage-override-complete" "$LOUT" "SWAP COMPLETE"
+  grep -q '"reason":"rewritten-lineage-override"' "$LJF" 2>/dev/null \
+    && grep -q '"justification":"selftest: audited override"' "$LJF" \
+    && grep -q '"actor":"selftest"' "$LJF" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: override not journaled with justification+actor"; }
+  check_has "swap-lineage-override-warning" "$LERR" "OVERRIDDEN"
+  # 21j. the override flag cannot be used bare — a missing justification dies rc 2
+  OC_DEPLOY_STATE_DIR="$SD6" "$SELF_BIN" swap-execute --sha "$LNEW" --run 778 \
+    --allow-rewritten-lineage >/dev/null 2>"$T/lin.err"; rc=$?
+  check_rc "swap-lineage-override-nojust-rc" $rc 2
+  check_has "swap-lineage-override-nojust-token" "$(cat "$T/lin.err")" "OC_DEPLOY_GATE=override-needs-justification"
   echo "oc-deploy selftest: $pass pass, $fail fail"
   rm -rf "$T"
   [ "$fail" = 0 ]
@@ -1451,16 +1708,38 @@ swap_execute() {
     fi
   fi
 
-  # Lineage monotonicity guard (v0.4.148): ensure the incoming SHA is a descendant of the currently deployed SHA
-  # if both exist in the local repo. Prevents older delayed/retried builds from regressing the live binary.
+  # Lineage guard (v0.4.148; rebase-aware v0.4.151): ensure the incoming SHA carries the currently
+  # deployed change, if both exist in the local repo. Prevents older delayed/retried builds from
+  # regressing the live binary. A fork-main rebase REWRITES shas, which orphaned the deployed sha
+  # and made the plain ancestry test refuse EVERY legitimate post-rewrite swap — fleet-blocking
+  # (reported 2026-09-12). An orphaned deployed commit whose PATCH CONTENT survives in the incoming
+  # lineage is now accepted as equivalent; only a genuinely absent change is refused.
   if [ "$PREV_SHA" != "none" ] && [ -n "$PREV_SHA" ] && [ "$DRILL" != "1" ]; then
-    if git -C "${OC_DEPLOY_REPO:-/root/opencrabs}" cat-file -e "$PREV_SHA" 2>/dev/null && \
-       git -C "${OC_DEPLOY_REPO:-/root/opencrabs}" cat-file -e "$SHA" 2>/dev/null; then
-      if ! git -C "${OC_DEPLOY_REPO:-/root/opencrabs}" merge-base --is-ancestor "$PREV_SHA" "$SHA" 2>/dev/null; then
-        jline guard 2 "$(jq -cn --arg s "$SHA" --arg p "$PREV_SHA" '{reason:"non-monotonic-swap", current_deployed:$p, incoming_sha:$s}')"
-        die 2 "swap-execute: incoming sha $SHA is NOT a descendant of deployed sha $PREV_SHA — refusing stale binary overwrite"
-      fi
-    fi
+    LV_REPO="${OC_DEPLOY_REPO:-/root/opencrabs}"
+    LV_OUT="$(lineage_verdict "$LV_REPO" "$PREV_SHA" "$SHA")"
+    LV_KIND="${LV_OUT%% *}"; LV_TWIN="${LV_OUT#* }"
+    case "$LV_KIND" in
+      monotonic)
+        : ;;   # fast path — unchanged from v0.4.148
+      rewritten)
+        jline guard 0 "$(jq -cn --arg s "$SHA" --arg p "$PREV_SHA" --arg t "$LV_TWIN" \
+          '{reason:"rewrite-equivalent-swap", current_deployed:$p, incoming_sha:$s, rewritten_twin:$t}')"
+        echo "oc-deploy: deployed sha $PREV_SHA was orphaned by a rewrite; its change is preserved as $LV_TWIN in the incoming lineage — accepting" >&2
+        ;;
+      absent)
+        if [ "$ALLOW_REWRITTEN_LINEAGE" = 1 ]; then
+          jline guard 0 "$(jq -cn --arg s "$SHA" --arg p "$PREV_SHA" --arg j "$RW_JUSTIFY" --arg a "$RW_ACTOR" \
+            '{reason:"rewritten-lineage-override", current_deployed:$p, incoming_sha:$s, justification:$j, actor:$a}')"
+          echo "oc-deploy: WARNING — swap guard OVERRIDDEN via --allow-rewritten-lineage (actor=$RW_ACTOR): $RW_JUSTIFY" >&2
+        else
+          jline guard 2 "$(jq -cn --arg s "$SHA" --arg p "$PREV_SHA" '{reason:"non-monotonic-swap", current_deployed:$p, incoming_sha:$s}')"
+          echo "OC_DEPLOY_SWAP_GUARD=stale-build" >&2
+          die 2 "swap-execute: incoming sha $SHA does not carry deployed sha $PREV_SHA — refusing stale binary overwrite (diagnose: oc-deploy lineage-check --prev $PREV_SHA --sha $SHA)"
+        fi
+        ;;
+      unknown)
+        echo "oc-deploy: lineage guard SKIPPED — $PREV_SHA or $SHA is not an object in $LV_REPO (cannot judge)" >&2 ;;
+    esac
   fi
 
   # --- 5. install (cp to .new, then atomic rename over target) ---
@@ -1850,15 +2129,19 @@ kill_brake() {
 
 MODE="${1:-}"; [ $# -gt 0 ] && shift
 # C-F5 (v0.4.71): --help / -h exits 0 on stdout, before any validation
-case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
+case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
 # issue #24 D1: contributors takes its own arg shape (positional range /
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. contributors is RETIRED (dies rc 1); the
 # kill-file brake now lives in the real-mode dispatch arms, below.
 if [ "$MODE" = contributors ]; then contributors_run "$@"; exit $?; fi
 if [ "$MODE" = status ]; then status_run "$@"; exit $?; fi
+# v0.4.151: lineage-check takes its own arg shape (--prev/--sha/--repo/--json) —
+# dispatch BEFORE the ship/poll flag loop so its flags are not rejected.
+if [ "$MODE" = lineage-check ]; then lineage_check_run "$@"; exit $?; fi
 SHA=""; FEATURES=""; FEATURES_EXPLICIT=0; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0; ALLOW_DROP=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
 WAIT_SECS=0; NOTIFY_SESSION=""   # C-#2: poll --wait / --notify-session
+ALLOW_REWRITTEN_LINEAGE=0; RW_JUSTIFY=""; RW_ACTOR="${OC_DEPLOY_ACTOR:-$(id -un 2>/dev/null || echo unknown)}"   # v0.4.151: audited swap-guard override
 while [ $# -gt 0 ]; do
   case "$1" in
     --sha)      SHA="${2:-}"; shift ;;
@@ -1867,12 +2150,16 @@ while [ $# -gt 0 ]; do
     --run)      RUN_ID="${2:-}"; shift ;;
     --drill)    DRILL=1 ;;
     --allow-features-drop) ALLOW_DROP=1 ;;  # HQ law 2026-09-04: explicit escape hatch for the features-compat gate
+    --allow-rewritten-lineage)   # v0.4.151: audited override for a genuinely-absent deployed change (justification MANDATORY)
+      [ -n "${2:-}" ] || die 2 "OC_DEPLOY_GATE=override-needs-justification: --allow-rewritten-lineage requires a non-empty justification string (it is journaled with the actor)"
+      ALLOW_REWRITTEN_LINEAGE=1; RW_JUSTIFY="${2:-}"; shift ;;
+    --actor)    [ -n "${2:-}" ] || die 2 "--actor needs a value (lane uuid or name)"; RW_ACTOR="${2:-}"; shift ;;
     --dry-run)  DRYRUN=1 ;;   # issue #24: fanout rehearsal — never marks done
     --with-delta) WITH_DELTA=1 ;;   # merge B (v0.4.48): watch rides oc-upstream-delta too
     --wait)     WAIT_SECS="${2:-}"; shift ;;   # C-#2: poll blocks until a NEW green run (or timeout, rc 5)
     --notify-session) [ -n "${2:-}" ] || die 2 "--notify-session needs a session uuid"; NOTIFY_SESSION="${2:-}"; shift ;;   # C-#2: session uuid woken on handoff/timeout; guard lens C MED-3 (v0.4.79)
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
-    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
     *)          die 1 "unknown arg: $1" ;;
   esac
   shift || true

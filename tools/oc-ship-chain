@@ -40,7 +40,16 @@
 #       4 GATE-RED (oc-prchecks rc 3) or CARRIER-RED (ship wait verdict RED)
 #       5 NON-FF (branch not fast-forwardable onto fork main — lane rebases
 #         via oc-rebase-safety, then re-runs the chain)
-#       6 dispatch/poll infra failure (prchecks rc 4/7/8, ship rc other)
+#       6 dispatch/poll infra failure (prchecks rc 4/7/8, ship rc other).
+#         A lineage-guard refusal surfaces here too (oc-deploy swap rc 2).
+#         The guard is REBASE-AWARE since v0.4.151: a deployed sha orphaned by
+#         a fork-main rebase whose change survives in the incoming lineage is
+#         accepted automatically as rewrite-equivalent-swap — just re-run the
+#         chain. Read-only verdict: `oc-deploy lineage-check --prev <deployed>
+#         --sha <incoming>`. NEVER hand-edit deployed.sha to re-point around a
+#         refusal — that is the regression the guard exists to catch. A genuine
+#         stale build is refused with `OC_DEPLOY_SWAP_GUARD=stale-build`; the
+#         fix is a fresh build from fork main, not a bypass.
 #       7 gate still IN FLIGHT after its budget + resume-polls (prchecks rc 5,
 #         non-terminal). The run id is printed — do NOT re-dispatch (that
 #         concurrency-cancels the live run); wait for it and re-run with
