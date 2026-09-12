@@ -127,7 +127,7 @@ SELFTEST=0
 # surviving record of what was removed, so it must be its own kind — `note`
 # would bury a SIGNING REVOCATION among 649 routine rows, and this is exactly
 # the kind of row a later audit asks for by name.
-KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident lesson note ack roster-enroll roster-retire claim confirm swap-result notify-fanout shipchain "
+KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident lesson note ack roster-enroll roster-retire claim confirm swap-result notify-fanout shipchain proposal "
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 die() { echo "oc-ledger: $2" >&2; exit "$1"; }
@@ -732,6 +732,13 @@ EOF
   bash "$ME" stamp note "" >/dev/null 2>&1; chk "empty-what" 2 $?
   bash "$ME" stamp skill-bump "x" >/dev/null 2>&1; chk "skill-bump-refused" 2 $?
   bash "$ME" stamp claim "CLAIM #fixture — v1.1 kind" >/dev/null 2>&1; chk "stamp-claim-v1.1" 0 $?
+  # Duty-4 `proposal` (v0.4.152 A1): the law mandates `stamp proposal` in four
+  # places (hq.md Duty 4, editor.md, fleet-directives.md routing table,
+  # CHANGELOG v0.4.144) but the kind was absent from KINDS, so the verb died
+  # rc 2 and the channel had NEVER accepted a row (0 of 3558 events, 2026-09-12).
+  # A law that names a verb the tool refuses is a dead channel, not a lane error.
+  bash "$ME" stamp proposal "Duty-4 proposal (fixture)" >/dev/null 2>&1; chk "stamp-proposal" 0 $?
+  chk "stamp-proposal-kind" "proposal" "$(jq -r '[.events[] | select(.kind == "proposal")] | last | .kind // ""' "$OC_LEDGER")"
   # --what flag form + flag-glitch guards (Duty-4 2026-08-31: n=1361/n=1372 class)
   bash "$ME" stamp note --what "flag-form text" >/dev/null 2>&1; chk "stamp-what-flag" 0 $?
   chk "stamp-what-value" "flag-form text" "$(jq -r '[.events[] | select(.kind == "note")] | last | .what // ""' "$OC_LEDGER")"
