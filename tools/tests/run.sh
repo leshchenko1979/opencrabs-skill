@@ -723,15 +723,22 @@ done
 # ---- 61. oc-notify-fanout: placeholder guard + target validation (HQ ASSIGN 2026-09-09)
 section "oc-notify-fanout guards (law1 placeholder + dead-target skip + --roles)"
 NF="$TOOLS_DIR/oc-notify-fanout"
+# LAW 16 (defect D-1, HQ 2026-09-12): self identity is DERIVED from the
+# invoking session and an unresolved self is a HARD ERROR (rc 2) — the old
+# hardcoded lane default is gone. So every fixture must name its invoker.
+# Resolve the live toolsmith lane; the fallback matches no real lane, which
+# keeps 61a/61b about the placeholder guard rather than about exclusion.
+NFSELF="$(bash "$TOOLS_DIR/oc-ledger" roster --live --role toolsmith 2>/dev/null | head -1 | awk '{print $1}')"
+[ -n "$NFSELF" ] || NFSELF="00000000-0000-4000-8000-00000000dead"
 # 61a. placeholder law: dangling token -> every send ABORTed, rc!=0
-NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
+NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_SELF="$NFSELF" OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
   --title "t-battery" --text "dangling {{NOSUCH}} token" --dry-run 2>&1)" \
   && bad "fanout placeholder-guard: rc=0 on token leak" \
   || { printf '%s' "$NFOUT" | grep -q "placeholder-token-survived" \
        && ok "fanout placeholder-guard: dangling token -> send ABORTed (law1)" \
        || bad "fanout placeholder-guard: aborted but no law1 receipt"; }
 # 61b. substitution: valid tokens -> DRY briefs, no ABORT, dead uuids skipped
-NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
+NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_SELF="$NFSELF" OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
   --title "t-battery" --text "v{{VERSION}} u{{UUID}}" --dry-run 2>&1)"
 printf '%s' "$NFOUT" | grep -q "placeholder-token-survived" \
   && bad "fanout substitution: valid tokens ABORTed (substitution broken)" \
@@ -740,7 +747,7 @@ printf '%s' "$NFOUT" | grep -qE "sent=[0-9]+ skipped=[0-9]+ failed=0" \
   && ok "fanout dry-run summary clean (dead targets skipped, none failed)" \
   || bad "fanout dry-run summary has failures"
 # 61c. roles filter: --roles toolsmith (self-excluded) -> sent=0
-NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
+NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_SELF="$NFSELF" OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
   --title "t" --text "x" --dry-run --roles toolsmith 2>&1)"
 printf '%s' "$NFOUT" | grep -q "sent=0" \
   && ok "fanout --roles filter respected" \

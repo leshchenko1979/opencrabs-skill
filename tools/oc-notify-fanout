@@ -83,12 +83,25 @@
 #      rc 3 no manifest. In-wave send failures keep exit 4 but now print a
 #      PARTIAL DELIVERY stderr line with the resume/audit path.
 #
+#  16. SELF IDENTITY IS DERIVED, NEVER HARDCODED (defect D-1, HQ 2026-09-12):
+#      `self_uuid` — the lane a wave EXCLUDES as its own invoker — resolves
+#      from --self, else OC_FANOUT_SELF, else the invoking session's OC_ACTOR;
+#      an unresolved self is a HARD ERROR (rc 2). The production default used
+#      to be a hardcoded lane uuid (2fae1230-…, a selftest fixture value
+#      promoted by 7c7844cd at v0.4.123): it excluded the Toolsmith lane from
+#      EVERY wave while leaving --include-self dead for every other invoker —
+#      so HQ self-notified its own brief. The battery could not catch it
+#      because every fixture run passes OC_FANOUT_SELF explicitly, so the
+#      DEFAULT path was never exercised (assertions added with this fix).
+#      A wrong self is INVISIBLE — it silently drops a real target from the
+#      wave — which is why the tool refuses to guess one.
+#
 # Usage:
 #   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
 #     [--text "what changed ..."] [--text-file /path/brief.md] \
 #     [--roles editor,hq] [--exclude "40695,uuid8char"] \
 #     [--mode now|turn-end|quiet] (default quiet) \
-#     [--forum-chat <chat_id>] [--dry-run] [--no-stamp] [--include-self] \
+#     [--forum-chat <chat_id>] [--self <uuid>] [--dry-run] [--no-stamp] [--include-self] \
 #     [--verify <wave-id>]
 #
 #   Default brief (when --text/--text-file omitted) is the canonical
@@ -301,6 +314,32 @@ JSON
   grep -qF -- '--mode' "$T/fake-notify-log" && chk 1 mode-invalid-never-sends || chk 0 mode-invalid-never-sends
   out="$(OC_FANOUT_RUN_DIR="$T/run-mode-bogus2" run_fanout --mode bogus 2>&1)" || true
   echo "$out" | grep -q "invalid --mode" && chk 0 mode-invalid-rejected || chk 1 mode-invalid-rejected
+
+  # LAW 16 (defect D-1, HQ 2026-09-12): self identity is DERIVED from the
+  # invoking session, never the hardcoded lane uuid that shipped as the default
+  # from v0.4.123. The battery could never catch it because every fixture run
+  # passes OC_FANOUT_SELF explicitly — these assertions exercise the DEFAULT
+  # path (no OC_FANOUT_SELF) with OC_ACTOR as the only identity source.
+  selfrun() { # $1=run dir, $2=actor uuid; remaining args appended
+    local rd="$1" actor="$2"; shift 2
+    env -u OC_FANOUT_SELF OC_ACTOR="$actor" OC_NOTIFY_DB="$T/db.sqlite" \
+      OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" \
+      OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$rd" FAKE_NOTIFY_LOG="$T/fake-notify-log" \
+      bash "$0" --title T --text "brief {{UUID}}" --no-stamp --dry-run "$@" 2>&1
+  }
+  out="$(selfrun "$T/run-self-actor" "$L1")"
+  printf '%s' "$out" | grep -q "$L1" && chk 1 self-default-from-actor || chk 0 self-default-from-actor
+  printf '%s' "$out" | grep -q "SKIP $L3 .*SCOPE" && chk 0 self-others-still-processed || chk 1 self-others-still-processed
+  out="$(selfrun "$T/run-self-incl" "$L1" --include-self)"
+  printf '%s' "$out" | grep -q "DRY $L1" && chk 0 self-include-self-flag || chk 1 self-include-self-flag
+  out="$(selfrun "$T/run-self-flag" "$L2" --self "$L1")"
+  printf '%s' "$out" | grep -q "$L1" && chk 1 self-flag-overrides-actor || chk 0 self-flag-overrides-actor
+  printf '%s' "$out" | grep -q "SKIP $L2 .*SCOPE" && chk 0 self-flag-actor-not-self || chk 1 self-flag-actor-not-self
+  rc="$(env -u OC_ACTOR -u OC_FANOUT_SELF OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_RUN_DIR="$T/run-self-none" \
+    bash "$0" --title T --text "brief {{UUID}}" --no-stamp --dry-run >"$T/self-none.out" 2>&1; echo $?)"
+  [ "$rc" = 2 ] && chk 0 self-unresolved-rc2 || chk 1 "self-unresolved-rc2 (got $rc)"
+  grep -q "self identity unresolved" "$T/self-none.out" && chk 0 self-unresolved-msg || chk 1 self-unresolved-msg
 
   # 3. Dry-run behaves identically for scope (no send attempted).
   rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
@@ -547,7 +586,7 @@ DREOF
   exit $?
 fi
 
-title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0 verify_id=""
+title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0 verify_id="" self_uuid=""
 # LAW 5 (fixed 2026-09-12): delivery mode, default QUIET — hq.md:95 mandates
 # delivery=quiet for ANY version bump. Passed through verbatim to session notify.
 mode="quiet"
@@ -562,6 +601,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --dry-run) dry=1; shift ;;
   --no-stamp) stamp=0; shift ;;
   --include-self) include_self=1; shift ;;
+  --self) self_uuid="${2:-}"; shift 2 ;;
   --verify) verify_id="${2:-}"; shift 2 ;;
   --mode) mode="${2:-}"; shift 2 ;;
   --help|-h) sed -n '2,40p' "$0"; exit 0 ;;
@@ -717,7 +757,24 @@ excluded() { # $1=uuid $2=topic -> 0 if excluded (8-char prefix or full uuid or 
   done
   return 1
 }
-self_uuid="${OC_FANOUT_SELF:-2fae1230-de9e-4fa5-aa24-822cf7188c3e}"
+# LAW 16 (defect D-1, HQ 2026-09-12): self is DERIVED from the invoking
+# session, never a hardcoded lane uuid. `2fae1230-…` — the Toolsmith lane's
+# uuid, a selftest fixture value promoted into the production default by
+# 7c7844cd (v0.4.123) — excluded that lane from EVERY wave while leaving
+# --include-self dead for every other invoker (HQ self-notified its own brief).
+# Precedence: --self, then OC_FANOUT_SELF, then the invoking session's OC_ACTOR
+# (trailing token, so a composed "<role> <uuid>" resolves too). Unresolved is a
+# HARD ERROR: a wrong self is invisible — it silently drops a real target from
+# the wave — so the tool refuses to guess one.
+if [ -z "$self_uuid" ]; then
+  if [ -n "${OC_FANOUT_SELF:-}" ]; then
+    self_uuid="$OC_FANOUT_SELF"
+  elif [ -n "${OC_ACTOR:-}" ]; then
+    self_uuid="${OC_ACTOR##* }"
+  else
+    die "self identity unresolved: pass --self <uuid> (or export OC_ACTOR=<your session uuid>); refusing to guess — a wrong self silently drops a real lane from the wave"
+  fi
+fi
 
 zero_segment() { case "$1" in *-0000-*|*-00000000*) return 0 ;; esac; return 1; }
 
