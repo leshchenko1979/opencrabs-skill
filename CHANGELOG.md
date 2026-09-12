@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.4.157 (2026-09-12) — Phase 3: the Night Shift Now Ends With Idle Lanes Holding Work
+
+Owner order: *"We need to add another phase to night shift - triaging open issues to idle editors."* The window previously ended at harvest; editors began the daytime window with whatever they had left over. It now CLOSES by filling idle lanes.
+
+- **New phase — §Phase 3, Idle-Lane Issue Triage** (`fleet-directives.md`), superseding the three-line v0.4.143 stub. Position: the CLOSING phase of the operator-initiated window, covered by the window's trigger — NOT a new command. Owner: Triage (v0.4.143 allocation authority + Duty T3 + Duty T5).
+- **Four classification buckets** — CLAIMED (open claim-ref → no action) · PARKED (owner standdown → never re-ignite) · UNVETTABLE (no acceptance criteria → park with the reason) · DISPATCHABLE (unclaimed AND vetted).
+- **Reuse-first is mandatory; expansion is the measured exception.** Capacity comes from `oc-ledger roster --live --role editor`; new editors are created only up to the measured shortfall, and each creation records the count that justified it. This folds the owner's 2026-09-11 lane-reuse order into the phase instead of leaving two rules that disagree.
+- **Verify-unclaimed FIRST, before any dispatch** (PHOP stage 2) — the two recorded violations (#106, #107, both already held when a fan-out routed them) are cited in the law as the reason it is not optional.
+- **LOAD-BEARING — the overnight design-gate contract.** A dispatched editor produces analysis + design and **PARKS at the owner design gate**; it MUST NOT open `/goal`. The v0.4.149 autonomous-goal mandate begins only after the owner confirms the design, so an owner-absent window cannot push work past that gate. This is what makes the phase safe to run while the operator sleeps.
+- **Exit line** — `triaged=N · dispatched=M · expanded=K · parked=P · waiting=0`, the L2 shift shape: any non-zero `waiting` means the phase is not done, and unclosed candidates roll to the next cycle.
+- **Cadence section updated** — the Nighttime phase list now names Batch Issue Triage as the window's third phase.
+- **Duty T5 updated** (`triage.md`) — gains the night-shift phase variant and a pointer to the full procedure.
+- **Open cosmetic item (owner's call, non-blocking):** the window's canonical name — "Batch Merge & Batch Harvest Window" — no longer names its third phase. Renaming it is churn across several references, so the name is unchanged pending an owner ruling.
+- **BATTERY**: 168 PASS / 0 FAIL.
+
 ## v0.4.156 (2026-09-12) — The Proposal Channel Is Live; the Interim Workaround Is Retired
 
 The `proposal` kind landed in the ledger, so the interim `kind=note` workaround that the v0.4.154/155 text prescribed is **retired** — following it now recreates the dead channel in the opposite direction: a lane writing proposals as `note` is invisible to `events --kind proposal`, which is the audit verb.

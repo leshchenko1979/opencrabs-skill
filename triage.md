@@ -167,6 +167,14 @@ one ledger stamp per issue (`oc-ledger stamp note "T5 auto-close #N <test>"
 `), and the close comment names the test class (a)/(b)/(c). Reversible by
 owner word (reopen + note).
 
+**Night-shift phase variant (v0.4.157):** inside the operator-initiated Night
+Shift window this duty is promoted from a patrol to the window's CLOSING
+PHASE — **Phase 3, Idle-Lane Issue Triage** (`fleet-directives.md`). Same
+census + classification, extended with capacity resolution, dispatch, and
+bounded expansion, under the overnight design-gate contract (a dispatched
+editor designs and PARKS at the owner gate; it does NOT open `/goal`). Exit
+line: `triaged=N · dispatched=M · expanded=K · parked=P · waiting=0`.
+
 ## Duty T6 — Registry writes: schema + seed rules (moved from hq.md Duty 2, lens B-F10 v0.4.96)
 
 Triage owns ALL `workers-ledger.json` writes (owner law v0.4.91): claims, ack
