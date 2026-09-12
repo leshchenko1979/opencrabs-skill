@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.160 (2026-09-12) — The Window Now Names All Three of Its Phases
+
+Owner ruling: *"Rename window to name all 3 phases."* The v0.4.157 phase law gave the night window a third phase but left the window's canonical name reading **"Batch Merge & Batch Harvest Window"** — two-thirds of the truth, and the very identifier the trigger law uses to name the window.
+
+- **Canonical name is now `Batch Merge, Harvest & Issue Triage Window`** — one word per phase, in phase order: Batch Merge (Phase 1, fleet-wide rebase/sync) -> Batch Harvest (Phase 2, upstream PR waves) -> Issue Triage (Phase 3, idle-lane dispatch). Updated at BOTH law sites in `fleet-directives.md`: §Cadence & Trigger Law item 1 (the SOLE-trigger sentence) and the Nighttime heading, item 3.
+- **Closes the v0.4.157 open cosmetic item.** That entry deferred the rename pending an owner ruling and is superseded by this one; the v0.4.157 section is left as-is because it records what was true at that release.
+- **Scope is the law text ONLY.** No command, trigger, phase procedure, classification bucket, or exit line changed — a lane can now see the window's full extent from its name alone, which is the point of the ruling.
+- **BATTERY**: 168 PASS / 0 FAIL (receipt `tools/tests/battery-last.json`).
+
 ## v0.4.159 (2026-09-12) — The Law Prescribed Two Writes for One Adoption
 
 Two independent lanes reported the same defect against the canonical reload instruction: it told lanes to ack twice.

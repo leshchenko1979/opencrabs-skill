@@ -586,12 +586,12 @@ rule above governs until these ship.
 ## Daytime-Editing & Nighttime-Batch-Sync Cadence (v0.4.146)
 
 **Cadence & Trigger Law (owner order 2026-09-12):**
-1. **The SOLE trigger for the Night Shift (Batch Merge & Batch Harvest Window) is an explicit operator command.** All automated triggers (quiescence heuristics, census threshold auto-triggers, background auto-batching) are strictly removed. In the absence of an explicit operator command, the fleet remains in standard daytime editing / passive patrol mode.
+1. **The SOLE trigger for the Night Shift (Batch Merge, Harvest & Issue Triage Window) is an explicit operator command.** All automated triggers (quiescence heuristics, census threshold auto-triggers, background auto-batching) are strictly removed. In the absence of an explicit operator command, the fleet remains in standard daytime editing / passive patrol mode.
 2. **Daytime (Active Operator Window / Interactive Hours):**
    - Focus is exclusively on **feature editing, design approvals, and smoke verification**.
    - No large upstream merge/rebase synchronization is performed across the fleet during daytime.
    - Editors advance topic branches and smoke-test against the stable deployed fork base.
-3. **Nighttime (Batch Merge & Batch Harvest Window — Operator-Initiated ONLY):**
+3. **Nighttime (Batch Merge, Harvest & Issue Triage Window — Operator-Initiated ONLY):**
    - Fleet-wide synchronization and rebases against upstream `adolfousier/main` are executed in **one consolidated batch** ONLY when explicitly ordered by the operator.
    - **Batch Harvesting:** Upstream harvest PRs are generated, rebased, and CI-gated in consolidated waves following operator command, with strict 4-leg smoke verification recorded in `smoke-verdicts.log`.
    - **Batch Issue Triage (v0.4.157):** the window CLOSES with every idle editor holding an assigned issue — open issues are swept, classified, and dispatched to idle lanes so the daytime window starts warm. This phase is covered by the window's operator trigger; it is NOT a separate command. Full procedure: §Phase 3 — Idle-Lane Issue Triage.
