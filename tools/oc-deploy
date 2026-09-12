@@ -2066,6 +2066,15 @@ swap_execute() {
   # --- 2. artifact + verify ---
   local WORKDIR BIN EXPECTED SRC_FLAG
   WORKDIR="$(mktemp -d)" || die 2 "mktemp failed"
+  # M2-22 (2026-09-12): this WORKDIR holds the downloaded ~83M release artifact
+  # + state-backup and was never removed — /tmp reached 11G and the root fs 85%
+  # (38 leaked dirs = 3.3G). swap_execute runs inside the subshell opened by the
+  # swap-execute arm (the flock wrapper), so a trap set HERE fires when that
+  # subshell exits, whether by normal return or by die. The path lives in a
+  # NON-LOCAL on purpose: by the time the subshell exits, this function's
+  # `local WORKDIR` is out of scope and the trap would rm -rf "" (measured).
+  _OC_SWAP_WORKDIR="$WORKDIR"
+  trap '[ -n "${_OC_SWAP_WORKDIR:-}" ] && rm -rf "$_OC_SWAP_WORKDIR"' EXIT
   if [ "$DRILL" = "1" ]; then
     # dummy artifact = byte-copy of the RUNNING binary; expected sha set
     # deliberately wrong so post-verify fails and exercises the rollback leg.

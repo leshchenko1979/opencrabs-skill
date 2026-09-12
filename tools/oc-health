@@ -38,6 +38,16 @@ WT_PATTERNS="${OC_HEALTH_WT_PATTERNS:-/root/oc-work/* /root/oc-wt-*}"
 LOCK_MAX_AGE_H="${OC_HEALTH_LOCK_MAX_AGE_H:-24}"
 BAK_KEEP="${OC_HEALTH_BAK_KEEP:-3}"
 TMP_MAX_AGE_H="${OC_HEALTH_TMP_MAX_AGE_H:-48}"
+# M2-22 (2026-09-12): the second temp class — `mktemp -d` WORKDIRs left behind by
+# oc-deploy's swap path and by the battery's run_selftest. They reached 3.3G and
+# took the root fs to 85%. Distinct glob + distinct age + a SIGNATURE gate: a
+# generic `mktemp -d` from any other tool lives in the same namespace and must
+# never be touched, so a dir is only ever a candidate when it carries the
+# oc-deploy WORKDIR signature. 24h is deliberately conservative: a LIVE swap
+# rewrites its WORKDIR continuously, so a signature dir whose mtime is a day
+# old cannot belong to a running swap (the manual reap used a 90-min gate).
+TMP2_GLOB="${OC_HEALTH_TMP2_GLOB:-/tmp/tmp.*}"
+TMP2_MAX_AGE_H="${OC_HEALTH_TMP2_MAX_AGE_H:-24}"
 WATCHER_WINDOW_H="${OC_HEALTH_WATCHER_WINDOW_H:-24}"   # runtime_procs: audit window (hours); 0 = all history
 SKILL_DIR="$(cd "$TOOLS_DIR/.." && pwd)"
 LOGF="${OC_HEALTH_LOG:-$STATE/tools.log}"
@@ -111,7 +121,7 @@ selftest_impl() {
   bad() { F=$((F+1)); echo "  FAIL $*" >&2; }
   chk() { [ "$2" = "$3" ] && ok || bad "$1 (want $2 got $3)"; }
 
-  mkdir -p "$T/state" "$T/tmp" "$T/skill" "$T/wt" "$T/fork" "$T/logs" "$T/detached"
+  mkdir -p "$T/state" "$T/tmp" "$T/skill" "$T/wt" "$T/fork" "$T/logs" "$T/detached" "$T/tmp2"
   git -C "$T/skill" init -q 2>/dev/null
   git -C "$T/skill" config user.email t@t; git -C "$T/skill" config user.name t
   echo x > "$T/skill/f"; git -C "$T/skill" add -A >/dev/null 2>&1
@@ -133,7 +143,7 @@ selftest_impl() {
   echo '{"version":1,"events":[],"roster":{"workers":{}}}' > "$T/state/workers-ledger.json"
 
   run() {
-    OC_HEALTH_STATE="$T/state" OC_HEALTH_TMP_GLOB="$T/tmp/oc-*" OC_HEALTH_DB="$T/db.sqlite" \
+    OC_HEALTH_STATE="$T/state" OC_HEALTH_TMP_GLOB="$T/tmp/oc-*" OC_HEALTH_TMP2_GLOB="$T/tmp2/tmp.*" OC_HEALTH_DB="$T/db.sqlite" \
     OC_HEALTH_SKILL_DIR="$T/skill" OC_HEALTH_FORK="$T/fork" OC_HEALTH_WT_PATTERNS="$T/wt/*" \
     OC_HEALTH_LOG="$T/tools.log" OC_HEALTH_DAEMON_LOG_DIR="$T/logs" OC_HEALTH_DETACHED_DIR="$T/detached" \
     OC_HEALTH_DISK_PCT="${DISK_PCT_OVERRIDE:-10}" \
@@ -192,6 +202,26 @@ selftest_impl() {
   run --class filesystem --reap >/dev/null 2>&1
   [ -e "$T/state/fanout.lock.2" ] && ok || bad "fs-live-lock-kept"
   rm -f "$T/state/fanout.lock.2"
+
+  # 6b. Class: filesystem — leaked mktemp WORKDIR class (M2-22).
+  #     Three fixtures pin the THREE gates at once: the signature, the age, and
+  #     the reap action. A generic mktemp dir MUST survive — that is the whole
+  #     point of a separate signature-gated class rather than a blanket
+  #     /tmp/tmp.* sweep.
+  mkdir -p "$T/tmp2/tmp.FAKELEAK/state-backup"
+  printf 'x' > "$T/tmp2/tmp.FAKELEAK/build-flags.txt"
+  touch -d '3 days ago' "$T/tmp2/tmp.FAKELEAK"
+  mkdir -p "$T/tmp2/tmp.FAKEGENERIC"
+  printf 'not-an-oc-deploy-workdir\n' > "$T/tmp2/tmp.FAKEGENERIC/somefile"
+  touch -d '3 days ago' "$T/tmp2/tmp.FAKEGENERIC"
+  mkdir -p "$T/tmp2/tmp.FAKEFRESH/state-backup"
+  RC=0; OUT="$(run --class filesystem 2>&1)" || RC=$?
+  chk "fs-tmp2-rc1" 1 "$RC"
+  case "$OUT" in *"stale-tmp2"*) ok ;; *) bad "fs-tmp2-detected: $OUT" ;; esac
+  run --class filesystem --reap >/dev/null 2>&1
+  [ -e "$T/tmp2/tmp.FAKELEAK" ] && bad "fs-tmp2-signature-reaped" || ok
+  [ -e "$T/tmp2/tmp.FAKEGENERIC" ] && ok || bad "fs-tmp2-generic-kept"
+  [ -e "$T/tmp2/tmp.FAKEFRESH" ] && ok || bad "fs-tmp2-fresh-kept"
 
   # 7. Class: persistence — ledger backup pruning
   for i in 1 2 3 4 5; do
@@ -434,6 +464,18 @@ if is_class_active "filesystem"; then
     if [ "$REAP" = "1" ]; then rm -rf "$f"; reap_tmp=$((reap_tmp + 1)); fi
   done
 
+  # 9b. Leaked mktemp WORKDIR class (M2-22). Signature-gated on purpose: the
+  #     check must name the oc-deploy/run.sh WORKDIR, never a generic mktemp dir.
+  n_tmp2=0; reap_tmp2=0
+  for d in $TMP2_GLOB; do
+    [ -d "$d" ] || continue
+    { [ -f "$d/build-flags.txt" ] || [ -d "$d/state-backup" ]; } || continue
+    age_h=$(( ( $(date +%s) - $(stat -c %Y "$d") ) / 3600 ))
+    [ "$age_h" -ge "$TMP2_MAX_AGE_H" ] || continue
+    n_tmp2=$((n_tmp2 + 1))
+    if [ "$REAP" = "1" ]; then rm -rf "$d"; reap_tmp2=$((reap_tmp2 + 1)); fi
+  done
+
   n_mir=0; reap_mir=0
   if [ -f "$TOOLS_DIR/lib/oc-snap.sh" ]; then
     . "$TOOLS_DIR/lib/oc-snap.sh"
@@ -452,6 +494,15 @@ if is_class_active "filesystem"; then
     add_finding 9 SAFE stale-tmp "$n_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h, $n_mir dead mirror(s) — rerun with --reap"
   else
     clean_line "tmp: no stale /tmp/oc-*"
+  fi
+
+  if [ "$reap_tmp2" -gt 0 ]; then
+    REAPED=$((REAPED + reap_tmp2))
+    add_finding 9 SAFE stale-tmp2 "removed $reap_tmp2 leaked mktemp WORKDIR(s) (>=${TMP2_MAX_AGE_H}h, oc-deploy signature)"
+  elif [ "$n_tmp2" -gt 0 ]; then
+    add_finding 9 SAFE stale-tmp2 "$n_tmp2 leaked mktemp WORKDIR(s) (>=${TMP2_MAX_AGE_H}h, oc-deploy signature) — rerun with --reap"
+  else
+    clean_line "tmp2: no leaked mktemp WORKDIRs"
   fi
 fi
 

@@ -162,7 +162,7 @@ oc-health [--class <name>|--all] [--rotate] [--status] [--reap] [--json] [--quie
 - `--quiet`: Print only findings, suppressing clean lines.
 - `--selftest`: Hermetic offline test suite verifying all 8 classes and rotation engine (27 assertions).
 
-**Environment overrides (hermetic testing / tuning):** `OC_HEALTH_STATE`, `OC_HEALTH_FORK`, `OC_HEALTH_DB`, `OC_HEALTH_TMP_GLOB`, `OC_HEALTH_SKILL_DIR`, `OC_HEALTH_WT_PATTERNS`, `OC_HEALTH_SKIP_VERSION`, `OC_HEALTH_LOG`, `OC_HEALTH_ROTATION_FILE`, `OC_HEALTH_DETACHED_DIR`, `OC_HEALTH_WATCHER_WINDOW_H`.
+**Environment overrides (hermetic testing / tuning):** `OC_HEALTH_STATE`, `OC_HEALTH_FORK`, `OC_HEALTH_DB`, `OC_HEALTH_TMP_GLOB`, `OC_HEALTH_TMP2_GLOB`, `OC_HEALTH_TMP2_MAX_AGE_H`, `OC_HEALTH_SKILL_DIR`, `OC_HEALTH_WT_PATTERNS`, `OC_HEALTH_SKIP_VERSION`, `OC_HEALTH_LOG`, `OC_HEALTH_ROTATION_FILE`, `OC_HEALTH_DETACHED_DIR`, `OC_HEALTH_WATCHER_WINDOW_H`.
 
 ---
 

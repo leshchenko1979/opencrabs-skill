@@ -29,7 +29,15 @@ section() { note ""; note "== $1 =="; }
 run_selftest() {
   local t="$1"
   if [ ! -x "$TOOLS_DIR/$t" ]; then bad "$t missing or not executable"; return 1; fi
-  if OC_DEPLOY_STATE_DIR="$(mktemp -d)" "$TOOLS_DIR/$t" --selftest >/dev/null 2>&1; then ok "$t --selftest"; else bad "$t --selftest"; fi
+  # M2-22 (2026-09-12): the state dir must be removed after the run — this was
+  # the volume driver of the /tmp leak (one dir per tool per battery run).
+  # A plain `rm -rf` right after the call, NOT a global trap: chunk mode
+  # re-extracts and sources the prelude (everything before the first `# ---- N`
+  # marker) once per section, so a prelude-level trap would be set N times.
+  local sd
+  sd="$(mktemp -d)"
+  if OC_DEPLOY_STATE_DIR="$sd" "$TOOLS_DIR/$t" --selftest >/dev/null 2>&1; then ok "$t --selftest"; else bad "$t --selftest"; fi
+  rm -rf "$sd"
 }
 
 # ---- battery driver: --jobs N parallel mode + internal --chunk mode (v0.4.131)

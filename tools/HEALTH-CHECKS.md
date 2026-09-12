@@ -86,6 +86,28 @@ after sloppy lanes and hide the pattern.
 - **Remediation (`--reap`):** Delete provably dead files; report count and freed bytes.
   Age check alone is insufficient; live PID verification is mandatory.
 
+## 9b. Leaked `mktemp` WORKDIRs — `SAFE` (prune old)
+
+- **Where:** `/tmp/tmp.*` (`OC_HEALTH_TMP2_GLOB` overrides).
+- **Origin (M2-22, 2026-09-12):** `oc-deploy`'s swap path held the downloaded
+  ~83 MB release artifact + `state-backup/` in a `mktemp -d` WORKDIR that was
+  never removed, and the battery's `run_selftest()` leaked one state dir per
+  tool per run. Together they reached **7615 dirs / 3.3 GB** and took the root
+  filesystem to **85 %**. Both producers are fixed (the WORKDIR now dies with
+  its subshell; `run_selftest()` removes its state dir); this check is the
+  backstop so the class cannot silently regrow.
+- **Invariant:** A `/tmp/tmp.*` directory is a candidate **only** when it carries
+  the oc-deploy WORKDIR signature — `build-flags.txt` **or** `state-backup/` —
+  **and** its mtime is older than `OC_HEALTH_TMP2_MAX_AGE_H` (default **24 h**).
+  Both gates are mandatory. A generic `mktemp -d` from any other tool lives in
+  the same namespace and must never be touched; a *live* swap rewrites its
+  WORKDIR continuously, so a signature dir a day old cannot belong to one.
+  (The manual emergency reap used a 90-minute gate to protect a chain in
+  flight; the standing check is deliberately more conservative.)
+- **Remediation (`--reap`):** `rm -rf` candidates; report count. Finding slug
+  `stale-tmp2` (check 9) so the count stays attributable and never blends into
+  the `/tmp/oc-*` figure.
+
 ## 10. Session DB size — `REPORT`
 
 - **Where:** `$HOME/.opencrabs/profiles/ops/opencrabs.db`
