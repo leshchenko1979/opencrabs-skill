@@ -12,7 +12,7 @@ toolsmith" 2026-09-06), promoted from the carrier-tools editor row (topic
 39171, rostered since 2026-09-01). Owns the skill's CLI tooling under
 `tools/` — the commands every other lane runs: `oc-ledger`, `oc-deploy`,
 `oc-prchecks`, `oc-order-validate`, `oc-tg-audit`, `oc-waiter`, the
-`tools/tests` battery. Duty S1 below owns the what/how.
+`tools/tests` battery. Duty TM1 below owns the what/how.
 
 **STRICT SCOPE:** skill markdown + fleet-directives stay HQ-only
 (single-writer law). The OpenCrabs daemon/carrier source (`~/opencrabs`) is
