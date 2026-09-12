@@ -103,7 +103,7 @@ source "$(dirname "$0")/lib/oc-log.sh"
 oc_log_init "oc-demo" "$@"
 trap 'oc_log_finish $?' EXIT
 rc="${1:-0}"
-case "$rc" in --selftest) rc=0 ;; esac
+case "$rc" in --selftest|selftest) rc=0 ;; esac
 exit "$rc"
 DEMO
   chmod +x "$d/oc-demo"
@@ -121,6 +121,22 @@ DEMO
   # suppression via env alone (no --selftest)
   OC_TOOLS_NOLOG=1 OC_TOOLS_LOG="$L" "$d/oc-demo" 3
   [ "$(wc -l < "$L")" -eq 2 ] && ok "OC_TOOLS_NOLOG=1 suppresses" || bad "env suppression failed"
+  # M2-21 (2026-09-12): the BARE `selftest` SUBCOMMAND must suppress too.
+  # oc-deploy:2976 dispatches `--selftest|selftest) selftest "$@" ;;` as ONE
+  # case arm, so a flag-only predicate let a bare-subcommand selftest log every
+  # fixture child it spawned into the PRODUCTION tools.log -- 93 rows per run,
+  # six phantom shas across two weeks, read back by oc-ship-audit as ORPHANED
+  # dispatches (rc=1, gating `oc-ledger commit-pending`).
+  L2="$d/tools2.log"
+  OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$L2" "$d/oc-demo" selftest
+  [ -s "$L2" ] && bad "bare 'selftest' subcommand logged a row (M2-21)" \
+               || ok "bare 'selftest' subcommand suppressed (M2-21)"
+  # separate log: a leak in the assertion above must not cascade into this one
+  L3="$d/tools3.log"
+  OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$L3" "$d/oc-demo" 0 selftest
+  [ "$(wc -l < "$L3")" -eq 1 ] \
+    && ok "a 'selftest' VALUE does not suppress a real invocation (M2-21)" \
+    || bad "non-first 'selftest' silenced a real invocation (M2-21)"
   rm -rf "$d"
 else
   bad "lib/oc-log.sh missing"
@@ -438,7 +454,25 @@ fi
 # non-FF fetch refspec silently rejected the update and the ref-first fallback
 # resurrected a STALE refs/oc-deploy/main — FF check saw a ghost "rebase needed".
 section "oc-deploy"
-run_selftest oc-deploy
+# M2-21 (2026-09-12) e2e: the selftest must be LOG-HERMETIC BY CONSTRUCTION,
+# not by argv shape. Run the BARE subcommand -- the spelling that slipped the
+# flag-only predicate -- with OC_TOOLS_LOG pointed at a temp file and require
+# ZERO rows. Pre-fix this wrote 93 rows of fixture dispatches; oc-ship-audit
+# read six of them back as ORPHANED and rc=1'd a gate that fronts
+# `oc-ledger commit-pending`. OC_TOOLS_NOLOG=0 is REQUIRED: the battery exports
+# it as 1 globally (run.sh:21), which would make this assertion vacuous.
+LSE="$(mktemp -d)/selftest.log"
+if OC_TOOLS_NOLOG=0 OC_DEPLOY_STATE_DIR="$(mktemp -d)" OC_TOOLS_LOG="$LSE" \
+     "$TOOLS_DIR/oc-deploy" selftest >/dev/null 2>&1; then
+  ok "oc-deploy selftest (bare subcommand)"
+else
+  bad "oc-deploy selftest (bare subcommand)"
+fi
+if [ -s "$LSE" ]; then
+  bad "bare selftest leaked $(wc -l < "$LSE") row(s) into OC_TOOLS_LOG (M2-21)"
+else
+  ok "bare selftest is log-hermetic: 0 rows (M2-21)"
+fi
 if tool oc-deploy; then
   "$TOOLS_DIR/oc-deploy" >/dev/null 2>&1; [ $? -eq 1 ] && ok "no args -> 1 (usage)" || bad "no args -> expected 1"
   "$TOOLS_DIR/oc-deploy" --bogus >/dev/null 2>&1; [ $? -eq 1 ] && ok "unknown arg -> 1" || bad "unknown arg -> expected 1"

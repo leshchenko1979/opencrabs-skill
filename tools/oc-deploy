@@ -563,6 +563,10 @@ a2a_notify_retry() { # $1=text — retry up to OC_A2A_TRIES (default 6), sleepin
 # Fully offline: sandbox git remote + stub gh/validate/launch + a
 # sandbox swap target for the full DRILL chain (no daemon bounce in selftest).
 selftest() {
+  # M2-21 (2026-09-12): hermetic by construction, NOT by argv shape. The fixture
+  # children below (`ship --sha <temp-repo HEAD> --execute`) inherit this and stay
+  # out of the production tools.log even if the shared predicate regresses.
+  export OC_TOOLS_NOLOG=1
   local T pass=0 fail=0 rc out
   T="$(mktemp -d)" || return 1
   export OC_DEPLOY_NO_WATCH=1  # piggyback OFF in selftest (explicit watch tests below run it for real)

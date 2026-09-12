@@ -91,7 +91,7 @@ record).
 
 - **Path:** `/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log` (override with `OC_TOOLS_LOG`).
 - **Schema:** `{"ts":"…Z","tool":"oc-…","args":"…","exit":N,"secs":N.N,"extra":{}}` — tools add fields via `oc_log_extra key value`.
-- **Suppression:** `--selftest` in argv or `OC_TOOLS_NOLOG=1` (the battery exports it — synthetic runs never pollute the log). Missing `jq` → no write; logging NEVER changes the host tool's exit code.
+- **Suppression:** the invocation IS a selftest — the `--selftest` FLAG **or the bare `selftest` SUBCOMMAND** (one shared `oc_is_selftest()` predicate; first-token match for the bare form, so a VALUE that merely reads `selftest`, e.g. `--dir selftest`, never silences a real run) — or `OC_TOOLS_NOLOG=1` (the battery exports it — synthetic runs never pollute the log). Missing `jq` → no write; logging NEVER changes the host tool's exit code. **M2-21 (2026-09-12, toolsmith):** the predicate used to match the flag token ONLY, but `oc-deploy:2976` dispatches `--selftest|selftest) selftest "$@" ;;` as ONE case arm — so a bare-subcommand selftest never exported `OC_TOOLS_NOLOG` and every fixture child it spawned was logged to the PRODUCTION log: **93 rows per run**, six phantom shas across two weeks (08-31 → 09-12) that `oc-ship-audit` read back as ORPHANED dispatches (rc 1, gating `oc-ledger commit-pending`). `oc-deploy`'s `selftest()` now also exports `OC_TOOLS_NOLOG=1` as its first statement so hermeticity does not depend on argv parsing; the predicate is the load-bearing layer (0 rows alone — the export alone still leaks the parent's own row).
 
 Recipes (verified live):
 

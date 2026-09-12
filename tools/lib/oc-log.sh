@@ -21,8 +21,11 @@
 # the durable step-by-step record, this file is the cross-tool analysis
 # aggregate.
 #
-# Suppression: argv contains --selftest (also exported to child invocations)
-# or OC_TOOLS_NOLOG=1 (the battery sets this so suites stay silent).
+# Suppression: the invocation IS a selftest -- either the `--selftest` FLAG or
+# the bare `selftest` SUBCOMMAND (oc-deploy dispatches both from one case arm),
+# see oc_is_selftest() below -- or OC_TOOLS_NOLOG=1 (the battery sets this so
+# suites stay silent). A bare-subcommand selftest used to slip the flag-only
+# predicate and log every fixture child it spawned into the PRODUCTION log.
 # Degrades to silence (never breaks the host tool): no jq, no line, no write.
 # =============================================================================
 
@@ -32,14 +35,34 @@ OC_LOG_ARGS=""
 OC_LOG_EXTRA="{}"
 OC_LOG_START=""
 
+# oc_is_selftest -- TRUE when this invocation is the tool's own selftest.
+# M2-21 (2026-09-12, toolsmith): the `--selftest` FLAG is not the only spelling --
+# oc-deploy dispatches `--selftest|selftest) selftest "$@" ;;` as ONE case arm, and
+# the bare SUBCOMMAND slipped the flag-only predicate. Consequence: OC_TOOLS_NOLOG
+# was never exported, so every fixture child the selftest spawned was logged to the
+# PRODUCTION tools.log -- six fixture shas across two weeks (08-31 -> 09-12) that
+# oc-ship-audit read back as ORPHANED dispatches, reddening a gate that fronts
+# `oc-ledger commit-pending`. The same predicate guards oc_log_flood_guard, which
+# must never trip on a selftest replaying its own failure fixtures.
+# First-token match for the bare form ONLY: a VALUE that happens to read
+# "selftest" (e.g. `--dir selftest`) must never silence a real invocation.
+oc_is_selftest() {
+  case " $OC_LOG_ARGS " in
+    *" --selftest "*) return 0 ;;
+  esac
+  [ "${OC_LOG_ARGS%% *}" = "selftest" ] && return 0
+  return 1
+}
+
 oc_log_init() {
   OC_LOG_TOOL="${1:-unknown}"
   shift 2>/dev/null || true
   OC_LOG_ARGS="$*"
   case " $OC_LOG_ARGS " in
-    *" --selftest "*) export OC_TOOLS_NOLOG=1 ;;  # recursive selftest children stay silent too
     *" --no-log "*)   export OC_TOOLS_NOLOG=1 ;;  # lib-level suppression (E-B1, 2026-08-31): tools no longer pre-scan argv
   esac
+  # recursive selftest children stay silent too (M2-21: the bare subcommand counts)
+  if oc_is_selftest; then export OC_TOOLS_NOLOG=1; fi
   if [ "${OC_TOOLS_NOLOG:-0}" = "1" ]; then
     OC_LOG_ENABLED=0
     return 0
@@ -69,7 +92,7 @@ oc_log_init() {
 # rc 8; identical-args loops do.
 oc_log_flood_guard() {
   [ "${OC_NO_FLOODGUARD:-0}" = "1" ] && return 0
-  case " $OC_LOG_ARGS " in *" --selftest "*) return 0 ;; esac
+  if oc_is_selftest; then return 0; fi   # M2-21: the bare `selftest` subcommand bypasses too
   command -v jq >/dev/null 2>&1 || return 0
   local logf="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
   [ -f "$logf" ] || return 0
