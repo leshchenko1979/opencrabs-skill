@@ -77,7 +77,20 @@ if [ -f "$_OC_LIB" ]; then
 else
   oc_log_finish() { :; }
 fi
-trap 'rc=$?; if command -v journal_summary >/dev/null 2>&1; then journal_summary; fi; oc_log_finish $rc' EXIT
+# Combined exit handler: cleans up lock, logs lost journal lines, finishes tool logging
+_chain_exit_handler() {
+  local rc=$?
+  if command -v release_ship_lock >/dev/null 2>&1; then
+    release_ship_lock
+  fi
+  if command -v journal_summary >/dev/null 2>&1; then
+    journal_summary
+  fi
+  if command -v oc_log_finish >/dev/null 2>&1; then
+    oc_log_finish $rc
+  fi
+}
+trap '_chain_exit_handler' EXIT INT TERM
 
 # selftest dispatch BEFORE arg parsing (avoids the unknown-arg gate)
 # impl re-entry is guarded by OC_SHIPCHAIN_IMPL to prevent exec-loop
@@ -215,6 +228,8 @@ release_ship_lock() {
 acquire_ship_lock() {
   local timeout="${1:-600}"
   local start_ts now elapsed
+  # Skip lock in selftest / test override mode if requested
+  [ "${OC_SKIP_SHIP_LOCK:-0}" = "1" ] && return 0
   mkdir -p "$STATE_DIR"
   eval "exec ${SHIP_LOCK_FD}>\"\$SHIP_LOCK_FILE\"" 2>/dev/null || true
   
@@ -245,11 +260,9 @@ acquire_ship_lock() {
       printf '%s\n' "oc-ship-chain: landing lock timeout after ${elapsed}s" >&2
       die "ship lock acquisition timed out after ${timeout}s — another ship is in progress" 6
     fi
-    sleep 3
+    sleep 1
   done
 }
-
-trap 'release_ship_lock' EXIT INT TERM
 
 # worktree pinned to another branch — git forbids main twice)
 MAIN_WT="$(git -C "$FORK_REPO" worktree list --porcelain | awk '/^worktree /{wt=$2} /^branch refs\/heads\/main$/{found=wt} END{if (found) print found}')"
@@ -408,7 +421,7 @@ fi
 
 # ---- leg 3: ff-merge into fork main (under ship lock) ----------------------
 acquire_ship_lock "${SHIP_LOCK_TIMEOUT:-600}"
-git -C "$FORK_REPO" fetch origin --quiet
+git -C "$FORK_REPO" fetch origin --quiet || true
 CUR="$(git -C "$FORK_REPO" rev-parse --abbrev-ref HEAD)"
 [ "$CUR" = "main" ] || die "fork checkout on '$CUR', not main — check out main first" 3
 set +e
@@ -542,7 +555,7 @@ EOF
     OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
     OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
     OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
-    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
       bash "$SELF" "$@"
   }
 
@@ -673,7 +686,7 @@ EOF
     OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
     OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
     OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$T/tools.log" \
-    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
       bash "$T/bin/oc-ship-chain" "$@"
   }
   rm -f "$T/journal.log"
@@ -755,7 +768,7 @@ EOF
   #     override lifts it. OC_SHIPCHAIN_FREEZE_FILE makes this hermetic — the
   #     case never depends on the live .fork-freeze existing.
   printf 'freeze\n' > "$T/freeze"
-  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+  RC=0; OUT="$(OC_DEPLOY_STATE_DIR="$T/state" OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
       OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" OC_TOOLS_NOLOG=1 \
       OC_SHIPCHAIN_LEDGER="$T/journal.log" OC_SHIPCHAIN_FREEZE_FILE="$T/freeze" \
       bash "$SELF" --sha "$FSHA" --branch feat 2>&1)" || RC=$?
@@ -765,7 +778,7 @@ EOF
   rm -f "$T/journal.log"
   git -C "$T/clone" checkout -q main
   git -C "$T/clone" reset -q --hard origin/main
-  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+  RC=0; OUT="$(OC_DEPLOY_STATE_DIR="$T/state" OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
       OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" OC_TOOLS_NOLOG=1 \
       OC_SHIPCHAIN_LEDGER="$T/journal.log" OC_SHIPCHAIN_FREEZE_FILE="$T/freeze" \
       OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
@@ -824,10 +837,9 @@ EOF2
   # Ship Lock contention selftest:
   # Hold lock in background -> chain wait -> release lock -> chain completes
   mkdir -p "$T/state"
-  LOCK_FD_TEST=199
-  eval "exec ${LOCK_FD_TEST}>\"\$T/state/ship.lock\""
-  flock -x "$LOCK_FD_TEST"
-  ( sleep 1 && eval "exec ${LOCK_FD_TEST}>&-" ) &
+  flock -x "$T/state/ship.lock" sleep 1 &
+  SUBPID=$!
+  sleep 0.1
   rm -f "$T/journal.log"
   git -C "$T/clone" checkout -q main
   git -C "$T/clone" reset -q --hard origin/main
@@ -835,6 +847,7 @@ EOF2
       OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" OC_TOOLS_NOLOG=1 \
       OC_SHIPCHAIN_LEDGER="$T/journal.log" OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
       bash "$SELF" --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  wait $SUBPID 2>/dev/null || true
   check_rc "ship-lock-contention-resolved" "$RC" 0
   grep -q "SHIP-LOCK acquired after" "$T/journal.log" && ok "journal-ship-lock-waited" || bad "journal-ship-lock-waited"
   grep -q "SHIP-LOCK released" "$T/journal.log" && ok "journal-ship-lock-released" || bad "journal-ship-lock-released"

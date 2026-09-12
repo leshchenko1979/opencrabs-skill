@@ -1451,6 +1451,18 @@ swap_execute() {
     fi
   fi
 
+  # Lineage monotonicity guard (v0.4.148): ensure the incoming SHA is a descendant of the currently deployed SHA
+  # if both exist in the local repo. Prevents older delayed/retried builds from regressing the live binary.
+  if [ "$PREV_SHA" != "none" ] && [ -n "$PREV_SHA" ] && [ "$DRILL" != "1" ]; then
+    if git -C "${OC_DEPLOY_REPO:-/root/opencrabs}" cat-file -e "$PREV_SHA" 2>/dev/null && \
+       git -C "${OC_DEPLOY_REPO:-/root/opencrabs}" cat-file -e "$SHA" 2>/dev/null; then
+      if ! git -C "${OC_DEPLOY_REPO:-/root/opencrabs}" merge-base --is-ancestor "$PREV_SHA" "$SHA" 2>/dev/null; then
+        jline guard 2 "$(jq -cn --arg s "$SHA" --arg p "$PREV_SHA" '{reason:"non-monotonic-swap", current_deployed:$p, incoming_sha:$s}')"
+        die 2 "swap-execute: incoming sha $SHA is NOT a descendant of deployed sha $PREV_SHA — refusing stale binary overwrite"
+      fi
+    fi
+  fi
+
   # --- 5. install (cp to .new, then atomic rename over target) ---
   local OLD_SHA NEW_SHA
   OLD_SHA="$(sha256sum "$SWAP_TARGET" | cut -d' ' -f1)"
@@ -2064,7 +2076,15 @@ case "$MODE" in
             if [ -z "$CAND_SHA" ]; then
               CAND_SHA="$("$GH" api "repos/$FORK/actions/runs/$CANDID" 2>/dev/null | jq -r '.head_sha // empty' 2>/dev/null)"
             fi
-            [ "$CAND_SHA" = "$SHA" ] || continue   # only the run WE dispatched
+            # Ancestry-aware candidate matching (v0.4.148): accept if the run builds our exact SHA
+            # OR a descendant commit containing our SHA (coalesced carrier run).
+            if [ "$CAND_SHA" = "$SHA" ]; then
+              : # exact match
+            elif [ -n "$CAND_SHA" ] && git -C "${OC_DEPLOY_REPO:-/root/opencrabs}" merge-base --is-ancestor "$SHA" "$CAND_SHA" 2>/dev/null; then
+              echo "oc-deploy ship-wait: candidate run $CANDID built descendant $CAND_SHA (contains our sha $SHA — coalesced run)" >&2
+            else
+              continue
+            fi
             RID="$CANDID"; break
           done
           if [ -n "$RID" ]; then
@@ -2207,7 +2227,14 @@ case "$MODE" in
     # NOTE (n=1878): NO local cat-file guard here — swap-execute targets the
     # remote host; its sha is authenticated by the carrier-run job-name decode
     # inside swap_execute, not by the local object DB. Local guard = false stops.
-    swap_execute "$SHA" "$RUN_ID" "$FEATURES" "$DRILL" "$ARTDIR" "$ALLOW_DROP"
+    SWAP_LOCK="$STATE_DIR/host-swap.lock"
+    (
+      if command -v flock >/dev/null 2>&1; then
+        exec 200>"$SWAP_LOCK"
+        flock -x 200 || die 2 "failed to acquire host-swap.lock ($SWAP_LOCK)"
+      fi
+      swap_execute "$SHA" "$RUN_ID" "$FEATURES" "$DRILL" "$ARTDIR" "$ALLOW_DROP"
+    )
     ;;
   # ---------------------------------------------------------------- fanout --
   fanout)
