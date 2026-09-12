@@ -93,8 +93,24 @@ cmd_overlap() {
   trap - EXIT INT TERM
   trap 'oc_log_finish $?' EXIT
   if [ -n "$inter" ]; then
-    echo "$inter"
-    echo "OVERLAP: gate-required (conservative=$conservative)" >&2
+    # #22 (2026-09-12, editor lane 462181e9 report; found first-hand by two
+    # lanes): on the conservative path tmp_merge is a COPY of tmp_main, so
+    # comm -12 returns the ENTIRE main-shift set — not an intersection. Printing
+    # that bare list under a heading that reads as an overlap verdict has now
+    # misled two lanes (6630dc9a flagged it; 462181e9 nearly filed a false
+    # collision) on a real overlap of ZERO. The logic is correct and stays; the
+    # LABEL was the defect. Name the list for what it is and say outright that
+    # it is not an intersection. Nothing parses this stdout (the one consumer,
+    # oc-deploy, calls `audit`), so the shape is free to change.
+    if [ "$conservative" = "1" ]; then
+      echo "MAIN-SHIFT (not an overlap — merge-changed set unknown for a single-parent HEAD):"
+      echo "$inter" | sed 's/^/  /'
+      echo "OVERLAP: gate-required (conservative=1 — the list above is NOT an intersection: every main-shift file is listed because the branch-side set could not be derived)" >&2
+    else
+      echo "OVERLAP (real intersection of main-shift and branch-side):"
+      echo "$inter" | sed 's/^/  /'
+      echo "OVERLAP: gate-required (conservative=0 — real intersection)" >&2
+    fi
     exit 1
   fi
   echo "OVERLAP: zero — gate-skip permitted (conservative=$conservative)" >&2
@@ -180,8 +196,13 @@ cmd_selftest() {
   # 2. main also touches f1 -> overlap -> 1
   git checkout -q main; echo clash >> f1.txt; git commit -q -a -m main2
   git checkout -q feat; git merge --no-edit -m merge2 main >/dev/null 2>&1 || { echo -e "clash\nfeat" > f1.txt; git add f1.txt; git commit -q --no-edit -m merge2-resolved; }
-  "$SELF" overlap --old-main "$BASE" --new-main main --tree "$T/repo" >/dev/null 2>&1
+  "$SELF" overlap --old-main "$BASE" --new-main main --tree "$T/repo" >"$T/ov2.out" 2>"$T/ov2.err"
   [ $? -eq 1 ] && t=OK || { t=FAIL; rc=1; }; echo "selftest overlap-clash: $t"
+  # 2b. the REAL-intersection path must say so and must NOT borrow the
+  #     conservative label (#22).
+  grep -q '^OVERLAP (real intersection' "$T/ov2.out" && t=OK || { t=FAIL; rc=1; }; echo "selftest overlap-real-labelled: $t"
+  grep -q 'real intersection' "$T/ov2.err" && t=OK || { t=FAIL; rc=1; }; echo "selftest overlap-real-stderr: $t"
+  grep -q 'MAIN-SHIFT' "$T/ov2.out" && { t=FAIL; rc=1; } || t=OK; echo "selftest overlap-real-not-main-shift: $t"
   # 3. audit clean: old tip changes survive the CLEAN merge intact
   "$SELF" audit --old-tip "$OLD_TIP" --new-tip "$MERGE_TIP" --base "$BASE" >/dev/null 2>&1
   [ $? -eq 0 ] && t=OK || { t=FAIL; rc=1; }; echo "selftest audit-clean: $t"
@@ -193,8 +214,18 @@ cmd_selftest() {
   # 5. usage rc 2
   "$SELF" >/dev/null 2>&1
   [ $? -eq 2 ] && t=OK || { t=FAIL; rc=1; }; echo "selftest no-args-usage: $t"
+  # 6. CONSERVATIVE path (no --tree => merge-changed set unknown): the printed
+  #    list is the MAIN-SHIFT set, NOT an intersection. This is the shape that
+  #    misled two lanes on a real overlap of ZERO — the list must be labelled,
+  #    and the verdict must say it is not an intersection (#22).
+  git checkout -q main
+  "$SELF" overlap --old-main "$BASE" --new-main main >"$T/ov6.out" 2>"$T/ov6.err"
+  [ $? -eq 1 ] && t=OK || { t=FAIL; rc=1; }; echo "selftest overlap-conservative-rc: $t"
+  grep -q '^MAIN-SHIFT' "$T/ov6.out" && t=OK || { t=FAIL; rc=1; }; echo "selftest overlap-conservative-labelled: $t"
+  grep -qi 'NOT an intersection' "$T/ov6.err" && t=OK || { t=FAIL; rc=1; }; echo "selftest overlap-conservative-stderr-honest: $t"
+  grep -q '^OVERLAP (real' "$T/ov6.out" && { t=FAIL; rc=1; } || t=OK; echo "selftest overlap-conservative-not-called-real: $t"
 
-  [ "$rc" -eq 0 ] && echo "selftest: 5/5 OK" >&2 || echo "selftest: FAILURES" >&2
+  [ "$rc" -eq 0 ] && echo "selftest: 12/12 OK" >&2 || echo "selftest: FAILURES" >&2
   exit "$rc"
 }
 
