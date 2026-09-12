@@ -278,6 +278,26 @@ Gate 4 (Session-Id trailer, `quick-build-linux.yml` ORDER gates) applies to ever
   ```
 - **PR Citation**: The resulting GREEN run URL from the full CI run MUST be cited in the upstream PR body alongside the behavioral smoke test evidence.
 
+## Docs-Only LEG1 Gate Skip (v0.4.161, owner ruling 2026-09-12 11:04Z) [LANE]
+
+**Owner ruling (verbatim, 2026-09-12 11:04Z):** *"We don't need the pure docs commits to pass through ci on our side."* Origin: lane `6630dc9a`'s docs commit `eee36027` (ONTOLOGY.md + CONTRIBUTING.md, zero code) burned LEG1 run `34688939568` in full before the ruling landed.
+
+- **The law.** A commit whose changed paths are ALL **pure docs** SKIPS the LEG1 CI gate on the fork ship chain. A skip is neither PASS nor RED — it is a **SKIP**, and it MUST be recorded as one (see §Recording).
+- **"Pure docs" is DEFINED HERE, in the law — never left to a tool's discretion.** A commit is pure docs iff **every** changed path (a) ends in `.md`, **and** (b) is **NOT compiled into the binary** via `include_str!` / `include_bytes!`. Clause (b) is load-bearing: a `.md` compiled into the binary changes COMPILED OUTPUT, so a commit touching it is a code change and MUST run the gate. When a chain ships a RANGE rather than a single commit, every commit in the range must be pure docs for the skip to apply.
+- **The compiled-in exclusion set — 21 paths (HQ-verified first-hand 2026-09-12 against `src/**/*.rs`).** A commit touching ANY of these is NOT docs-only, whatever its extension:
+  - `README.md` (repo root — `src/tests/subagent_tool_description_test.rs`)
+  - `src/docs/reference/templates/{SOUL,USER,AGENTS,TOOLS,MEMORY,CODE,SECURITY,BOOT,HEARTBEAT}.md` — 9 paths (`src/config/profile.rs`, `src/tui/onboarding/brain.rs`, `src/tui/onboarding/types.rs`)
+  - `src/docs/reference/templates/skills/{a2a-gateway,browser-cdp,cost-estimate,dynamic-tools,github,multi-agent,repo-audit,security-audit}/SKILL.md` — 8 paths (`src/brain/skills.rs`)
+  - `src/docs/reference/plans/plan-json-spec.md` (`src/brain/plans.rs`, `src/tests/bundled_plans_test.rs`)
+  - `src/eval/fixtures/memory_corpus.md` + `src/eval/fixtures/memory_corpus_multilingual.md` (`src/tests/memory_recall_eval_test.rs`, `src/tests/memory_recall_multilingual_test.rs`)
+- **Derive the set; never trust the snapshot above.** It rots the moment a template is added or removed. The authoritative derivation is one command — if a changed path appears in its output, the commit is NOT docs-only:
+  ```bash
+  grep -rho 'include_str!("[^"]*\.md")' src/ --include='*.rs' | sort -u
+  ```
+- **Recording is MANDATORY — an absent gate is NEVER a passed gate.** A skipped LEG1 MUST be recorded in the ship journal **and** in a ledger row naming the sha (kind `shipchain`, the leg stated as SKIPPED). The v0.4.109 CI-run identity + verdict laws apply unchanged: GREEN may be stated only for a gate that actually ran and returned `completed success`; a skipped leg is cited as SKIPPED, never as GREEN, and is never counted as a passed leg in a smoke receipt.
+- **Upstream precedent — and why this law does NOT copy its shape.** Upstream `.github/workflows/ci.yml:23-27` already paths-ignores `**.md` / `docs/**` / `LICENSE*` / `.gitignore` on push ("Docs-only commits are skipped via paths-ignore so they don't burn the matrix"). That shape is **extension-based**, so it would happily skip a commit editing a compiled-in template. This law states the compiled-in exclusion EXPLICITLY rather than inheriting that hole.
+- **Enforcement split.** The law text is HQ's (this section). The mechanical LEG1 behavior in `tools/oc-ship-chain` is Toolsmith's (defect #20). Until that change lands a docs-only commit still burns LEG1 — this section is the REQUIREMENT, and it deliberately **names no flag**: do not invent one, and do not claim a skip the tool has not recorded.
+
 ## Owner-Dependent Smoke Legs — Park, Don't Chase (v0.4.152, owner order 2026-09-12) [LANE]
 
 **Origin (owner, 2026-09-12 ~08:0xZ, verbatim):** *"I saw you stranded on waiting for a smoke — that shouldn't happen, no human smoke will be confirmed as I was away. Why not just leave these PRs for the next cycle?"* Worked example: a verdict-only lane (#155) sat ~4 h because its 4th smoke leg was an owner visual pass, and that leg was treated as a blocking gate in an owner-absent window. Waiting bought nothing — the candidate was verdict-only and excluded from harvest, so no PR was ever going to be filed off it.

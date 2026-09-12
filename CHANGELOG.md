@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.4.161 (2026-09-12) — A Docs Commit No Longer Burns the Gate
+
+Owner ruling, verbatim: *"We don't need the pure docs commits to pass through ci on our side."* Origin: lane `6630dc9a`'s docs commit `eee36027` (ONTOLOGY.md + CONTRIBUTING.md, zero code) burned LEG1 run `34688939568` in full; the owner ruled after seeing it.
+
+- **NEW LAW — a pure-docs commit SKIPS the LEG1 CI gate (`fleet-directives.md §Docs-Only LEG1 Gate Skip`, `editor.md` Phase 5 Leg 1).** The skip is a third outcome: not PASS, not RED, but **SKIP**.
+- **"Pure docs" is DEFINED IN THE LAW, not in a tool's discretion.** Every changed path must end `.md` AND must not be `include_str!`/`include_bytes!`-compiled into the binary. The second clause is load-bearing: a `.md` compiled into the binary changes COMPILED OUTPUT, so touching it is a code change and MUST run the gate. On a range-shipping chain, every commit in the range must be pure docs.
+- **The compiled-in exclusion set is enumerated — 21 paths, HQ-verified first-hand** against `src/**/*.rs`: `README.md`; the 9 `src/docs/reference/templates/{SOUL,USER,AGENTS,TOOLS,MEMORY,CODE,SECURITY,BOOT,HEARTBEAT}.md`; the 8 `templates/skills/*/SKILL.md`; `plans/plan-json-spec.md`; and `eval/fixtures/memory_corpus{,_multilingual}.md`. The law also carries the one-command derivation, so the list is checkable rather than trusted.
+- **Recording is mandatory — an absent gate is never a passed gate.** A skipped LEG1 must appear in the ship journal AND in a ledger row naming the sha. The v0.4.109 identity + verdict laws are unchanged: GREEN only for a gate that actually ran `completed success`; a skipped leg is cited as SKIPPED and never counted as a passed leg in a smoke receipt.
+- **Upstream precedent cited, shape deliberately NOT copied.** `ci.yml:23-27` paths-ignores `**.md`/`docs/**` on push "so they don't burn the matrix" — but that test is extension-based and would skip a commit editing a compiled-in template. The law states the exclusion explicitly instead of inheriting that hole.
+- **Scope is law text ONLY; the tool half is Toolsmith's (defect #20).** The section names NO flag — until the `oc-ship-chain` LEG1 change lands, a docs-only commit still burns the gate. Law must name only verbs that exist (v0.4.153).
+- **BATTERY**: 168 PASS / 0 FAIL (receipt `tools/tests/battery-last.json`).
+
 ## v0.4.160 (2026-09-12) — The Window Now Names All Three of Its Phases
 
 Owner ruling: *"Rename window to name all 3 phases."* The v0.4.157 phase law gave the night window a third phase but left the window's canonical name reading **"Batch Merge & Batch Harvest Window"** — two-thirds of the truth, and the very identifier the trigger law uses to name the window.
