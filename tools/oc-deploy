@@ -220,8 +220,10 @@ lineage_next_step() { # <verdict> <prev> <sha> <twin>
 # host-swap.lock flock) so a re-entry can never self-deadlock on a held lock.
 # Overrides: OC_SWAP_UNIT (default opencrabs-ops.service) · OC_SWAP_IN_UNIT_CGROUP
 # (auto|1|0 — test hook; auto inspects /proc/self/cgroup) · OC_SWAP_DETACH_CMD
-# (default `systemd-run --user --scope --collect`) · OC_SWAP_DETACHED (loop guard,
-# also set by the poll handoff so the transient-unit path never re-detaches).
+# (default `systemd-run --user --scope --collect`; MUST BLOCK and pass the child's
+# rc through — use `setsid -w`, never bare `setsid`, or the swap's exit code is
+# lost and a guard refusal reads as success) · OC_SWAP_DETACHED (loop guard, also
+# set by the poll handoff so the transient-unit path never re-detaches).
 swap_in_bounce_cgroup() { # rc 0 = this process IS inside the unit's cgroup
   local unit="${OC_SWAP_UNIT:-opencrabs-ops.service}" cg
   case "${OC_SWAP_IN_UNIT_CGROUP:-auto}" in
@@ -292,7 +294,9 @@ lineage_check_run() { # [--prev P] [--sha S] [--repo R] [--json]
 #   - no swap-result ledger row quoting sha+run -> idempotent, never double-stamp
 # Fan-out is deliberately NOT replayed here (use `oc-deploy fanout --run <id>`):
 # fanout has its own done-marker and a replay would re-notify contributors.
-# rc: 0 = handled (recovered, or correctly nothing to do) · 2 = cannot judge.
+# rc: 0 = handled (recovered, or correctly nothing to do) · 2 = refused (the journal
+# does not describe a recoverable real swap) — a caller scripting recovery can tell
+# "done" from "needs attention".
 recover_receipt_run() { # [--journal PATH] [--run R] [--sha S] [--dry-run] [--json]
   local jf="" run="" sha="" dry=0 json=0 cand hist=0
   while [ $# -gt 0 ]; do
@@ -330,15 +334,15 @@ recover_receipt_run() { # [--journal PATH] [--run R] [--sha S] [--dry-run] [--js
   [ -n "$run" ] || run="$jrun"
   [ -n "$sha" ] || sha="$jsha"
 
-  local cur existing reason="" ok=1 superseded=0
+  local cur existing reason="" ok=1 superseded=0 refuse=0
   cur="$(cat "$DEPLOYED" 2>/dev/null || echo MISSING)"
   if [ "$has_receipt" != 0 ]; then reason="journal already carries a receipt step — swap completed, nothing to recover"; ok=0
-  elif [ "$has_install" = 0 ]; then reason="journal has no install exit=0 — the swap never installed; refusing to stamp"; ok=0
-  elif [ "$has_marker" = 0 ]; then reason="journal has no marker-write exit=0 — markers never written; refusing to stamp"; ok=0
-  elif [ -z "$sha" ]; then reason="journal names no deployed sha (and --sha not given) — cannot judge"; ok=0
+  elif [ "$has_install" = 0 ]; then reason="journal has no install exit=0 — the swap never installed; refusing to stamp"; ok=0; refuse=2
+  elif [ "$has_marker" = 0 ]; then reason="journal has no marker-write exit=0 — markers never written; refusing to stamp"; ok=0; refuse=2
+  elif [ -z "$sha" ]; then reason="journal names no deployed sha (and --sha not given) — cannot judge"; ok=0; refuse=2
   elif [ "$cur" != "$sha" ]; then
     if [ "$hist" = 1 ]; then superseded=1
-    else reason="deployed.sha ($cur) != journal sha ($sha) — a later swap superseded this one; refusing to stamp (pass --historical to record it as a superseded swap)"; ok=0
+    else reason="deployed.sha ($cur) != journal sha ($sha) — a later swap superseded this one; refusing to stamp (pass --historical to record it as a superseded swap)"; ok=0; refuse=2
     fi
   fi
   if [ "$ok" = 1 ]; then
@@ -360,7 +364,7 @@ recover_receipt_run() { # [--journal PATH] [--run R] [--sha S] [--dry-run] [--js
   fi
   if [ "$ok" != 1 ]; then
     [ "$json" = 1 ] || echo "verdict:      not recovered — $reason"
-    return 0
+    return $refuse
   fi
   if [ "$dry" = 1 ]; then
     [ "$json" = 1 ] || echo "verdict:      RECOVERABLE (dry-run — no stamp written)"
@@ -1446,6 +1450,139 @@ NSTUB
     --allow-rewritten-lineage >/dev/null 2>"$T/lin.err"; rc=$?
   check_rc "swap-lineage-override-nojust-rc" $rc 2
   check_has "swap-lineage-override-nojust-token" "$(cat "$T/lin.err")" "OC_DEPLOY_GATE=override-needs-justification"
+  # ---------------------------------------------------------------------
+  # 22. cgroup-kill survival + receipt recovery (v0.4.153)
+  #     DEFECT: a DIRECT swap-execute launched from a session hosted by
+  #     opencrabs-ops.service lives in that unit's cgroup, so its OWN step-8
+  #     restart tears the cgroup down and SIGKILLs it at the restart line.
+  #     Steps 9-12 (post-verify, sidecar-sync, receipt, fanout) never run, so
+  #     NO swap-result row is written: the host is swapped, the ledger is
+  #     silent (journal swap-acb8e205-… stops at seq 7 marker-write, 2026-09-12).
+  #     Every other case in this file shims the restart with `true`, so none of
+  #     them can observe it — that is the testing gap this section closes.
+  #
+  #     The restart shim here KILLS the swap's own process group, which is what
+  #     a cgroup teardown does. The swap is launched under its own `setsid`, so
+  #     that kill cannot reach this selftest.
+  #       (a) DETACHED: swap_ensure_detached re-execs via setsid into a NEW
+  #           session; the kill lands on the abandoned original group and the
+  #           swap runs to completion (receipt step + ledger row + rc 0).
+  #       (b) NEGATIVE CONTROL: OC_SWAP_DETACHED=1 suppresses the detach, so the
+  #           swap IS the original group; the kill truncates it at marker-write
+  #           and NO row is written. Proves the test can SEE the defect.
+  #       (c) recover-receipt repairs (b): exactly one row, then a no-op re-run.
+  #       (d) recover-receipt REFUSES (rc 2) a journal whose marker-write sha
+  #           does not match the current deployed.sha; --historical records it.
+  #     NOTE: fanout is suppressed (OC_DEPLOY_NOFANOUT=1 — no network in the
+  #     battery). The proof rests on receipt + the ledger stamp, both of which
+  #     land strictly AFTER the kill point, so they cannot run unless the swap
+  #     survived it.
+  # ---------------------------------------------------------------------
+  local SD7="$T/state7" SD8="$T/state8" KPG="$T/cgpgid" COUT CERR CRC CJF NEG_JF DET_JF
+  mkdir -p "$SD7/tools" "$SD7/backups" "$SD8/tools" "$SD8/backups"
+  local d
+  for d in "$SD7" "$SD8"; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$d/tools/oc-artifact-verify"; chmod +x "$d/tools/oc-artifact-verify"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$d/tools/oc-seal-state";     chmod +x "$d/tools/oc-seal-state"
+  done
+  # restart shim: kill the ORIGINAL process group (what a unit teardown does)
+  cat > "$T/cgkill.sh" <<'EOS'
+#!/bin/sh
+pg="$(cat "$OC_SWAP_KILL_PGID_FILE" 2>/dev/null)"
+[ -n "$pg" ] && kill -TERM -"$pg" 2>/dev/null
+exit 0
+EOS
+  chmod +x "$T/cgkill.sh"
+  # launcher wrapper: records its own pgid — under setsid it IS the session leader
+  cat > "$T/cgwrap.sh" <<'EOS'
+#!/bin/sh
+echo "$$" > "$OC_SWAP_KILL_PGID_FILE"
+exec "$@"
+EOS
+  chmod +x "$T/cgwrap.sh"
+  cg_swap() { # <sdir> <prev> <sha> <detached 0|1> [extra...] -> COUT/CERR/CRC/CJF
+    local sdir="$1" prev="$2" sha="$3" det="$4"; shift 4
+    printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$sdir/workers-ledger.json"
+    printf '%s\n' "$prev" > "$sdir/deployed.sha"
+    printf 'v0-current' > "$T/bin/oc-cg-target"
+    : > "$KPG"
+    COUT="$(OC_DEPLOY_STATE_DIR="$sdir" OC_SWAP_TARGET="$T/bin/oc-cg-target" \
+      OC_SWAP_BACKUP_DIR="$sdir/backups" \
+      OC_SWAP_RESTART_CMD="$T/cgkill.sh" OC_SWAP_KILL_PGID_FILE="$KPG" \
+      OC_SWAP_ACTIVE_CMD="echo active" OC_SWAP_SKIP_PROC=1 OC_SWAP_SETTLE=0 OC_SWAP_TRIES=1 \
+      OC_A2A_URL="" OC_DEPLOY_NOTIFY="$SD/notify" OC_DEPLOY_GH="$SD/gh" \
+      OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" OC_DEPLOY_NOFANOUT=1 \
+      OC_DEPLOY_REPO="$LREPO" OC_DEPLOY_SEAL="$sdir/tools/oc-seal-state" \
+      OC_DEPLOY_ARTVERIFY="$sdir/tools/oc-artifact-verify" \
+      OC_SWAP_IN_UNIT_CGROUP=1 OC_SWAP_DETACH_CMD="setsid -w" OC_SWAP_DETACHED="$det" \
+      setsid "$T/cgwrap.sh" "$SELF_BIN" swap-execute --sha "$sha" --run 790 \
+      --features telegram --artifact-dir "$T/art" "$@" 2>"$T/cg.err" )"
+    CRC=$?
+    CERR="$(cat "$T/cg.err" 2>/dev/null)"
+    CJF="$(ls -t "$sdir/oc-deploy/journal/"swap-"${sha:0:8}"-*.jsonl 2>/dev/null | head -1)"
+  }
+  # 22a. DETACHED: the swap survives the group kill that a unit teardown performs
+  cg_swap "$SD7" "$LREW" "$LNEW" 0
+  DET_JF="$CJF"
+  # The WAITER (the setsid/systemd-run client) still lives in the doomed cgroup,
+  # so it dies with it and reports 143 — NOT the swap's exit code. That is
+  # expected, and is exactly why the swap's bookkeeping must never depend on its
+  # caller. So assert (i) the kill WAS delivered (waiter rc != 0 — else the test
+  # is not exercising the kill path at all) and (ii) the swap SURVIVED it, via
+  # the journal + ledger assertions below, which only land after the kill point.
+  [ "$CRC" != 0 ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: cg detached waiter exited 0 — the group kill was never delivered"; }
+  check_has "cg-detached-complete" "$COUT" "SWAP COMPLETE"
+  grep -q '"step":"receipt"' "$DET_JF" 2>/dev/null && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: cg detached run lost the receipt step"; }
+  grep -q '"step":"post-verify"' "$DET_JF" 2>/dev/null && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: cg detached run lost post-verify (killed at the bounce)"; }
+  [ "$(jq '[.events[]|select(.kind=="swap-result")]|length' "$SD7/workers-ledger.json" 2>/dev/null)" = 1 ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: cg detached run wrote no swap-result ledger row"; }
+  # 22b. NEGATIVE CONTROL: no detach -> the kill lands -> truncated, ledger silent
+  cg_swap "$SD7" "$LREW" "$LNEW" 1
+  NEG_JF="$CJF"
+  [ -z "$(grep '"step":"receipt"' "$NEG_JF" 2>/dev/null)" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: cg negative control was NOT truncated (receipt present)"; }
+  [ "$(jq -rs '.[-1].step' "$NEG_JF" 2>/dev/null)" = "marker-write" ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: cg negative control did not stop at marker-write"; }
+  [ "$(jq '[.events[]|select(.kind=="swap-result")]|length' "$SD7/workers-ledger.json" 2>/dev/null)" = 0 ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: cg negative control stamped a row despite truncation"; }
+  # 22c. recover-receipt repairs the truncated swap: exactly one row, idempotent
+  printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD7/workers-ledger.json"
+  printf '%s\n' "$LNEW" > "$SD7/deployed.sha"
+  COUT="$(OC_DEPLOY_STATE_DIR="$SD7" "$SELF_BIN" recover-receipt --journal "$NEG_JF" 2>&1)"; CRC=$?
+  check_rc "recover-rc" $CRC 0
+  check_has "recover-verdict" "$COUT" "row stamped"
+  [ "$(jq '[.events[]|select(.kind=="swap-result")]|length' "$SD7/workers-ledger.json" 2>/dev/null)" = 1 ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: recover-receipt did not stamp exactly one row"; }
+  COUT="$(OC_DEPLOY_STATE_DIR="$SD7" "$SELF_BIN" recover-receipt --journal "$NEG_JF" 2>&1)"; CRC=$?
+  check_rc "recover-idempotent-rc" $CRC 0
+  check_has "recover-idempotent-msg" "$COUT" "idempotent no-op"
+  [ "$(jq '[.events[]|select(.kind=="swap-result")]|length' "$SD7/workers-ledger.json" 2>/dev/null)" = 1 ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: recover-receipt double-stamped on re-run"; }
+  # 22d. REFUSAL: journal sha != current deployed.sha -> rc 2, nothing written
+  printf '{"meta":{"oc_deploy_stage":"S2"},"events":[]}' > "$SD8/workers-ledger.json"
+  printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n' > "$SD8/deployed.sha"
+  COUT="$(OC_DEPLOY_STATE_DIR="$SD8" "$SELF_BIN" recover-receipt --journal "$NEG_JF" 2>&1)"; CRC=$?
+  check_rc "recover-refuse-rc" $CRC 2
+  check_has "recover-refuse-msg" "$COUT" "superseded"
+  [ "$(jq '[.events[]|select(.kind=="swap-result")]|length' "$SD8/workers-ledger.json" 2>/dev/null)" = 0 ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: recover-receipt stamped despite the sha mismatch"; }
+  # 22e. --historical records the superseded swap rather than refusing outright
+  COUT="$(OC_DEPLOY_STATE_DIR="$SD8" "$SELF_BIN" recover-receipt --journal "$NEG_JF" --historical 2>&1)"; CRC=$?
+  check_rc "recover-historical-rc" $CRC 0
+  check_has "recover-historical-kw" "$COUT" "SUPERSEDED"
+  [ "$(jq '[.events[]|select(.kind=="swap-result")]|length' "$SD8/workers-ledger.json" 2>/dev/null)" = 1 ] && pass=$((pass+1)) \
+    || { fail=$((fail+1)); echo "SELFTEST FAIL: --historical did not stamp the superseded row"; }
+  # 22f. rc PROPAGATION through the detach. A non-blocking launcher (bare
+  #      `setsid`) returns 0 the moment it forks, so the swap's own exit code
+  #      is lost — a guard refusal (rc 2) would read as success to every caller,
+  #      including oc-ship-chain, which branches on it. The detach command must
+  #      BLOCK and pass the child's rc through (`systemd-run --scope`, `setsid -w`).
+  cg_swap "$SD7" "$LSTALE" "$LNEW" 0
+  check_rc "cg-detached-rc-propagation" $CRC 2
+  check_has "cg-detached-rc-token" "$CERR" "OC_DEPLOY_SWAP_GUARD=stale-build"
   echo "oc-deploy selftest: $pass pass, $fail fail"
   rm -rf "$T"
   [ "$fail" = 0 ]
@@ -2278,7 +2415,7 @@ MODE="${1:-}"; [ $# -gt 0 ] && shift
 # globals — the cgroup detach must re-exec with the original flags.
 ORIG_ARGS=("$@")
 # C-F5 (v0.4.71): --help / -h exits 0 on stdout, before any validation
-case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | recover-receipt [--journal J] [--run R] [--sha S] [--dry-run] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
+case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | recover-receipt [--journal J] [--run R] [--sha S] [--dry-run] [--historical] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
 # issue #24 D1: contributors takes its own arg shape (positional range /
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. contributors is RETIRED (dies rc 1); the
@@ -2311,7 +2448,7 @@ while [ $# -gt 0 ]; do
     --wait)     WAIT_SECS="${2:-}"; shift ;;   # C-#2: poll blocks until a NEW green run (or timeout, rc 5)
     --notify-session) [ -n "${2:-}" ] || die 2 "--notify-session needs a session uuid"; NOTIFY_SESSION="${2:-}"; shift ;;   # C-#2: session uuid woken on handoff/timeout; guard lens C MED-3 (v0.4.79)
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
-    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | recover-receipt [--journal J] [--run R] [--sha S] [--dry-run] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | recover-receipt [--journal J] [--run R] [--sha S] [--dry-run] [--historical] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
     *)          die 1 "unknown arg: $1" ;;
   esac
   shift || true
