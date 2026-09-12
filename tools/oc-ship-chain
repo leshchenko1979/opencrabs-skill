@@ -73,6 +73,9 @@
 #
 # Env (selftest hooks — never needed in production):
 #   OC_PRCHECKS_BIN  default tools/oc-prchecks
+#   OC_SHIPCHAIN_NO_DOCS_SKIP=1  force the LEG1 gate even for a docs-only sha
+#                    (test/debug hook — the skip is AUTO-DETECTED, never
+#                    lane-declared; see the #20 note at leg 1)
 #   OC_DEPLOY_BIN    default tools/oc-deploy
 #   OC_ISSUELOG_BIN  default tools/oc-issue-log
 #   OC_FORK_REPO     default ~/opencrabs (the fork checkout)
@@ -358,8 +361,78 @@ if [ "$DRY" = "1" ]; then
   exit 0
 fi
 
+# ---- docs-only gate skip (#20, owner ruling 2026-09-12 11:04Z) -------------
+# "We don't need the pure docs commits to pass through ci on our side."
+# A commit that touches ONLY markdown which is NOT compiled into the binary
+# cannot change compiled output, so gating it spends minutes proving that an
+# untouched binary still builds. Cost evidence (lane 6630dc9a): docs commit
+# eee36027 (ONTOLOGY.md + CONTRIBUTING.md, zero code) burned LEG1 run
+# 34688939568, 10:36:55Z -> 10:41:04Z — the FAST variant, whose "Run tests"
+# step is already skipped, so the entire spend bought a type-check over a
+# binary the commit never touched. Upstream ci.yml carries the equivalent
+# (`paths-ignore: '**.md', 'LICENSE*', '.gitignore', 'docs/**'`).
+#
+# THE PREDICATE IS DELIBERATELY NOT "every path ends in .md". 21 distinct .md
+# paths are include_str!/include_bytes!-compiled into the binary, so editing one
+# of those DOES change compiled output and MUST still gate. The set is DERIVED
+# from the source tree on every chain and never hardcoded — a hardcoded list
+# rots silently the moment someone adds an include_str!, and the failure mode of
+# a rotted skip-list is a RED binary that passed a skipped gate.
+#
+# `include_str!` resolves relative to the CONTAINING .rs file (not the crate
+# root), so the containing file is captured alongside each literal and the pair
+# is resolved together; output is repo-relative, one path per line.
+shipchain_compiled_md_set() {
+  local rs rel
+  # Whole body in a subshell: the `cd` must not move the caller's cwd. Today's
+  # only call site is a command substitution (already a subshell), but a cwd
+  # leak out of a path-resolver is the kind of bug that surfaces a hundred lines
+  # later in an unrelated `git` call.
+  (
+    cd "$FORK_REPO" 2>/dev/null || exit 0
+    grep -rloE 'include_(str|bytes)!\([[:space:]]*"[^"]+\.md"' src --include=*.rs 2>/dev/null \
+      | while IFS= read -r rs; do
+          grep -oE 'include_(str|bytes)!\([[:space:]]*"[^"]+\.md"' "$rs" 2>/dev/null \
+            | sed -E 's/.*"([^"]+\.md)".*/\1/' \
+            | while IFS= read -r rel; do
+                realpath -m --relative-to=. "$(dirname "$rs")/$rel" 2>/dev/null || true
+              done
+        done | sort -u
+  )
+}
+
+# rc 0 = docs-only, prints the changed paths; rc 1 = must gate.
+shipchain_docs_only() {
+  local base paths p compiled
+  base="$(git -C "$FORK_REPO" rev-parse --verify --quiet "$SHA^" 2>/dev/null || true)"
+  [ -n "$base" ] || return 1                    # root commit: no range to judge
+  paths="$(git -C "$FORK_REPO" diff --name-only "$base" "$SHA" 2>/dev/null || true)"
+  [ -n "$paths" ] || return 1                   # empty diff: gate (conservative)
+  compiled="$(shipchain_compiled_md_set)"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in *.md) ;; *) return 1 ;; esac   # any non-markdown -> gate
+    printf '%s\n' "$compiled" | grep -qxF "$p" && return 1   # compiled -> gate
+  done <<EOF
+$paths
+EOF
+  printf '%s\n' "$paths"
+  return 0
+}
+
 # ---- leg 1: CI gate -------------------------------------------------------
-if [ -n "$GATED_RUN" ]; then
+# The docs-only branch is FIRST and applies ONLY to a fresh dispatch: --gated-run
+# / --gated-sha are explicit "verify THIS run" requests, so they are honoured
+# regardless of the sha's contents.
+if [ -z "$GATED_RUN" ] && [ -z "$GATED_SHA" ] && [ "${OC_SHIPCHAIN_NO_DOCS_SKIP:-0}" != "1" ] \
+   && DOCS_ONLY_PATHS="$(shipchain_docs_only)"; then
+  DOCS_ONLY_FLAT="$(printf '%s' "$DOCS_ONLY_PATHS" | tr '\n' ',')"
+  # VISIBILITY IS LOAD-BEARING (#20): an absent gate must never be
+  # indistinguishable from a passed gate. Journal line + ledger row both carry
+  # the sha and the reason, so an auditor can tell a skip from a green run.
+  journal "GATE-SKIPPED-DOCS sha=$SHA reason=every-changed-path-is-markdown-and-none-is-compiled-into-the-binary paths=${DOCS_ONLY_FLAT%,}"
+  printf 'oc-ship-chain: LEG1 GATE SKIPPED for %s — docs-only commit, no changed path is include_str!/include_bytes!-compiled (paths: %s). Owner ruling 2026-09-12 11:04Z; force the gate with OC_SHIPCHAIN_NO_DOCS_SKIP=1.\n' "$SHA" "${DOCS_ONLY_FLAT%,}" >&2
+elif [ -n "$GATED_RUN" ]; then
   # Verify specific run ID passed explicitly (or watch/resume it if still in flight)
   journal "LEG1 gate resume: checking run $GATED_RUN for $SHA"
   RUN_INFO="$("$GH_BIN" run view "$GATED_RUN" -R "${REPO:-leshchenko1979/opencrabs}" --json status,conclusion,jobs -q '[.status, .conclusion, ([.jobs[]? | select(.name | contains("'"$SHA"'")) | .conclusion] | first // "no-job")] | join(" ")' 2>/dev/null || true)"
@@ -568,6 +641,14 @@ selftest_impl() {
   git init -q "$T/clone"
   git -C "$T/clone" config user.email t@t; git -C "$T/clone" config user.name t
   echo base > "$T/clone/base.txt"
+  # #20 fixtures: README.md IS include_str!'d from src/lib.rs (so a commit
+  # touching it changes compiled output and MUST gate), while ONTOLOGY.md is
+  # reached by nothing (so a commit touching only it may skip). The skip
+  # predicate must separate these two; that separation is the whole point.
+  mkdir -p "$T/clone/src/docs/reference/templates"
+  printf 'pub const A: &str = include_str!("../README.md");\npub const B: &str = include_str!("docs/reference/templates/AGENTS.md");\n' > "$T/clone/src/lib.rs"
+  printf '# agents\n' > "$T/clone/src/docs/reference/templates/AGENTS.md"
+  printf '# readme\n' > "$T/clone/README.md"
   git -C "$T/clone" add -A && git -C "$T/clone" commit -qm base
   git -C "$T/clone" branch -M main
   git -C "$T/clone" remote add origin "$T/origin.git"
@@ -590,6 +671,13 @@ selftest_impl() {
   echo u > "$T/clone/u.txt"
   git -C "$T/clone" add -A && git -C "$T/clone" commit -qm u
   USHA="$(git -C "$T/clone" rev-parse HEAD)"
+  # #20 fixtures (the docs-only ONTOLOGY.md branch and the compiled README.md
+  # branch) are built INSIDE test 20, not here. An earlier test force-pushes
+  # onto origin/main (diverge, then feat), so a branch cut from the ORIGINAL
+  # main stops being a descendant of the clone's main and LEG3 dies rc 5 NON-FF
+  # before a single gate assertion can run — the first run of this block failed
+  # exactly that way. Building them at the point of use keeps them
+  # fast-forwardable against whatever origin/main has become by then.
   # fixture "fork checkout" = clone back on main
   git -C "$T/clone" checkout -q main
 
@@ -993,6 +1081,56 @@ EOF
   SEEN="$(cat "$T/actor.seen" 2>/dev/null || true)"
   [ "$SEEN" = "<unset>" ] && ok "actor-never-invented" \
     || bad "actor-never-invented (want <unset> got '$SEEN')"
+
+  # 20. DOCS-ONLY GATE SKIP (owner ruling 2026-09-12 11:04Z). A commit whose
+  #     every changed path is markdown NOT compiled into the binary must skip
+  #     LEG1 — journaled + visible, never a silent absence of a gate.
+  rm -f "$T/journal.log" "$T/prchecks.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  # Built here, from the CURRENT origin/main (see the note in the fixture block
+  # above). docs-fixture touches only ONTOLOGY.md, which nothing compiles;
+  # compiled-md-fixture touches README.md, which src/lib.rs include_str!'s.
+  git -C "$T/clone" checkout -qB docs-fixture main
+  printf '# ontology\n' > "$T/clone/ONTOLOGY.md"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "docs only" --trailer "Session-Id: $FIXTURE_SESSION"
+  DOCS_SHA="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" push -q -f origin docs-fixture
+  git -C "$T/clone" checkout -qB compiled-md-fixture main
+  printf '# readme v2\n' > "$T/clone/README.md"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "readme bump" --trailer "Session-Id: $FIXTURE_SESSION"
+  CMDSHA="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" push -q -f origin compiled-md-fixture
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$DOCS_SHA" --branch docs-fixture --wait 5 2>&1)" || RC=$?
+  check_rc "docs-only-chain-green" "$RC" 0
+  grep -q "GATE-SKIPPED-DOCS sha=$DOCS_SHA" "$T/journal.log" && ok "docs-only-skip-journaled" || bad "docs-only-skip-journaled"
+  grep -q "reason=" "$T/journal.log" && ok "docs-only-skip-names-reason" || bad "docs-only-skip-names-reason"
+  grep -q "ONTOLOGY.md" "$T/journal.log" && ok "docs-only-skip-names-paths" || bad "docs-only-skip-names-paths"
+  [ -s "$T/prchecks.log" ] && bad "docs-only-dispatched-no-gate" || ok "docs-only-dispatched-no-gate"
+  grep -q "LEG1 gate start" "$T/journal.log" && bad "docs-only-no-gate-start" || ok "docs-only-no-gate-start"
+  case "$OUT" in *SWAPPED*) ok "docs-only-chain-completed" ;; *) bad "docs-only-chain-completed: $OUT" ;; esac
+  case "$OUT" in *"GATE SKIPPED"*) ok "docs-only-skip-visible-on-stderr" ;; *) bad "docs-only-skip-visible-on-stderr" ;; esac
+
+  # 20b. NEGATIVE CASE: README.md IS include_str!'d from src/lib.rs, so a commit
+  #      touching it changes compiled output and MUST still gate. If this ever
+  #      skips, the skip predicate has become an extension check.
+  rm -f "$T/journal.log" "$T/prchecks.log"
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$CMDSHA" --branch compiled-md-fixture --wait 5 2>&1)" || RC=$?
+  check_rc "compiled-md-chain-green" "$RC" 0
+  grep -q "GATE-SKIPPED-DOCS" "$T/journal.log" && bad "compiled-md-not-skipped" || ok "compiled-md-not-skipped"
+  grep -q "$CMDSHA" "$T/prchecks.log" && ok "compiled-md-gate-dispatched" || bad "compiled-md-gate-dispatched"
+
+  # 20c. the escape hatch: OC_SHIPCHAIN_NO_DOCS_SKIP=1 forces the gate even for a
+  #      docs-only sha (a gate that can vanish needs a way to summon it back).
+  rm -f "$T/journal.log" "$T/prchecks.log"
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_SHIPCHAIN_NO_DOCS_SKIP=1 FAKE_PRCHECKS_LOG="$T/prchecks.log" run_chain --sha "$DOCS_SHA" --branch docs-fixture --wait 5 2>&1)" || RC=$?
+  check_rc "docs-skip-override-chain-green" "$RC" 0
+  grep -q "GATE-SKIPPED-DOCS" "$T/journal.log" && bad "docs-skip-override-disables" || ok "docs-skip-override-disables"
+  grep -q "$DOCS_SHA" "$T/prchecks.log" && ok "docs-skip-override-gates" || bad "docs-skip-override-gates"
 
   echo "selftest: $PASS passed, $FAIL failed"
   # Contract fix 2026-09-11: was `return $?`, which returned ECHO's status (0),
