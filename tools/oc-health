@@ -48,6 +48,16 @@ TMP_MAX_AGE_H="${OC_HEALTH_TMP_MAX_AGE_H:-48}"
 # old cannot belong to a running swap (the manual reap used a 90-min gate).
 TMP2_GLOB="${OC_HEALTH_TMP2_GLOB:-/tmp/tmp.*}"
 TMP2_MAX_AGE_H="${OC_HEALTH_TMP2_MAX_AGE_H:-24}"
+# M2-25 detector (2026-09-12): the THIRD temp class — `mktemp` FILEs, i.e. the
+# non-directory `/tmp/tmp.*` namespace. `oc-issue-sweep` wrote three siblings of
+# its `mktemp` file (`.raw`/`.sorted`/`.final`) but its EXIT trap removed only the
+# base path, so every invocation dripped 3 files — 1070 of them, oldest 2 days
+# (fixed at source in 83008e1d). This check is the backstop. Same signature-gate
+# discipline as tmp2: only the KNOWN sibling pattern is ever a reap candidate;
+# any other `/tmp/tmp.*` file is REPORTED, never touched — another tool's
+# `mktemp` file shares this namespace.
+TMP3_GLOB="${OC_HEALTH_TMP3_GLOB:-/tmp/tmp.*}"
+TMP3_MAX_AGE_H="${OC_HEALTH_TMP3_MAX_AGE_H:-24}"
 WATCHER_WINDOW_H="${OC_HEALTH_WATCHER_WINDOW_H:-24}"   # runtime_procs: audit window (hours); 0 = all history
 SKILL_DIR="$(cd "$TOOLS_DIR/.." && pwd)"
 LOGF="${OC_HEALTH_LOG:-$STATE/tools.log}"
@@ -121,7 +131,7 @@ selftest_impl() {
   bad() { F=$((F+1)); echo "  FAIL $*" >&2; }
   chk() { [ "$2" = "$3" ] && ok || bad "$1 (want $2 got $3)"; }
 
-  mkdir -p "$T/state" "$T/tmp" "$T/skill" "$T/wt" "$T/fork" "$T/logs" "$T/detached" "$T/tmp2"
+  mkdir -p "$T/state" "$T/tmp" "$T/skill" "$T/wt" "$T/fork" "$T/logs" "$T/detached" "$T/tmp2" "$T/tmp3"
   git -C "$T/skill" init -q 2>/dev/null
   git -C "$T/skill" config user.email t@t; git -C "$T/skill" config user.name t
   echo x > "$T/skill/f"; git -C "$T/skill" add -A >/dev/null 2>&1
@@ -143,7 +153,7 @@ selftest_impl() {
   echo '{"version":1,"events":[],"roster":{"workers":{}}}' > "$T/state/workers-ledger.json"
 
   run() {
-    OC_HEALTH_STATE="$T/state" OC_HEALTH_TMP_GLOB="$T/tmp/oc-*" OC_HEALTH_TMP2_GLOB="$T/tmp2/tmp.*" OC_HEALTH_DB="$T/db.sqlite" \
+    OC_HEALTH_STATE="$T/state" OC_HEALTH_TMP_GLOB="$T/tmp/oc-*" OC_HEALTH_TMP2_GLOB="$T/tmp2/tmp.*" OC_HEALTH_TMP3_GLOB="$T/tmp3/tmp.*" OC_HEALTH_DB="$T/db.sqlite" \
     OC_HEALTH_SKILL_DIR="$T/skill" OC_HEALTH_FORK="$T/fork" OC_HEALTH_WT_PATTERNS="$T/wt/*" \
     OC_HEALTH_LOG="$T/tools.log" OC_HEALTH_DAEMON_LOG_DIR="$T/logs" OC_HEALTH_DETACHED_DIR="$T/detached" \
     OC_HEALTH_DISK_PCT="${DISK_PCT_OVERRIDE:-10}" \
@@ -222,6 +232,23 @@ selftest_impl() {
   [ -e "$T/tmp2/tmp.FAKELEAK" ] && bad "fs-tmp2-signature-reaped" || ok
   [ -e "$T/tmp2/tmp.FAKEGENERIC" ] && ok || bad "fs-tmp2-generic-kept"
   [ -e "$T/tmp2/tmp.FAKEFRESH" ] && ok || bad "fs-tmp2-fresh-kept"
+
+  # 6c. Class: filesystem — leaked mktemp FILE class (M2-25 detector).
+  #     The signature (.raw/.sorted/.final) is reaped; an UNKNOWN /tmp/tmp.*
+  #     file is reported but NEVER removed; a fresh signature file is kept.
+  printf 'x' > "$T/tmp3/tmp.FAKELEAKA.raw";    touch -d '3 days ago' "$T/tmp3/tmp.FAKELEAKA.raw"
+  printf 'x' > "$T/tmp3/tmp.FAKELEAKB.sorted"; touch -d '3 days ago' "$T/tmp3/tmp.FAKELEAKB.sorted"
+  printf 'x' > "$T/tmp3/tmp.FAKEUNKNOWN.xyz";  touch -d '3 days ago' "$T/tmp3/tmp.FAKEUNKNOWN.xyz"
+  printf 'x' > "$T/tmp3/tmp.FAKEFRESH.raw"
+  RC=0; OUT="$(run --class filesystem 2>&1)" || RC=$?
+  chk "fs-tmp3-rc1" 1 "$RC"
+  case "$OUT" in *"oc-issue-sweep sibling signature"*) ok ;; *) bad "fs-tmp3-detected: $OUT" ;; esac
+  case "$OUT" in *"stale-tmp3-unknown"*) ok ;; *) bad "fs-tmp3-unknown-reported: $OUT" ;; esac
+  run --class filesystem --reap >/dev/null 2>&1
+  [ -e "$T/tmp3/tmp.FAKELEAKA.raw" ] && bad "fs-tmp3-signature-reaped" || ok
+  [ -e "$T/tmp3/tmp.FAKELEAKB.sorted" ] && bad "fs-tmp3-signature-reaped2" || ok
+  [ -e "$T/tmp3/tmp.FAKEUNKNOWN.xyz" ] && ok || bad "fs-tmp3-unknown-kept"
+  [ -e "$T/tmp3/tmp.FAKEFRESH.raw" ] && ok || bad "fs-tmp3-fresh-kept"
 
   # 7. Class: persistence — ledger backup pruning
   for i in 1 2 3 4 5; do
@@ -503,6 +530,38 @@ if is_class_active "filesystem"; then
     add_finding 9 SAFE stale-tmp2 "$n_tmp2 leaked mktemp WORKDIR(s) (>=${TMP2_MAX_AGE_H}h, oc-deploy signature) — rerun with --reap"
   else
     clean_line "tmp2: no leaked mktemp WORKDIRs"
+  fi
+
+  # 9c. Leaked mktemp FILE class (M2-25 detector). `oc-issue-sweep` wrote
+  #     `.raw`/`.sorted`/`.final` siblings of its `mktemp` file and trapped only
+  #     the base path, dripping 1070 files (fixed at source, 83008e1d). Same
+  #     discipline as 9b: only the KNOWN sibling signature is a reap candidate;
+  #     any other `/tmp/tmp.*` file is REPORTED, never removed — another tool's
+  #     `mktemp` file shares this namespace, and a detector that eats a live
+  #     temp file is worse than the leak it hunts.
+  n_tmp3=0; reap_tmp3=0; n_tmp3_unknown=0
+  for f in $TMP3_GLOB; do
+    [ -f "$f" ] || continue
+    age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
+    [ "$age_h" -ge "$TMP3_MAX_AGE_H" ] || continue
+    case "${f##*/}" in
+      tmp.*.raw|tmp.*.sorted|tmp.*.final)
+        n_tmp3=$((n_tmp3 + 1))
+        if [ "$REAP" = "1" ]; then rm -f "$f"; reap_tmp3=$((reap_tmp3 + 1)); fi ;;
+      *) n_tmp3_unknown=$((n_tmp3_unknown + 1)) ;;
+    esac
+  done
+
+  if [ "$reap_tmp3" -gt 0 ]; then
+    REAPED=$((REAPED + reap_tmp3))
+    add_finding 9 SAFE stale-tmp3 "removed $reap_tmp3 leaked mktemp FILE(s) (>=${TMP3_MAX_AGE_H}h, oc-issue-sweep sibling signature)"
+  elif [ "$n_tmp3" -gt 0 ]; then
+    add_finding 9 SAFE stale-tmp3 "$n_tmp3 leaked mktemp FILE(s) (>=${TMP3_MAX_AGE_H}h, oc-issue-sweep sibling signature) — rerun with --reap"
+  else
+    clean_line "tmp3: no leaked mktemp FILEs"
+  fi
+  if [ "$n_tmp3_unknown" -gt 0 ]; then
+    add_finding 9 REPORT stale-tmp3-unknown "$n_tmp3_unknown other /tmp/tmp.* FILE(s) >=${TMP3_MAX_AGE_H}h with no known leak signature — NOT reaped, inspect"
   fi
 fi
 

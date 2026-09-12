@@ -108,6 +108,28 @@ after sloppy lanes and hide the pattern.
   `stale-tmp2` (check 9) so the count stays attributable and never blends into
   the `/tmp/oc-*` figure.
 
+## 9c. Leaked `mktemp` FILEs — `SAFE` (prune old) / `REPORT` (unknown class)
+
+- **Where:** non-directory `/tmp/tmp.*` (`OC_HEALTH_TMP3_GLOB` overrides).
+- **Origin (M2-25, 2026-09-12):** `oc-issue-sweep` wrote three siblings of its
+  `mktemp` file — `.raw`, `.sorted`, `.final` — while its EXIT trap removed only
+  the base path, so every invocation dripped 3 files into `/tmp`. Measured:
+  **1070 files, 0.1 MB, oldest 2 days.** The producer is fixed (`83008e1d` — the
+  trap now names all four paths); this check is the backstop so the class cannot
+  silently regrow. Sibling of 9b, for the *file* namespace rather than the dir.
+- **Invariant:** a file is a reap candidate **only** when its name matches the
+  known leak signature — `tmp.*.raw` / `tmp.*.sorted` / `tmp.*.final` — **and**
+  its mtime is older than `OC_HEALTH_TMP3_MAX_AGE_H` (default **24 h**). Both
+  gates are mandatory: another tool's `mktemp` file shares this namespace, so a
+  signature is required before anything is removed.
+- **Second branch (`REPORT`, never reaped):** any *other* `/tmp/tmp.*` file past
+  the age gate is reported as `stale-tmp3-unknown` — a new leak class shows up
+  here instead of hiding behind an unknown suffix. It is deliberately never
+  removed: a detector that eats a live temp file is worse than the leak it hunts.
+- **Remediation (`--reap`):** `rm -f` the signature-matched candidates only;
+  report the count. Finding slugs `stale-tmp3` (check 9) and `stale-tmp3-unknown`,
+  so neither count blends into the `/tmp/oc-*` or WORKDIR figures.
+
 ## 10. Session DB size — `REPORT`
 
 - **Where:** `$HOME/.opencrabs/profiles/ops/opencrabs.db`
