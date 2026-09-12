@@ -219,8 +219,39 @@ derive_by() { # default stamp attribution (v0.4.58, Duty-4 IDEA from lane 7e1ebb
   # mis-attributed worker stamps (n=1337-correct-via---by vs n=1386-silent-lie).
   local uuid="${OC_ACTOR:-}" hit
   if [ -n "$uuid" ] && [ -f "$LEDGER" ]; then
+    uuid="$(printf '%s' "$uuid" | tr 'A-F' 'a-f')"   # M2-3: uuids are lowercase; an UPPERCASE actor could never match
     hit="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid==$u)][0] | if . == null then "" else (.role + " " + .uuid) end' "$LEDGER" 2>/dev/null || true)"
     if [ -n "$hit" ]; then echo "$hit"; return; fi
+    # M2-3 (census 2026-09-12): the lookup above is an EXACT compare, so a uuid
+    # FRAGMENT can never match — and 8 live rows carry a bare 8-char prefix
+    # (462181e9, 212b3c83, c6b1a539, d5863180, 2fae1230) whose full uuid IS
+    # rostered. Those rows are not "unrostered lanes", they are an UNRESOLVABLE
+    # LOOKUP, and every one of the five resolves to EXACTLY ONE roster uuid.
+    # So resolve the fragment (unique match) instead of labelling it.
+    # NOT a refusal (the queue's first cut, option (b)): 64 of the 86 full-uuid
+    # sentinel rows belong to uuids that ARE rostered today — they were stamped
+    # inside the pre-`enroll` window — so refusing the sentinel would have
+    # blocked legitimate stamps. And `oc-ship-chain` passes an explicit `--by`
+    # fallback: a refusal here would trade its whole ledger trail for a warning
+    # (the chain CONTINUES). Meaningful labels (hq/opencrabs-dev-factory) are
+    # not fragments and keep the sentinel.
+    case "$uuid" in
+      *[!0-9a-f-]*) : ;;   # carries a non-hex/non-dash char -> a LABEL, never resolved
+      *)
+        if [ "${#uuid}" -ge 4 ]; then
+          # .[0] is load-bearing: after the pipe `.` is the ARRAY, so a bare
+          # `.role` indexes an array with a string -> jq rc=5, and the
+          # `2>/dev/null` below turns that ERROR into an empty hit, i.e. an
+          # unresolvable lookup read as "unrostered". Caught by the battery,
+          # 237/2, on the first run of this branch.
+          hit="$(jq -r --arg p "$uuid" '[.workers[] | select((.uuid // "") | startswith($p))] | if length == 1 then (.[0].role + " " + .[0].uuid) else "" end' "$LEDGER" 2>/dev/null || true)"
+          if [ -n "$hit" ]; then echo "$hit"; return; fi
+        fi
+        ;;
+    esac
+    # an unresolvable actor is LOUD and names the remedy — never a silent label
+    printf '%s\n' "oc-ledger: WARNING — actor '$uuid' is not in the roster ($LEDGER) — row stamped 'unrostered-actor $uuid'." >&2
+    printf '%s\n' "  If it is a session: oc-ledger enroll $uuid <role> [--topic N]. A factory/lane LABEL is not an actor — stamp as your ROSTER ROLE." >&2
     echo "unrostered-actor $uuid"; return
   fi
   echo "(unattributed — pass --by or export OC_ACTOR)"
@@ -755,7 +786,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (215 cases) -----------------------------------------------------
+# ---- selftest (239 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -1042,6 +1073,36 @@ EOF
   chk "derive-by-roster-label" "tester $W2" "$(jq -r '[.events[] | select(.what=="worker-stamp")][0].by' "$OC_LEDGER")"
   OC_ACTOR="99999999-8888-7777-6666-555555555555" bash "$ME" stamp note "ghost-stamp" >/dev/null 2>&1
   chk "derive-by-unrostered" "true" "$(jq -r '[.events[] | select(.what=="ghost-stamp")][0].by | startswith("unrostered-actor")' "$OC_LEDGER")"
+  # M2-3 (2026-09-12): a uuid FRAGMENT resolves against the roster. The lookup
+  # was an exact compare, so 8 live rows carry a bare 8-char prefix whose full
+  # uuid IS rostered — an unresolvable lookup, not an unrostered lane.
+  local W2P="${W2%%-*}"    # 11111111 — the unique prefix of the enrolled W2
+  OC_ACTOR="$W2P" bash "$ME" stamp note "prefix-stamp" >/dev/null 2>&1; chk "derive-by-prefix-rc" 0 $?
+  chk "derive-by-prefix-resolves" "tester $W2" "$(jq -r '[.events[] | select(.what=="prefix-stamp")][0].by' "$OC_LEDGER")"
+  chk "derive-by-prefix-not-sentinel" "false" "$(jq -r '[.events[] | select(.what=="prefix-stamp")][0].by | startswith("unrostered-actor")' "$OC_LEDGER")"
+  # a fragment matching NOTHING keeps the sentinel (honest, never invented) and
+  # says so LOUDLY, naming the remedy
+  OC_ACTOR="ffffffff" bash "$ME" stamp note "nomatch-stamp" >/dev/null 2>"$T/nomatch.err"; chk "derive-by-nomatch-rc" 0 $?
+  chk "derive-by-nomatch-sentinel" "true" "$(jq -r '[.events[] | select(.what=="nomatch-stamp")][0].by | startswith("unrostered-actor")' "$OC_LEDGER")"
+  chk "derive-by-nomatch-names-enroll" "true" "$(grep -qF 'oc-ledger enroll' "$T/nomatch.err" && echo true || echo false)"
+  # a meaningful LABEL is not a fragment: --by is written VERBATIM (HQ stamps
+  # hq/opencrabs-dev-factory; refusing the label form would break it outright)
+  bash "$ME" stamp note "label-stamp" --by "hq/opencrabs-dev-factory" >/dev/null 2>&1; chk "stamp-label-rc" 0 $?
+  chk "stamp-label-verbatim" "hq/opencrabs-dev-factory" "$(jq -r '[.events[] | select(.what=="label-stamp")][0].by' "$OC_LEDGER")"
+  # an AMBIGUOUS fragment must NOT resolve — a wrong pick is worse than an
+  # honest sentinel. Built on an ISOLATED ledger: the shared fixture roster is
+  # deliberately pinned at 3 workers by the roster-count assertions below.
+  mkdir -p "$T/amb"
+  cat > "$T/amb/amb-ledger.json" <<'AMBEOF'
+{"current_skill_version":"0.4.1","meta":{"skill_version":"0.4.1","current_skill_version":"0.4.1"},
+ "updated_at":"2026-01-01T00:00:00Z","workers":[
+ {"uuid":"77777777-aaaa-1111-1111-111111111111","role":"editor","topic_id":1,"feature":"-","confirmed":true,"last_acked":null,"notes":[],"events":[]},
+ {"uuid":"77777777-bbbb-2222-2222-222222222222","role":"editor","topic_id":2,"feature":"-","confirmed":true,"last_acked":null,"notes":[],"events":[]}],"events":[]}
+AMBEOF
+  OC_LEDGER="$T/amb/amb-ledger.json" OC_ACTOR="77777777" bash "$ME" stamp note "amb-stamp" >/dev/null 2>&1; chk "derive-by-ambiguous-rc" 0 $?
+  chk "derive-by-ambiguous-sentinel" "true" "$(jq -r '[.events[] | select(.what=="amb-stamp")][0].by | startswith("unrostered-actor")' "$T/amb/amb-ledger.json")"
+  OC_LEDGER="$T/amb/amb-ledger.json" OC_ACTOR="77777777-aaaa-1111-1111-111111111111" bash "$ME" stamp note "amb-exact-stamp" >/dev/null 2>&1
+  chk "derive-by-amb-exact-resolves" "editor 77777777-aaaa-1111-1111-111111111111" "$(jq -r '[.events[] | select(.what=="amb-exact-stamp")][0].by' "$T/amb/amb-ledger.json")"
   printf '#!/bin/sh\nexit 0\n' > "$T/gh-ok.sh"; chmod +x "$T/gh-ok.sh"
   printf '#!/bin/sh\nexit 1\n' > "$T/gh-fail.sh"; chmod +x "$T/gh-fail.sh"
   OC_ACTOR="$W2" bash "$ME" stamp claim "CLAIM #999 — fixture claim for confirm" >/dev/null 2>&1
