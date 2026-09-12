@@ -636,7 +636,10 @@ echo "--- receipts ---"; printf '%s' "$receipts"
 echo "--- summary ---"
 echo "sent=$sent skipped=$skipped failed=$failed version=$version dry=$dry"
 if [ "$stamp" = 1 ] && [ "$dry" = 0 ] && [ "$sent" -gt 0 ]; then
+  # --by fallback (#19, 2026-09-12): oc-ledger refuses an anonymous row, so a
+  # wave stamps under the caller's OC_ACTOR when set, else under the tool name.
   bash "$SKILL_DIR/tools/oc-ledger" stamp notify-fanout \
+    --by "${OC_ACTOR:-oc-notify-fanout}" \
     "fanout '$title': sent=$sent skipped=$skipped failed=$failed ids: ${ids:-none}" || true
 fi
 if [ "$failed" -gt 0 ]; then

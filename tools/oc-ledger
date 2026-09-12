@@ -7,8 +7,13 @@
 #  `commit-pending`, run on the HQ Duty-3/4 cadence).
 #
 # Subcommands:
-#   stamp <kind> "<what>" [--by <label>]   append event under lock (flock +
-#                                          tmp -> jq-validate -> mv) + git leg
+#   stamp <kind> "<what>" [--by <label>] [--allow-unattributed]
+#                                          append event under lock (flock +
+#                                          tmp -> jq-validate -> mv) + git leg.
+#                                          #19 (v0.4.16x): an ANONYMOUS row is
+#                                          REFUSED rc 2 — name the actor with
+#                                          --by / OC_ACTOR, or say the anonymous
+#                                          row is deliberate with the override.
 #   lessons [--kind <lesson|incident|all>] [--class <text>]
 #                                          extract lesson/incident rows by class
 #                                          (H-2 v0.4.116; read-only)
@@ -223,16 +228,17 @@ derive_by() { # default stamp attribution (v0.4.58, Duty-4 IDEA from lane 7e1ebb
 
 # ---- stamp ------------------------------------------------------------------
 cmd_stamp() {
-  local kind="" what="" by=""
+  local kind="" what="" by="" allow_unattr=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --by) by="${2:-}"; shift 2 ;;
+      --allow-unattributed) allow_unattr=1; shift ;;
       --what) what="${2:-}"; [ -n "$what" ] || die 2 "--what needs a value"; shift 2 ;;
       --*) die 2 "stamp: unknown flag '$1' (forms: stamp <kind> \"<what>\" | stamp <kind> --what \"<text>\")" ;;
       *) if [ -z "$kind" ]; then kind="$1"; elif [ -z "$what" ]; then what="$1"; fi; shift ;;
     esac
   done
-  [ -n "$kind" ] || die 2 "usage: oc-ledger stamp <kind> \"<what>\" [--by <label>]"
+  [ -n "$kind" ] || die 2 "usage: oc-ledger stamp <kind> \"<what>\" [--by <label>] [--allow-unattributed]"
   [ -n "$what" ] || die 2 "stamp: what must be non-empty"
   [ -n "$by" ] || by="$(derive_by)"
   kind="${kind//_/-}"   # C-#7 (v0.4.77): underscore input normalizes to enum hyphen form
@@ -240,6 +246,23 @@ cmd_stamp() {
   case "$KINDS" in *" $kind "*) ;; *) die 2 "stamp: unknown kind '$kind' (v1.2 vocabulary — see header)" ;; esac
   case "$what" in --*) die 2 "stamp: what looks like a lost flag (\"$what\") — pass text with --what explicitly (glitched-argv class, ledger n=1361/n=1372)" ;; esac
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+  # #19 (dispatched by Triage 530c29ec, 2026-09-12; found on my own law-12 row
+  # n=3794, and n=3786 before it): an anonymous row IS a defect — it cannot be
+  # traced to a lane or a tool, which is the whole point of the `by` field.
+  # derive_by() correctly REFUSED to invent an actor and returned a sentinel,
+  # but cmd_stamp then wrote that sentinel into the ledger anyway: warn-and-
+  # write made the defect the DEFAULT. Refuse like the sync stray-guard does,
+  # and name both remedies. An explicit --by or OC_ACTOR always wins, and
+  # --allow-unattributed is the deliberate override (the escape hatch a guard
+  # needs — cf. sync --allow-sweep).
+  # Placed AFTER the ledger_ok gate so the documented rc precedence holds: a
+  # missing/corrupt ledger is still rc 3, never masked by an rc 2 actor refusal.
+  if [ "$allow_unattr" = 0 ]; then
+    case "$by" in
+      "(unattributed"*)
+        die 2 "stamp: REFUSED — no actor, and an anonymous row is a defect (it cannot be traced to a lane or a tool). Fix: pass --by \"<label>\" (e.g. --by \"<role> <uuid>\"), or export OC_ACTOR=<your session uuid>. If the anonymous row is deliberate: --allow-unattributed. (kind=$kind)" ;;
+    esac
+  fi
   _stamp_locked() {
     local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
     atomic_jq --arg n "$n" --arg t "$t" --arg by "$by" --arg kind "$kind" --arg what "$what" \
@@ -760,6 +783,10 @@ EOF
     git -C "$r" add -A; git -C "$r" commit -q -m base
   done
   export OC_LEDGER="$T/state/workers-ledger.json" OC_SKILL_DIR="$T/skill" OC_DEPLOY_STATE_DIR="$T/state"
+  # #19: stamp now REFUSES an anonymous row, so the fixture stamps carry an
+  # actor the way a lane's shell does. The attribution cases below override it
+  # inline (an explicit OC_ACTOR always wins; the refusal has its own block).
+  export OC_ACTOR="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
   local ME="$0"
   # 1-3: stamp happy + n continuity + fields
   bash "$ME" stamp note "one" >/dev/null 2>&1; chk "stamp#1" 0 $?
@@ -1002,7 +1029,14 @@ EOF
   local W2="11111111-2222-3333-4444-555555555555"
   git -C "$T/state" init -q 2>/dev/null; git -C "$T/state" add -A 2>/dev/null; git -C "$T/state" -c user.email=t@t -c user.name=t commit -q -m regit 2>/dev/null
   bash "$ME" enroll "$W2" tester --topic 42 >/dev/null 2>&1; chk "enroll-w2" 0 $?
-  OC_ACTOR= bash "$ME" stamp note "anon-stamp" >/dev/null 2>&1; chk "derive-by-no-actor-rc" 0 $?
+  # #19: an anonymous row is REFUSED (warn-and-write made the defect the default)
+  OC_ACTOR= bash "$ME" stamp note "anon-stamp" >/dev/null 2>&1; chk "anon-refused-rc" 2 $?
+  OC_ACTOR= bash "$ME" stamp note "anon-stamp" >/dev/null 2>"$T/anon.err"
+  chk "anon-refused-names-by" "true" "$(grep -qF -- '--by' "$T/anon.err" && echo true || echo false)"
+  chk "anon-refused-names-actor" "true" "$(grep -qF -- 'OC_ACTOR' "$T/anon.err" && echo true || echo false)"
+  chk "anon-refused-names-override" "true" "$(grep -qF -- '--allow-unattributed' "$T/anon.err" && echo true || echo false)"
+  chk "anon-refused-wrote-nothing" "0" "$(jq -r '[.events[] | select(.what=="anon-stamp")] | length' "$OC_LEDGER")"
+  OC_ACTOR= bash "$ME" stamp note "anon-stamp" --allow-unattributed >/dev/null 2>&1; chk "anon-override-rc" 0 $?
   chk "derive-by-no-actor-loud" "true" "$(jq -r '[.events[] | select(.what=="anon-stamp")][0].by | test("unattributed")' "$OC_LEDGER")"
   OC_ACTOR="$W2" bash "$ME" stamp note "worker-stamp" >/dev/null 2>&1; chk "derive-by-roster-rc" 0 $?
   chk "derive-by-roster-label" "tester $W2" "$(jq -r '[.events[] | select(.what=="worker-stamp")][0].by' "$OC_LEDGER")"

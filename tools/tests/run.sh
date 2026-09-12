@@ -518,7 +518,9 @@ section "oc-ledger"
 run_selftest oc-ledger
 d="$(mktemp -d)"; mkdir -p "$d/state"
 printf '{"current_skill_version":"0.0.1","meta":{"skill_version":"0.0.1","current_skill_version":"0.0.1"},"updated_at":"x","workers":[],"events":[]}' > "$d/state/workers-ledger.json"
-OC_LEDGER="$d/state/workers-ledger.json" "$TOOLS_DIR/oc-ledger" stamp note "battery edge" >/dev/null 2>&1 \
+# #19 (2026-09-12): stamp REFUSES an anonymous row, so the battery fixture
+# carries an actor the way a lane's shell does.
+OC_LEDGER="$d/state/workers-ledger.json" OC_ACTOR="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "$TOOLS_DIR/oc-ledger" stamp note "battery edge" >/dev/null 2>&1 \
   && [ "$(jq '.events[-1].n' "$d/state/workers-ledger.json")" = "1" ] \
   && ok "empty-events fixture: first stamp -> n=1" || bad "empty-events fixture stamp"
 OC_LEDGER="$d/state/workers-ledger.json" "$TOOLS_DIR/oc-ledger" frobnicate >/dev/null 2>&1
