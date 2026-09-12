@@ -137,7 +137,12 @@ SELFTEST=0
 # surviving record of what was removed, so it must be its own kind — `note`
 # would bury a SIGNING REVOCATION among 649 routine rows, and this is exactly
 # the kind of row a later audit asks for by name.
-KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident lesson note ack roster-enroll roster-retire claim confirm swap-result notify-fanout shipchain proposal "
+# D-2 (HQ d72bd52d, 2026-09-12): close/done/unclaim/reject were
+# DOCUMENTED as closing kinds by cmd_claims below, but never admitted here —
+# 4 of the 5 closers were UNSTAMPABLE (`stamp close #N` died rc 2), and the
+# fifth (confirm) wrote to a store cmd_claims never read. A gate that never
+# closes gets ignored: #150 and #191 both shipped and both still read OPEN.
+KINDS=" ruling idea idea-verdict design-feedback design-locked review-battery incident lesson note ack roster-enroll roster-retire claim confirm close done unclaim reject swap-result notify-fanout shipchain proposal "
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 die() { echo "oc-ledger: $2" >&2; exit "$1"; }
@@ -1279,7 +1284,13 @@ AMBEOF
   bash "$ME" claims 777 > "$T/claims-open.out" 2>/dev/null; chk "claims-open-rc" 0 $?
   grep -q "$W4" "$T/claims-open.out" && grep -q '#777' "$T/claims-open.out" \
     && ok || bad "claims-open-row"
-  bash "$ME" claims 999 2>/dev/null | grep -q "$W2" && ok || bad "claims-999-missing-W2"
+  # D-2 (HQ d72bd52d, 2026-09-12): `confirm` now appends the TOP-LEVEL
+  # .events row that cmd_claims scans. The assertion that used to sit here
+  # required #999 to still read OPEN after the confirm verb ran — it asserted
+  # the DEFECT (confirm wrote only to .workers[].events, a store cmd_claims
+  # never reads). Assert the closure instead.
+  bash "$ME" claims 999 2>/dev/null | grep -q "$W2" \
+    && bad "claims-999-still-open-after-confirm" || ok
   bash "$ME" claims 123456 > "$T/claims-empty.out" 2>/dev/null; chk "claims-clean-rc" 0 $?
   [ ! -s "$T/claims-empty.out" ] && ok || bad "claims-clean-not-empty"
   OC_ACTOR="$W4" bash "$ME" stamp confirm "CONFIRM #777 — fixture closure (confirm = closing kind in v1.1 vocabulary)" >/dev/null 2>&1
@@ -1287,6 +1298,21 @@ AMBEOF
   grep -q "$W4" "$T/claims-closed.out" && bad "claims-closed-still-open" || ok
   bash "$ME" claims >/dev/null 2>&1; chk "claims-noarg-rc2" 2 $?
   bash "$ME" claims abc >/dev/null 2>&1; chk "claims-nonnum-rc2" 2 $?
+  # D-2: KINDS carried none of close/done/unclaim/reject, so 4 of the 5
+  # documented closers were UNSTAMPABLE (`stamp close #N` died rc 2) — the
+  # contract cmd_claims documents was a dead letter by vocabulary, and confirm
+  # could not close either. Each newly-admitted kind must be stampable AND
+  # must actually close a claim (live impact: #150 and #191 both shipped and
+  # both still read OPEN).
+  local W5="55555555-3333-4444-5555-666666666666"
+  for k in close done unclaim reject; do
+    OC_ACTOR="$W5" bash "$ME" stamp claim "CLAIM #888 — fixture for kind $k" >/dev/null 2>&1
+    chk "closure-kind-$k-claim-rc" 0 $?
+    OC_ACTOR="$W5" bash "$ME" stamp "$k" "$k #888 — fixture closure" >/dev/null 2>&1
+    chk "closure-kind-$k-stampable" 0 $?
+    bash "$ME" claims 888 > "$T/claims-888-$k.out" 2>/dev/null
+    grep -q "$W5" "$T/claims-888-$k.out" && bad "closure-kind-$k-did-not-close" || ok
+  done
   # 51-54 (v0.4.116, H-2): lessons — lesson/incident row extraction by class.
   OC_ACTOR="$W4" bash "$ME" stamp lesson "LESSON-FIXTURE uncoded gate-bypass lesson" >/dev/null 2>&1
   OC_ACTOR="$W4" bash "$ME" stamp incident "INCIDENT-FIXTURE phantom write without receipt" >/dev/null 2>&1
@@ -1494,11 +1520,21 @@ cmd_confirm() { # oc-ledger confirm <uuid> [--gh <cmd>] — verify the worker's
   # live fork-issue existence check (injectable gh shim keeps selftest offline)
   "$gh" issue view "$issue" --repo leshchenko1979/opencrabs --json number >/dev/null 2>&1 \
     || die 3 "confirm: fork issue #$issue not resolvable"
-  local t; t="$(now_iso)"
+  local t role by n; t="$(now_iso)"
+  # D-2 (HQ d72bd52d, 2026-09-12): `by` must CONTAIN the uuid, because
+  # cmd_claims links a closure with `(.value.by // "") | contains($u)`.
+  # The composed "<role> <uuid>" form satisfies it and stays readable.
+  role="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid==$u)][0].role // ""' "$LEDGER" 2>/dev/null || true)"
+  by="$uuid"; [ -n "$role" ] && by="$role $uuid"
   _confirm_locked() {
-    atomic_jq --arg u "$uuid" --arg t "$t" --arg i "$issue" \
+    # D-2: the top-level .events row is the one cmd_claims SCANS — without it
+    # `confirm` flips .confirmed but the claim still reads OPEN forever.
+    n=$(( $(max_n) + 1 ))
+    atomic_jq --arg u "$uuid" --arg t "$t" --arg i "$issue" --arg by "$by" --arg n "$n" \
       '(.workers[] | select(.uuid==$u) | .confirmed) = true
        | (.workers[] | select(.uuid==$u) | .events) += [{t: $t, kind: "confirm", issue: ("#"+$i)}]
+       | .events += [{n: ($n|tonumber), t: $t, by: $by, kind: "confirm",
+                      what: ("CONFIRM #" + $i + " — claim verified live (workers[].confirmed=true)")}]
        | .updated_at = $t' || return $?
     echo "confirmed: $uuid (claim #$issue verified live)"
     git_state_commit "ledger confirm $uuid (#$issue)"
