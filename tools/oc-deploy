@@ -294,7 +294,7 @@ lineage_check_run() { # [--prev P] [--sha S] [--repo R] [--json]
 # fanout has its own done-marker and a replay would re-notify contributors.
 # rc: 0 = handled (recovered, or correctly nothing to do) · 2 = cannot judge.
 recover_receipt_run() { # [--journal PATH] [--run R] [--sha S] [--dry-run] [--json]
-  local jf="" run="" sha="" dry=0 json=0 cand
+  local jf="" run="" sha="" dry=0 json=0 cand hist=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --journal) jf="${2:-}"; shift ;;
@@ -302,6 +302,7 @@ recover_receipt_run() { # [--journal PATH] [--run R] [--sha S] [--dry-run] [--js
       --sha)     sha="${2:-}"; shift ;;
       --dry-run) dry=1 ;;
       --json)    json=1 ;;
+      --historical) hist=1 ;;   # sha no longer == deployed.sha: record as a superseded swap
       *) die 1 "recover-receipt: unknown arg: $1" ;;
     esac
     shift || true
