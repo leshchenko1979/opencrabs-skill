@@ -144,7 +144,7 @@ or record them onto the ledger via `oc-ledger stamp proposal "ADD|CHANGE <rule> 
 3. Intake & Closure Determination:
    - **Mechanical State Check**: HQ reads the submissions in a single batch turn from disk (`ls $REVIEW_DIR/proposals/`)
      and ledger events (`oc-ledger events --kind proposal`).
-     **Window-safe read:** `events` counts `--n` rows back from the NEWEST (default 20, `tools/oc-ledger:1382`), so a
+     **Window-safe read:** `events` counts `--n` rows back from the NEWEST (default 20 — see the `--n N` usage note under `oc-ledger events`), so a
      **kind-filtered** read is safe — the filter runs BEFORE windowing and cannot be starved by unrelated rows. A
      **marker-prefix** read over `--kind note` is NOT safe: by cycle close the `note` tail no longer holds the proposals,
      and `rc=0` WITH rows reads as "none submitted" (the false-negative class, reported by lane `1a63f103`). For the

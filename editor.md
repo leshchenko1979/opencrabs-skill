@@ -159,7 +159,7 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
    `oc-ledger ack <your-roster-uuid> <new-version>` (shape `0.N.N`, `v`
    prefix tolerated — v0.4.55 fixed the N.N-only regex that made every real
    version un-ackable) — **ONLY when step 1 ran WITHOUT `--ack`**. With
-   `--ack`, step 1 already wrote the adoption row (`tools/oc-drift-check:78`
+   `--ack`, step 1 already wrote the adoption row (`oc-drift-check --ack` delegates to `oc-ledger ack`;
    delegates to `oc-ledger ack`), so stamping here is a SECOND row for ONE
    adoption: **`--ack` IS the ack.** The canonical reload receipt is the
    single `oc-ledger ack` row — written once, by `--ack` if it was passed,
