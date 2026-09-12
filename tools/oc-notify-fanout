@@ -62,12 +62,22 @@
 #      test is `""|ACTIVE -> sendable`, anything else -> `SKIP <uuid> <role>
 #      INACTIVE(state=...)`. Fail-safe by construction: a state this tool does
 #      not know yet is skipped, never notified.
+#  10. PARTIAL-DELIVERY VERDICT (defect #5, 2026-09-12): a wave killed
+#      mid-loop (SIGTERM / cgroup teardown at swap restart) never runs its
+#      own end-of-wave accounting, and a partial .sent file is otherwise
+#      indistinguishable from a complete wave unless someone counts .sent
+#      lines by hand. Every send ATTEMPT is recorded to run/wave-<id>.targets
+#      BEFORE the send (dedup'd), and `--verify <wave-id>` diffs manifest vs
+#      receipts: rc 0 COMPLETE / rc 8 PARTIAL naming each unreached lane /
+#      rc 3 no manifest. In-wave send failures keep exit 4 but now print a
+#      PARTIAL DELIVERY stderr line with the resume/audit path.
 #
 # Usage:
 #   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
 #     [--text "what changed ..."] [--text-file /path/brief.md] \
 #     [--roles editor,hq] [--exclude "40695,uuid8char"] \
 #     [--forum-chat <chat_id>] [--dry-run] [--no-stamp] [--include-self]
+#     [--verify <wave-id>]
 #
 #   Default brief (when --text/--text-file omitted) is the canonical
 #   skill-change template with what="" — pass --text for the body.
@@ -117,13 +127,15 @@ if [ "${1:-}" = "--selftest" ]; then
   L4="44444444-4444-4444-8444-444444444444"  # malformed shape
   L5="00000000-0000-0000-0000-000000000000"  # all-zero (n=2167 class)
   L6="66666666-6666-4666-8666-666666666666"  # live + forum-bound + RETIRED (defect #6)
+  L7="77777777-7777-4777-8777-777777777777"  # live + forum-bound + ACTIVE (law-10 slow lane)
   FORUM="-1999999999"
   sqlite3 "$T/db.sqlite" <<SQL
 CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, archived_at INTEGER);
 CREATE TABLE session_bindings (session_id TEXT PRIMARY KEY, channel TEXT, chat_id TEXT, thread_id INTEGER, updated_at INTEGER DEFAULT 0);
-INSERT INTO sessions VALUES ('$L1','lane1',NULL),('$L2','outside',NULL),('$L3','unbound',NULL),('$L4','bad',NULL),('$L5','zero',NULL),('$L6','retired',NULL);
+INSERT INTO sessions VALUES ('$L1','lane1',NULL),('$L2','outside',NULL),('$L3','unbound',NULL),('$L4','bad',NULL),('$L5','zero',NULL),('$L6','retired',NULL),('$L7','slow',NULL);
 INSERT INTO session_bindings VALUES ('$L1','telegram','$FORUM',123,0);
 INSERT INTO session_bindings VALUES ('$L6','telegram','$FORUM',126,0);
+INSERT INTO session_bindings VALUES ('$L7','telegram','$FORUM',127,0);
 INSERT INTO session_bindings VALUES ('$L2','telegram','-1000000000',1,0);
 SQL
   cat > "$T/fake-notify" <<'EOF'
@@ -306,12 +318,51 @@ JSON
     --text-file "$T/does-not-exist.md" >/dev/null 2>&1 && rc_mf=0 || rc_mf=$?
   [ "$rc_mf" = 2 ] && chk 0 text-file-missing-rc2 || chk 1 "text-file-missing-rc2 (got rc=$rc_mf)"
 
+  # LAW 10 (defect #5, 2026-09-12): partial delivery surfaced + per-send bound.
+  # 10a. --verify diffs the per-attempt manifest against .sent receipts:
+  #      partial wave -> rc 8 naming each unreached uuid; complete -> rc 0;
+      # unknown wave -> rc 3.
+  mkdir -p "$T/verify-run"
+  V1=aaaabbbb-1111-4111-8111-111111111111; V2=aaaabbbb-2222-4222-8222-222222222222; V3=aaaabbbb-3333-4333-8333-333333333333
+  printf '%s\n' "$V1" "$V2" "$V3" > "$T/verify-run/wave-deadbeef0001.targets"
+  printf '%s\n' "$V1" > "$T/verify-run/wave-deadbeef0001.sent"
+  OC_FANOUT_RUN_DIR="$T/verify-run" bash "$0" --verify deadbeef0001 >/dev/null 2>"$T/vp.err" && vrc=0 || vrc=$?
+  [ "$vrc" = 8 ] && chk 0 verify-partial-rc8 || chk 1 "verify-partial-rc8 (got $vrc)"
+  grep -q "$V2" "$T/vp.err" && chk 0 verify-names-unreached-2 || chk 1 verify-names-unreached-2
+  grep -q "$V3" "$T/vp.err" && chk 0 verify-names-unreached-3 || chk 1 verify-names-unreached-3
+  printf '%s\n' "$V2" "$V3" >> "$T/verify-run/wave-deadbeef0001.sent"
+  OC_FANOUT_RUN_DIR="$T/verify-run" bash "$0" --verify deadbeef0001 >/dev/null 2>&1 && vrc=0 || vrc=$?
+  [ "$vrc" = 0 ] && chk 0 verify-complete-rc0 || chk 1 "verify-complete-rc0 (got $vrc)"
+  OC_FANOUT_RUN_DIR="$T/verify-run" bash "$0" --verify nosuchwave00 >/dev/null 2>&1 && vrc=0 || vrc=$?
+  [ "$vrc" = 3 ] && chk 0 verify-nomanifest-rc3 || chk 1 "verify-nomanifest-rc3 (got $vrc)"
+  # 10b. per-send timeout bounds a hung lane; the wave CONTINUES past it and
+  # reports PARTIAL DELIVERY (exit 4) — one slow lane cannot starve a wave.
+  cat > "$T/fake-notify-slow" <<'SLOWEOF'
+#!/usr/bin/env bash
+for a in "$@"; do case "$a" in 77777777-*) sleep 30 ;; esac; done
+echo "notification id 88888888-8888-4888-8888-888888888888"
+exit 0
+SLOWEOF
+  chmod +x "$T/fake-notify-slow"
+  jq '.workers += [{"uuid":"'"$L7"'","role":"editor","topic_id":1,"state":"ACTIVE"}]' "$LEDG" > "$T/ledg2.json"
+  tout="$(OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify-slow" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_LEDGER="$T/ledg2.json" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=2 \
+    OC_FANOUT_RUN_DIR="$T/run-timeout" FAKE_NOTIFY_LOG="$T/fns.log" \
+    bash "$0" --title "TTO" --text "brief {{UUID}}" --no-stamp 2>&1; echo "RC=$?")"
+  echo "$tout" | grep -q "FAIL $L7 .*rc=124" && chk 0 timeout-bounds-hung-send || chk 1 timeout-bounds-hung-send
+  echo "$tout" | grep -q "SENT $L1" && chk 0 wave-continues-past-hung-lane || chk 1 wave-continues-past-hung-lane
+  echo "$tout" | grep -q "PARTIAL DELIVERY" && chk 0 partial-delivery-named || chk 1 partial-delivery-named
+  echo "$tout" | grep -q "RC=4" && chk 0 partial-wave-exit-4 || chk 1 partial-wave-exit-4
+  # 10c. the manifest itself: one row per attempted lane, retired rows never.
+  ls "$T"/run-default/wave-*.targets >/dev/null 2>&1 && chk 0 manifest-written || chk 1 manifest-written
+  grep -qxF "$L1" "$T"/run-default/wave-*.targets && chk 0 manifest-has-attempted-lane || chk 1 manifest-has-attempted-lane
+  grep -qxF "$L6" "$T"/run-default/wave-*.targets && chk 1 manifest-never-retired || chk 0 manifest-never-retired
   echo "oc-notify-fanout selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
   exit $?
 fi
 
-title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0
+title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0 verify_id=""
 forum_chat="${OC_FANOUT_FORUM_CHAT:--1003936827469}"
 while [ $# -gt 0 ]; do case "$1" in
   --title) title="${2:-}"; shift 2 ;;
@@ -323,10 +374,36 @@ while [ $# -gt 0 ]; do case "$1" in
   --dry-run) dry=1; shift ;;
   --no-stamp) stamp=0; shift ;;
   --include-self) include_self=1; shift ;;
+  --verify) verify_id="${2:-}"; shift 2 ;;
   --help|-h) sed -n '2,40p' "$0"; exit 0 ;;
   *) die "unknown flag '$1' (see --help)" ;;
 esac; done
 
+# LAW 10 — partial-delivery verdict (defect #5, 2026-09-12). Dispatched
+# BEFORE the version/title/ledger checks: --verify touches only the run dir.
+if [ -n "$verify_id" ]; then
+  [ -n "$verify_id" ] || die "verify: --verify needs a wave id" 2
+  VRUN="${OC_FANOUT_RUN_DIR:-$SKILL_DIR/run}"
+  VT="$VRUN/wave-${verify_id}.targets"; VS="$VRUN/wave-${verify_id}.sent"
+  if [ ! -f "$VT" ]; then
+    die "verify: no targets manifest for wave ${verify_id} in ${VRUN} — wave never attempted a send (or predates the manifest)" 3
+  fi
+  owed="$(sort -u "$VT" | grep -c . || true)"
+  sentn=0
+  if [ -f "$VS" ]; then sentn="$(sort -u "$VS" | grep -c . || true)"; fi
+  unreached="$(comm -23 <(sort -u "$VT") <(sort -u "${VS:-/dev/null}") || true)"
+  if [ -z "$unreached" ]; then
+    echo "wave ${verify_id}: COMPLETE — ${sentn}/${owed} targets all have receipts"
+    exit 0
+  fi
+  n_unreached="$(printf '%s\n' "$unreached" | grep -c . || true)"
+  {
+    echo "wave ${verify_id}: PARTIAL — ${sentn}/${owed} sent, ${n_unreached} unreached:"
+    printf '%s\n' "$unreached"
+    echo "resume: re-run the original fanout command (duplicates skip cleanly, law 8)"
+  } >&2
+  exit 8
+fi
 version="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL_DIR/SKILL.md" | head -1)"
 [ -n "$version" ] || die "cannot read version from SKILL.md"
 [ -n "$title" ] || die "usage: --title required"
@@ -343,6 +420,7 @@ wave_text="${title}|$( [ -n "$text_file" ] && cat "$text_file" || echo "${text:-
 wave_id="$(printf '%s' "$wave_text" | sha256sum | cut -c1-12)"
 LOCK_FILE="$RUN_DIR/wave-${wave_id}.lock"
 SENT_FILE="$RUN_DIR/wave-${wave_id}.sent"
+TARGETS_FILE="$RUN_DIR/wave-${wave_id}.targets"   # law 10: one uuid per send ATTEMPT
 
 # Live = holder pid alive AND lock < 900s old. Stale = cleared with receipt.
 lock_live() { # $1=lockfile -> 0 if live
@@ -520,6 +598,11 @@ while IFS=$'\t' read -r uuid role topic wstate; do
   # The old 20s default killed EVERY send rc=124 while delivery actually
   # worked. Default raised to 90s; each receipt carries send latency.
   if [ -z "${OC_FANOUT_SEND_TIMEOUT:-}" ]; then OC_FANOUT_SEND_TIMEOUT=90; fi
+  # LAW 10 manifest: recorded BEFORE the send, so even a mid-send kill leaves
+# the intended set on disk for --verify to diff against .sent receipts.
+  if [ "$dry" = 0 ]; then
+    grep -qxF "$uuid" "$TARGETS_FILE" 2>/dev/null || printf '%s\n' "$uuid" >> "$TARGETS_FILE"
+  fi
   printf '%s' "$receipts"   # incremental flush: receipts survive a mid-send hang
   receipts=""
   T0=$(date +%s%N)
@@ -556,5 +639,10 @@ if [ "$stamp" = 1 ] && [ "$dry" = 0 ] && [ "$sent" -gt 0 ]; then
   bash "$SKILL_DIR/tools/oc-ledger" stamp notify-fanout \
     "fanout '$title': sent=$sent skipped=$skipped failed=$failed ids: ${ids:-none}" || true
 fi
-[ "$failed" = 0 ] || exit 4
+if [ "$failed" -gt 0 ]; then
+  # LAW 10 (defect #5, 2026-09-12): a wave that finished its loop with send
+  # failures must SAY partial delivery on stderr, not just exit 4 silently.
+  echo "PARTIAL DELIVERY: $failed of $((sent+failed)) attempted send(s) failed — named in the FAIL receipts above; resume by re-running the same wave (duplicates skip), audit with: oc-notify-fanout --verify $wave_id" >&2
+  exit 4
+fi
 exit 0
