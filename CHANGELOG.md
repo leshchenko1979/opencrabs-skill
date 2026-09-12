@@ -1,3 +1,11 @@
+## v0.4.148 (2026-09-12) — Carrier Build Coalescence, Ancestry Matching & Host Swap Mutex
+
+- **Carrier Concurrency & Coalescence Law (`fleet-directives.md`, `editor.md`)**: Codified that carrier workflow `ci/quick-build-linux` concurrency coalesces pending queued builds. Editors push fast-forwarded commits immediately without pre-dispatch lock serialization.
+- **Ancestry-Aware Carrier Matching (`tools/oc-deploy`, `tools/RC-CONTRACT.md`)**: `oc-deploy ship/poll` accepts descendant builds via `git merge-base --is-ancestor "$SHA" "$CAND_SHA"`. When coalesced carrier runs finish GREEN on a descendant commit, all included ancestors are recognized as deployed.
+- **Host Swap Mutex & Lineage Monotonicity (`tools/oc-deploy`)**: Wrapped `swap-execute` in `flock -x $STATE_DIR/host-swap.lock` and added `git merge-base --is-ancestor "$PREV_SHA" "$SHA"` verification to prevent stale binary overwrites.
+- **Fast-Forward Merge Serialization (`tools/oc-ship-chain`)**: Added `ship.lock` around Leg 3 to serialize concurrent local fork-main merges cleanly.
+- **BATTERY**: 166 PASS / 0 FAIL.
+
 ## v0.4.145 (2026-09-11) — Unified Event Capture Matrix, Split-Gate Ship Pipeline & Failure Recovery Protocol
 
 - **Unified Event Capture Matrix (`fleet-directives.md`)**: Codified routing law separating urgent anomalies (Toolsmith direct notification, GitHub fork issues, Alexey) from batched self-improvement (Duty 4 review proposals and Idea Box intake persisted directly to disk/ledger without flooding HQ).

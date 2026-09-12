@@ -254,6 +254,25 @@ To optimize daytime delivery velocity while maintaining binary safety, shipping 
 4. **Immediate Live Swap & Smoke Review**: Binary swaps atomically onto the host (`oc-deploy swap-execute`), and editors execute Phase 6b smoke tests (`oc-smoke-evidence`) during active daytime hours.
 5. **Asynchronous / Nightly Full Regression**: Full regression suites (`cargo test --all-features`, ~25 min) execute asynchronously in CI on `main` or run in consolidated batches during the nighttime sync. If asynchronous test runs report regressions, a fix issue is queued for triage.
 
+## Carrier Concurrency & Coalescence Law (v0.4.148, Toolsmith brief 2026-09-12) [LANE]
+
+- **Workflow Concurrency Semantics:** The GitHub Actions carrier workflow `ci/quick-build-linux` uses `concurrency: group: quick-build-linux` with default queuing semantics (1 active run, 1 pending run; additional dispatches cancel and replace the pending run).
+- **Non-blocking Push:** Editors pushing to `origin/main` do not serialize on a pre-dispatch carrier lock; they push their fast-forwarded commits immediately.
+- **Ancestry Matching & Coalescence:** `oc-deploy` and `oc-ship-chain` accept descendant builds via ancestry matching (`git merge-base --is-ancestor "$SHA" "$CAND_SHA"`). If Editor B pushes while Editor A's carrier build is running, and Editor C pushes right after, GitHub Actions coalesces B and C into a single build. When that build succeeds, both Editor B and Editor C recognize their commits as deployed without running redundant builds.
+- **Host Swap Mutex & Monotonicity:** Host binary swaps remain strictly serialized and monotonic via `host-swap.lock` (`flock -x $STATE_DIR/host-swap.lock`) and lineage verification (`git merge-base --is-ancestor "$PREV_SHA" "$SHA"`), preventing stale binary overwrites.
+- **Merge Serialization:** `oc-ship-chain` serializes Leg 3 (fast-forward merge) via `ship.lock`.
+
+```mermaid
+flowchart TD
+    E1["Editor 1 (Push A)"] -->|Dispatches| R1["Carrier Build 1 (Active on A)"]
+    E2["Editor 2 (Push B)"] -->|Queues| R2["Carrier Build 2 (Pending on B)"]
+    E3["Editor 3 (Push C)"] -->|Replaces Pending| R3["Carrier Build 3 (Pending on C)"]
+    R1 -->|Build 1 Finishes| S1["Swap A to Host"]
+    R3 -->|Build 3 Finishes on C| S2["Swap C to Host (Coalesced B+C)"]
+    S2 -.->|Ancestry Match| ACK2["Editor 2 Acknowledged (B in C)"]
+    S2 -.->|Direct Match| ACK3["Editor 3 Acknowledged (C)"]
+```
+
 ## Features-compat gate — no silent feature-loss swaps (HQ ruling 2026-09-04, MANDATORY) [LANE]
 
 `oc-deploy swap-execute` **refuses** any artifact whose feature set drops a feature present in `deployed.meta.json` (exit 4, journal `features-drop-gate`, markers untouched) unless the operator passes `--allow-features-drop` explicitly. Feature *additions* pass freely; *drops* are the failure class. Enforced in-code (selftest 17p/17q). Rationale: the 06:36:06Z rogue swap (run `33844429519`, `features="telegram"` over a live `telegram,code-graph` binary) killed structural memory for 12h — and the 18:57Z f3c03269 swap was the same class (no-tests artifact, auto-consumed). The gate would have refused both.
