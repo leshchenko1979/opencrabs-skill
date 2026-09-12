@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.154 (2026-09-12) — Law Text Names Only Commands That Exist
+
+Two verified skill-law defects, both found by editors who ran the prescribed command and got a usage error instead of the promised recovery:
+
+- **`oc-ship-chain --resume` did not exist.** `editor.md` Failure Mode 4 ("Daemon Bounce Task Interruption") prescribed `--resume` for post-bounce recovery; the tool carries 11 case arms and **0** occurrences of the flag — the arg loop's catch-all dies `unknown arg` rc=2. Corrected to the real recovery: read `deployed.sha`, and if the chain died before the swap, **re-run the same chain with `--gated-run <id>`** (reusing the GREEN gate run whose job name pins your sha). The row's cgroup claim was corrected too: only the `poll --execute` path hands Phase B to a transient `systemd-run` unit, so a **direct** `swap-execute` runs in the caller's cgroup and can be killed by the restart it performs.
+- **`oc-ledger stamp proposal` can never yield a row** — the `KINDS` enum omits `proposal` (stamp rc=2, `events --kind proposal` rc=1 empty), while four citations prescribe it (`editor.md:69`, `fleet-directives.md`, `hq.md:137`, `CHANGELOG.md:55`). Resolution = admit the kind, per precedent (`shipchain` v1.2, `roster-retire` v1.3); Toolsmith owns the enum.
+- **New law (`fleet-directives.md`, tool-problem routing section):** law text may name only commands that **exist**, verified against the tool's own surface before it ships — `grep -c -- '<flag>' <tool>` for a flag, the `KINDS` / case-arm list for a verb. HQ owns the law text; Toolsmith owns the tool surface when the verb should exist rather than be removed.
+- **BATTERY**: 168 PASS / 0 FAIL.
+
 ## v0.4.153 (2026-09-12) — Reading a Delivery Verdict: `no wake observed` Is Not a Failure
 
 Toolsmith correction 2026-09-12, on its own v0.4.151 handover. Two facts, both verified against source by the reporter:

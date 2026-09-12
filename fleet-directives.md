@@ -203,6 +203,15 @@ Triage is an AUDITOR, not a relay hub. Lanes do NOT route tool anomalies through
 
 Format for direct quirk dispatch to Toolsmith: `QUIRK: <tool> <observed> BECAUSE <expected>` + evidence (exit code, logs, journal). Toolsmith verifies against disk/tests, fixes in a worktree, verifies selftests, and ships via `oc-ship-chain`.
 
+**Law text may name only commands that EXIST — verified against the tool's own surface before it is written (2026-09-12, two instances in one day).** A runbook row that prescribes an impossible verb is a **defect, not a typo**: lanes follow law literally and collect `rc=2`. Both instances below were found by editors who ran the prescribed command and got a usage error instead of the promised recovery:
+
+| Prescribed (wrong) | Real surface | Where it was written |
+|---|---|---|
+| `oc-ship-chain --resume` | flag never existed — 0 occurrences; the arg loop's catch-all dies `unknown arg` rc=2. Real recovery = read `deployed.sha`, then re-run the same chain with `--gated-run <id>` | `editor.md` Failure Mode 4 (fixed v0.4.154) |
+| `oc-ledger stamp proposal` | `KINDS` enum omits `proposal` → stamp rc=2, `events --kind proposal` rc=1 empty. Resolution = add the kind (precedent: `shipchain` v1.2, `roster-retire` v1.3) | `editor.md:69`, this file, `hq.md` |
+
+Verification is one line either way: `grep -c -- '<flag>' <tool>` for a flag, or read the tool's `KINDS` / case-arm list for a verb. Do this BEFORE the law ships. Fix ownership splits: **HQ** owns the law text, **Toolsmith** owns the tool surface when the missing verb should exist rather than be removed.
+
 ## Unified Event Capture: Urgent Routing vs. Batched Evolution (v0.4.145)
 
 All observed runtime events, anomalies, proposals, and feature ideas MUST follow the strict taxonomy below. Urgent execution items route directly to the owning substrate without relay hops; non-urgent evolution items persist to disk/ledger to prevent context bloat and memory compaction at HQ.
