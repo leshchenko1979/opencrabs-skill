@@ -274,6 +274,101 @@ lineage_check_run() { # [--prev P] [--sha S] [--repo R] [--json]
   fi
   case "$kind" in monotonic|rewritten) return 0 ;; *) return 2 ;; esac
 }
+
+# ------------------------------------------ receipt recovery (v0.4.153) --
+# A swap launched INSIDE the unit it bounces is SIGKILLed at step 8 (the
+# restart), so steps 9-12 never run and NO swap-result ledger row is written:
+# the host is swapped, the ledger is silent — a false-negative audit trail
+# (lane 2fbfb2f8, 2026-09-12; journal swap-acb8e205-1789199968-2602580.jsonl
+# stops at seq 7 marker-write while the daemon really did bounce onto the new
+# binary). The v0.4.153 cgroup self-detach fixes the CAUSE; this verb repairs
+# the EVIDENCE for a swap already truncated, idempotently.
+#
+# It stamps ONLY when every guard holds, reading the journal alone (a crash is
+# reconstructable from the journal by design):
+#   - install exit=0 AND marker-write exit=0  -> the swap is REAL
+#   - NO receipt step                         -> it was truncated (else: done)
+#   - deployed.sha still == the journal sha   -> not superseded by a later swap
+#   - no swap-result ledger row quoting sha+run -> idempotent, never double-stamp
+# Fan-out is deliberately NOT replayed here (use `oc-deploy fanout --run <id>`):
+# fanout has its own done-marker and a replay would re-notify contributors.
+# rc: 0 = handled (recovered, or correctly nothing to do) · 2 = cannot judge.
+recover_receipt_run() { # [--journal PATH] [--run R] [--sha S] [--dry-run] [--json]
+  local jf="" run="" sha="" dry=0 json=0 cand
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --journal) jf="${2:-}"; shift ;;
+      --run)     run="${2:-}"; shift ;;
+      --sha)     sha="${2:-}"; shift ;;
+      --dry-run) dry=1 ;;
+      --json)    json=1 ;;
+      *) die 1 "recover-receipt: unknown arg: $1" ;;
+    esac
+    shift || true
+  done
+  if [ -z "$jf" ]; then
+    # default: the newest journal that LACKS a receipt step — i.e. the actionable
+    # truncated one. A journal that carries receipt is complete and not our job.
+    for cand in $(ls -1t "$JOURNAL_DIR"/swap-*.jsonl 2>/dev/null); do
+      [ "$(jq -s '[.[]|select(.step=="receipt")]|length' "$cand" 2>/dev/null || echo 1)" = 0 ] && { jf="$cand"; break; }
+    done
+    if [ -z "$jf" ]; then
+      [ "$json" = 1 ] && echo '{"recoverable":false,"reason":"no truncated journal found"}' \
+        || echo "recover-receipt: no truncated journal in $JOURNAL_DIR — every swap carries a receipt step"
+      return 0
+    fi
+  fi
+  [ -f "$jf" ] || die 1 "recover-receipt: journal not found: $jf"
+
+  local has_install has_marker has_receipt jsha jrun
+  has_install="$(jq -s '[.[]|select(.step=="install" and .exit==0)]|length' "$jf" 2>/dev/null || echo 0)"
+  has_marker="$(jq -s '[.[]|select(.step=="marker-write" and .exit==0)]|length' "$jf" 2>/dev/null || echo 0)"
+  has_receipt="$(jq -s '[.[]|select(.step=="receipt")]|length' "$jf" 2>/dev/null || echo 0)"
+  jsha="$(jq -rs '[.[]|select(.step=="marker-write")][-1].deployed_sha // empty' "$jf" 2>/dev/null)"
+  jrun="$(jq -rs '[.[]|select(.step=="auto-swap")][-1].run_id // empty' "$jf" 2>/dev/null)"
+  [ -n "$run" ] || run="$jrun"
+  [ -n "$sha" ] || sha="$jsha"
+
+  local cur existing reason="" ok=1
+  cur="$(cat "$DEPLOYED" 2>/dev/null || echo MISSING)"
+  if [ "$has_receipt" != 0 ]; then reason="journal already carries a receipt step — swap completed, nothing to recover"; ok=0
+  elif [ "$has_install" = 0 ]; then reason="journal has no install exit=0 — the swap never installed; refusing to stamp"; ok=0
+  elif [ "$has_marker" = 0 ]; then reason="journal has no marker-write exit=0 — markers never written; refusing to stamp"; ok=0
+  elif [ -z "$sha" ]; then reason="journal names no deployed sha (and --sha not given) — cannot judge"; ok=0
+  elif [ "$cur" != "$sha" ]; then reason="deployed.sha ($cur) != journal sha ($sha) — a later swap superseded this one; refusing to stamp"; ok=0
+  fi
+  if [ "$ok" = 1 ]; then
+    existing="$(jq -r --arg s "sha=$sha" --arg r "run=$run" \
+      '[.events[]|select(.kind=="swap-result" and (.what|contains($s)) and (.what|contains($r)))]|length' \
+      "$LEDGER" 2>/dev/null || echo 0)"
+    [ "$existing" = 0 ] || { reason="ledger already carries a swap-result row for sha=$sha run=$run — idempotent no-op"; ok=0; }
+  fi
+
+  if [ "$json" = 1 ]; then
+    jq -cn --arg j "$jf" --arg s "$sha" --arg r "$run" --arg c "$cur" --arg why "$reason" \
+      --argjson ok "$([ "$ok" = 1 ] && echo true || echo false)" \
+      '{journal:$j, sha:$s, run:$r, deployed_sha:$c, recoverable:$ok, reason:$why}'
+  else
+    echo "journal:      $jf"
+    echo "sha:          ${sha:-<none>}"
+    echo "run:          ${run:-<none>}"
+    echo "deployed.sha: $cur"
+  fi
+  if [ "$ok" != 1 ]; then
+    [ "$json" = 1 ] || echo "verdict:      not recovered — $reason"
+    return 0
+  fi
+  if [ "$dry" = 1 ]; then
+    [ "$json" = 1 ] || echo "verdict:      RECOVERABLE (dry-run — no stamp written)"
+    return 0
+  fi
+  ledger_stamp "oc-deploy recover-receipt" \
+    "swap-result RECOVERED sha=$sha run=$run: install(exit=0)+marker-write(exit=0) present but the receipt step was lost to a truncated run; row reconstructed post-hoc from journal=$jf (v0.4.153 cgroup-kill defect)" \
+    "swap-result"
+  [ "$json" = 1 ] || echo "verdict:      RECOVERED — swap-result row stamped"
+  return 0
+}
+
 stage() { jq -r '.meta.oc_deploy_stage // "S0"' "$LEDGER" 2>/dev/null || echo S0; }
 shadow_log() { # <op> <sha> <features> <result>
   printf '%s\t%s\t%s\t%s\t%s\tstage=%s\n' \
@@ -2177,7 +2272,7 @@ MODE="${1:-}"; [ $# -gt 0 ] && shift
 # globals — the cgroup detach must re-exec with the original flags.
 ORIG_ARGS=("$@")
 # C-F5 (v0.4.71): --help / -h exits 0 on stdout, before any validation
-case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
+case "$MODE" in -h|--help) echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | recover-receipt [--journal J] [--run R] [--sha S] [--dry-run] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;; esac
 # issue #24 D1: contributors takes its own arg shape (positional range /
 # --deployed / --repo) — dispatch BEFORE the ship/poll flag loop so the
 # positional range survives. contributors is RETIRED (dies rc 1); the
@@ -2187,6 +2282,9 @@ if [ "$MODE" = status ]; then status_run "$@"; exit $?; fi
 # v0.4.151: lineage-check takes its own arg shape (--prev/--sha/--repo/--json) —
 # dispatch BEFORE the ship/poll flag loop so its flags are not rejected.
 if [ "$MODE" = lineage-check ]; then lineage_check_run "$@"; exit $?; fi
+# v0.4.153: recover-receipt takes its own arg shape (--journal/--run/--sha/--dry-run/--json) —
+# dispatch BEFORE the ship/poll flag loop so its flags are not rejected.
+if [ "$MODE" = recover-receipt ]; then recover_receipt_run "$@"; exit $?; fi
 SHA=""; FEATURES=""; FEATURES_EXPLICIT=0; EXECUTE=0; RUN_ID=""; DRILL=0; ARTDIR=""; DRYRUN=0; WITH_DELTA=0; ALLOW_DROP=0   # FEATURES="" = resolve from carrier (KERNEL D2, 2026-08-28)
 WAIT_SECS=0; NOTIFY_SESSION=""   # C-#2: poll --wait / --notify-session
 ALLOW_REWRITTEN_LINEAGE=0; RW_JUSTIFY=""; RW_ACTOR="${OC_DEPLOY_ACTOR:-$(id -un 2>/dev/null || echo unknown)}"   # v0.4.151: audited swap-guard override
@@ -2207,7 +2305,7 @@ while [ $# -gt 0 ]; do
     --wait)     WAIT_SECS="${2:-}"; shift ;;   # C-#2: poll blocks until a NEW green run (or timeout, rc 5)
     --notify-session) [ -n "${2:-}" ] || die 2 "--notify-session needs a session uuid"; NOTIFY_SESSION="${2:-}"; shift ;;   # C-#2: session uuid woken on handoff/timeout; guard lens C MED-3 (v0.4.79)
     --artifact-dir) ARTDIR="${2:-}"; shift ;;
-    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
+    -h|--help)  echo "usage: oc-deploy ship [--sha S] [--features F] [--execute] [--allow-features-drop] | poll [--execute] [--wait N] [--notify-session UUID] | swap-execute --sha S --run R [--features F] [--artifact-dir D] [--drill] [--allow-features-drop] [--allow-rewritten-lineage \"<justification>\" [--actor A]] | lineage-check [--prev P] [--sha S] [--repo R] [--json] | recover-receipt [--journal J] [--run R] [--sha S] [--dry-run] [--json] | watch [--with-delta] | status [--json] | fanout --run R [--dry-run] | --selftest  (contributors RETIRED — use oc-attrib --contributors)"; exit 0 ;;
     *)          die 1 "unknown arg: $1" ;;
   esac
   shift || true
@@ -2560,8 +2658,8 @@ case "$MODE" in
     # v0.4.153: detach BEFORE the lock and before any work. A swap launched from
     # inside the unit it bounces is SIGKILLed at step 8 — steps 9-12 (receipt,
     # fanout, ledger stamp) are then lost and the swap goes unrecorded.
-    swap_ensure_detached "$@"
     swap_ensure_detached
+    [ -n "$SHA" ] && [ -n "$RUN_ID" ] || die 1 "swap-execute needs --sha <40-hex> and --run <id>"
     echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || die 1 "sha not 40-hex: $SHA"
     # NOTE (n=1878): NO local cat-file guard here — swap-execute targets the
     # remote host; its sha is authenticated by the carrier-run job-name decode
