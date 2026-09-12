@@ -87,6 +87,8 @@ hand from a stale registry.
    three real branches that read 121 / 105 / 120 where the true pending counts
    were 2 / 0 / 1. **Test the target range first:**
    ```bash
+   # 0. is ANY of this branch's work genuinely pending? patch-id, NOT ancestry
+   git cherry origin/main <lane-branch> | grep -c '^+'   # 0 -> absorbed, SKIP (pointer move)
    # 1. how much of this branch is NOT already in the new base?
    git rev-list --count origin/main..<lane-branch>     # 0 -> absorbed, see below
    # 2. cut at the PARENT of the oldest of THAT range
@@ -101,6 +103,24 @@ hand from a stale registry.
    pointer) rather than deriving a cut. Lane `2fbfb2f8` (2026-09-11, #132) hit
    this: `299d1c72` had 0 pending, the derivation yielded `^`, and the old-sha
    fallback did not apply either.
+   **Second skip case — a STALE POINTER on a re-synthesized base (step 0's
+   patch-id test is what catches it).** The count test cannot tell "this lane
+   has work" from "this lane SITS ON a base whose lineage was replaced". When
+   fork main is re-synthesized a SECOND time, a lane still pointing at the
+   FIRST new base has a range populated entirely by that base's OWN history,
+   so the count reads non-zero while genuinely pending work is ZERO and the
+   zero-test never fires. Lane `9fa7c71a` (2026-09-12, branch
+   `feat/streaming-empty-finish-guard` @ `b3b3fc9a`, pointer set by the
+   v0.4.140 case-0 rule): `origin/main..HEAD` = **15** — zero-test silent —
+   while `git cherry origin/main HEAD` returned **15 x `-` / 0 x `+`**, i.e.
+   every commit already patch-id-applied. The cut derived from that range
+   gave **rc 1 with 10 conflicting files** — the over-replay signature
+   above, on a branch with ZERO work. **The cut must be the base the lane
+   SITS ON (read from the branch pointer), never derived from a range against
+   a base whose lineage was rewritten:** `git rebase --onto origin/main
+   b3b3fc9a <branch>` → rc 0, a pure pointer move that replays nothing.
+   J-shaped: a migration verb printing `ABSORBED|PENDING` from `git cherry`
+   would remove the hand-derivation entirely.
    **Failure signature — an over-replay does NOT error.** It presents as a huge
    commit wall and mass conflicts, so it reads as "the lane is a mess" rather
    than "the cut point is wrong". Lane `facd50af` was offered **220 commits**
