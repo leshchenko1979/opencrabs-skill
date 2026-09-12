@@ -12,6 +12,13 @@
 #
 # Usage: oc-smoke-evidence [--unit opencrabs-ops] [--markers m1,m2]
 #                          [--negative-control <backup-binary>] [--selftest]
+#                          [--append-log <path>]
+#   --append-log <path> (defect #13, lane c10cd97b, 2026-09-12): appends the
+#   evidence block to <path> NEWLINE-SAFELY — if the log was last written
+#   without a trailing newline, that row is terminated first, so rows can
+#   never glue. Appends on rc 0/1 (verdict rows are evidence either way);
+#   usage/infra failures (rc 2/3) write nothing. This is the sanctioned
+#   append path — a plain shell >> is what glued c10cd97b's verdict rows.
 #   --markers is canonical (matches oc-artifact-verify); --strings is a
 #   deprecated alias kept for back-compat (E2 finding 6, v0.4.72).
 # Exit:  0 IDENTITY-MATCH / 1 MISMATCH / 2 usage / 3 unit-or-proc-fail
@@ -25,13 +32,24 @@ trap 'oc_log_finish $?' EXIT
 usage() { echo "usage: $0 [--unit <systemd-user-unit>] [--markers m1,m2] [--negative-control <binary>] | --selftest" >&2; exit 2; }
 die() { echo "oc-smoke-evidence: $2" >&2; exit "$1"; }
 
+append_log() { # newline-safe append (defect #13): a log left unterminated by a
+               # previous writer must not glue the next row onto its last line
+  local f="$1" c="$2"
+  [ -n "$f" ] || return 2
+  if [ -s "$f" ] && [ -n "$(tail -c 1 "$f" 2>/dev/null)" ]; then
+    printf '\n' >> "$f"   # terminate the previous writer's unterminated row
+  fi
+  printf '%s\n' "$c" >> "$f"
+}
+
 STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
-UNIT="opencrabs-ops"; MARKERS=""; NEGCTRL=""
+UNIT="opencrabs-ops"; MARKERS=""; NEGCTRL=""; APPEND_LOG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --unit) UNIT="${2:-}"; shift 2 ;;
     --markers|--strings) MARKERS="${2:-}"; shift 2 ;;   # --strings = deprecated alias
     --negative-control) NEGCTRL="${2:-}"; shift 2 ;;
+    --append-log) APPEND_LOG="${2:-}"; shift 2 ;;
     --selftest)
       d="$(mktemp -d)"
       printf 'x%.0s' {1..100} > "$d/a"; cp "$d/a" "$d/b"; printf 'x%.0s' {1..100} > "$d/c"; printf 'y' >> "$d/c"
@@ -43,12 +61,26 @@ while [ $# -gt 0 ]; do
       { printf 'OC_MARKER_PAST_PIPEBUF\n'; head -c 1048576 /dev/zero | tr '\0' 'x'; } > "$d/m"
       SB="$(strings "$d/m" 2>/dev/null)"
       grep -qF -- 'OC_MARKER_PAST_PIPEBUF' <<< "$SB" || { echo "selftest: buffered marker check failed (drain regression?)" >&2; exit 1; }
+      # defect #13 (lane c10cd97b): newline-safe append. A log left WITHOUT a
+      # trailing newline must not glue the next row onto its last line, and a
+      # second probe keeps the same intact-line shape.
+      printf 'row1-unterminated' > "$d/v.log"
+      append_log "$d/v.log" "E1" && append_log "$d/v.log" "E2"
+      [ "$(wc -l < "$d/v.log")" = 3 ] || { echo "selftest: append-log line count broken" >&2; exit 1; }
+      grep -qF 'row1-unterminatedE1' "$d/v.log" && { echo "selftest: append glued rows" >&2; exit 1; }
+      grep -qx 'row1-unterminated' "$d/v.log" || { echo "selftest: append glued row1" >&2; exit 1; }
+      grep -qx 'E1' "$d/v.log" || { echo "selftest: append lost E1" >&2; exit 1; }
+      grep -qx 'E2' "$d/v.log" || { echo "selftest: append lost E2" >&2; exit 1; }
+      append_log "$d/v.log" "E3"
+      [ "$(wc -l < "$d/v.log")" = 4 ] || { echo "selftest: second probe broke shape" >&2; exit 1; }
+      grep -qF 'E2E3' "$d/v.log" && { echo "selftest: second probe glued" >&2; exit 1; }
       echo "selftest OK"; exit 0 ;;
     -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) usage ;;
   esac
 done
 
+emit_evidence() {
 [ -f "$STATE_DIR/deployed.meta.json" ] || die 3 "deployed.meta.json missing in $STATE_DIR"
 PID="$(systemctl --user show "$UNIT" -p MainPID --value 2>/dev/null)" || die 3 "systemctl --user show $UNIT failed"
 case "$PID" in ''|0) die 3 "unit $UNIT not running (MainPID=$PID)" ;; esac
@@ -115,3 +147,15 @@ fi
 
 if [ "$rc" -eq 0 ]; then echo "VERDICT: IDENTITY-MATCH — binary identity + feature presence on live $UNIT"; else echo "VERDICT: MISMATCH — see rows above"; fi
 exit "$rc"
+}
+
+if [ -n "$APPEND_LOG" ]; then
+  RC=0
+  OUT="$( { trap - EXIT; emit_evidence; } )" || RC=$?
+  printf '%s\n' "$OUT"
+  if [ "$RC" = 0 ] || [ "$RC" = 1 ]; then
+    append_log "$APPEND_LOG" "$OUT" || die 3 "append-log failed: $APPEND_LOG"
+  fi
+  exit "$RC"
+fi
+emit_evidence
