@@ -19,10 +19,16 @@
 #      Dead targets are skipped with a reason, never attempted.
 #   4. RECEIPTS: one line per lane (uuid role rc detail); summary; ledger
 #      stamp kind=notify-fanout carrying all ids (opt-out --no-stamp).
-#   5. QUIET-60S contract text is embedded in briefs. SENDS ARE IMMEDIATE
-#      (`--mode` defaults to now) with the standard interrupt-retry: on rc 3
-#      the send is re-issued with --interrupt, which is now a deprecated alias
-#      for --mode turn-end.
+#   5. QUIET-60S contract text is embedded in briefs. SENDS DEFAULT TO QUIET:
+#      `--mode now|turn-end|quiet` (default **quiet**) is passed straight
+#      through to `session notify`. hq.md:95 (owner law 2026-09-07) mandates
+#      delivery=quiet for ANY version bump, so quiet is the default. In the
+#      non-quiet modes a mid-turn rc 3 is re-issued with --interrupt (a
+#      deprecated alias for --mode turn-end); in QUIET mode there is NO
+#      interrupt-retry — the CLI returns a DEFERRED verdict carrying a
+#      notification id, which IS the expected result, and re-issuing it would
+#      convert a deferred send into the immediate wake this flag exists to
+#      prevent.
 #      CORRECTION 2026-09-11 (Toolsmith, dispatched by the hourly health sweep):
 #      an earlier note here claimed the binary's `session notify` CLI had NO
 #      quiet/mode flag (verified 2026-09-09) and flagged it to HQ as a binary
@@ -33,6 +39,11 @@
 #      work-dispatch wave is a fleet delivery-semantics decision, not a header
 #      detail. If HQ wants quiet-by-default fanout, the switch is one flag
 #      (`--mode quiet`), and it belongs in a separate, owner-visible change.
+#      FIXED 2026-09-12 (HQ report d72bd52d, Toolsmith): the law above named a
+#      flag this tool did not parse — `--mode quiet` died "unknown flag" — while
+#      the help described immediate sends as a choice. A tool whose help names a
+#      flag it cannot parse is the law-names-a-nonexistent-invocation family.
+#      The parser now carries --mode and the default is the law's quiet.
 #   6. FORUM-SCOPE GUARD (owner order 2026-09-10 03:16Z): ALL opencrabs-dev
 #      work — including skill-change fanout — happens ONLY in the opencrabs-dev
 #      forum chat. A target session is sendable only when the profile session
@@ -76,7 +87,8 @@
 #   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
 #     [--text "what changed ..."] [--text-file /path/brief.md] \
 #     [--roles editor,hq] [--exclude "40695,uuid8char"] \
-#     [--forum-chat <chat_id>] [--dry-run] [--no-stamp] [--include-self]
+#     [--mode now|turn-end|quiet] (default quiet) \
+#     [--forum-chat <chat_id>] [--dry-run] [--no-stamp] [--include-self] \
 #     [--verify <wave-id>]
 #
 #   Default brief (when --text/--text-file omitted) is the canonical
@@ -266,6 +278,29 @@ JSON
     OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 \
     bash "$0" --title T --text "broken {{NOPE}} token" --no-stamp 2>&1)" || true
   echo "$out" | grep -q "ABORT.*placeholder" && chk 0 law1-placeholder-abort || chk 1 law1-placeholder-abort
+
+  # LAW 5 (defect: HQ report d72bd52d, 2026-09-12): the tool could not express
+  # the law's quiet contract — hq.md:95 mandates delivery=quiet for ANY version
+  # bump, but the parser had no --mode at all, so `--mode quiet` died "unknown
+  # flag" and every wave sent IMMEDIATELY. These assertions pin the flag at the
+  # BINARY BOUNDARY (the fake notify's logged argv), not merely the rc: a parser
+  # that accepts the flag and drops it before the send would sail past an
+  # rc-only check. Distinct run dirs — the wave-id hashes title+brief, so two
+  # runs sharing a dir would SKIP as DUPLICATE and never reach a send.
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  OC_FANOUT_RUN_DIR="$T/run-mode-quiet" run_fanout --mode quiet >/dev/null 2>&1
+  grep -qF -- '--mode quiet' "$T/fake-notify-log" && chk 0 mode-quiet-reaches-binary || chk 1 mode-quiet-reaches-binary
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  OC_FANOUT_RUN_DIR="$T/run-mode-default" run_fanout >/dev/null 2>&1
+  grep -qF -- '--mode quiet' "$T/fake-notify-log" && chk 0 mode-absent-defaults-quiet || chk 1 mode-absent-defaults-quiet
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  OC_FANOUT_RUN_DIR="$T/run-mode-now" run_fanout --mode now >/dev/null 2>&1
+  grep -qF -- '--mode now' "$T/fake-notify-log" && chk 0 mode-now-passthrough || chk 1 mode-now-passthrough
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  OC_FANOUT_RUN_DIR="$T/run-mode-bogus" run_fanout --mode bogus >/dev/null 2>&1 || true
+  grep -qF -- '--mode' "$T/fake-notify-log" && chk 1 mode-invalid-never-sends || chk 0 mode-invalid-never-sends
+  out="$(OC_FANOUT_RUN_DIR="$T/run-mode-bogus2" run_fanout --mode bogus 2>&1)" || true
+  echo "$out" | grep -q "invalid --mode" && chk 0 mode-invalid-rejected || chk 1 mode-invalid-rejected
 
   # 3. Dry-run behaves identically for scope (no send attempted).
   rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
@@ -513,6 +548,9 @@ DREOF
 fi
 
 title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0 verify_id=""
+# LAW 5 (fixed 2026-09-12): delivery mode, default QUIET — hq.md:95 mandates
+# delivery=quiet for ANY version bump. Passed through verbatim to session notify.
+mode="quiet"
 forum_chat="${OC_FANOUT_FORUM_CHAT:--1003936827469}"
 while [ $# -gt 0 ]; do case "$1" in
   --title) title="${2:-}"; shift 2 ;;
@@ -525,9 +563,17 @@ while [ $# -gt 0 ]; do case "$1" in
   --no-stamp) stamp=0; shift ;;
   --include-self) include_self=1; shift ;;
   --verify) verify_id="${2:-}"; shift 2 ;;
+  --mode) mode="${2:-}"; shift 2 ;;
   --help|-h) sed -n '2,40p' "$0"; exit 0 ;;
   *) die "unknown flag '$1' (see --help)" ;;
 esac; done
+
+# LAW 5: the mode must be one the CLI accepts. Validate BEFORE any send — an
+# unrecognised value silently falling back to `now` is the defect this fixes.
+case "$mode" in
+  now|turn-end|quiet) : ;;
+  *) die "invalid --mode '$mode' (want now|turn-end|quiet)" 2 ;;
+esac
 
 # LAW 10 — partial-delivery verdict (defect #5, 2026-09-12). Dispatched
 # BEFORE the version/title/ledger checks: --verify touches only the run dir.
@@ -761,9 +807,17 @@ while IFS=$'\t' read -r uuid role topic wstate; do
   printf '%s' "$receipts"   # incremental flush: receipts survive a mid-send hang
   receipts=""
   T0=$(date +%s%N)
+  # LAW 5 (fixed 2026-09-12, HQ report d72bd52d): --mode is passed straight
+  # through to the CLI and DEFAULTS TO QUIET. --mode sits BEFORE --text on
+  # purpose: the argv tail stays "... --text <brief> <uuid>", the shape the
+  # selftest's sent_brief() parser keys on.
   out="$(timeout "$OC_FANOUT_SEND_TIMEOUT" "$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
-        --title "$title" --text "$brief" "$uuid" 2>&1)" && rc=0 || rc=$?
-  if [ "$rc" = 3 ]; then  # mid-turn: interrupt-retry per lib contract
+        --title "$title" --mode "$mode" --text "$brief" "$uuid" 2>&1)" && rc=0 || rc=$?
+  # A mid-turn rc 3 gets the interrupt-retry ONLY in the non-quiet modes. In
+  # QUIET mode a deferred verdict (rc 0 + notification id) IS the expected
+  # result, and re-issuing it would convert a deferred send into the immediate
+  # wake the flag exists to prevent.
+  if [ "$rc" = 3 ] && [ "$mode" != "quiet" ]; then  # mid-turn: interrupt-retry per lib contract
     out="$(timeout "$OC_FANOUT_SEND_TIMEOUT" "$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
           --title "$title" --text "$brief" --interrupt "$uuid" 2>&1)" && rc=0 || rc=$?
   fi
