@@ -136,6 +136,7 @@ selftest_impl() {
     OC_HEALTH_STATE="$T/state" OC_HEALTH_TMP_GLOB="$T/tmp/oc-*" OC_HEALTH_DB="$T/db.sqlite" \
     OC_HEALTH_SKILL_DIR="$T/skill" OC_HEALTH_FORK="$T/fork" OC_HEALTH_WT_PATTERNS="$T/wt/*" \
     OC_HEALTH_LOG="$T/tools.log" OC_HEALTH_DAEMON_LOG_DIR="$T/logs" OC_HEALTH_DETACHED_DIR="$T/detached" \
+    OC_HEALTH_DISK_PCT="${DISK_PCT_OVERRIDE:-10}" \
     OC_HEALTH_ROTATION_FILE="$T/state/health-rotation.json" OC_HEALTH_SKIP_VERSION=1 \
       bash "$SELF" "$@"
   }
@@ -144,6 +145,21 @@ selftest_impl() {
   RC=0; OUT="$(run --all 2>&1)" || RC=$?
   chk "all-clean-rc0" 0 "$RC"
   case "$OUT" in *"0 finding(s)"*) ok ;; *) bad "all-clean-zero-findings: $OUT" ;; esac
+
+  # 1b. DISK THRESHOLDS, both directions, hermetic via the OC_HEALTH_DISK_PCT
+  #     test hook (see the note at the disk check). The host's own usage must
+  #     never decide these: run() defaults the hook to 10, and these three pin
+  #     it explicitly so the >=89 / >=85 / clean branches are all exercised.
+  DISK_PCT_OVERRIDE=10; RC=0; OUT="$(run --all 2>&1)" || RC=$?
+  chk "disk-low-clean-rc0" 0 "$RC"
+  case "$OUT" in *"disk-high"*|*"disk-critical"*) bad "disk-low-no-finding: $OUT" ;; *) ok ;; esac
+  DISK_PCT_OVERRIDE=85; RC=0; OUT="$(run --all 2>&1)" || RC=$?
+  chk "disk-85-warn-rc1" 1 "$RC"
+  case "$OUT" in *"disk-high"*) ok ;; *) bad "disk-85-finding: $OUT" ;; esac
+  DISK_PCT_OVERRIDE=90; RC=0; OUT="$(run --all 2>&1)" || RC=$?
+  chk "disk-90-critical-rc1" 1 "$RC"
+  case "$OUT" in *"disk-critical"*) ok ;; *) bad "disk-90-finding: $OUT" ;; esac
+  DISK_PCT_OVERRIDE=
 
   # 2. Rotation state creation and advance
   run >/dev/null 2>&1
@@ -342,7 +358,20 @@ is_class_active() {
 # =============================================================================
 # BASE CRITICAL INVARIANTS (Always executed on every sweep)
 # =============================================================================
-disk_pct="$(df -P / 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}')"
+# OC_HEALTH_DISK_PCT is a TEST HOOK, and it exists because this check reads the
+# LIVE host filesystem: without it every "clean fixture => rc 0" assertion in the
+# selftest is non-hermetic. On 2026-09-12 the root fs hit exactly 85% and the
+# battery went 167/1 with four red assertions in THIS file (all-clean-rc0,
+# all-clean-zero-findings, runtime_procs-old-violation-windowed-out,
+# issue_portfolio-clean-rc0) — not one of them related to the change under test.
+# A selftest asserts the TOOL's behaviour, never the host's disk usage.
+# Setting the hook overrides the measurement; the branch logic below is
+# unchanged, and the selftest now exercises BOTH directions explicitly.
+if [ -n "${OC_HEALTH_DISK_PCT:-}" ]; then
+  disk_pct="$OC_HEALTH_DISK_PCT"
+else
+  disk_pct="$(df -P "${OC_HEALTH_DISK_PATH:-/}" 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}')"
+fi
 if [ "${disk_pct:-0}" -ge 89 ]; then
   add_finding 5 URGENT disk-critical "root filesystem ${disk_pct}% — run vds-servers/scripts/cleanup-unified.sh, then re-check"
 elif [ "${disk_pct:-0}" -ge 85 ]; then
