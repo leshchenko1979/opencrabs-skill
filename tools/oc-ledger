@@ -249,6 +249,20 @@ derive_by() { # default stamp attribution (v0.4.58, Duty-4 IDEA from lane 7e1ebb
         fi
         ;;
     esac
+    # M2-23 (2026-09-12): the sentinel is IDEMPOTENT. A LABEL keeps the
+    # sentinel (hq/opencrabs-dev-factory -> 'unrostered-actor hq/...'), but a
+    # value that ALREADY carries it is echoed VERBATIM. Without this guard a
+    # caller feeding back a prior row's `by` produced
+    # 'unrostered-actor unrostered-actor 2fae1230' — unattributable, and it
+    # breaks an exact-string grep for the actor. Origin: TOOLSMITH stamped
+    # exactly that, having derived OC_ACTOR with `sort -u | tail -1` over the
+    # by column (which picks the alphabetically-LAST value, not the latest).
+    case "$uuid" in
+      unrostered-actor\ *)
+        printf '%s\n' "oc-ledger: WARNING — actor '$uuid' already carries the 'unrostered-actor' sentinel — echoed VERBATIM, never double-prefixed." >&2
+        printf '%s\n' "  Pass a roster role label or a session uuid as OC_ACTOR/--by." >&2
+        echo "$uuid"; return ;;
+    esac
     # an unresolvable actor is LOUD and names the remedy — never a silent label
     printf '%s\n' "oc-ledger: WARNING — actor '$uuid' is not in the roster ($LEDGER) — row stamped 'unrostered-actor $uuid'." >&2
     printf '%s\n' "  If it is a session: oc-ledger enroll $uuid <role> [--topic N]. A factory/lane LABEL is not an actor — stamp as your ROSTER ROLE." >&2
@@ -811,7 +825,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (264 cases) -----------------------------------------------------
+# ---- selftest (267 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -1177,6 +1191,12 @@ ACKEOF
   OC_ACTOR="ffffffff" bash "$ME" stamp note "nomatch-stamp" >/dev/null 2>"$T/nomatch.err"; chk "derive-by-nomatch-rc" 0 $?
   chk "derive-by-nomatch-sentinel" "true" "$(jq -r '[.events[] | select(.what=="nomatch-stamp")][0].by | startswith("unrostered-actor")' "$OC_LEDGER")"
   chk "derive-by-nomatch-names-enroll" "true" "$(grep -qF 'oc-ledger enroll' "$T/nomatch.err" && echo true || echo false)"
+  # M2-23 (2026-09-12): the sentinel is IDEMPOTENT — an actor already in
+  # sentinel form is echoed VERBATIM, never prefixed a second time.
+  OC_ACTOR="unrostered-actor 2fae1230" bash "$ME" stamp note "sentinel-idem-stamp" >/dev/null 2>"$T/idem.err"
+  chk "derive-by-sentinel-idem-rc" 0 $?
+  chk "derive-by-sentinel-idem-verbatim" "unrostered-actor 2fae1230" "$(jq -r '[.events[] | select(.what=="sentinel-idem-stamp")][0].by' "$OC_LEDGER")"
+  chk "derive-by-sentinel-idem-warns" "true" "$(grep -qF 'already carries' "$T/idem.err" && echo true || echo false)"
   # a meaningful LABEL is not a fragment: --by is written VERBATIM (HQ stamps
   # hq/opencrabs-dev-factory; refusing the label form would break it outright)
   bash "$ME" stamp note "label-stamp" --by "hq/opencrabs-dev-factory" >/dev/null 2>&1; chk "stamp-label-rc" 0 $?
