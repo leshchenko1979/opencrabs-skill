@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.169 (2026-09-13) — Zero-Ack Dispatch Law
+
+Codifies binding owner directive eliminating conversational notification acks:
+- **Zero-Ack on Task & Harvest Dispatches (`fleet-directives.md`, `editor.md`, `triage.md`):**
+  - Task and harvest dispatches are strictly one-way work directives.
+  - Senders must conclude every dispatch envelope with: `Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed.`
+  - Receiving lanes (editors and harvesters) are strictly forbidden from replying with conversational `session_notify` acks (`[ack] Received...`, `Starting now...`).
+  - The ledger claim (`oc-ledger claim <issue>`) is the sole valid and required receipt.
+  - Senders verify delivery via `workers-ledger.json` (`oc-ledger events --kind claim`), eliminating queue pollution and token waste.
+
+
 ## v0.4.168 (2026-09-13) — Upstream Coding/Testing Standards & Process Directives
 
 Codifies binding owner directives and upstream standards from Adolfo Usier DM and CONTRIBUTING.md audit:

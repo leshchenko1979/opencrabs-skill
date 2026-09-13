@@ -149,6 +149,10 @@ below needs a regular cadence to be worth anything.
    none is obvious, surface the unclaimed set to HQ for
    dispatch — do NOT let it sit silent (the v0.4.91 gap: "claimed when
    someone claims it" is not assignment).
+   - **Wire Envelope Law (owner order 2026-09-13)**: Every dispatch wire envelope
+     must conclude with: `Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed.`
+     Triage verifies delivery by polling `workers-ledger.json` (`oc-ledger events --kind claim`),
+     NEVER by expecting, requesting, or processing `session_notify` conversational acks.
 5. Already-claimed issues: no action; the owning editor's chain owns them.
 
 **Autonomous closure — limited disposal authority (owner option 2, ruling

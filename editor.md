@@ -306,6 +306,7 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
    `workers-ledger.json` (first ledger timestamp wins; conflicts are HQ
    rulings, never GitHub chatter). The uniqueness sweep in step 1 stays
    read-only search.
+   - **ZERO-ACK ON DISPATCH (owner order 2026-09-13)**: When receiving a task dispatch (`[ISSUE TRIAGE DISPATCH: #N]`) or harvest dispatch, **NEVER reply with a `session_notify` ack** (`[ack] Received...`). Stamp `oc-ledger claim <issue>` on the ledger immediately. The ledger claim IS the receipt. Replying via notify violates communication discipline and interrupts the dispatch lane.
 4. **Claim read-back (Duty-4, v0.4.71):** after EVERY
    `oc-ledger claim`/`stamp`, RE-READ the returned event row and verify it
    carries your uuid + issue + branch + the full non-empty `what` text you
