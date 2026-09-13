@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.166
+version: 0.4.167
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -104,7 +104,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ship-audit [--hours N] [--log f] [--journal-dir d] [--grace min]` | dispatch-WITHOUT-swap alarm |
 | `./tools/oc-tg-audit <uuid> [--date D] [--days N] [--log-dir P]` | Telegram surface-law evidence scan |
 | `./tools/oc-ledger sync` CHANGELOG gate | sync refuses a version bump whose CHANGELOG entry is missing |
-| `./tools/oc-harvest-census <scan|check|record|sync>` | pre-flight census & lifecycle registry for upstream PR harvests; prevents duplicate/colliding PRs. **`record` is currently a NO-OP** — it appends to `manual_records` and nothing reads that key (v0.4.166; found by lane `d5863180`; wire-or-retire DISPATCHED to Toolsmith). Use `check`/`scan`, which derive IN_FLIGHT from the live scan |
+| `./tools/oc-harvest-census <scan|check|record|sync>` | pre-flight census & lifecycle registry for upstream PR harvests; prevents duplicate/colliding PRs. `record` appends to `manual_records`, which `check` CONSULTS before declaring a unit unharvested — rc 1 `REFUSED … manually recorded as filed in PR #<n> (unit <u>)` — and the registry write MERGES into the loaded dict so foreign keys survive (v0.4.167; wired at `8f7b9558`, three commits after the v0.4.166 row read NO-OP — that law's own subject matter, one iteration later). Use `check`/`scan`, which derive IN_FLIGHT from the live scan |
 | `./tools/oc-harvest-dispatch <issue> [--dry-run]` | dispatches automated harvest-to-upstream work order for eligible features |
 | `./tools/oc-harvest-sweep <pr-branch> [--base adolfousier/main] [--repo P] [--port-of sha1,sha2]` | pre-gate harvest verification (editor Phase 7 sweep, mechanical legs); behavioral judgment stays human |
 | `./tools/oc-health [--json|--summary]` | daily & pre-flight health audit of worktrees, watchers, and cron consistency |

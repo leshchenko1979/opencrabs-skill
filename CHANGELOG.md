@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.4.167 (2026-09-13) — Retired surfaces off the live docs (verdict D-1 + convergent A-F2 · E-1 · F-5)
+
+Origin: **the 20260912 lens cycle accepted five findings that all say one thing — a RETIRED surface
+still described present-tense.** D-1 (`README.md` advertises the retired `oc-waiter` as a live tool),
+A-F2 ("RETIRED concept still described present-tense"), E-1 (`oc-wt`'s retired index chain), C-3 and
+F-5 converge on it. This entry lands the doc half. F-5's verdict was **KERNEL** — *"the tool is
+RETIRED (v0.4.135) — D-1's fix removes the last live reference; no code change owed."*
+
+`tools/oc-waiter` is a 1372-byte stub whose own header says RETIRED, and `tools/RC-CONTRACT.md`
+documents it correctly (*"RETIRED in v0.4.135: replaced by native detached bash execution
+(`background: true`); `--help` returns 0, subcommands return 1"*). **Six live-doc sites disagreed** —
+and the sharpest one taught a dead surface inside the very lens that flags lanes for not using the
+official one:
+
+- **`README.md` — the tool-highlight row.** Advertised `oc-waiter` present-tense as *"lane wake
+  service: arm/_run/sweep/list, systemd transient scopes"*. Replaced with the retirement plus the
+  live mechanism: native detached bash (`background: true`, the harness wakes the caller with the
+  exit code) and `tools/lib/oc-notify.sh` for cross-session chaining.
+- **`README.md` — the `oc-notify.sh` row.** Read *"shared wake/notify contract for waiter +
+  prchecks"*. The lib's own header names its consumers: the wake logic *"previously duplicated
+  between oc-deploy (notify_session, fanout path) and oc-waiter (resolve_notify_bin + notify_lane).
+  Both consumers now source this file."* Live consumer today is `tools/oc-deploy` (sources it) plus
+  the executable CLI wrapper — not `oc-prchecks`. Corrected.
+- **`toolsmith.md` — the live-tool enumeration.** Named `oc-waiter` among *"the commands every other
+  lane runs"*. Dropped.
+- **`toolsmith.md` — Duty TM1's interface-drift clause.** Used *"oc-waiter greps oc-prchecks' `RUN`
+  line"* as its dependent-consumer example. Replaced with a VERIFIED live consumer:
+  `oc-ship-chain`'s LEG1 gate, which journals *"LEG1 gate run <run> is still <info> — attaching via
+  oc-prchecks resume"* (`tools/oc-ship-chain`, LEG1 gate).
+- **`review-lenses.md` — lens C's ADOPTION-COMPLIANCE CHECK.** Prescribed *"official surfaces are
+  `oc-waiter arm` and one-shot `gh run view`"*. A retired tool named as the official surface, in the
+  lens whose whole job is flagging non-compliance with official surfaces. Replaced with native
+  detached execution + one-shot `gh run view` (and `oc-prchecks --wait` for a blocking gate).
+- **`review-lenses.md` — lens H's slice-tool list.** Named `oc-waiter-sweep` as a **tool**; no such
+  file exists. It is a law-carrying **cron**, retargeted to `oc-roster-detached-sweep` (job id
+  `b0d7e0d3-1270-4fb5-8cb8-6c7161e90c34`, `*/5 * * * *` UTC, `Deliver: none`). Qualified as a cron.
+
+**A SEVENTH site, found while landing this — and it is this law's own subject matter one iteration
+later.** `SKILL.md`'s `oc-harvest-census` register row read **"`record` is currently a NO-OP … wire-or-
+retire DISPATCHED to Toolsmith"**. That was true at `def56377`; Toolsmith landed `8f7b9558` **three
+commits later**, wiring the verb — and found the defect was worse than reported: the registry write
+dumped a literal two-key dict, so every `sync`/`scan` ERASED `manual_records` (non-durable by
+construction), and `check` had no reader at all. Both fixed; selftest 6/6 → 10/10. **The v0.4.166
+clause says a "until X lands" claim must be revisited in the SAME version window X lands — and this
+row was that clause's own text, still stale.** The row now records the wired behaviour (rc 1
+`REFUSED … manually recorded as filed in PR #<n> (unit <u>)`, the merging write, the landing sha) and
+drops the DISPATCHED tail.
+
+**Extra (disclosed, NOT part of D-1) — the README's tool count is dropped.** `README.md` read
+*"29 executables in `tools/` (31 − `oc-toolaccum` v0.4.110 − `oc-ci-parity` v0.4.117; owner-ordered
+additions 2026-09-01)"*. The predicate is stated and reproducible, and the figure does not survive
+it: `find tools -maxdepth 1 -type f -perm -u+x | wc -l` = **39** (42 files at that depth; the other
+three are `HEALTH-CHECKS.md`, `HEALTH-CLASSES.md`, `RC-CONTRACT.md`). Under the **"state the
+predicate with the number"** law this is an unreproducible absolute count of a **growing** inventory,
+so the count is replaced by a pointer to the register — `tools/RC-CONTRACT.md` is the authority, and
+a drifting count is a future false-defect generator.
+
+**Method note.** Every replacement was verified first-hand before it was written: `oc-ship-chain`'s
+LEG1 journal line (grep, same turn), `lib/oc-notify.sh`'s own consumer header (read, same turn), the
+cron's live existence via the cron tool (`oc-roster-detached-sweep`, last run 2026-09-13 09:30Z), and
+Toolsmith's `8f7b9558` verified in-tool (`git merge-base --is-ancestor` rc 0, the `manual_records`
+read at the check path, the merging write, `--selftest` 10/10 OK). Anchors were captured from a
+same-turn read of each region and the patch is all-or-nothing — **cite a region by its TEXT, never by
+a line number**, which is stale after every edit.
+
+Docs-only. Battery unchanged.
 ## v0.4.166 (2026-09-13) — Truth in Law: a clause stale inside its own version window
 
 Origin: **the v0.4.165 clause said the tool half "is DISPATCHED to Toolsmith" — and the tool

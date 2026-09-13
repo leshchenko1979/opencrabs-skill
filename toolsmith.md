@@ -11,7 +11,7 @@ TOOLSMITH session's standing role — carved out at v0.4.87 (owner word "Go
 toolsmith" 2026-09-06), promoted from the carrier-tools editor row (topic
 39171, rostered since 2026-09-01). Owns the skill's CLI tooling under
 `tools/` — the commands every other lane runs: `oc-ledger`, `oc-deploy`,
-`oc-prchecks`, `oc-order-validate`, `oc-tg-audit`, `oc-waiter`, the
+`oc-prchecks`, `oc-order-validate`, `oc-tg-audit`, the
 `tools/tests` battery. Duty TM1 below owns the what/how.
 
 **STRICT SCOPE:** skill markdown + fleet-directives stay HQ-only
@@ -72,7 +72,8 @@ Hard discipline for every change:
   get updated in the same batch: the role-file tool tables (`editor.md` §Tool
   reference, `triage.md`/`hq.md` where cited),
   `tools/RC-CONTRACT.md` rows, and any dependent tool that parses the changed
-  output (e.g. oc-waiter greps oc-prchecks' `RUN` line). A tool change whose
+  output (e.g. `oc-ship-chain`'s LEG1 gate attaches via `oc-prchecks resume`).
+  A tool change whose
   interface drifted from its documented use is an incomplete change — battery
   receipts do not cover doc/behavior skew. Skill markdown (SKILL.md,
   CHANGELOG.md) stays HQ-only; role files flow through the routing

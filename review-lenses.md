@@ -167,7 +167,8 @@ on census evidence + owner word (hq.md step 7).
      owner-ordered): every C pass samples runtime `Detaching '...'` records
      and flags ANY `gh run watch` / hand-rolled nohup CI poller spawn as a
      law violation (one-watcher law, editor.md) — official surfaces are
-     `oc-waiter arm` and one-shot `gh run view`; also flags
+     native detached execution (`background: true`) and one-shot `gh run view`
+     (for a blocking gate, `oc-prchecks --wait`); also flags
      `oc-prchecks --wait` used as a verdict waiter (double-duty). Each
      violation names the session id from the log row. Boundary watch vs A/B: C's dimension is
      GAPS (what should be a command), not doc wording or weight.
@@ -221,8 +222,9 @@ on census evidence + owner word (hq.md step 7).
      HQ's poll triple-check + owner word.
    - **Reviewer H — LEDGER HEALTH (shipped v0.4.114, owner GO 2026-09-08 20:16Z):**
      the workers-ledger.json read AS A WHOLE, not per-slice — the slice tools
-     (`oc-ledger claims`, `oc-ship-audit`, `oc-waiter-sweep`) each audit one
-     family and stay the enforcement surface; H reads for what they cannot
+     (`oc-ledger claims`, `oc-ship-audit`) each audit one family and stay the
+     enforcement surface, while the `oc-roster-detached-sweep` cron sweeps
+     detached work; H reads for what they cannot
      see: (1) RECEIPT COMPLETENESS — incident/lesson-mention rows with no
      corresponding codified rule in fleet-directives.md/editor.md/AGENTS.md
      (lesson-extraction completeness; each finding names the row AND the law
