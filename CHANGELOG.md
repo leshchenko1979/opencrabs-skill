@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.4.168 (2026-09-13) — Upstream Coding/Testing Standards & Process Directives
+
+Codifies binding owner directives and upstream standards from Adolfo Usier DM and CONTRIBUTING.md audit:
+- **Upstream Coding & Testing Standards (`fleet-directives.md`, `editor-upstream-pr.md`, `editor.md`):**
+  - **Strict test isolation:** ALL tests must live under `src/tests/*_test.rs` registered in `src/tests/mod.rs`. Absolutely **NO inline `#[cfg(test)] mod tests`** blocks inside source files in `src/`.
+  - **`mod.rs` declarations only:** Zero function definitions (`fn`) inside any `mod.rs`. Only doc comments, `mod`/`pub mod` statements, and `pub use` re-exports.
+  - **Commit trailers:** Zero `Co-Authored-By` lines allowed in commit messages.
+  - **No mock tests / real testing:** Tests must hit real structs and SQLite; tests must fail without the fix and pass with it.
+  - **Zero warnings / no error suppression:** No `#[allow(dead_code)]` or `#[allow(unused)]` duct tape; unused code must be deleted.
+  - **`ONTOLOGY.md` synchronization:** Update `src/docs/reference/ONTOLOGY.md` whenever introducing, renaming, or retiring concepts.
+- **Strict Atomicity & Zero Bundling (`fleet-directives.md`, `editor-upstream-pr.md`):**
+  - 1 Intent = 1 Unit. Never mix features and bug fixes in the same branch, issue, or PR.
+  - Discovered bugs during feature work get isolated fork issues and separate branches/PRs.
+- **External Lanes Licence & Dev Non-Participation (`fleet-directives.md`):**
+  - External lanes (e.g. `inferhub-watch`) are permitted to open fork issues on `leshchenko1979/opencrabs` for runtime anomalies observed during operation.
+  - External lanes are strictly barred from the development process (no PRs, no code edits in `/root/opencrabs`, no participation in dev triage/review).
+- **LLM Ergonomics & Efficiency Law (`fleet-directives.md`):**
+  - Design tools, schemas, and feedback for LLM constraints: contextual anchors over index arithmetic, actionable self-healing errors, turn consolidation, and token discipline.
+- **Brief Verification & `--dry-run` Compliance (`fleet-directives.md`):**
+  - Briefs written during blocked states must be verified against git log and active receipts before broadcast.
+  - Ad-hoc scripts must strictly guard mutating state changes behind flags and respect `--dry-run`.
+- **Explain Open Questions & Re-Anchor Context (`fleet-directives.md`):**
+  - Never merely index open questions (e.g. "Q1–Q5 remain"); explain the most critical dilemma, trade-off, and recommended default.
+
 ## v0.4.167 (2026-09-13) — Retired surfaces off the live docs (verdict D-1 + convergent A-F2 · E-1 · F-5)
 
 Origin: **the 20260912 lens cycle accepted five findings that all say one thing — a RETIRED surface
