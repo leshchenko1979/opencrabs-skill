@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.4.165 (2026-09-13) — The Predicate Rule, and a Sensor That Could Not Fire
+
+Origin: **the v0.4.164 correction carried its own unreproducible number.** That entry fixed the
+smoke-log clause and quoted *"55 verdict rows (9 canonical / 46 free-text)"*. Four lanes
+(`d18ce16a`, `c6b1a539`, `329bf3a3`, `c2ba4ef2`) independently reported they could not reproduce
+it; none claimed it was wrong — each stated its own measurement **with a definition** and said the
+recipe was missing. HQ re-measured and found the culprit **in HQ's own measuring script**: its
+verdict-token set held the short common words `NA`/`N/A`/`PARTIAL`/`BLOCKED` behind a bare
+`^\S+\s+` prefix, so it counted **prose and `evidence=` continuation lines as rows** — 56 matches,
+42 of them over-matches. The 55 was a regex artifact. The clause had banned unmeasured numbers in
+the very sentence that carried one, one iteration after the "98" it was written to correct.
+
+In the same window lane `212b3c83` reported a sharper defect: **the RELOAD line every brief
+prescribes cannot detect the condition it exists to detect.**
+
+- **The absolute counts are GONE; the structural claim is kept.** `fleet-directives.md`
+  §Canonical smoke log now states the load-bearing fact — **1 tool-written identity block vs
+  lane-authored verdict rows** — and adds the rule: **state the PREDICATE with the number, or
+  state no number.** A count whose definition is not stated is, in `329bf3a3`'s phrase adopted
+  here as the ruling, *"an assertion wearing a measurement's clothes."* The clause also records
+  its own failure history honestly: both bad figures (the 98 and the 55), and the regex mechanism
+  behind the second.
+- **No absolute count of a GROWING file may be written into law text.** The clause read
+  *"136 lines / 55 rows"*; the log was **146 lines** before the hour was out. Absolute counts of a
+  growing file are stale on arrival — they rot exactly like the 98.
+- **The RELOAD version token is the lane's OWN CLAIM** (`<your-claimed-ver>`), never the announced
+  version. `oc-drift-check <uuid> <claimed>` compares **ARGV to the live `SKILL.md` version and
+  nothing else** (`cmd_drift`), so prescribing the NEW version makes argv == live **by
+  construction** and the verdict is **always `NO-DRIFT`**. Reproduced first-hand on a **synthetic
+  uuid that has never acked anything**: `oc-drift-check deadbeef-…-5555 0.4.164` → rc 0 `NO-DRIFT`.
+  A lane with no history passes the compliance check. `tools/oc-notify-fanout` auto-appends the
+  same vacuous form (it substitutes the live `${version}`), so the wrong form reached the fleet
+  automatically; the correct form had always been in `editor.md` §Mid-cycle skill drift and the
+  `SKILL.md` tool row. **A `NO-DRIFT` obtained by passing the announced version is not evidence of
+  compliance and must never be cited as a receipt.** The `--ack` arm is unaffected and correct.
+- **Tool half dispatched to Toolsmith:** an omit-arg mode (`oc-drift-check <uuid> --ack`) that
+  reads `last_acked` from the roster and compares **that** to live, making the check a pure
+  function of state on disk instead of an argv echo.
+- **Distribution:** the corrected v0.4.164 brief was re-issued as wave `a9561c346258`, which
+  closed **COMPLETE 28/28** (`--verify` rc 0) — the first wave in this cycle to reach every
+  target. The v0.4.163 wave it replaced had closed PARTIAL 14/28.
+
 ## v0.4.164 (2026-09-13) — The Correction Reaches the Lanes
 
 Origin: **fixing the law file is not the same as distributing the correction.** `fdb34a5b` corrected
