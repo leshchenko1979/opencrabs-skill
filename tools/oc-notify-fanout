@@ -83,6 +83,12 @@
 #      rc 3 no manifest. In-wave send failures keep exit 4 but now print a
 #      PARTIAL DELIVERY stderr line with the resume/audit path.
 #
+#  17. DORMANCY / ACTIVITY FILTER (owner order 2026-09-13): prune targets
+#      to eliminate waking idle workers. Core roles (toolsmith, triage, hq)
+#      ALWAYS receive fanout broadcasts. Worker lanes idle >= 12h (measured
+#      from session DB updated_at) with no active worktree or claim are
+#      skipped cleanly: `SKIP <uuid> <role> DORMANT(idle_hours=XX.X)`.
+#
 #  16. SELF IDENTITY IS DERIVED, NEVER HARDCODED (defect D-1, HQ 2026-09-12):
 #      `self_uuid` — the lane a wave EXCLUDES as its own invoker — resolves
 #      from --self, else OC_FANOUT_SELF, else the invoking session's OC_ACTOR;
@@ -207,14 +213,20 @@ if [ "${1:-}" = "--selftest" ]; then
   L5="00000000-0000-0000-0000-000000000000"  # all-zero (n=2167 class)
   L6="66666666-6666-4666-8666-666666666666"  # live + forum-bound + RETIRED (defect #6)
   L7="77777777-7777-4777-8777-777777777777"  # live + forum-bound + ACTIVE (law-10 slow lane)
+  L8="88888888-8888-4888-8888-888888888888"  # live + forum-bound + dormant editor (law-17)
+  L9="99999999-9999-4999-8999-999999999999"  # live + forum-bound + dormant core role (toolsmith) (law-17)
+  L10="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" # live + forum-bound + dormant editor with claim (law-17)
   FORUM="-1999999999"
   sqlite3 "$T/db.sqlite" <<SQL
-CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, archived_at INTEGER);
+CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, archived_at INTEGER, updated_at INTEGER DEFAULT 0);
 CREATE TABLE session_bindings (session_id TEXT PRIMARY KEY, channel TEXT, chat_id TEXT, thread_id INTEGER, updated_at INTEGER DEFAULT 0);
-INSERT INTO sessions VALUES ('$L1','lane1',NULL),('$L2','outside',NULL),('$L3','unbound',NULL),('$L4','bad',NULL),('$L5','zero',NULL),('$L6','retired',NULL),('$L7','slow',NULL);
+INSERT INTO sessions VALUES ('$L1','lane1',NULL,strftime('%s','now')),('$L2','outside',NULL,strftime('%s','now')),('$L3','unbound',NULL,strftime('%s','now')),('$L4','bad',NULL,strftime('%s','now')),('$L5','zero',NULL,strftime('%s','now')),('$L6','retired',NULL,strftime('%s','now')),('$L7','slow',NULL,strftime('%s','now')),('$L8','dormant-ed',NULL,100000),('$L9','dormant-ts',NULL,100000),('$L10','dormant-claim',NULL,100000);
 INSERT INTO session_bindings VALUES ('$L1','telegram','$FORUM',123,0);
 INSERT INTO session_bindings VALUES ('$L6','telegram','$FORUM',126,0);
 INSERT INTO session_bindings VALUES ('$L7','telegram','$FORUM',127,0);
+INSERT INTO session_bindings VALUES ('$L8','telegram','$FORUM',128,0);
+INSERT INTO session_bindings VALUES ('$L9','telegram','$FORUM',129,0);
+INSERT INTO session_bindings VALUES ('$L10','telegram','$FORUM',130,0);
 INSERT INTO session_bindings VALUES ('$L2','telegram','-1000000000',1,0);
 SQL
   cat > "$T/fake-notify" <<'EOF'
@@ -235,8 +247,13 @@ EOF
   {"uuid": "$L3", "role": "editor", "topic_id": 3},
   {"uuid": "$L4", "role": "editor", "topic_id": 4},
   {"uuid": "$L5", "role": "editor", "topic_id": 5},
-  {"uuid": "$L6", "role": "editor", "topic_id": 6, "state": "RETIRED"}
-], "events": []}
+  {"uuid": "$L6", "role": "editor", "topic_id": 6, "state": "RETIRED"},
+  {"uuid": "$L8", "role": "editor", "topic_id": 8},
+  {"uuid": "$L9", "role": "toolsmith", "topic_id": 9},
+  {"uuid": "$L10", "role": "editor", "topic_id": 10}
+], "events": [
+  {"kind": "claim", "by": "editor aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "what": "#9999 task"}
+]}
 JSON
 
   run_fanout() { # args passed through; asserts rc 0 and returns receipts
@@ -265,6 +282,17 @@ JSON
   grep -qF "$L6" "$T/fake-notify-log" && chk 1 retired-never-sent || chk 0 retired-never-sent
   grep -qF "$L2" "$T/fake-notify-log" && chk 1 leak-bound-elsewhere || chk 0 leak-bound-elsewhere
   grep -qF "$L3" "$T/fake-notify-log" && chk 1 leak-unbound || chk 0 leak-unbound
+
+  # LAW 17 (owner order 2026-09-13): dormancy/activity filter
+  # L8 is a dormant editor without claim/worktree -> SKIP DORMANT
+  echo "$out" | grep -q "SKIP $L8 .*DORMANT(idle_hours=" && chk 0 skip-dormant-worker || chk 1 skip-dormant-worker
+  grep -qF "$L8" "$T/fake-notify-log" && chk 1 dormant-never-sent || chk 0 dormant-never-sent
+  # L9 is a dormant core role (toolsmith) -> core role bypasses dormancy and is SENT
+  echo "$out" | grep -q "SENT $L9" && chk 0 dormant-core-role-sent || chk 1 dormant-core-role-sent
+  grep -qF "$L9" "$T/fake-notify-log" && chk 0 dormant-core-role-notified || chk 1 dormant-core-role-notified
+  # L10 is a dormant editor WITH active claim -> claim holder is preserved and SENT
+  echo "$out" | grep -q "SENT $L10" && chk 0 dormant-with-claim-sent || chk 1 dormant-with-claim-sent
+  grep -qF "$L10" "$T/fake-notify-log" && chk 0 dormant-with-claim-notified || chk 1 dormant-with-claim-notified
   # 1b. The OTHER arm of law 9: an explicitly ACTIVE row must still be
   #     sendable. L1 above carries NO state key at all (the enroll default), so
   #     it proves only the ABSENT arm — a rewrite that special-cases RETIRED and
@@ -805,6 +833,8 @@ fi
 
 LIVE_SESSIONS="$(mktemp /tmp/fanout-sessions.XXXXXX)"
 IN_SCOPE_SESSIONS="$(mktemp /tmp/fanout-scope.XXXXXX)"
+SESSION_RECENCY="$(mktemp /tmp/fanout-recency.XXXXXX)"
+ACTIVE_HOLDERS="$(mktemp /tmp/fanout-active.XXXXXX)"
 # FULL-ID roster from the profile session DB (READ-ONLY, ~0s) — v0.4.129:
 # session list prints only 8-char prefixes and session get costs ~37s/call;
 # the DB is the canonical full-id source (CLI list ≡ archived_at IS NULL AND
@@ -819,6 +849,49 @@ sqlite3 "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}
   "SELECT b.session_id FROM session_bindings b JOIN sessions s ON s.id = b.session_id
    WHERE s.archived_at IS NULL AND b.chat_id = '$forum_chat';" \
   > "$IN_SCOPE_SESSIONS" 2>/dev/null || die 3 "session DB unreadable — cannot resolve forum scope"
+# RECENCY query (LAW 17, owner order 2026-09-13): resolve last update epoch seconds per session.
+sqlite3 "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
+  "SELECT id, COALESCE(updated_at, 0) FROM sessions WHERE archived_at IS NULL;" \
+  | tr '|' ' ' > "$SESSION_RECENCY" 2>/dev/null || die 3 "session DB unreadable — cannot resolve session recency"
+
+# ACTIVE CLAIM & WORKTREE HOLDERS (LAW 17): scan ledger claims + active worktrees
+python3 -c "
+import os, sys, json, re, subprocess
+ledger = os.environ.get('LEDGER') or os.environ.get('OC_FANOUT_LEDGER') or ''
+repo = os.environ.get('OC_FANOUT_REPO', os.path.expanduser('~/opencrabs'))
+active = set()
+if os.path.exists(ledger):
+    try:
+        with open(ledger) as f:
+            led = json.load(f)
+        UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+        ISSUE_RE = re.compile(r'#(\\d+)')
+        issues_by_uuid = {}
+        for ev in led.get('events', []):
+            if ev.get('kind') == 'claim':
+                m = UUID_RE.search(ev.get('by') or '')
+                if m:
+                    u = m.group(0)
+                    active.add(u)
+                    mi = ISSUE_RE.search(ev.get('what') or '')
+                    if mi:
+                        issues_by_uuid.setdefault(u, set()).add(mi.group(1))
+        if os.path.isdir(repo):
+            r_wt = subprocess.run(['git', '-C', repo, 'worktree', 'list', '--porcelain'], capture_output=True, text=True)
+            for line in r_wt.stdout.splitlines():
+                if line.startswith('worktree '):
+                    task = os.path.basename(line.split(' ', 1)[1])
+                    if task.startswith('oc-wt-'): task = task[6:]
+                    m = re.match(r'^(\\d+)', task)
+                    if m:
+                        for u, s in issues_by_uuid.items():
+                            if m.group(1) in s:
+                                active.add(u)
+    except Exception:
+        pass
+for u in active:
+    print(u)
+" 2>/dev/null >> "$ACTIVE_HOLDERS" || true
 
 # --text-file is loaded HERE, not merely hashed. The first cut validated the
 # file (244), hashed its content into the wave-id (245) — and then never read
@@ -835,6 +908,13 @@ sqlite3 "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}
 if [ -n "$text_file" ]; then text="$(cat "$text_file")"; fi
 
 [ -n "$text" ] || text="(see title)"
+
+is_core_role() { # LAW 17: core roles always receive fanouts
+  case "$(canon_role "$1")" in
+    toolsmith|triage|hq) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 canon_role() { # ontology fold 2026-09-11 (c586e61f): the HQ role string was
   # `hq-supervisor`, now `hq`. Legacy selectors must keep resolving, or a wave
@@ -972,7 +1052,28 @@ while IFS=$'\t' read -r uuid role topic wstate; do
   # session's notify lands wherever its default route points — a DM, another
   # group — which is exactly the leak this guard closes).
   if ! grep -qxF "$uuid" "$IN_SCOPE_SESSIONS" 2>/dev/null; then
-    receipts+="SKIP ${uuid} ${role} SCOPE(not-bound-to-forum-${forum_chat})"$'\n'; skipped=$((skipped+1)); continue
+    receipts+="SKIP ${uuid} ${role} SCOPE(not-bound-to-forum-${forum_chat})"$'
+'; skipped=$((skipped+1)); continue
+  fi
+  # LAW 17 — dormancy/activity filter (owner order 2026-09-13): prune targets
+  # to eliminate waking idle workers. Core roles (toolsmith, triage, hq) ALWAYS
+  # receive fanout broadcasts. Worker lanes idle >= 12h with no active worktree
+  # or claim are skipped cleanly.
+  if ! is_core_role "$role"; then
+    upd="$(awk -v u="$uuid" '$1==u {print $2; exit}' "$SESSION_RECENCY" 2>/dev/null || true)"
+    upd="${upd:-0}"
+    if [ "${#upd}" -gt 11 ]; then upd=$(( upd / 1000 )); fi
+    now_s="$(date +%s)"
+    idle_s=$(( now_s - upd ))
+    if [ "$idle_s" -ge 43200 ]; then
+      if ! grep -qxF "$uuid" "$ACTIVE_HOLDERS" 2>/dev/null; then
+        idle_h="$(python3 -c "import sys; print(f'{(int(sys.argv[1])) / 3600.0:.1f}')" "$idle_s" 2>/dev/null || awk -v s="$idle_s" 'BEGIN { printf "%.1f", s/3600.0 }')"
+        receipts+="SKIP ${uuid} ${role} DORMANT(idle_hours=${idle_h})"$'
+'
+        skipped=$((skipped+1))
+        continue
+      fi
+    fi
   fi
   # LAW 8 — per-lane idempotency: already-sent lanes never re-notify.
   if [ "$dry" = 0 ] && grep -qxF "$uuid" "$SENT_FILE" 2>/dev/null; then
