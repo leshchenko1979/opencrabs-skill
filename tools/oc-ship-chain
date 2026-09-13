@@ -16,8 +16,13 @@
 #   oc-ship-chain --sha <sha> --branch <branch> [--issue <n>] [--repo <fork-slug>]
 #                 [--gated-sha <sha>] [--gated-run <id>] [--wait <sec>]
 #                 [--gate-wait <sec>] [--full] [--dry-run] [--no-ledger] [--selftest] [--help]
+#   oc-ship-chain --eval-docs-skip [<sha>]
 #
 # Flags:
+#   --eval-docs-skip [<sha>] Evaluate whether a commit qualifies for the docs-only
+#                    LEG1 gate skip (rc 0 = docs-only / gate skippable; rc 1 = gate
+#                    required; rc 2 = missing sha; rc 3 = bad commit or git error).
+#                    Can also be paired with --sha <sha>.
 #   --fast           Default gate mode (passes fast=true to oc-prchecks).
 #   --full|--no-fast Opt-in full test suite gate (~30 min).
 #
@@ -160,9 +165,60 @@ GATE_RESUMES="${OC_SHIPCHAIN_GATE_RESUMES:-2}"     # max rc-5 resume-polls befor
 # already-drained "$@" would launch a chain with no --sha and die rc 2).
 ORIG_ARGS=("$@")
 
+# `include_str!` resolves relative to the CONTAINING .rs file (not the crate
+# root), so the containing file is captured alongside each literal and the pair
+# is resolved together; output is repo-relative, one path per line.
+shipchain_compiled_md_set() {
+  local rs rel
+  # Whole body in a subshell: the `cd` must not move the caller's cwd. Today's
+  # only call site is a command substitution (already a subshell), but a cwd
+  # leak out of a path-resolver is the kind of bug that surfaces a hundred lines
+  # later in an unrelated `git` call.
+  (
+    cd "$FORK_REPO" 2>/dev/null || exit 0
+    grep -rloE 'include_(str|bytes)!\([[:space:]]*"[^"]+\.md"' src --include=*.rs 2>/dev/null \
+      | while IFS= read -r rs; do
+          grep -oE 'include_(str|bytes)!\([[:space:]]*"[^"]+\.md"' "$rs" 2>/dev/null \
+            | sed -E 's/.*"([^"]+\.md)".*/\1/' \
+            | while IFS= read -r rel; do
+                realpath -m --relative-to=. "$(dirname "$rs")/$rel" 2>/dev/null || true
+              done
+        done | sort -u
+  )
+}
+
+# rc 0 = docs-only, prints the changed paths; rc 1 = must gate.
+shipchain_docs_only() {
+  local base paths p compiled
+  base="$(git -C "$FORK_REPO" rev-parse --verify --quiet "$SHA^" 2>/dev/null || true)"
+  [ -n "$base" ] || return 1                    # root commit: no range to judge
+  paths="$(git -C "$FORK_REPO" diff --name-only "$base" "$SHA" 2>/dev/null || true)"
+  [ -n "$paths" ] || return 1                   # empty diff: gate (conservative)
+  compiled="$(shipchain_compiled_md_set)"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in *.md) ;; *) return 1 ;; esac   # any non-markdown -> gate
+    printf '%s\n' "$compiled" | grep -qxF "$p" && return 1   # compiled -> gate
+  done <<EOF
+$paths
+EOF
+  printf '%s\n' "$paths"
+  return 0
+}
+
 FAST_GATE=1
+EVAL_DOCS_SKIP=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    --eval-docs-skip)
+      EVAL_DOCS_SKIP=1
+      if [ $# -gt 1 ] && [[ "$2" != -* ]]; then
+        SHA="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
     --sha)       SHA="${2:?}"; shift 2 ;;
     --branch)    BRANCH="${2:?}"; shift 2 ;;
     --issue)     ISSUE="${2:?}"; shift 2 ;;
@@ -179,6 +235,22 @@ while [ $# -gt 0 ]; do
     *) die "unknown arg: $1 (see --help)" 2 ;;
   esac
 done
+
+if [ "$EVAL_DOCS_SKIP" = "1" ]; then
+  [ -n "$SHA" ] || die "--sha or commit argument required for --eval-docs-skip" 2
+  [ -d "$FORK_REPO/.git" ] || die "fork checkout not found: $FORK_REPO" 3
+  git -C "$FORK_REPO" rev-parse --verify --quiet "$SHA^{commit}" >/dev/null 2>&1 \
+    || die "bad commit or unknown ref: $SHA" 3
+  if EVAL_PATHS="$(shipchain_docs_only)"; then
+    printf '%s\n' "$EVAL_PATHS"
+    printf 'oc-ship-chain: DOCS-ONLY gate skip permitted for %s\n' "$SHA" >&2
+    exit 0
+  else
+    printf 'oc-ship-chain: GATE-REQUIRED for %s (contains code or compiled-in markdown)\n' "$SHA" >&2
+    exit 1
+  fi
+fi
+
 [ -n "$SHA" ]    || die "--sha required"
 [ -n "$BRANCH" ] || die "--branch required"
 
@@ -468,47 +540,6 @@ fi
 # rots silently the moment someone adds an include_str!, and the failure mode of
 # a rotted skip-list is a RED binary that passed a skipped gate.
 #
-# `include_str!` resolves relative to the CONTAINING .rs file (not the crate
-# root), so the containing file is captured alongside each literal and the pair
-# is resolved together; output is repo-relative, one path per line.
-shipchain_compiled_md_set() {
-  local rs rel
-  # Whole body in a subshell: the `cd` must not move the caller's cwd. Today's
-  # only call site is a command substitution (already a subshell), but a cwd
-  # leak out of a path-resolver is the kind of bug that surfaces a hundred lines
-  # later in an unrelated `git` call.
-  (
-    cd "$FORK_REPO" 2>/dev/null || exit 0
-    grep -rloE 'include_(str|bytes)!\([[:space:]]*"[^"]+\.md"' src --include=*.rs 2>/dev/null \
-      | while IFS= read -r rs; do
-          grep -oE 'include_(str|bytes)!\([[:space:]]*"[^"]+\.md"' "$rs" 2>/dev/null \
-            | sed -E 's/.*"([^"]+\.md)".*/\1/' \
-            | while IFS= read -r rel; do
-                realpath -m --relative-to=. "$(dirname "$rs")/$rel" 2>/dev/null || true
-              done
-        done | sort -u
-  )
-}
-
-# rc 0 = docs-only, prints the changed paths; rc 1 = must gate.
-shipchain_docs_only() {
-  local base paths p compiled
-  base="$(git -C "$FORK_REPO" rev-parse --verify --quiet "$SHA^" 2>/dev/null || true)"
-  [ -n "$base" ] || return 1                    # root commit: no range to judge
-  paths="$(git -C "$FORK_REPO" diff --name-only "$base" "$SHA" 2>/dev/null || true)"
-  [ -n "$paths" ] || return 1                   # empty diff: gate (conservative)
-  compiled="$(shipchain_compiled_md_set)"
-  while IFS= read -r p; do
-    [ -n "$p" ] || continue
-    case "$p" in *.md) ;; *) return 1 ;; esac   # any non-markdown -> gate
-    printf '%s\n' "$compiled" | grep -qxF "$p" && return 1   # compiled -> gate
-  done <<EOF
-$paths
-EOF
-  printf '%s\n' "$paths"
-  return 0
-}
-
 # ---- leg 1: CI gate -------------------------------------------------------
 # The docs-only branch is FIRST and applies ONLY to a fresh dispatch: --gated-run
 # / --gated-sha are explicit "verify THIS run" requests, so they are honoured
@@ -1332,6 +1363,31 @@ EOF
   check_rc "docs-skip-override-chain-green" "$RC" 0
   grep -q "GATE-SKIPPED-DOCS" "$T/journal.log" && bad "docs-skip-override-disables" || ok "docs-skip-override-disables"
   grep -q "$DOCS_SHA" "$T/prchecks.log" && ok "docs-skip-override-gates" || bad "docs-skip-override-gates"
+
+  # 20d. --eval-docs-skip standalone inspection verb (Defect #20 / Reviewer J-7).
+  #      rc 0 = docs-only (prints paths); rc 1 = gate-required; rc 2 = missing sha;
+  #      rc 3 = bad ref or git error.
+  # Note: OC_SHIPCHAIN_IMPL=0 is mandatory when calling $SELF as a standalone command
+  # from inside selftest_impl to prevent inheriting SELFTEST_MODE=2 (re-entering selftest).
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_FORK_REPO="$T/clone" bash "$SELF" --eval-docs-skip 2>&1)" || RC=$?
+  check_rc "eval-docs-skip-no-sha-rc2" "$RC" 2
+  case "$OUT" in *"--sha or commit argument required"*) ok "eval-docs-skip-no-sha-msg" ;; *) bad "eval-docs-skip-no-sha-msg: $OUT" ;; esac
+
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_FORK_REPO="$T/clone" bash "$SELF" --eval-docs-skip deadbeef1234 2>&1)" || RC=$?
+  check_rc "eval-docs-skip-bad-sha-rc3" "$RC" 3
+  case "$OUT" in *"bad commit or unknown ref"*) ok "eval-docs-skip-bad-sha-msg" ;; *) bad "eval-docs-skip-bad-sha-msg: $OUT" ;; esac
+
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_FORK_REPO="$T/clone" bash "$SELF" --eval-docs-skip "$DOCS_SHA" 2>&1)" || RC=$?
+  check_rc "eval-docs-skip-docs-rc0" "$RC" 0
+  case "$OUT" in *"ONTOLOGY.md"*) ok "eval-docs-skip-docs-paths" ;; *) bad "eval-docs-skip-docs-paths: $OUT" ;; esac
+  case "$OUT" in *"DOCS-ONLY gate skip permitted"*) ok "eval-docs-skip-docs-msg" ;; *) bad "eval-docs-skip-docs-msg: $OUT" ;; esac
+
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_FORK_REPO="$T/clone" bash "$SELF" --eval-docs-skip --sha "$DOCS_SHA" 2>&1)" || RC=$?
+  check_rc "eval-docs-skip-flag-docs-rc0" "$RC" 0
+
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_FORK_REPO="$T/clone" bash "$SELF" --eval-docs-skip "$CMDSHA" 2>&1)" || RC=$?
+  check_rc "eval-docs-skip-compiled-rc1" "$RC" 1
+  case "$OUT" in *"GATE-REQUIRED"*) ok "eval-docs-skip-compiled-msg" ;; *) bad "eval-docs-skip-compiled-msg: $OUT" ;; esac
 
   # 21. CGROUP DETACH (LAW 17, defect #21). A chain launched from a session is
   #     a child of the daemon and sits INSIDE the unit cgroup a swap's
