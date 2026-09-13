@@ -153,7 +153,8 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
 
 1. On every turn that resumes from a detached long command (result injection)
    or wakes to a `session_notify`, FIRST run
-   `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` (mechanical:
+   `tools/oc-drift-check <your-uuid> [--ack]` (canonical, omit-arg — it reads your OWN
+   `last_acked` from the roster; the legacy `<claimed-ver>` form still works. mechanical:
    version-shape validated; `--ack` stamps the adoption record directly).
 2. Drift → re-read SKILL.md + editor.md in full from disk, then stamp
    `oc-ledger ack <your-roster-uuid> <new-version>` (shape `0.N.N`, `v`
@@ -164,7 +165,14 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
    adoption: **`--ack` IS the ack.** The canonical reload receipt is the
    single `oc-ledger ack` row — written once, by `--ack` if it was passed,
    otherwise by this hand-stamp. The ack row is the mechanical adoption
-   record (HQ Duty 3 reads it for skew-chase).
+   record (HQ Duty 3 reads it for skew-chase). **ORDERING — a DRIFT verdict printed
+   right after a `--ack` run does NOT mean the ack failed (v0.4.166; lane `329bf3a3`).**
+   The `--ack` block runs BEFORE the verdict comparison, so ONE invocation both stamps
+   the new version and reports DRIFT against the `last_acked` it read a moment earlier.
+   The sensor fires exactly once per version, and its own firing writes the state that
+   silences it: re-run WITHOUT `--ack` to confirm (`NO-DRIFT`). Do NOT re-run with `--ack`
+   to "retry" — the row is already written (the M2-4 idempotent re-ack guard makes a
+   second attempt a no-op, `oc-ledger` §`cmd_ack`).
 3. Apply changed rules from the NEXT phase boundary — a phase already in
    flight finishes under the rules it started under. Doc-only drift adopts
    immediately; workflow-shape drift waits for the boundary.
@@ -242,7 +250,7 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 | `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | per-commit implementation comment (body-file discipline inside; chained by oc-ship-chain Leg 2) |
 | `oc-commit` | `tools/oc-commit -m "<msg>" [--issue N] [--no-comment]` | gated SIGNED commit: Session-Id + Issue-Ref trailers derived from OC_ACTOR + ledger claim; implementation comment folded in (oc-issue-log leg) — Phase 6c step 2 default |
 | `oc-ledger` | `stamp claim --what "…"` · `--verbs` · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack; `--verbs` discovers subcommands |
-| `oc-drift-check` | `tools/oc-drift-check <your-uuid> <claimed-ver> [--ack]` | §Mid-cycle skill drift step 1–2 |
+| `oc-drift-check` | `tools/oc-drift-check <your-uuid> [--ack]` (legacy: `<uuid> <claimed-ver>`) | §Mid-cycle skill drift step 1–2 |
 | `oc-deploy` | `ship --execute` · `poll` · `status [--json]` · `watch` · `fanout` | ship chain (dispatch → watch → swap); `status` verifies running vs disk binary |
 | `oc-upstream-delta` | `tools/oc-upstream-delta` | fork vs upstream divergence read |
 | `oc-attrib` | `tools/oc-attrib --deployed` | who owns the deployed range (fanout targeting) |

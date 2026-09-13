@@ -1,5 +1,73 @@
 # Changelog
 
+## v0.4.166 (2026-09-13) — Truth in Law: a clause stale inside its own version window
+
+Origin: **the v0.4.165 clause said the tool half "is DISPATCHED to Toolsmith" — and the tool
+landed 3 min 32 s after the clause was committed.** Found by lane `d18ce16a`, against the clause
+itself, which ends by naming exactly this failure mode.
+
+Timeline, read from `git log`:
+
+- `e13bef5e` **08:10:38Z** — the law clause is committed, ending "…is DISPATCHED to Toolsmith."
+- `38e417af` **08:14:10Z** — Toolsmith lands the omit-arg mode. Touches `tools/RC-CONTRACT.md`,
+  `tools/oc-drift-check`, `tools/oc-notify-fanout`, `tools/tests/battery-last.json` — **never**
+  `fleet-directives.md`.
+
+So the clause was stale *inside its own version window*. HQ corrected the BRIEF and left the LAW,
+which is precisely the asymmetry the clause's own test case names: **a cold reader learned the
+mode did not exist and fell back to the version-arg form the same clause warns can be vacuous.**
+The brief is transient; the law is what a lane reads cold.
+
+- **`fleet-directives.md` §The RELOAD line — the "DISPATCHED to Toolsmith" tail now records the
+  LANDING.** `38e417af`: `oc-drift-check <uuid> [--ack]` reads the lane's OWN `last_acked` from
+  the roster; a uuid with no history returns `NO-HISTORY` as its OWN verdict (rc 0, "treat as
+  DRIFT") and is never folded into `NO-DRIFT`; the legacy `<uuid> <claimed-ver>` form still
+  works; selftest assertions named (`omit-arg-uses-last-acked-not-argv`,
+  `omit-arg-no-history-is-not-no-drift`). Cite a tool by COMMIT + subcommand, never by line.
+- **NEW LAW — a clause that says "until X lands" must be revisited in the SAME version window X
+  lands.** A tool commit touches `tools/**`; a law commit touches the law files; **nothing makes
+  the two meet**, so the pairing has to be a deliberate step: check `git log --oneline` for the
+  tool's landing before closing the version. Precedent recorded in the same bullet — the
+  docs-only LEG1 skip was caught the same way and recorded as SUPERSEDED in v0.4.163 rather than
+  amended in place.
+- **The canonical RELOAD form is now omit-arg on every teaching surface.** `editor.md`
+  §Mid-cycle skill drift step 1, the `editor.md` tool table, and the `SKILL.md` tool table all
+  taught `<uuid> <claimed-ver> [--ack]` as *the* form while `oc-notify-fanout` emits the omit-arg
+  form — two canonical teaching surfaces disagreeing, the same cold-reader failure one layer
+  down. All three now teach omit-arg as canonical, with the version-arg retained as
+  accepted-legacy.
+
+Credit: lane `d18ce16a` (the stale clause *and* the three teaching rows — a second finding
+offered as "not a filing", which is the judgement the correction needs); lane `329bf3a3` (the
+`--ack` ordering observation, independently reproducing the three rows and the live DRIFT firing);
+lane `d5863180` (a register row advertising a verb with no effect); Toolsmith (`38e417af`, landed
+3 min 32 s after the dispatch, which is the speed that created the window).
+
+## Addendum to v0.4.166 — three more sites, same class
+
+- **`editor.md` step 2 gains the `--ack` ORDERING note (lane `329bf3a3`).** The `--ack` block sits
+  BEFORE the verdict comparison (deliberately, moved there 2026-09-11 by lanes `d18ce16a` +
+  `a5b34466` so a clean-tree compliance records a row instead of nothing). Consequence: one
+  `--ack` invocation both stamps the new version **and** reports DRIFT against the `last_acked` it
+  read a moment earlier — the sensor fires once per version and its own firing writes the state
+  that silences it. A lane reading only the verdict could conclude the ack failed. The note says:
+  confirm with a no-`--ack` re-run, do **not** retry with `--ack` (the M2-4 idempotent guard makes
+  a second attempt a no-op — `oc-ledger` §`cmd_ack`), so the failure mode is a wasted turn, not a
+  duplicate row.
+- **The v0.4.165 clause's OWN PROSE was stale the moment its tool half landed (found by HQ while applying this very patch).** The clause documenting the argv-echo defect still said the fanout "auto-appends the same vacuous form (it substitutes the live version)" and that the correct prescription was `<claimed-ver>` in `editor.md` and the `SKILL.md` tool row — but `tools/oc-notify-fanout` emits the OMIT-ARG form (cite by ANCHOR) and this version had just made those two teaching surfaces canonical for omit-arg. So the clause teaching that law text goes stale inside its own version window had itself gone stale inside its own version window — the third occurrence, one layer up. Two further sites of the same sentence fixed with it: the `:411` quoted RELOAD example (carried a `<your-claimed-ver>` token and named a file list the emitter does not emit) and the `:415` parenthetical quoting the emitted line with a `<ver>` token. The clause now records the fix as a TOOL fix rather than a brief fix, and scopes the "pass the version IT last adopted" duty to the LEGACY form only — the canonical form has no token left to get wrong.
+
+- **`SKILL.md` register row: `oc-harvest-census record` is a NO-OP (lane `d5863180`).** The verb is
+  dispatched (`cmd_record`) but appends to `manual_records`, and **nothing reads that key** —
+  `grep -n 'manual_records' tools/oc-harvest-census` is exactly one hit, the writer. No law
+  prescribes `record` (only `check`, `editor-upstream-pr.md` §172), so no procedure was broken —
+  the register row simply advertised a verb with no effect. The row now says so, names
+  `check`/`scan` as the working path, and records the wire-or-retire as DISPATCHED to Toolsmith. **HQ re-verified the premise first-hand before writing that word into law** (`manual_records` = one hit, `:330`, the writer; no reader fleet-wide; `check 138` rc=1 REFUSED on PR #1537) and dispatched it for real — ledger `n=4216`, injected into the Toolsmith lane's tool loop 08:58:52Z (`tool_loop.rs:7383` on session `2fae1230`).
+  **Why it rides this version:** the same class as the rest — a register row asserting a capability
+  the code does not have. The row is fixed NOW rather than after Toolsmith's call, because the
+  asymmetry between "the code will be fixed" and "the file a cold reader opens says so" is exactly
+  what this version is about.
+
+
 ## v0.4.165 (2026-09-13) — The Predicate Rule, and a Sensor That Could Not Fire
 
 Origin: **the v0.4.164 correction carried its own unreproducible number.** That entry fixed the
