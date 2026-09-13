@@ -206,6 +206,24 @@ if action == "check":
             print(f"ELIGIBLE_REWORK: Target {target} had PR #{num} CLOSED without merge: {ti}")
             sys.exit(0)
     
+    # CONSULT MANUAL RECORDS before declaring a unit unharvested. record
+    # exists to register a PR filed OUTSIDE the scan window (or while GH was
+    # unreachable), so such a unit is filed, not unharvested - declaring it
+    # ELIGIBLE would order a re-harvest of something already in flight.
+    manual = []
+    if os.path.exists(registry_file):
+        try:
+            with open(registry_file) as f:
+                manual = json.load(f).get("manual_records", []) or []
+        except Exception:
+            manual = []
+    for r in manual:
+        by_issue = target_iss is not None and r.get("issue") == target_iss
+        by_unit = bool(r.get("unit")) and str(r["unit"]).lower() == target.lower()
+        if by_issue or by_unit:
+            print("REFUSED: Target %s is manually recorded as filed in PR #%s (unit %s)" % (target, r.get("pr"), r.get("unit")))
+            sys.exit(1)
+
     print(f"ELIGIBLE: Target {target} is confirmed UNHARVESTED (clean to branch and gate)")
     sys.exit(0)
 
@@ -242,8 +260,23 @@ elif action in ("scan", "sync"):
 
     if action == "sync" or (action == "scan" and registry_file):
         os.makedirs(os.path.dirname(os.path.abspath(registry_file)), exist_ok=True)
+        # PRESERVE keys this engine does not own (e.g. manual_records written
+        # by the record verb). A literal dict here CLOBBERED them: every
+        # sync/scan erased every manual record, so record was not merely
+        # write-only but non-durable by construction.
+        merged = {}
+        if os.path.exists(registry_file):
+            try:
+                with open(registry_file) as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    merged = loaded
+            except Exception:
+                merged = {}
+        merged["prs"] = prs
+        merged["summary"] = summary
         with open(registry_file, "w") as f:
-            json.dump({"prs": prs, "summary": summary}, f, indent=2)
+            json.dump(merged, f, indent=2)
 
     if as_json:
         print(json.dumps(summary, indent=2))
@@ -422,6 +455,35 @@ EOF
   export OC_HARVEST_MOCK_COMMITS="$mock_commits"
 
   local rc=0 out=""
+  # 0. STRUCTURAL (runs FIRST - a quote defect must not be masked by a later
+  #    behavioural failure). The engine runs as `python3 -c '<block>'`, so a
+  #    single quote INSIDE the block is eaten by the shell: the refusal f-string
+  #    used r.get('pr'), reached Python as r.get(pr), and crashed with
+  #    NameError - while the behavioural assertion still passed on the
+  #    traceback's echo of the source line. Guard the CLASS, not the instance.
+  #    Only SINGLE-quoted blocks are scanned: a double-quoted opener leaves the
+  #    single quotes to Python, where they are safe.
+  awk_rc=0
+  awk -v q="'" '
+    /^[[:space:]]*#/ { if (inb) print; next }
+    !inb && $0 ~ ("python3 -c " q "$") { inb=1; next }
+    inb && substr($0,1,1) == q { inb=0; next }
+    inb { print }
+    END { if (inb) exit 3 }
+  ' "$0" > "$selftest_tmp/engine_block.py" || awk_rc=$?
+  if [ "$awk_rc" -ne 0 ]; then
+    echo "  bad  - could not extract the python3 -c blocks (awk rc=$awk_rc)"
+    return 1
+  elif ! grep -q "def get_prs" "$selftest_tmp/engine_block.py"; then
+    echo "  bad  - extraction found no engine block (guard would be vacuous)"
+    return 1
+  elif grep -q "'" "$selftest_tmp/engine_block.py"; then
+    echo "  bad  - a python3 -c block contains a single quote (the shell eats it)"
+    return 1
+  else
+    echo "  ok   - python3 -c blocks are single-quote free"
+  fi
+
 
   # 1. Check on MERGED issue (#132) -> exits 1 REFUSED
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "132" 2>&1)" || rc=$?
@@ -482,7 +544,52 @@ EOF
     return 1
   fi
 
-  echo "selftest: 6/6 OK"
+  # 7. REGISTRY WRITE PRESERVES FOREIGN KEYS (the clobber fix). The engine used
+  #    to dump a literal two-key dict, erasing manual_records on every write.
+  rc=0
+  cat << 'EOJ' > "$selftest_tmp/reg_manual.json"
+{"manual_records":[{"unit":"U-42","pr":9999,"issue":777}],"prs":[],"summary":{}}
+EOJ
+  run_engine "sync" "mock/repo" "$selftest_tmp" "$selftest_tmp/reg_manual.json" "" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ] && python3 -c "
+import json,sys
+d=json.load(open('$selftest_tmp/reg_manual.json'))
+sys.exit(0 if d.get('manual_records') and d['manual_records'][0].get('unit')=='U-42' and d.get('prs') is not None else 1)
+"; then
+    echo "  ok   - registry write preserves manual_records (no clobber)"
+  else
+    echo "  bad  - registry write CLOBBERED manual_records (rc=$rc)"
+    return 1
+  fi
+
+  # 8. CHECK CONSULTS MANUAL RECORDS. A manually recorded unit is filed, so
+  #    check must REFUSE it rather than declare it unharvested.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$selftest_tmp/reg_manual.json" "777" 2>&1)" || rc=$?
+  #    The exact rendered line is required: a NameError traceback ECHOES the
+  #    source line, so a loose "REFUSED.*manually recorded" grep passes on a
+  #    crash (that is exactly how the single-quote defect hid here).
+  if [ "$rc" -eq 1 ] \
+     && ! echo "$out" | grep -q "Traceback" \
+     && echo "$out" | grep -qx "REFUSED: Target 777 is manually recorded as filed in PR #9999 (unit U-42)"; then
+    echo "  ok   - check consults manual records -> REFUSED exit 1"
+  else
+    echo "  bad  - check manual record expected rc=1 exact REFUSED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 9. NEGATIVE - a registry WITH manual records must NOT refuse an unrelated
+  #    target. Guards against over-refusal from the new reader.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$selftest_tmp/reg_manual.json" "200" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q "Traceback" && echo "$out" | grep -q "ELIGIBLE"; then
+    echo "  ok   - unrelated target still ELIGIBLE with manual records present"
+  else
+    echo "  bad  - over-refusal: expected rc=0 ELIGIBLE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  echo "selftest: 10/10 OK"
   return 0
 }
 
