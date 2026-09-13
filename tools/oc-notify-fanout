@@ -445,6 +445,21 @@ JSON
   OC_NOTIFY_BIN="$T/fake-notify" bash "$0" --title T --no-stamp \
     --text-file "$T/does-not-exist.md" >/dev/null 2>&1 && rc_mf=0 || rc_mf=$?
   [ "$rc_mf" = 2 ] && chk 0 text-file-missing-rc2 || chk 1 "text-file-missing-rc2 (got rc=$rc_mf)"
+  # D-5 (HQ d72bd52d, 2026-09-13): the RELOAD line must NOT carry the LIVE
+  # version. Passing ${version} made argv == live BY CONSTRUCTION, so the
+  # prescribed check always answered NO-DRIFT — the sensor could not fire on
+  # the one invocation every brief teaches. Assert the OMIT-ARG form is what
+  # ships, and that no version is handed to the checker as argv. Asserting
+  # only "the line mentions oc-drift-check" would pass on the broken form:
+  # the defect WAS a well-formed invocation, which is why it survived.
+  case "$A_B" in
+    *"oc-drift-check $L1 --ack"*) chk 0 reload-line-omit-arg ;;
+    *) chk 1 "reload-line-omit-arg (brief has no 'oc-drift-check <uuid> --ack')" ;;
+  esac
+  case "$A_B" in
+    *"oc-drift-check $L1 0."*) chk 1 "reload-line-carries-no-live-version (brief still passes the version as argv)" ;;
+    *) chk 0 reload-line-carries-no-live-version ;;
+  esac
 
   # LAW 10 (defect #5, 2026-09-12): partial delivery surfaced + per-send bound.
   # 10a. --verify diffs the per-attempt manifest against .sent receipts:
@@ -966,7 +981,16 @@ while IFS=$'\t' read -r uuid role topic wstate; do
   brief="${text}"
   brief="${brief//\{\{UUID\}\}/${uuid}}"
   brief="${brief//\{\{VERSION\}\}/${version}}"
-  brief="${brief} RELOAD: run oc-drift-check ${uuid} ${version} --ack, re-read changed files. ACK after drift-check."
+  # D-5 (HQ d72bd52d, 2026-09-13): this line used to pass ${version} as argv.
+  # ${version} IS the live version THIS wave announces, so
+  # `oc-drift-check <uuid> <version> --ack` had argv == live BY CONSTRUCTION:
+  # the verdict was ALWAYS NO-DRIFT and the sensor could never fire on the
+  # exact invocation every brief prescribes. A lane with NO history got
+  # NO-DRIFT too, and cited it as compliance evidence. oc-drift-check now
+  # has an OMIT-ARG mode that reads the lane's RECORDED last_acked (roster)
+  # instead of argv — a pure function of state on disk (Reviewer J lens) —
+  # so the brief prescribes THAT and a lane cannot get it wrong.
+  brief="${brief} RELOAD: run oc-drift-check ${uuid} --ack, re-read changed files. ACK after drift-check."
   case "$brief" in *'{{'*'}}'*)
     receipts+="ABORT ${uuid} ${role} placeholder-token-survived-substitution(law1)"$'\n'
     failed=$((failed+1)); continue ;;

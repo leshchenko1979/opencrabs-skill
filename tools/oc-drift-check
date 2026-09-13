@@ -3,7 +3,7 @@
 # oc-drift-check — editor skill-drift ritual, mechanical (v0.4.58, Duty-6 lens C
 # #4: highest-frequency editor ritual was in HQ's head + prose).
 #
-# Usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]
+# Usage: oc-drift-check <uuid> [<claimed-version>] [--ack] [--skill-dir <path>]
 #   Compares the version a lane claimed at task-claim time against the LIVE
 #   SKILL.md (editor.md §Mid-cycle skill drift step 1-2). --ack delegates the
 #   oc-ledger ack so the re-read is mechanically recorded — on BOTH verdicts,
@@ -17,6 +17,16 @@
 # ($HOME/.opencrabs/profiles/ops/skills/opencrabs-dev). The invoking script's
 # own location is NEVER resolved — worktree copies of the skill repo must not
 # self-resolve (produced contradicting drift verdicts same-day, 2026-09-10).
+#
+# Omit-arg mode (D-5, HQ d72bd52d, 2026-09-13): with NO claimed-version the
+#   comparison is made against the lane's RECORDED last_acked (roster, written
+#   by `oc-ledger ack`) instead of argv. Passing the LIVE version as `claimed`
+#   — which is what every RELOAD brief did — makes the verdict an ARGV ECHO:
+#   argv == live BY CONSTRUCTION, so it always prints NO-DRIFT and the sensor
+#   can never fire on the invocation the brief prescribes. Omit-arg makes the
+#   verdict a pure function of state on disk (Reviewer J lens). A lane with NO
+#   last_acked recorded gets NO-HISTORY (rc 1, same required action as DRIFT),
+#   NEVER NO-DRIFT — a lane with no history must not read as compliant.
 #
 # Exit: 0 no-drift (proceed under current rules) · 1 DRIFT (re-read required;
 #       ack stamped when --ack) · 2 usage · 3 ledger/skill-dir failure.
@@ -45,12 +55,14 @@ cmd_drift() {
   while [ $# -gt 0 ]; do case "$1" in
     --ack) ack=1; shift ;;
     --skill-dir) skill_dir_flag="${2:-}"; shift 2 ;;
-    -h|--help) echo "usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]"; echo "Exit: 0 no-drift / 1 DRIFT / 2 usage / 3 ledger-or-skilldir-fail"; exit 0 ;;  # C-#3: help=0
+    -h|--help) echo "usage: oc-drift-check <uuid> [<claimed-version>] [--ack] [--skill-dir <path>]"; echo "Omit <claimed-version> to compare the lane's RECORDED last_acked (roster) instead of argv — no argv echo."; echo "Exit: 0 no-drift / 1 DRIFT or NO-HISTORY / 2 usage / 3 ledger-or-skilldir-fail"; exit 0 ;;  # C-#3: help=0
     --*) die 2 "unknown flag '$1'" ;;
     *) if [ -z "$uuid" ]; then uuid="$1"; elif [ -z "$claimed" ]; then claimed="$1"; fi; shift ;;
   esac; done
-  [ -n "$uuid" ] && [ -n "$claimed" ] || die 2 "usage: oc-drift-check <uuid> <claimed-version> [--ack] [--skill-dir <path>]"
-  printf '%s' "$claimed" | grep -Eq '^v?0\.[0-9]+\.[0-9]+$' || die 2 "claimed-version must be [v]0.N.N, got '$claimed'"
+  [ -n "$uuid" ] || die 2 "usage: oc-drift-check <uuid> [<claimed-version>] [--ack] [--skill-dir <path>]"
+  if [ -n "$claimed" ]; then
+    printf '%s' "$claimed" | grep -Eq '^v?0\.[0-9]+\.[0-9]+$' || die 2 "claimed-version must be [v]0.N.N, got '$claimed'"
+  fi
   # v0.4.130 canonical-resolve (ruling n=2369): precedence = --skill-dir flag >
   # OC_SKILL_DIR env > CANONICAL profile copy. The invoking script's own location
   # is NEVER used — a worktree copy must not self-resolve (contradicting
@@ -65,7 +77,39 @@ cmd_drift() {
   local cur
   cur="$(grep -E '^version:' "$SKILL_DIR/SKILL.md" 2>/dev/null | head -1 | awk '{print $2}')"
   [ -n "$cur" ] || die 3 "cannot read version from $SKILL_DIR/SKILL.md"
-  local claimed_bare="${claimed#v}"
+  # Omit-arg mode (D-5, HQ d72bd52d, 2026-09-13): no argv version means there
+  # is nothing to echo — read the lane's RECORDED last_acked from the roster
+  # and compare THAT to live. Reviewer J: the verdict must be a pure function
+  # of state on disk, never of the caller's own argument. Emitting the live
+  # version (what every RELOAD brief did) made it vacuous BY CONSTRUCTION:
+  # argv == live always, so NO-DRIFT always, and the sensor could not fire on
+  # the exact invocation the brief prescribes. The roster read goes through
+  # oc-ledger (the schema owner) rather than re-implementing the ledger shape.
+  local claimed_bare="" no_history=0
+  if [ -n "$claimed" ]; then
+    claimed_bare="${claimed#v}"
+  else
+    local rj rrc acked
+    rj="$(OC_LEDGER="$LEDGER" "$_OC_DIR/oc-ledger" roster --json 2>/dev/null)"; rrc=$?
+    [ "$rrc" -eq 0 ] || die 3 "omit-arg mode: cannot read the roster (oc-ledger roster rc=$rrc, ledger=$LEDGER)"
+    acked="$(printf '%s' "$rj" | jq -r --arg u "$uuid" \
+      '.[] | select(.uuid==$u) | (.last_acked | if type=="object" then (.version // "") else (. // "") end)' 2>/dev/null | head -1)"
+    # The roster's --json projection renders an ABSENT last_acked as the sentinel
+    # "-" (its own display convention for empty), NOT as null — verified live
+    # 2026-09-13. Reading that as a version prints a confusing
+    # "DRIFT: claimed - != live <cur>" for a lane that never claimed anything, so
+    # "-" and empty BOTH mean no record. (A version is always 0.N.N, so the
+    # sentinel is unambiguous.)
+    case "$acked" in
+      ""|-)
+        # NO-HISTORY is its OWN verdict, never folded into NO-DRIFT: a lane with
+        # no record currently gets NO-DRIFT (the defect HQ reproduced on a
+        # synthetic uuid), which reads as compliance evidence it never earned.
+        no_history=1 ;;
+      *)
+        claimed_bare="${acked#v}" ;;
+    esac
+  fi
   # --ack stamps on BOTH paths (defect fix 2026-09-11, lanes d18ce16a + a5b34466).
   # This block used to sit AFTER the no-drift early return, so --ack fired ONLY on
   # DRIFT — the inverse of the promise in the header and of every RELOAD brief,
@@ -77,6 +121,11 @@ cmd_drift() {
   if [ "$ack" = "1" ]; then
     OC_LEDGER="$LEDGER" OC_SKILL_DIR="$SKILL_DIR" "$_OC_DIR/oc-ledger" ack "$uuid" "$cur" || die 3 "ack failed (oc-ledger rc=$?)"
     echo "ack stamped for $uuid at $cur"
+  fi
+  if [ "$no_history" = "1" ]; then
+    echo "NO-HISTORY: no last_acked recorded for $uuid — treat as DRIFT, re-read SKILL.md + editor.md IN FULL before next phase boundary"
+    oc_log_extra verdict NO-HISTORY
+    return 1
   fi
   if [ "$claimed_bare" = "$cur" ]; then
     echo "NO-DRIFT: claimed $claimed_bare == live $cur"
@@ -105,7 +154,12 @@ EOF
   bash "$ME" u1 v0.4.58 --skill-dir "$T/skill" >/dev/null 2>&1; chk "v-prefix-rc0" 0 $?
   bash "$ME" u1 0.4.57 --skill-dir "$T/skill" >/dev/null 2>&1; chk "drift-rc1" 1 $?
   bash "$ME" u1 0.4 --skill-dir "$T/skill" >/dev/null 2>&1; chk "bad-shape-rc2" 2 $?
-  bash "$ME" u1 --skill-dir "$T/skill" >/dev/null 2>&1; chk "usage-rc2" 2 $?
+  # D-5: a call with NO uuid is still a usage error. (This assertion used to be
+  # `bash "$ME" u1 --skill-dir ...` — it encoded "no claimed-version == usage
+  # error", which IS the behaviour D-5 changes: a uuid with no version is now
+  # a legitimate read-only check against the lane's RECORDED last_acked. The
+  # expectation is unchanged (rc 2); the PREMISE that made it true was the bug.)
+  bash "$ME" --skill-dir "$T/skill" >/dev/null 2>&1; chk "usage-rc2" 2 $?
   # v0.4.130 canonical-resolve (ruling n=2369): explicit overrides still win.
   chk "env-override-respected" 0 "$(OC_SKILL_DIR="$T/skill" bash "$ME" u1 0.4.58 >/dev/null 2>&1; echo $?)"
   chk "env-override-drift-rc1" 1 "$(OC_SKILL_DIR="$T/skill" bash "$ME" u1 0.4.57 >/dev/null 2>&1; echo $?)"
@@ -144,6 +198,43 @@ EOF
   RC=0; OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.58 --skill-dir "$T/skill" >/dev/null 2>&1 || RC=$?
   chk "no-drift-without-ack-rc0" 0 "$RC"
   chk "no-drift-without-ack-no-write" "none" "$(jq -r '.workers[0].last_acked.version // "none"' "$T/state-ledger.json")"
+  # ---- D-5 omit-arg mode (HQ d72bd52d, 2026-09-13) --------------------------
+  # The verdict must be a function of state on disk, never of argv. With no
+  # claimed-version the tool reads the lane's RECORDED last_acked and compares
+  # THAT to live (fixture live = 0.4.58). The killer arm is the first one:
+  # last_acked=0.4.57 vs live 0.4.58 must be DRIFT — an implementation that
+  # echoed argv, or compared live-to-live, could ONLY ever answer NO-DRIFT here.
+  AU=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+  jq '.workers[0].last_acked = {version:"0.4.57", at:"2026-01-01T00:00:00Z"}' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "omit-arg-uses-last-acked-not-argv" 1 "$RC"
+  case "$OUT" in *"DRIFT: claimed 0.4.57"*) OA=yes ;; *) OA=no ;; esac
+  chk "omit-arg-names-the-recorded-version" "yes" "$OA"
+  # a lane with NO history gets its OWN verdict — never NO-DRIFT (the defect)
+  jq '.workers[0].last_acked = null' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "omit-arg-no-history-rc1" 1 "$RC"
+  case "$OUT" in *"NO-HISTORY"*) NH=yes ;; *) NH=no ;; esac
+  chk "omit-arg-no-history-verdict" "yes" "$NH"
+  case "$OUT" in *"NO-DRIFT"*) ND2=yes ;; *) ND2=no ;; esac
+  chk "omit-arg-no-history-is-not-no-drift" "no" "$ND2"
+  case "$OUT" in *"claimed -"*) BN=yes ;; *) BN=no ;; esac
+  chk "omit-arg-no-history-no-bogus-claim" "no" "$BN"
+  # an UNKNOWN uuid (never acked, not even enrolled) is NO-HISTORY too — the
+  # exact reproduction HQ ran on a synthetic uuid
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" deadbeef-0000-1111-2222-333344445555 --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "omit-arg-unknown-uuid-rc1" 1 "$RC"
+  case "$OUT" in *"NO-HISTORY"*) UH=yes ;; *) UH=no ;; esac
+  chk "omit-arg-unknown-uuid-no-history" "yes" "$UH"
+  # recorded == live -> clean
+  jq '.workers[0].last_acked = {version:"0.4.58", at:"2026-01-01T00:00:00Z"}' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "omit-arg-match-rc0" 0 "$RC"
+  # --ack keeps stamping the LIVE version on the omit-arg path too
+  jq '.workers[0].last_acked = {version:"0.4.57", at:"2026-01-01T00:00:00Z"}' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" "$AU" --ack --skill-dir "$T/skill" >/dev/null 2>&1 || RC=$?
+  chk "omit-arg-drift-rc1" 1 "$RC"
+  chk "omit-arg-ack-stamps-live" "0.4.58" "$(jq -r '.workers[] | select(.uuid=="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") | .last_acked.version // "none"' "$T/state-ledger.json")"
   rm -rf "$T"
   echo "oc-drift-check selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
