@@ -7,13 +7,20 @@
 #  `commit-pending`, run on the HQ Duty-3/4 cadence).
 #
 # Subcommands:
-#   stamp <kind> "<what>" [--by <label>] [--allow-unattributed]
+#   stamp <kind> "<what>" [--by <label>] [--allow-unattributed] [--allow-no-ref]
 #                                          append event under lock (flock +
 #                                          tmp -> jq-validate -> mv) + git leg.
 #                                          #19 (v0.4.16x): an ANONYMOUS row is
 #                                          REFUSED rc 2 — name the actor with
 #                                          --by / OC_ACTOR, or say the anonymous
 #                                          row is deliberate with the override.
+#                                          residual (2026-09-12, lane c6b1a539):
+#                                          a kind=claim row with NO numeric issue
+#                                          ref is REFUSED rc 2 too — every
+#                                          consumer keys on the ref, so a
+#                                          ref-less claim is a DEAD LETTER the
+#                                          scanner cannot see (it reported the
+#                                          issue CLEAN). Override: --allow-no-ref.
 #   lessons [--kind <lesson|incident|all>] [--class <text>]
 #                                          extract lesson/incident rows by class
 #                                          (H-2 v0.4.116; read-only)
@@ -303,18 +310,38 @@ derive_by() { # default stamp attribution (v0.4.58, Duty-4 IDEA from lane 7e1ebb
 }
 
 # ---- stamp ------------------------------------------------------------------
+# ---- issue-ref tokens (residual after D-2; lane c6b1a539 report 2026-09-12) --
+# The canonical issue reference is "#N", but the live ledger also carries
+# "issue#150", "issue=172" and "issue 76". cmd_claims used to test the ref as a
+# SUBSTRING of "#N", so those rows were INVISIBLE: an issue that IS claimed
+# answered CLEAN — a false-clean on the verify-unclaimed dispatch gate (the
+# #106/#107 class). Extracting the NUMBER instead also kills the mirror false
+# POSITIVE: contains("#76") matched a claim on "#760", so `claims 76` answered
+# for #760's claim. These two helpers are the single owner of ref extraction.
+_issue_ref_tokens() { # $1=text -> every issue ref in it as a bare number, one per line
+  printf '%s' "$1" | grep -oiE '(#[0-9]+|issue[[:space:]=#]*[0-9]+)' | grep -oE '[0-9]+'
+}
+_issue_ref_has() { # $1=text $2=issue number -> rc 0 when <text> references that issue
+  local toks; toks="$(_issue_ref_tokens "$1" || true)"
+  [ -n "$toks" ] || return 1
+  # space-delimited membership: the padding spaces stop 76 matching 760
+  case " $(printf '%s' "$toks" | tr '\n' ' ') " in *" $2 "*) return 0 ;; esac
+  return 1
+}
+
 cmd_stamp() {
-  local kind="" what="" by="" allow_unattr=0
+  local kind="" what="" by="" allow_unattr=0 allow_noref=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --by) by="${2:-}"; shift 2 ;;
       --allow-unattributed) allow_unattr=1; shift ;;
+      --allow-no-ref) allow_noref=1; shift ;;
       --what) what="${2:-}"; [ -n "$what" ] || die 2 "--what needs a value"; shift 2 ;;
       --*) die 2 "stamp: unknown flag '$1' (forms: stamp <kind> \"<what>\" | stamp <kind> --what \"<text>\")" ;;
       *) if [ -z "$kind" ]; then kind="$1"; elif [ -z "$what" ]; then what="$1"; fi; shift ;;
     esac
   done
-  [ -n "$kind" ] || die 2 "usage: oc-ledger stamp <kind> \"<what>\" [--by <label>] [--allow-unattributed]"
+  [ -n "$kind" ] || die 2 "usage: oc-ledger stamp <kind> \"<what>\" [--by <label>] [--allow-unattributed] [--allow-no-ref]"
   [ -n "$what" ] || die 2 "stamp: what must be non-empty"
   [ -n "$by" ] || by="$(derive_by)"
   kind="${kind//_/-}"   # C-#7 (v0.4.77): underscore input normalizes to enum hyphen form
@@ -337,6 +364,17 @@ cmd_stamp() {
     case "$by" in
       "(unattributed"*)
         die 2 "stamp: REFUSED — no actor, and an anonymous row is a defect (it cannot be traced to a lane or a tool). Fix: pass --by \"<label>\" (e.g. --by \"<role> <uuid>\"), or export OC_ACTOR=<your session uuid>. If the anonymous row is deliberate: --allow-unattributed. (kind=$kind)" ;;
+    esac
+  fi
+  # RESIDUAL (lane c6b1a539 report, 2026-09-12; the D-2 family): every consumer
+  # of a claim — `claims <N>`, `claim-ref`, `confirm` (via _latest_claim_issue)
+  # — keys on the issue reference. A claim carrying NONE is therefore a dead
+  # letter, and a SILENT one: cmd_claims cannot see the row, so the
+  # verify-unclaimed dispatch gate answers "clean" for an issue that IS claimed
+  # (the #106/#107 class). Refuse it, symmetric with #19's anonymous refusal.
+  if [ "$kind" = "claim" ] && [ "$allow_noref" = 0 ]; then
+    case "$(_issue_ref_tokens "$what" || true)" in
+      "") die 2 "stamp: REFUSED — a claim must carry a numeric issue reference the scanner can see (\"CLAIM #<N> — ...\"; also accepted: \"issue <N>\", \"issue=#N\"). Every consumer keys on the ref, so a claim without one is a DEAD LETTER: cmd_claims cannot see the row, and the verify-unclaimed gate reports the issue CLEAN. If the row is deliberately ref-less: --allow-no-ref. (kind=$kind)" ;;
     esac
   fi
   _stamp_locked() {
@@ -898,7 +936,7 @@ EOF
   bash "$ME" stamp bogus-kind "x" >/dev/null 2>&1; chk "unknown-kind" 2 $?
   bash "$ME" stamp note "" >/dev/null 2>&1; chk "empty-what" 2 $?
   bash "$ME" stamp skill-bump "x" >/dev/null 2>&1; chk "skill-bump-refused" 2 $?
-  bash "$ME" stamp claim "CLAIM #fixture — v1.1 kind" >/dev/null 2>&1; chk "stamp-claim-v1.1" 0 $?
+  bash "$ME" stamp claim "CLAIM #1234 — v1.1 kind" >/dev/null 2>&1; chk "stamp-claim-v1.1" 0 $?
   # Duty-4 `proposal` (v0.4.152 A1): the law mandates `stamp proposal` in four
   # places (hq.md Duty 4, editor.md, fleet-directives.md routing table,
   # CHANGELOG v0.4.144) but the kind was absent from KINDS, so the verb died
@@ -1273,9 +1311,29 @@ AMBEOF
   bash "$ME" claim-ref "$W2" >/dev/null 2>&1; chk "claim-ref-after-claim" 0 $?
   chk "claim-ref-value" "999" "$(bash "$ME" claim-ref "$W2" 2>/dev/null)"
   local W3="22222222-3333-4444-5555-666666666666"
-  OC_ACTOR="$W3" bash "$ME" stamp claim "CLAIM without issue ref" >/dev/null 2>&1
+  # RESIDUAL (lane c6b1a539 report, 2026-09-12): a claim with NO issue ref is
+  # now REFUSED (symmetric with #19) — every consumer keys on the ref, so such
+  # a row is a dead letter that cmd_claims cannot see (it answered CLEAN).
+  OC_ACTOR="$W3" bash "$ME" stamp claim "CLAIM without issue ref" >/dev/null 2>&1; chk "stamp-claim-no-ref-refused" 2 $?
+  # ...and the guard must carry an escape hatch (#19 has --allow-unattributed,
+  # sync has --allow-sweep): a caller who DELIBERATELY wants a ref-less claim
+  # says so. The row lands, and claim-ref still answers rc 3 for it — which is
+  # the honest verdict, not a silent clean.
+  OC_ACTOR="$W3" bash "$ME" stamp claim "CLAIM without issue ref" --allow-no-ref >/dev/null 2>&1; chk "stamp-claim-no-ref-hatch-rc" 0 $?
   bash "$ME" claim-ref "$W3" >/dev/null 2>&1; chk "claim-ref-no-ref-rc3" 3 $?
   bash "$ME" claim-ref "00000000-0000-0000-0000-000000000000" >/dev/null 2>&1; chk "claim-ref-no-claim-rc3" 3 $?
+  # RESIDUAL (lane c6b1a539 report, 2026-09-12; the D-2 family): ref extraction
+  # is the SINGLE OWNER's (_issue_ref_tokens), so (a) a claim written "issue N"
+  # with NO '#' resolves at all, and (b) the FIRST-WRITTEN ref wins — the old
+  # "first '#<digits>' anywhere in the prose" grep derived the WRONG issue when
+  # the claim named its issue in the "issue N" form and a passing mention
+  # carried a '#'. Fixture shape taken from live row n=1585 (claims "issue 94",
+  # prose mentions the "#93 options hook" -> old derived 93, the wrong issue,
+  # which cmd_confirm would then verify against GitHub and close).
+  local W7="77777777-3333-4444-5555-666666666666"
+  OC_ACTOR="$W7" bash "$ME" stamp claim "issue 6060 claimed: no hash form; a passing mention of the #7070 hook" >/dev/null 2>&1
+  chk "claim-ref-nohash-rc" 0 $?
+  chk "claim-ref-nohash-value" "6060" "$(bash "$ME" claim-ref "$W7" 2>/dev/null)"
   # 46-50 (v0.4.97, #129 family): claims <N> — open claim-refs by issue.
   # Fixture: W2 claimed #999 above; W3's claim has no #N. Claim #777 as W4,
   # verify OPEN, close it via a later close event, verify GONE.
@@ -1313,6 +1371,43 @@ AMBEOF
     bash "$ME" claims 888 > "$T/claims-888-$k.out" 2>/dev/null
     grep -q "$W5" "$T/claims-888-$k.out" && bad "closure-kind-$k-did-not-close" || ok
   done
+  # RESIDUAL (lane c6b1a539 report, 2026-09-12; D-2 family — the gate must not
+  # LIE). (1) FALSE-CLEAN: the scan matched the ref as a substring of "#N", so
+  # a claim written "issue=N" (no hash) was INVISIBLE and claims <N> answered
+  # CLEAN for an issue that IS claimed. (2) The mirror false POSITIVE: the same
+  # substring test made "#76" match a claim on "#760".
+  local W6="66666666-3333-4444-5555-666666666666"
+  OC_ACTOR="$W6" bash "$ME" stamp claim "issue=4242 task='fixture ref without a hash'" >/dev/null 2>&1; chk "claims-nohash-claim-rc" 0 $?
+  bash "$ME" claims 4242 > "$T/claims-4242.out" 2>/dev/null; chk "claims-nohash-rc" 0 $?
+  grep -q "$W6" "$T/claims-4242.out" && ok || bad "claims-nohash-false-clean"
+  OC_ACTOR="$W6" bash "$ME" stamp claim "CLAIM #760 — fixture substring trap" >/dev/null 2>&1
+  bash "$ME" claims 76 > "$T/claims-76.out" 2>/dev/null
+  grep -q "$W6" "$T/claims-76.out" && bad "claims-76-matched-760" || ok
+  bash "$ME" claims 760 > "$T/claims-760.out" 2>/dev/null
+  grep -q "$W6" "$T/claims-760.out" && ok || bad "claims-760-not-matched"
+  # (3) UNCLOSABLE: a claim whose `by` is the unattributed sentinel could never
+  # close — the linker is contains($by) and no real closure carries that
+  # literal. The actor test is DROPPED for an unattributed claim, so a later
+  # closer referencing #N closes it; an ATTRIBUTED claim still needs its own
+  # actor. Raw fixtures: deterministic, and independent of derive_by. The
+  # sentinel is read from the tool's own source so it cannot drift.
+  local SENT; SENT="$(grep -m1 -oE '\(unattributed[^)]*\)' "$ME")"
+  [ -n "$SENT" ] || bad "claims-fixture-sentinel-unresolved"
+  local UAT="$T/uat"; mkdir -p "$UAT"
+  jq -n --arg by "$SENT" '{workers:[], events:[
+      {n:1, t:"2026-09-12T00:00:00Z", by:$by, kind:"claim", what:"CLAIM #5150 — unattributed fixture"}]}' > "$UAT/open.json"
+  OC_LEDGER="$UAT/open.json" bash "$ME" claims 5150 > "$T/claims-5150a.out" 2>/dev/null
+  grep -q "unattributed" "$T/claims-5150a.out" && ok || bad "claims-unattr-not-open"
+  jq -n --arg by "$SENT" '{workers:[], events:[
+      {n:1, t:"2026-09-12T00:00:00Z", by:$by, kind:"claim", what:"CLAIM #5150 — unattributed fixture"},
+      {n:2, t:"2026-09-12T00:01:00Z", by:"editor 44444444-3333-4444-5555-666666666666", kind:"confirm", what:"CONFIRM #5150 — closure by another lane"}]}' > "$UAT/closed.json"
+  OC_LEDGER="$UAT/closed.json" bash "$ME" claims 5150 > "$T/claims-5150b.out" 2>/dev/null
+  grep -q "unattributed" "$T/claims-5150b.out" && bad "claims-unattr-unclosable" || ok
+  jq -n '{workers:[], events:[
+      {n:1, t:"2026-09-12T00:00:00Z", by:"editor 11111111-1111-1111-1111-111111111111", kind:"claim", what:"CLAIM #5151 — attributed fixture"},
+      {n:2, t:"2026-09-12T00:01:00Z", by:"editor 22222222-2222-2222-2222-222222222222", kind:"confirm", what:"CONFIRM #5151 — closure by a DIFFERENT lane"}]}' > "$UAT/attr.json"
+  OC_LEDGER="$UAT/attr.json" bash "$ME" claims 5151 > "$T/claims-5151.out" 2>/dev/null
+  grep -q "11111111" "$T/claims-5151.out" && ok || bad "claims-attributed-closed-by-other-actor"
   # 51-54 (v0.4.116, H-2): lessons — lesson/incident row extraction by class.
   OC_ACTOR="$W4" bash "$ME" stamp lesson "LESSON-FIXTURE uncoded gate-bypass lesson" >/dev/null 2>&1
   OC_ACTOR="$W4" bash "$ME" stamp incident "INCIDENT-FIXTURE phantom write without receipt" >/dev/null 2>&1
@@ -1483,8 +1578,23 @@ _latest_claim_issue() { # $1=uuid -> stdout: issue number (rc 0) or failure
   local claim issue
   claim="$(jq -r --arg u "$1" '[.events[] | select(.kind=="claim" and ((.by // "") | contains($u)))][-1].what // ""' "$LEDGER")"
   [ -n "$claim" ] || { echo "no claim event by $1"; return 3; }
-  issue="$(printf '%s' "$claim" | grep -oE '#[0-9]+' | head -1 | tr -d '#')"
-  [ -n "$issue" ] || { echo "latest claim by $1 carries no #N issue ref: $claim"; return 3; }
+  # RESIDUAL (lane c6b1a539 report, 2026-09-12; the D-2 family — the gate must
+  # not LIE): the ref is extracted by the SINGLE OWNER (_issue_ref_tokens),
+  # never by a bare '#<digits>' grep. Both failure modes are live in the ledger:
+  #   (1) a claim written "issue 76" / "issue=172" carries NO '#' at all, so the
+  #       old grep returned rc 3 for a claim that EXISTS — a false negative on
+  #       cmd_claim_ref AND on cmd_confirm, which delegates here;
+  #   (2) the old grep took the first '#<digits>' ANYWHERE in the prose, so
+  #       n=1585 ("...issue 94 ... keep fence parsing reusable for the #93
+  #       options hook") derived 93 — the WRONG issue, which cmd_confirm would
+  #       then verify against GitHub and close. The token scan reads the ref in
+  #       the order it is WRITTEN, so the claimed issue wins over a passing
+  #       mention. MEASURED across all 130 live claim rows (python, 2026-09-12):
+  #       109 resolved under the old grep — 108 keep the SAME number and n=1585
+  #       is CORRECTED 93 -> 94; 6 that were previously unresolvable now resolve;
+  #       0 are lost; 15 name no issue at all under either scan.
+  issue="$(_issue_ref_tokens "$claim" | head -1)"
+  [ -n "$issue" ] || { echo "latest claim by $1 carries no numeric issue ref: $claim"; return 3; }
   echo "$issue"
 }
 
@@ -1584,25 +1694,47 @@ cmd_claims() { # oc-ledger claims <N> — dispatch=verify-unclaimed backend (#12
   local n="${1#\#}"
   case "$n" in ''|*[!0-9]*) die 2 "claims: issue number must be numeric (got '$1')" ;; esac
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
-  # A claim on #N is OPEN unless a LATER event for the same uuid closes the
+  # A claim on #N is OPEN unless a LATER event for the same actor closes the
   # loop: kind in (close|confirm|reject|done|unclaim) whose what references
   # the same #N. Bash-side scan is the single owner — close semantics stay
   # readable, no jq gymnastics.
+  #
+  # RESIDUAL (lane c6b1a539 report, 2026-09-12; the D-2 family — the gate must
+  # not LIE): two more ways this scan could not be trusted. (1) FALSE-CLEAN:
+  # the ref was matched as a SUBSTRING of "#N", so a claim written "issue=N"
+  # (21 of 130 claim rows carry no "#N" at all) was invisible and the issue
+  # answered CLEAN although it IS claimed. Refs are now TOKENS
+  # (_issue_ref_has), which also kills the mirror false POSITIVE: contains
+  # ("#76") matched a claim on "#760". (2) UNCLOSABLE: the closure keyed on
+  # the CLAIM's own `by`, so the 20 sentinel-`by` rows could never close.
   local uuid t what kind cidx
   while IFS=$'\t' read -r cidx uuid kind t what; do
     [ -n "$uuid" ] || continue
     [ "$kind" = claim ] || continue
-    case "$what" in *"#${n}"*) ;; *) continue ;; esac
+    _issue_ref_has "$what" "$n" || continue
     # any LATER event (array order — timestamps can collide within a second)
     # by the same uuid referencing #n -> not open
-    local closed=0 ctype cwhat
+    local closed=0 ctype cwhat unattr=0
+    # RESIDUAL (lane c6b1a539 report): a claim whose `by` is the unattributed
+    # sentinel could never close — the linker is contains($by) and no real
+    # closure carries that literal — so it read OPEN forever. An unattributed
+    # claim has no actor to discriminate on, so the actor test is DROPPED for
+    # it and any later closer referencing #N closes it. New unattributed rows
+    # are already refused by #19, so this reaches legacy data only.
+    case "$uuid" in "(unattributed"*) unattr=1 ;; esac
     while IFS=$'\t' read -r ctype cwhat; do
-      case "$ctype" in close|confirm|reject|done|unclaim) case "$cwhat" in *"#${n}"*) closed=1 ;; esac ;; esac
-    done < <(jq -r --arg u "$uuid" --argjson idx "$cidx" \
-      '.events | to_entries[] | select(.key > $idx and (.value.by // "" | contains($u)) and .value.kind != "claim") | [(.value.kind // "?"), (.value.what // "")] | @tsv' "$LEDGER" 2>/dev/null)
+      case "$ctype" in
+        close|confirm|reject|done|unclaim) if _issue_ref_has "$cwhat" "$n"; then closed=1; fi ;;
+      esac
+    done < <(jq -r --arg u "$uuid" --argjson idx "$cidx" --argjson unattr "$unattr" \
+      '.events | to_entries[]
+       | select(.key > $idx and .value.kind != "claim")
+       | select(($unattr == 1) or ((.value.by // "") | contains($u)))
+       | [(.value.kind // "?"), (.value.what // "")] | @tsv' "$LEDGER" 2>/dev/null)
     [ "$closed" = 0 ] && printf '%s\t%s\t%s\n' "$uuid" "$t" "$what"
-  done < <(jq -r --arg n "#$n" \
-    '.events | to_entries[] | select(.value.kind == "claim" and ((.value.what // "") | contains($n))) | [(.key // 0), (.value.by // "?"), (.value.kind // "?"), (.value.t // ""), (.value.what // "")] | @tsv' "$LEDGER" 2>/dev/null)
+  done < <(jq -r \
+    '.events | to_entries[] | select(.value.kind == "claim")
+     | [(.key // 0), (.value.by // "?"), (.value.kind // "?"), (.value.t // ""), (.value.what // "")] | @tsv' "$LEDGER" 2>/dev/null)
   exit 0
 }
 
