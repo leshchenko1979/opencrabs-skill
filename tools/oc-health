@@ -198,20 +198,20 @@ selftest_impl() {
   case "$OUT" in *"Current Class"*|"current_class"*) ok ;; *) bad "status-output: $OUT" ;; esac
 
   # 5. Class: filesystem — stale lock detection and reap
-  printf 'pid=999999 ts=2020-01-01T00:00:00Z run=1\n' > "$T/state/fanout.lock.1"
-  touch -d '3 days ago' "$T/state/fanout.lock.1"
+  printf 'pid=999999 ts=2020-01-01T00:00:00Z run=1\n' > "$T/state/fanout.1.lock"
+  touch -d '3 days ago' "$T/state/fanout.1.lock"
   RC=0; OUT="$(run --class filesystem 2>&1)" || RC=$?
   chk "fs-stale-lock-rc1" 1 "$RC"
   case "$OUT" in *"stale-locks"*) ok ;; *) bad "fs-stale-lock: $OUT" ;; esac
   run --class filesystem --reap >/dev/null 2>&1
-  [ -e "$T/state/fanout.lock.1" ] && bad "fs-stale-lock-reaped" || ok
+  [ -e "$T/state/fanout.1.lock" ] && bad "fs-stale-lock-reaped" || ok
 
   # 6. Class: filesystem — live pid lock not reaped
-  printf 'pid=%s ts=2020-01-01T00:00:00Z run=2\n' "$$" > "$T/state/fanout.lock.2"
-  touch -d '3 days ago' "$T/state/fanout.lock.2"
+  printf 'pid=%s ts=2020-01-01T00:00:00Z run=2\n' "$$" > "$T/state/fanout.2.lock"
+  touch -d '3 days ago' "$T/state/fanout.2.lock"
   run --class filesystem --reap >/dev/null 2>&1
-  [ -e "$T/state/fanout.lock.2" ] && ok || bad "fs-live-lock-kept"
-  rm -f "$T/state/fanout.lock.2"
+  [ -e "$T/state/fanout.2.lock" ] && ok || bad "fs-live-lock-kept"
+  rm -f "$T/state/fanout.2.lock"
 
   # 6b. Class: filesystem — leaked mktemp WORKDIR class (M2-22).
   #     Three fixtures pin the THREE gates at once: the signature, the age, and
@@ -444,7 +444,10 @@ if is_class_active "filesystem"; then
   # 1. Stale fanout & wave locks
   n_locks=0; n_stale=0; reaped_locks=0
   if [ -d "$STATE" ]; then
-    for f in "$STATE"/fanout.lock.* "$SKILL_CHECK"/run/wave-*.lock "$SKILL_CHECK"/run/wave-*.sent; do
+    # BOTH names: legacy `fanout.lock.<run>` (pre-rename) and the current
+    # `fanout.<run>.lock`. Triage owns untracking the legacy ones; until then
+    # they still need reaping.
+    for f in "$STATE"/fanout.lock.* "$STATE"/fanout.*.lock "$SKILL_CHECK"/run/wave-*.lock "$SKILL_CHECK"/run/wave-*.sent; do
       [ -e "$f" ] || continue
       n_locks=$((n_locks + 1))
       age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
@@ -455,7 +458,22 @@ if is_class_active "filesystem"; then
         continue
       fi
       n_stale=$((n_stale + 1))
-      if [ "$REAP" = "1" ]; then rm -f "$f"; reaped_locks=$((reaped_locks + 1)); fi
+      if [ "$REAP" = "1" ]; then
+        # A reaped lock may be a TRACKED file: a CORRECT reap then leaves a
+        # dirty tree that the next sweep commits as a deletion. Say so rather
+        # than doing that silently. Check the repo that OWNS the path - the
+        # sweep covers $STATE locks AND $SKILL_CHECK/run/ wave locks.
+        lock_repo=""; lock_rel=""
+        case "$f" in
+          "$STATE"/*) lock_repo="$STATE"; lock_rel="$(basename "$f")" ;;
+          "$SKILL_CHECK"/*) lock_repo="$SKILL_CHECK"; lock_rel="${f#"$SKILL_CHECK"/}" ;;
+        esac
+        if [ -n "$lock_repo" ] \
+           && git -C "$lock_repo" ls-files --error-unmatch "$lock_rel" >/dev/null 2>&1; then
+          add_finding 1 QUIRK stale-lock-tracked "reaped $lock_rel but it is TRACKED - the reap leaves a deletion for the next sweep"
+        fi
+        rm -f "$f"; reaped_locks=$((reaped_locks + 1))
+      fi
     done
   fi
   if [ "$n_stale" -gt 0 ]; then

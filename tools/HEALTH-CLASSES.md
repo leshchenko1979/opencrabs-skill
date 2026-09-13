@@ -15,7 +15,7 @@ into two tiers:
 1. **Base Invariants (Every Run):**
    Fast, critical measurements executed on every invocation:
    - Root filesystem headroom (`df -P /` warn at 85%, urgent at 89%)
-   - Critical deadlock locks (`fanout.lock.*`, `run/wave-*.lock` >24h with dead owner PID)
+   - Critical deadlock locks (`fanout.*.lock`, legacy `fanout.lock.*`, `run/wave-*.lock` >24h with dead owner PID)
    - Snapshot mirror and stale `/tmp/oc-*` cleanup (when `--reap` is passed)
 
 2. **Rotating Class (1 Class per Hourly Run or `--class <name>`):**
@@ -50,7 +50,7 @@ into two tiers:
 - **Objects Audited:** `/tmp`, `$OC_DEV_STATE`, worktrees, logs.
 - **Invariants Checked:**
   - Inode usage and disk headroom (`df -P /`).
-  - Stale fanout/wave locks (`fanout.lock.*`, `run/wave-*.lock`, `run/wave-*.sent`).
+  - Stale fanout/wave locks (`fanout.*.lock`, legacy `fanout.lock.*`, `run/wave-*.lock`, `run/wave-*.sent`).
   - Stale temporary scratch directories (`/tmp/oc-*` >48h) and dead PID snapshot mirrors (`oc-snap-*-<pid>`).
   - State directory bloat (`$OC_DEV_STATE` >200MB).
 - **Remediation:** Under `--reap`, prune dead locks, dead mirrors, and tmp >48h.

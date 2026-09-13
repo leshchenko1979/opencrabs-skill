@@ -1730,6 +1730,27 @@ EOS
   COUT="$(OC_DEPLOY_STATE_DIR="$SD7" "$SELF_BIN" recover-receipt --run 790 --dry-run 2>&1)"; CRC=$?
   check_rc "recover-selector-prefers-complete-rc" $CRC 0
   check_has "recover-selector-prefers-complete-msg" "$COUT" "already carries a receipt step"
+  # 18. structural guard: the fanout lock NAME must be ignorable by the repo.
+  #     Defect class (HQ dispatch 2026-09-13): `fanout.lock.<runid>` ENDS in the
+  #     run id, so the state repo's only rule (`*.lock`) CANNOT match it and 12
+  #     such locks ended up TRACKED. Every other lock here ends in .lock
+  #     (LEDGER.lock, host-swap.lock, run/wave-*.lock) - this one was the outlier.
+  LOCKLINE="$(grep -m1 '^  local lockfile=' "$SELF_BIN" 2>/dev/null)"
+  case "$LOCKLINE" in
+    *'"$STATE_DIR/fanout.'*'.lock"'*) pass=$((pass+1)) ;;
+    *) fail=$((fail+1)); echo "SELFTEST FAIL: fanout lockfile does not END in .lock (ignorable-name invariant): ${LOCKLINE:-<line not found>}" ;;
+  esac
+  # 18b. the state repo's own ignore rule must actually match the new name.
+  if [ -f "${OC_DEV_STATE:-/nonexistent}/.gitignore" ]; then
+    if python3 -c "
+import fnmatch, sys
+pats = [l.strip() for l in open('$OC_DEV_STATE/.gitignore') if l.strip() and not l.startswith('#')]
+sys.exit(0 if any(fnmatch.fnmatch('fanout.4242.lock', p) for p in pats) else 1)
+" 2>/dev/null; then pass=$((pass+1))
+    else fail=$((fail+1)); echo "SELFTEST FAIL: state repo .gitignore does not ignore fanout.<run>.lock"; fi
+  else
+    pass=$((pass+1))   # state repo absent in this environment; the suffix arm above stands
+  fi
   echo "oc-deploy selftest: $pass pass, $fail fail"
   rm -rf "$T"
   [ "$fail" = 0 ]
@@ -1959,7 +1980,11 @@ fanout_run() { # $1=run id $2=dry-run(0/1)
   # fanout_mark_done; released on process exit on every path (crash-safe,
   # no stale marker, no reaper). exec 9<> = no-truncate open so the holder
   # record survives; flock -n -E 4 = non-blocking, EWOULDBLOCK -> rc 4.
-  local lockfile="$STATE_DIR/fanout.lock.$run"
+  # Name ENDS in .lock so the state repo's `*.lock` ignore rule matches it.
+  # `fanout.lock.$run` ended in the run id and was UN-IGNORABLE by
+  # construction: 12 such locks ended up tracked. Every other lock here
+  # (LEDGER.lock, host-swap.lock, run/wave-*.lock) ends in .lock.
+  local lockfile="$STATE_DIR/fanout.$run.lock"
   # stale-lock reaper (lens D 2026-08-31): holder records pid=; a dead pid +
   # existing file = leftover from a finished fan-out (exit releases flock but
   # intentionally never unlinks — unlink-after-release would let a second

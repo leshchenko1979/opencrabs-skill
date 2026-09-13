@@ -23,7 +23,7 @@ after sloppy lanes and hide the pattern.
 
 ## 1. Stale fanout & wave locks — `SAFE` (reap) + `QUIRK` (warn)
 
-- **Where:** `$OC_DEV_STATE/fanout.lock.<runid>`, `$OC_DEV_STATE/run/wave-*.lock`
+- **Where:** `$OC_DEV_STATE/fanout.<runid>.lock` (legacy `fanout.lock.<runid>` still swept), `$OC_DEV_STATE/run/wave-*.lock`
 - **Content:** `pid=<n> ts=<ISO> run=<n>`
 - **Invariant:** Lock age >24h **and** associated PID dead (`kill -0`), or recorded run completed.
 - **Remediation (`--reap`):** Remove stale lock; report `reaped N locks`.
