@@ -1585,7 +1585,42 @@ AMBEOF
   bash "$ME" events --n 1 --full > "$T/ev-full.out" 2>"$T/ev-full.err"; chk "events-full-rc" 0 $?
   chk "events-full-300" "300" "$(awk -F'\t' '{print length($5)}' "$T/ev-full.out")"
   grep -q "truncated" "$T/ev-full.err" && bad "events-full-no-nudge" || ok
+
+  # ---- events: NON-CANONICAL key schema (lane 329bf3a3 report, 2026-09-13) ----
+  # `.events[]` carries 27 distinct key schemas, but this verb read ONLY the
+  # canonical {n,t,kind,by,what}: a row that stored its content in `text`
+  # rendered with a BLANK content column AND was invisible to --actor/--since.
+  # Live acceptance row: n=2250 (actor,claim_ref,kind,n,text,ts).
+  # Assertions below compare the EXACT rendered string — never a grep, so a
+  # traceback echoing the source line cannot satisfy them.
+  NCL_TEXT="noncanonical content must survive the projection"
+  NCL_ACTOR="cccccccc-1111-2222-3333-444444444444"
+  NCL_TS="y2099-01-01T00:00:00Z"
+  jq --arg t "$NCL_TEXT" --arg a "$NCL_ACTOR" --arg s "$NCL_TS" \
+     '.events += [{"n":99001,"ts":$s,"actor":$a,"kind":"nc-schema","text":$t,"claim_ref":"nc-probe"}]' \
+     "$T/state/workers-ledger.json" > "$T/state/nc.json" \
+     && mv "$T/state/nc.json" "$T/state/workers-ledger.json"
+  bash "$ME" events --n 1 > "$T/nc.out" 2>"$T/nc.err"; chk "events-nc-render-rc" 0 $?
+  chk "events-nc-content" "$NCL_TEXT" "$(awk -F'\t' '{print $5}' "$T/nc.out")"
+  chk "events-nc-ts"      "$NCL_TS"    "$(awk -F'\t' '{print $2}' "$T/nc.out")"
+  chk "events-nc-kind"    "nc-schema"  "$(awk -F'\t' '{print $3}' "$T/nc.out")"
+  chk "events-nc-actor"   "$NCL_ACTOR" "$(awk -F'\t' '{print $4}' "$T/nc.out")"
+  bash "$ME" events --actor "$NCL_ACTOR" --json > "$T/nc-a.out" 2>/dev/null
+  chk "events-nc-actor-reach" 1 "$(jq 'length' "$T/nc-a.out" 2>/dev/null || echo X)"
+  bash "$ME" events --since "$NCL_TS" --json > "$T/nc-s.out" 2>/dev/null
+  chk "events-nc-since-reach" 1 "$(jq 'length' "$T/nc-s.out" 2>/dev/null || echo X)"
+  bash "$ME" events --kind nc-schema --json > "$T/nc-k.out" 2>/dev/null
+  chk "events-nc-kind-reach" 1 "$(jq 'length' "$T/nc-k.out" 2>/dev/null || echo X)"
+  # the truncation nudge must measure the NORMALISED field it prints, not .what
+  LONGNC="$(printf 'y%.0s' $(seq 1 300))"
+  jq --arg t "$LONGNC" '(.events[] | select(.n==99001) | .text) |= $t' \
+     "$T/state/workers-ledger.json" > "$T/state/nc2.json" \
+     && mv "$T/state/nc2.json" "$T/state/workers-ledger.json"
+  bash "$ME" events --n 1 > "$T/nc-t.out" 2>"$T/nc-t.err"; chk "events-nc-trunc-rc" 0 $?
+  chk "events-nc-trunc-160" "160" "$(awk -F'\t' '{print length($5)}' "$T/nc-t.out")"
+  grep -q "truncated" "$T/nc-t.err" && ok || bad "events-nc-trunc-nudge"
   rm -rf "$T"
+
   echo "oc-ledger selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
 }
@@ -1947,11 +1982,22 @@ cmd_events() { # oc-ledger events|tail [--n N] [--kind K] [--actor U] [--since T
   [ "$n" -ge 1 ] || die 2 "events: --n must be >= 1 (got '$n')"
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   local sel rc
+  # Schema-mismatch fix (lane 329bf3a3 report): `.events[]` carries 27 distinct
+  # key schemas and this verb read ONLY the canonical {n,t,kind,by,what}. A row
+  # that kept its content in `text` (or its stamp in `ts`, its actor in `actor`)
+  # rendered with a BLANK content column AND was invisible to --actor/--since.
+  # The projection below is normalised ONCE and used by BOTH the filter and the
+  # render, so a row can never be SELECTABLE by a value it does not PRINT.
   sel="$(jq -c --arg kind "$kind" --arg actor "$actor" --arg since "$since" --argjson n "$n" '
+    def n_kind: ((.kind // .type // "") | tostring);
+    def n_by:   ((.by // .actor // .role // "") | tostring);
+    def n_t:    ((.t // .ts // "") | tostring);
+    def n_what: ((.what // .text // .summary // .note // "") | tostring);
+    def n_n:    (.n // .seq // 0);
     [ .events[]?
-      | select(($kind == "") or (((.kind // "") | tostring) == $kind))
-      | select(($actor == "") or ((((.by // "") | tostring)) | contains($actor)))
-      | select(($since == "") or (((.t // "") | tostring) >= $since))
+      | select(($kind == "") or (n_kind == $kind))
+      | select(($actor == "") or (n_by | contains($actor)))
+      | select(($since == "") or (n_t >= $since))
     ] as $m
     | ($m | length) as $len
     | $m[(if $len > $n then $len - $n else 0 end):]' "$LEDGER")"
@@ -1966,12 +2012,22 @@ cmd_events() { # oc-ledger events|tail [--n N] [--kind K] [--actor U] [--since T
   if [ "$json" -eq 1 ]; then printf '%s\n' "$sel" | jq '.'; exit 0; fi
 
   local trunc=160; [ "$full" -eq 1 ] && trunc=1000000
-  printf '%s' "$sel" | jq -r --argjson t "$trunc" \
-    '.[] | [(.n // 0), (.t // "?"), (.kind // "?"), ((.by // "-") | tostring), ((.what // "") | tostring | .[0:$t])] | @tsv'
+  printf '%s' "$sel" | jq -r --argjson t "$trunc" '
+    def n_kind: ((.kind // .type // "") | tostring);
+    def n_by:   ((.by // .actor // .role // "") | tostring);
+    def n_t:    ((.t // .ts // "") | tostring);
+    def n_what: ((.what // .text // .summary // .note // "") | tostring);
+    def n_n:    (.n // .seq // 0);
+    .[] | [ n_n,
+            (n_t    | if . == "" then "?" else . end),
+            (n_kind | if . == "" then "?" else . end),
+            (n_by   | if . == "" then "-" else . end),
+            (n_what | .[0:$t]) ] | @tsv'
   if [ "$full" -eq 0 ]; then
     local clipped
-    clipped="$(printf '%s' "$sel" | jq --argjson t "$trunc" \
-      '[.[] | select(((.what // "") | tostring | length) > $t)] | length')"
+    clipped="$(printf '%s' "$sel" | jq --argjson t "$trunc" '
+      def n_what: ((.what // .text // .summary // .note // "") | tostring);
+      [.[] | select((n_what | length) > $t)] | length')"
     [ "${clipped:-0}" -gt 0 ] && echo "events: $clipped row(s) had 'what' truncated to $trunc chars — rerun with --full for the complete text" >&2
   fi
   exit 0
