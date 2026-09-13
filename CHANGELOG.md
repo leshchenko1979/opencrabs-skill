@@ -1,11 +1,49 @@
 # Changelog
 
+## v0.4.164 (2026-09-13) — The Correction Reaches the Lanes
+
+Origin: **fixing the law file is not the same as distributing the correction.** `fdb34a5b` corrected
+the smoke-log clause in `fleet-directives.md` at 21:42:30Z. The v0.4.163 fanout brief — the artifact
+lanes actually READ — ran at 21:54:14Z, **twelve minutes later**, carrying the uncorrected bullet
+verbatim. So the tree said one thing and every lane that received the brief was taught the other.
+Four lanes reported it independently (`52058a75`, `63d775f9`, `212b3c83`, `a5b34466`), each having
+verified the tree first-hand rather than trusting the brief. The class is the stale-law class v0.4.163
+itself names: **a brief is a SNAPSHOT of the law at the moment it is written, and a law fix that does
+not re-issue the brief has reached nobody.**
+
+- **The brief is corrected and re-issued.** Its second bullet said *"the smoke row is APPENDED by the
+  tool; a hand-typed row is a procedure violation"* — conflating the IDENTITY EVIDENCE BLOCK
+  (`oc-smoke-evidence --append-log`, deployment proof) with the VERDICT ROW (lane-authored, and
+  appending it is NOT a violation). Impact is a silent failure: a lane believing the tool writes the
+  verdict row authors none, the verdict goes unrecorded, and the lane believes it was recorded — the
+  same shape as the C-1 defect. The re-issued brief opens with a RE-ISSUE NOTE so a lane that received
+  the earlier copy knows why it is seeing the brief again.
+- **`fleet-directives.md` §Canonical smoke log — the count is MEASURED, not estimated.** The clause
+  I had just corrected for exactly this class of error carried MY OWN unmeasured figure: *"98
+  lane-authored verdict rows"*. Lane `a5b34466` reproduced the *"0 tool-appended identity blocks"* half
+  and could not reproduce 98 under any definition. Re-measured: the canonical log holds **55 verdict
+  rows** (9 in the canonical tab-separated shape, 46 in older free-text shapes) and **0 tool-appended
+  identity blocks**. The 98 reproduces under no definition of a verdict row. An unmeasured number in
+  law text is a claim, and this one was wrong in the same sentence that banned the error.
+- **`CHANGELOG.md:8` — the C-1 bullet gets the marker it lacked.** `fdb34a5b` touched ONLY
+  `fleet-directives.md`, so the falsified claim survived unmarked at every other site that carried it.
+  The C-1 bullet now carries **SUPERSEDED same-day by `fdb34a5b`**, the same treatment line 34 already
+  had — a reader could otherwise take the changelog as current law.
+- **`SKILL.md:101` — the tool row's writer claim is narrowed.** *"--append-log is the SANCTIONED writer
+  of the canonical `smoke-verdicts.log`"* reads as *"this tool writes the log"*, landing a lane on the
+  same wrong inference. It now reads *"…of the **IDENTITY EVIDENCE BLOCK** in the canonical
+  `smoke-verdicts.log` — the VERDICT ROWS are LANE-AUTHORED."*
+- **Toolsmith dispatched** for the sanctioned-writer half: a `--late-entry` / `--sha` override so
+  `oc-smoke-evidence` can emit a HISTORICAL row, closing the `:145` LATE-ENTRY exception that the law
+  grants but no tool could discharge.
+- **BATTERY**: 175 PASS / 0 FAIL.
+
 ## v0.4.163 (2026-09-12) — The Law Catches Up With Its Own Tool
 
 Origin: three lanes reported, independently, that law shipped in v0.4.161 had been overtaken by its own tool half — and the sharpest form of the defect is that the law and the tool landed **24 minutes apart, inside the SAME tag**. A fourth gap arrived mid-batch. Every claim was verified first-hand before editing; one was reproduced from its recorded shas.
 
 - **The stale-law class, named.** A law that says *"until X lands"* MUST be revisited in the SAME version X lands — otherwise it is stale the moment it ships. `fleet-directives.md` §Enforcement split said *"until that change lands a docs-only commit still burns LEG1"*; `d6cb9b9a` landed that change at 11:56:24Z, **24 minutes after** the 11:32:09Z law text, both inside v0.4.161. The clause is SUPERSEDED: a pure-docs commit now SKIPS LEG1, the exclusion set is DERIVED at gate time (`shipchain_docs_only()`, `tools/oc-ship-chain:494`), the skip is recorded in the journal (`GATE-SKIPPED-DOCS`) plus a `shipchain` ledger row, it applies to a FRESH dispatch only (`--gated-run`/`--gated-sha` still gate), and the force flag `OC_SHIPCHAIN_NO_DOCS_SKIP=1` does exist. Lanes `afe476f8` and `a5b34466` found this before HQ did.
-- **C-1 — the smoke row IS appended by the tool.** `fleet-directives.md` still said `oc-smoke-evidence` *"PRINTS a leg and never appends"*, i.e. it taught the hand-typed write it had just retired. Now: the row is APPENDED by `oc-smoke-evidence --append-log` (bare = the canonical absolute; a wrong path is unrepresentable, M2-2) and a hand-typed row is a procedure violation. Plain shell `>>` is what glued `c10cd97b`'s rows. The `SKILL.md` tool row names the flag.
+- **C-1 — the smoke row IS appended by the tool.** `fleet-directives.md` still said `oc-smoke-evidence` *"PRINTS a leg and never appends"*, i.e. it taught the hand-typed write it had just retired. Now: the row is APPENDED by `oc-smoke-evidence --append-log` (bare = the canonical absolute; a wrong path is unrepresentable, M2-2) and a hand-typed row is a procedure violation. Plain shell `>>` is what glued `c10cd97b`'s rows. The `SKILL.md` tool row names the flag. **SUPERSEDED same-day by `fdb34a5b` — see `fleet-directives.md` §Canonical smoke log.** This bullet CONFLATED two artifacts and banned the AUTHOR where it meant to ban the WRITE MECHANISM: `--append-log` writes the IDENTITY EVIDENCE BLOCK (deployment proof — pid, exe_sha256, artifact_sha256, run_id, VERDICT; 10 tab-separated lines), NOT the verdict row. The VERDICT ROW is LANE-AUTHORED and appending it is **NOT** a violation. What is banned is plain shell `>>` (newline-unsafe). Measured: 55 verdict rows, 0 tool-appended identity blocks.
 - **The duplicate-ack HISTORY was MEASURED, not remembered.** The v0.4.159 sentence cited "20+ lanes going back to 0.4.143" and a tight 2 s pair as the class. Audit: **68 duplicate `(uuid, version)` groups across 27 lanes, 75 extra rows, back to 0.4.118**; median gap **16 min** and only 19 of 68 within 5 min — so the mechanism is a **RE-ACK** at a later boundary, not a double-write, and the 2 s pair is the exception rather than the class. Heaviest lanes: `61161247`, `462181e9`, `d5863180` ×5 each. **CLOSED** by the M2-4 idempotent re-ack guard (`a36224ad`, 15:50:14Z) — zero duplicate rows since.
 - **Citation defect — pair identifiers by READING the row, never by adjacency.** The same section named `d18ce16a` for rows 3713/3714; those rows were written by `d5863180` (2 hits vs 0). Five adjacent rows had been paired off by proximity instead of by reading each one.
 - **`upstream-merge-runbook.md` §step 7 gains STEP 0 — a patch-id test before the cut derivation** (lane `9fa7c71a`, proposal n=4067, evidence n=4071). A range count cannot tell "this lane has work" from "this lane SITS ON a base whose lineage was replaced": after a SECOND re-synthesis, a lane still pointing at the FIRST new base has a range populated entirely by that base's own history, so the count reads non-zero while genuinely pending work is ZERO and the zero-test never fires. Reproduced from the recorded shas: `origin/main..b3b3fc9a` = **15** with `git cherry` = **15 × `-` / 0 × `+`**, and the derived rebase was **rc 1 over 10 conflicting files** on a branch with zero work. `git cherry origin/main <branch> | grep -c '^+'` = 0 — absorbed, SKIP (pointer move); and the cut must be the base the lane SITS ON, never derived from a range against a lineage that was rewritten. J-shaped: a migration verb printing `ABSORBED|PENDING` would remove the hand-derivation entirely.
