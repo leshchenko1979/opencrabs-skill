@@ -142,13 +142,23 @@ Rules:
   for UPSTREAM-local references. Incident + rationale:
   `editor-phase7-rules.md`.
 - One feature = one PR; never bundle two features to save a PR.
-- **ATOMICITY:** issues, PRs and commits are atomic —
-  one problem per issue, one logical change per commit, one issue per PR. Every
-  harvested commit carries an `Issue-Ref: #N` trailer matching EXACTLY the single
+- **ATOMICITY & ZERO BUNDLING (owner order 2026-09-13; lane 1a63f103 proposal):** issues, PRs and commits are atomic —
+  one problem per issue, one logical change per commit, one issue per PR. **1 Intent = 1 Unit.**
+  Never mix features and bug fixes in the same issue, branch, or PR: a feature PR must carry exclusively
+  feature commits, and a bugfix PR must carry exclusively fix commits. If a defect is found while working
+  on a feature, file a separate fork issue and resolve it in an isolated branch/PR — never bundle the fix
+  into the feature work. Every harvested commit carries an `Issue-Ref: #N` trailer matching EXACTLY the single
   issue the PR claims; no commit without one, no PR claiming more than one. A PR
   whose diff mixes fixed and unfixed concerns forces a binary status on a mixed bag
   and mislabels both. Gate with `./tools/oc-pr-atomicity <pr>` (trailer scan + body
   claim cross-check) BEFORE closing the issue. PR LIFECYCLE: one PR = one atomic change; a bug found in review is fixed
+- **UPSTREAM CODING & TEST STANDARDS (CONTRIBUTING.md & Adolfo DM 2026-09-13):**
+  - **Test isolation:** ALL tests MUST live under `src/tests/*_test.rs` registered in `src/tests/mod.rs`. Absolutely **NO inline `#[cfg(test)] mod tests`** blocks inside source files in `src/`. If an existing inline test block is found while editing a file, move it to `src/tests/` as part of the change.
+  - **`mod.rs` declarations only:** Zero function definitions (`fn`) inside any `mod.rs`. Only doc comments, `mod`/`pub mod` statements, and `pub use` re-exports. Functions belong in cohesive child modules.
+  - **No `Co-Authored-By`:** Never add `Co-Authored-By` trailers to commit messages.
+  - **Real tests over mocks:** Hit real structs and SQLite; tests must fail without the fix and pass with it.
+  - **Zero error / warning suppression:** No `#[allow(dead_code)]` or `#[allow(unused)]` duct tape. Unused code must be deleted.
+  - **`ONTOLOGY.md` synchronization:** If a change introduces, renames, or retires a concept, update `src/docs/reference/ONTOLOGY.md` in the same PR.
   FORWARD on the same PR or the PR is closed — no draft limbo. A MERGED PR is
   closed forever: follow-up work = new branch + new PR, NEVER extend a merged
   branch.

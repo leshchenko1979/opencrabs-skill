@@ -437,8 +437,12 @@ touches the trailer area** (v0.4.71, Duty-4 P2). `git interpret-trailers --parse
 commit-body scan) must show every expected trailer before the sha enters any
 gate or push.
 
-**Test placement (CONTRIBUTING.md policy, from Phase 7 step 2c):** tests live under `src/tests/*_test.rs` registered in
-`mod.rs`, never inline `#[cfg(test)]` blocks — upstream CI enforces both.
+**Test placement & upstream coding standards (CONTRIBUTING.md policy, Adolfo DM 2026-09-13):**
+- Tests live under `src/tests/*_test.rs` registered in `src/tests/mod.rs`, never inline `#[cfg(test)] mod tests { ... }` blocks.
+- `mod.rs` is for module declarations and re-exports ONLY — zero function definitions (`fn`) in any `mod.rs`.
+- Commit trailers must never include `Co-Authored-By`.
+- No `#[allow(dead_code)]` / `#[allow(unused)]` suppression; unused code must be deleted.
+- If introducing, renaming, or retiring concepts, update `src/docs/reference/ONTOLOGY.md`. Upstream CI strictly enforces these.
 
 **rustfmt = NON-FATAL diagnostic pre-pass (Duty-4 P6, v0.4.80):** run fmt
 before `oc-commit`; a fmt failure is a diagnostic to fix and re-run — never a
