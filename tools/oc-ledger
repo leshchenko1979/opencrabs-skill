@@ -1408,6 +1408,25 @@ AMBEOF
       {n:2, t:"2026-09-12T00:01:00Z", by:"editor 22222222-2222-2222-2222-222222222222", kind:"confirm", what:"CONFIRM #5151 — closure by a DIFFERENT lane"}]}' > "$UAT/attr.json"
   OC_LEDGER="$UAT/attr.json" bash "$ME" claims 5151 > "$T/claims-5151.out" 2>/dev/null
   grep -q "11111111" "$T/claims-5151.out" && ok || bad "claims-attributed-closed-by-other-actor"
+  # SIBLING SENTINEL (lane a5b34466 report; corroborated by 6cd8175f): the
+  # `unrostered-actor <uuid>` sentinel gets the SAME treatment as
+  # `(unattributed` — its rows could otherwise only be closed by hand-
+  # reproducing the historical `by` string, which writes a row attributed to
+  # another actor. Two assertions: the natural closer now closes it, and the
+  # 5151 guard above still proves an ATTRIBUTED claim is NOT over-closed.
+  jq -n '{workers:[], events:[
+      {n:1, t:"2026-09-12T00:00:00Z", by:"unrostered-actor 99999999-9999-9999-9999-999999999999", kind:"claim", what:"CLAIM #5152 — unrostered-actor fixture"},
+      {n:2, t:"2026-09-12T00:01:00Z", by:"editor 44444444-3333-4444-5555-666666666666", kind:"confirm", what:"CONFIRM #5152 — closure by the now-rostered lane"}]}' > "$UAT/unrostered.json"
+  OC_LEDGER="$UAT/unrostered.json" bash "$ME" claims 5152 > "$T/claims-5152.out" 2>/dev/null; chk "claims-unrostered-rc" 0 $?
+  [ -s "$T/claims-5152.out" ] && bad "claims-unrostered-still-unclosable" || ok
+  # ...and the sentinel is matched as a PREFIX: the malformed legacy labels
+  # (`unrostered-actor d5863180-editor`, `… editor-141`) all start with it, so
+  # they are covered by the same arm rather than needing a second one.
+  jq -n '{workers:[], events:[
+      {n:1, t:"2026-09-12T00:00:00Z", by:"unrostered-actor d5863180-editor", kind:"claim", what:"CLAIM #5153 — malformed legacy label"},
+      {n:2, t:"2026-09-12T00:01:00Z", by:"editor 44444444-3333-4444-5555-666666666666", kind:"confirm", what:"CONFIRM #5153 — closure"}]}' > "$UAT/unrostered2.json"
+  OC_LEDGER="$UAT/unrostered2.json" bash "$ME" claims 5153 > "$T/claims-5153.out" 2>/dev/null
+  [ -s "$T/claims-5153.out" ] && bad "claims-unrostered-label-unclosable" || ok
   # 51-54 (v0.4.116, H-2): lessons — lesson/incident row extraction by class.
   OC_ACTOR="$W4" bash "$ME" stamp lesson "LESSON-FIXTURE uncoded gate-bypass lesson" >/dev/null 2>&1
   OC_ACTOR="$W4" bash "$ME" stamp incident "INCIDENT-FIXTURE phantom write without receipt" >/dev/null 2>&1
@@ -1721,7 +1740,18 @@ cmd_claims() { # oc-ledger claims <N> — dispatch=verify-unclaimed backend (#12
     # claim has no actor to discriminate on, so the actor test is DROPPED for
     # it and any later closer referencing #N closes it. New unattributed rows
     # are already refused by #19, so this reaches legacy data only.
-    case "$uuid" in "(unattributed"*) unattr=1 ;; esac
+    #
+    # EXTENDED (lane a5b34466 report, corroborated by 6cd8175f): the SIBLING
+    # sentinel `unrostered-actor <uuid>` — what derive_by writes when OC_ACTOR
+    # is not in the roster — was NOT matched, so its rows could only be closed
+    # by hand-reproducing the historical `by` string, which writes a row
+    # attributed to ANOTHER actor (the false-attribution family). Both sentinels
+    # mean "no resolvable actor", so both drop the actor test. Bounded the same
+    # way: the closer must still be LATER and must reference the same #N, and
+    # #19 refuses NEW anonymous rows, so this reaches legacy data only.
+    # Attribution-preserving closure (a third-party closure verb) is the larger
+    # fix and is deliberately NOT this change.
+    case "$uuid" in "(unattributed"*|"unrostered-actor"*) unattr=1 ;; esac
     while IFS=$'\t' read -r ctype cwhat; do
       case "$ctype" in
         close|confirm|reject|done|unclaim) if _issue_ref_has "$cwhat" "$n"; then closed=1; fi ;;
