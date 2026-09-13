@@ -99,7 +99,7 @@ answers "who is alive right now".
 
 
 Bump propagation mechanics (B-F4 v0.4.96 — moved out of the table cell):
-1. Stamp ONE ledger event (version published; no per-worker rows).
+1. **Publish the version to the ledger: `oc-ledger sync --version <v> [--why <provenance>]` — and READ its rc.** The skill-repo commit/tag is NOT the version-published event; only `sync` mints the `skill-bump` row AND the three registry fields (`current_skill_version`, `meta.current_skill_version`, `meta.skill_version`) in one flock'd atomic write. A commit without a sync leaves the registry reading the PREVIOUS version while lanes ack the new one — the fleet is on `<v>` and the ledger still says `<v-1>`. `sync` is battery-gated and refuses `rc 7` on unrelated dirty paths (stray-guard, v0.4.157); **a refusal writes NOTHING and is silent unless someone reads rc/stderr**, so a bump that ships law text + a fanout brief and never reads the sync's rc has minted NO version-published event. Origin: v0.4.164 shipped its law text and its fanout brief and 27 lanes acked it with no `skill-bump` row (gap reported first-hand by lanes `530c29ec` + `facd50af`). **The consumer half (Reviewer-J inverse, v0.4.165):** `oc-ledger check-version` — rc 1 when any of the three fields disagrees with `SKILL.md` — is a pure function of on-disk state and had NO actor assigned to it. On the Duty-3/4 cadence READ it, and treat `rc=1` as a bump-propagation failure to heal with `oc-ledger sync --version <SKILL.md version>`, not as a worker defect.
 2. Commit BOTH git repos — skill-dir: one commit per bump; state-dir: one
    commit per ledger stamp, inside the same flock as the write (git-history regime).
 3. TOOL-written stamps (`oc-deploy` swap-execute etc.) are committed by the
