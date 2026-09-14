@@ -15,6 +15,7 @@
 #                          [--append-log [<path>]]
 #                          [--late-entry --sha <sha> [--run <id>] [--actor <uuid>]
 #                           [--issue <#N>] [--target <name>] [--evidence <text>]]
+#                          [--park-owner-eye <description> [--sha <sha>] [--issue <#N>]]
 #   --append-log [<path>] (defect #13, lane c10cd97b, 2026-09-12): appends the
 #   evidence block to <path> NEWLINE-SAFELY — if the log was last written
 #   without a trailing newline, that row is terminated first, so rows can
@@ -69,12 +70,26 @@ CANON_LOG="$STATE_DIR/smoke-verdicts.log"   # M2-2: the ONLY sanctioned target
 UNIT="opencrabs-ops"; MARKERS=""; NEGCTRL=""; APPEND_LOG=""
 LATE_MODE=""; LATE_SHA=""; LATE_RUN=""; LATE_ACTOR=""; LATE_ISSUE=""
 LATE_TARGET=""; LATE_EVIDENCE=""
+PARK_MODE=""; PARK_DESC=""; PARK_ISSUE=""
 
 # D-4 (HQ d72bd52d, 2026-09-13): the HISTORICAL row builder. It mirrors the
 # shape the fleet already writes by hand, so the sanctioned writer and the
 # lanes agree on one format. Optional fields are OMITTED rather than emitted
 # empty -- an empty `run=` reads as a value, not as absence. Defined BEFORE
 # the arg loop because --selftest runs inside it and must be able to call this.
+build_park_block() {
+  [ -n "$PARK_DESC" ] || die 2 "--park-owner-eye requires a description text"
+  local ts row sha TAB
+  TAB=$'\t'
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sha="${LATE_SHA:-$(head -1 "$STATE_DIR/deployed.sha" 2>/dev/null || echo "unknown")}"
+  row="${ts}${TAB}PARKED-OWNER-EYE${TAB}sha=${sha}"
+  local iss="${PARK_ISSUE:-$LATE_ISSUE}"
+  [ -n "$iss" ] && row="${row}${TAB}issue=${iss}"
+  row="${row}${TAB}evidence=\"${PARK_DESC}\""
+  printf '%s' "$row"
+}
+
 build_late_block() {
   [ -n "$LATE_SHA" ] || die 2 "--late-entry requires --sha <sha>"
   local ts row TAB
@@ -107,6 +122,7 @@ while [ $# -gt 0 ]; do
         /*) APPEND_LOG="$1"; shift ;;                    # absolute -> honoured
         *)  APPEND_LOG="$STATE_DIR/$1"; shift ;;         # relative -> STATE_DIR, never CWD
       esac ;;
+    --park-owner-eye) PARK_MODE=1; PARK_DESC="${2:-}"; shift 2 ;;
     --late-entry) LATE_MODE=1; shift ;;
     --sha)     LATE_SHA="${2:-}";      shift 2 ;;
     --run)     LATE_RUN="${2:-}";      shift 2 ;;
@@ -186,6 +202,18 @@ while [ $# -gt 0 ]; do
       grep -qF 'PASS-LATE-ENTRY' "$d/late-ok.log" || { echo "selftest: late-entry row lacks the verdict token" >&2; exit 1; }
       grep -qF 'sha=deadbeef' "$d/late-ok.log" || { echo "selftest: late-entry row lacks the sha" >&2; exit 1; }
       [ "$(grep -oF "$(printf '\t')" "$d/late-ok.log" | wc -l)" = 7 ] || { echo "selftest: late-entry row field count wrong" >&2; exit 1; }
+      # J-02: --park-owner-eye selftest
+      PARK_DESC=""; ( build_park_block >/dev/null 2>&1 ); [ $? -eq 2 ] || { echo "selftest: park-owner-eye without desc did not die 2" >&2; exit 1; }
+      PARK_DESC="check visual layout"; LATE_SHA="cafe1234"; PARK_ISSUE="#42"
+      pb="$(build_park_block 2>/dev/null)"
+      printf '%s' "$pb" | grep -qF "PARKED-OWNER-EYE" || { echo "selftest: park row lacks verdict token" >&2; exit 1; }
+      printf '%s' "$pb" | grep -qF "sha=cafe1234" || { echo "selftest: park row lacks sha" >&2; exit 1; }
+      printf '%s' "$pb" | grep -qF "issue=#42" || { echo "selftest: park row lacks issue" >&2; exit 1; }
+      printf '%s' "$pb" | grep -qF 'evidence="check visual layout"' || { echo "selftest: park row lacks quoted evidence" >&2; exit 1; }
+      OC_DEPLOY_STATE_DIR="$d" "$0" --park-owner-eye "e2e visual" --sha bbeef --issue 10 --append-log "$d/park-ok.log" >/dev/null 2>&1 || { echo "selftest: park-owner-eye e2e failed" >&2; exit 1; }
+      [ "$(wc -l < "$d/park-ok.log")" = 1 ] || { echo "selftest: park-owner-eye wrote != 1 line" >&2; exit 1; }
+      grep -qF "PARKED-OWNER-EYE" "$d/park-ok.log" || { echo "selftest: park file lacks verdict token" >&2; exit 1; }
+      grep -qF "sha=bbeef" "$d/park-ok.log" || { echo "selftest: park file lacks sha" >&2; exit 1; }
       echo "selftest OK"; exit 0 ;;
     -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) usage ;;
@@ -265,6 +293,20 @@ fi
 if [ "$rc" -eq 0 ]; then echo "VERDICT: IDENTITY-MATCH — binary identity + feature presence on live $UNIT"; else echo "VERDICT: MISMATCH — see rows above"; fi
 exit "$rc"
 }
+
+# J-02 (2026-09-14): PARKED-OWNER-EYE mechanical formatting & atomic append
+if [ -n "$PARK_MODE" ]; then
+  [ -n "$PARK_DESC" ] || die 2 "--park-owner-eye requires a description text"
+  if [ -n "$MARKERS" ] || [ -n "$NEGCTRL" ]; then
+    die 2 "--park-owner-eye cannot be combined with --markers/--negative-control"
+  fi
+  TARGET_LOG="${APPEND_LOG:-$CANON_LOG}"
+  OUT="$(build_park_block)"
+  printf '%s\n' "$OUT"
+  append_log "$TARGET_LOG" "$OUT" || die 3 "append-log failed: $TARGET_LOG"
+  echo "oc-smoke-evidence: NOTE -- PARKED-OWNER-EYE row appended to $TARGET_LOG" >&2
+  exit 0
+fi
 
 # D-4: validation BEFORE any work -- a misuse must never be mistakable for a row.
 if [ -n "$LATE_MODE" ]; then

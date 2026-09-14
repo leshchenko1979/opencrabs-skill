@@ -19,6 +19,7 @@ PASS=0 FAIL=0
 # Battery stays silent in the unified tools log: every suite invocation is a
 # synthetic run, not fleet activity (KERNEL batch D0, 2026-08-28).
 export OC_TOOLS_NOLOG=1
+export OC_ACTOR="test-runner"
 
 # ---- helpers ---------------------------------------------------------------
 note()  { printf '%s\n' "$*"; }
@@ -244,12 +245,6 @@ if tool archive/oc-post-receipts; then
   "$TOOLS_DIR/archive/oc-post-receipts" --bogus >/dev/null 2>&1; [ $? -eq 3 ] && ok "bad args -> 3" || bad "bad args -> expected 3"
 fi
 
-# ---- 6. oc-index-worktree --------------------------------------------------
-section "oc-index-worktree"
-run_selftest oc-index-worktree
-if tool oc-index-worktree; then
-  "$TOOLS_DIR/oc-index-worktree" >/dev/null 2>&1; [ $? -eq 5 ] && ok "no args -> 5 (bad-input)" || bad "no args -> expected 5"
-fi
 
 # ---- 7. oc-pr-atomicity ----------------------------------------------------
 section "oc-pr-atomicity"

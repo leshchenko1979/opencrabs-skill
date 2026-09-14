@@ -243,9 +243,9 @@ done
 # GAPMAX bounds how far a flag may sit from the tool token that owns it. An
 # invocation is `oc-tool [verb] [value] --flag`, so 3 covers verb+value; a wider
 # gap means the line moved on to PROSE and the flag belongs to a DIFFERENT
-# command. Live case: "standalone oc-index-worktree stays the fallback only when
-# --create is unavailable" — that --create is oc-wt's, named three lines earlier,
-# and oc-index-worktree does not declare it. Gap 5 correctly refuses to attribute.
+# command. Live case: "standalone oc-wt stays the fallback only when
+# --create is unavailable" — that --create belongs to oc-wt, named three
+# lines earlier. Gap 5 correctly refuses to attribute.
 CANDS="$(awk -v GAPMAX=3 '
   { line = $0
     if (line ~ /^[ \t]*(```|~~~)/) { fence = !fence; next }
