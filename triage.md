@@ -121,7 +121,7 @@ below needs a regular cadence to be worth anything.
 3. Diff the OPEN set against the workers-ledger claim-refs
    (`grep -c '"issue'` or the claim rows) — an OPEN fork issue with NO
    open claim-ref is unclaimed backlog.
-4. For each unclaimed issue: route to the owning editor (Duty T2), or if
+4. For each unclaimed issue: route to the owning editor, or if
    none is obvious, surface the unclaimed set to HQ for
    dispatch — do NOT let it sit silent (the v0.4.91 gap: "claimed when
    someone claims it" is not assignment).

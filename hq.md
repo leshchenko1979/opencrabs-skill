@@ -250,7 +250,7 @@ Legacy references to "hq.md Duty 7" are retired.
 - **Backlog assignment (Duty T5, v0.4.92):** post-compaction sweep of OPEN fork issues against ledger claim-refs; unclaimed → route or surface here for dispatch.
 - **Telegram-law TOOL_ACCUM enforcement (Duty T4, v0.4.43):** OPERATES in the TRIAGE lane since v0.4.86 — full procedure in `triage.md` §Duty T4. Repeat offenders escalate HERE for review-toggle decisions.
 
-**Upstream-relations ownership (v0.4.176)**: All upstream lifecycle tracking (upstream delta watch, upstream PR census, maintainer dependency tracking) is consolidated in **Triage** (`triage.md §Duty T4/T8`). Fork branch lifecycle / clean sweep is executed by Triage (`triage.md §Duty T4`). Editor exclusively authors and files upstream PRs (`editor-upstream-pr.md`).
+**Upstream-relations ownership (v0.4.176)**: All upstream lifecycle tracking (upstream delta watch, upstream PR census, maintainer dependency tracking) is consolidated in **Triage** (`triage.md §Duty T4`). Fork branch lifecycle / clean sweep is executed by Triage (`triage.md §Duty T4`). Editor exclusively authors and files upstream PRs (`editor-upstream-pr.md`).
 
 ## Upstream sync — watch & governance (sync execution delegated to Triage)
 

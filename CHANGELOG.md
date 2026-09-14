@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.4.177 (2026-09-14) — Duty 4+6 Review Cycle `20260914-c12` Codification
+
+Codification of findings from Duty 4+6 Review Cycle `20260914-c12`:
+- **Doc & Role-File Cleanups (Findings A-1, G-2, G-3):**
+  - Deduplicated redundant 43-line Hard Rules block in `SKILL.md`.
+  - Lifted Upstream Relations section in `hq.md` out of retired Duty 7 heading to top-level section.
+  - Corrected stale cross-references in `triage.md` (Duty T2/T8 cleanup).
+- **Brain File & Process Boundaries (Findings BS-1, BS-2):**
+  - Pruned verbose smoke rubric in `AGENTS.md` to canonical pointer to `fleet-directives.md`.
+  - Re-homed external lanes dev process non-participation rule from `MEMORY.md` into `AGENTS.md`.
+- **Tooling Enhancements Dispatched (Findings C-1, C-2, F-1, F-2, J-1..J-4):**
+  - Dispatched structured work order to Toolsmith lane (`2fae1230`) covering automated 24h soak gating in `oc-harvest-census`/`oc-harvest-dispatch`, automated stale claims sweep in `oc-ledger`, and CLI wrapper cleanups.
+- **Review Cycle Persisted (Lenses A–J, Brain Scrub):**
+  - Evaluated 11/11 lenses, persisted reports under `reviews/20260914-c12/reports/` with cryptographic receipts in `skill-review-index.log`. Master verdict at `reviews/20260914-c12/verdict.md`.
+  - Battery verified: PASS=194, FAIL=0.
+
 ## v0.4.176 (2026-09-14) — Role Duties Realignment & OC_ACTOR Auto-Derivation
 
 Codification of direct process-owner feedback routing, Harvester consolidation into Triage, and ambient actor attribution:
