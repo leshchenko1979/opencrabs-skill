@@ -37,7 +37,7 @@ rustfmt wrapper), and its compile binaries were DISABLED 2026-08-28
 (`/root/toolchain-disabled-20260828/` — manifest + `restore.sh`). A local
 invocation that WORKS is still a ruling violation. Sanctioned local
 tools ONLY: `/usr/local/bin/rustfmt` wrapper (fmt only — `--edition 2024`
-+ entrypoint walk for exact CI parity). Lint = CI (`pr-checks.yml`, run in
++ entrypoint walk for exact CI parity). CODE TESTS = CI gate (`pr-checks.yml`, run in
 Phase 5 via `oc-ship-chain`; Phase 7 step 2c reuses it on upstream PR heads).
 Everything
 else — build, test, clippy — is CI dispatch: `pr-checks.yml` or
@@ -551,8 +551,9 @@ right here (`opencrabs-ops` user unit).
    MISMATCH → STOP: you would be smoking a binary that is not the one that was
    built — report the mismatch to the sender, do not smoke on a stale unit.
 3. Drive your feature end-to-end against the RUNNING unit on its normal
-   surfaces (Telegram, cron, MCP — whatever the feature touches). Happy path
-   plus one edge case.
+   surfaces (Telegram, cron, MCP — whatever the feature touches).
+   **Checkable completion criteria (v0.4.170, Finding G-2):**
+   DONE = Mechanical proof demonstrating target feature execution against the running binary (command output, log line with PID/timestamp match, or API receipt); confirmed via `tools/oc-smoke-evidence` (exit 0) and recorded in `smoke-verdicts.log`.
 4. PASS → reply to the sender (`session_notify`, `target_session` = the `from`
    header): feature OK + one line of evidence + the oc-smoke-evidence
    IDENTITY-MATCH receipt. If the feature is COMPLETE,

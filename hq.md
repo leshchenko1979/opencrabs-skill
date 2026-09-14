@@ -178,6 +178,12 @@ Cadence: after every FIVE shipped version bumps, on owner request, or when an
 incident suggests drift.
 
 Method:
+0. **Cycle State Durability & Step-0 Recovery** (v0.4.170, owner order 2026-09-13):
+   Every Duty 4+6 cycle maintains a machine-readable state file at `reviews/<cycle-id>/state.json` (under `$OC_DEV_STATE`).
+   Schema:
+   `{ "cycle_id": "<id>", "cadence": "<cadence-string>", "started_at": "<ts>", "status": "IN_PROGRESS|COMPLETED", "proposals": [...], "lenses": { "<lens>": { "status": "PENDING|COMPLETED", "report_path": "...", "verdict": "..." } }, "codification_plan": [...], "updated_at": "<ts>" }`
+   Before spawning reviewers or codifying findings, HQ initializes `state.json`.
+   **Step-0 Recovery Mandate:** After ANY context compaction or session restart during Duty 4+6, HQ must first check for an existing `reviews/<cycle-id>/state.json` before re-querying proposals, re-spawning reviewers, or re-drafting plans. Reading `state.json` restores the exact cycle state, preventing redundant tool calls or loss of completed work across compactions.
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
    one per lens (A/B/C/D/E/F/G/H/I/J + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
    are ALWAYS sub-agent work, never HQ-only inline reading. Same-day
@@ -269,43 +275,14 @@ for operations and HERE for batch/verdict ownership.
 
 **Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) is an HQ-owned duty; fork branch lifecycle / clean sweep (item 7) is delegated to and executed by Triage (`triage.md §Duty T4`) — canonical text stays in SKILL.md §Upstream relations; this line is the HQ-side ownership pointer.
 
-## Upstream sync — watch, REBASE parity (re-homed v0.4.80; sync model REBASE 2026-09-11; sync execution delegated to Triage 2026-09-11)
+## Upstream sync — watch & governance (sync execution delegated to Triage)
 
-Sync execution is DELEGATED TO TRIAGE (owner order 2026-09-11 "You should not do these merges - delegate to triage"; HQ does not execute syncs). **SYNC LAW canonical = `fleet-directives.md`
-§Remotes & sync (REBASE model 2026-09-11; one concept, one home — this
-section carries pointers only, lens A-12 v0.4.111).** Executing procedure:
-`upstream-merge-runbook.md` (freeze gate, roles, conflict classes,
-migration-union rule, semantic-triage defaults). SKILL.md §Upstream relations
-items 1/2/6 carry the one-line summaries. The
-REBASE-PORT procedure below is RETIRED for fork main — kept for PR-chain ports only (harvest
-branches onto upstream PR heads, where force-push-with-lease applies to the PR
-BRANCH, never to fork main).
+Sync execution is DELEGATED TO TRIAGE (owner order 2026-09-11: "You should not do these merges - delegate to triage"; HQ does not execute syncs). **SYNC LAW canonical = `fleet-directives.md §Remotes & sync` (REBASE model); executing procedure: `upstream-merge-runbook.md` (managed by Triage via `triage.md §Duty T7`).**
 
-### Watch — every build cycle
-
-    git -C ~/opencrabs fetch adolfousier
-    ./tools/oc-upstream-delta    # base/ahead/behind TSV + ABSORBED-CANDIDATE rows
-
-- Upstream shifted → notify Triage to execute the rebase sync per `upstream-merge-runbook.md`.
-- Conflicts beyond the runbook's trivial classes → notify Alexey with the
-  delta summary and WAIT for the word. Never improvise a history rewrite.
-
-### Port — REBASE-PORT model (RETIRED for fork main 2026-09-02; PR-branch chains only)
-
-Full 7-step procedure (backup ref, absorbed/superseded/survivor classification,
-chronological cherry-pick + SEAM-COMPILES verification, force-with-lease,
-editor notification) lives in `upstream-merge-runbook.md` §Port — moved there
-v0.4.96 (lens B-F16, one concept one home). This lane owns the DECISION to
-port, not the mechanics.
-
-### Parity — after every upstream merge/port
-
-Three-way-diff workflow check (runbook §Port) + carrier proof-dispatch
-(`--ref ci/quick-build-linux`). **DRIFT PERMANENT:** canonical text lives in
-SKILL.md §Upstream relations (fork `ci.yml` stays REMOVED, order cc100dc6;
-carrier branch is the sole build lane). oc-ci-parity RETIRED v0.4.117
-(owner "3 - ok": zero live use in 12 days, C-H2; the runbook's diff check
-supersedes it).
+HQ retains watch and governance authority only:
+- **Watch**: Monitor upstream delta (`./tools/oc-upstream-delta`) and notify Triage to execute rebase sync when upstream advances.
+- **Rulings**: Rule on non-trivial merge blockers or semantic conflicts escalated by Triage.
+- **Parity verification**: Ensure carrier proof-dispatch runs clean after rebase cutover. Procedural execution steps live exclusively in `upstream-merge-runbook.md` and `triage.md`.
 
 ## Detached command execution (background: true)
 

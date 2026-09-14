@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.4.170 (2026-09-14) — Duty 4+6 Review Cycle 20260913-c9 Implementation & Cycle Durability
+
+Comprehensive implementation of accepted Duty-4 worker proposals, Duty-6 review findings across 11 lenses, and durable cycle state:
+- **Duty 4 Worker Proposals Codified (`fleet-directives.md`, `upstream-merge-runbook.md`):**
+  - **Retire redundant ledger note row after drift-check (proposal n=4055, `52058a75`):** `oc-drift-check --ack` directly delegates to `oc-ledger ack`; retired the requirement for an additional note row.
+  - **Append-only shared log staging carve-out (proposal n=4057, `4b4463d5`):** Self-attributing append-only logs (`smoke-verdicts.log`) are exempt from the dirty-path commit prohibition when foreign rows are explicitly disclosed.
+  - **Absorbed branch detection via `git cherry` (proposal n=4067, `9fa7c71a`):** Step 7 in `upstream-merge-runbook.md` uses `git cherry origin/main` rather than raw commit counts to detect synthesized/absorbed branches.
+  - **Smoke log identity vs verdict separation (proposal n=4108, `52058a75`):** Explicitly split tool-generated identity evidence blocks from lane-authored verdict rows.
+  - **No static row counts in law text (proposal n=4132, `52058a75`):** Banned static row/line counts in law text; counts must be derived dynamically or cited by section/predicate.
+  - **Sanctioned smoke verdict taxonomy (proposal n=4175, `52058a75`):** Expanded field 2 taxonomy with `CORRECTION` and `RETRACTION` tokens with documented sha/evidence references.
+  - **Newline tail normalization on shared log appends (proposal n=4177, `4b4463d5`):** Mandatory newline tail verification before appending to shared logs to prevent poisoned un-terminated lines.
+  - **Anchor/section citations over line numbers (proposal n=4192, `63d775f9`):** Law text citations must reference section headings or grep anchors, never line numbers (`file:N`).
+  - **Mechanical derivation of idle editor capacity (proposal 329bf3a3):** Defined idle status by cross-referencing ledger claims with open GitHub issues (`gh issue list --state open`).
+- **Duty 6 Review Findings Codified (Lenses A, B, G, H, J):**
+  - **Finding A-1 (Lens A):** Replaced legacy "Lint" terminology with canonical "CODE TESTS = CI gate" (`editor.md`, `fleet-directives.md`).
+  - **Finding G-1 (Lens G):** Removed 36 lines of procedural upstream sync execution from `hq.md`, leaving clean governance pointers to Triage (`upstream-merge-runbook.md` / `triage.md`).
+  - **Finding G-2 (Lens G):** Codified checkable completion criteria for smoke tests in `editor.md` (`DONE = Mechanical proof demonstrating target feature execution against running binary...`).
+  - **Finding H-1 (Lens H):** Codified ban on clock-bomb test fixtures (row n=2123) and trailer retention mandate across history rewrites (row n=2102) in `fleet-directives.md` and `upstream-merge-runbook.md`.
+  - **Finding J-2 (Lens J):** Codified mechanical pure-docs verification via `tools/oc-ship-chain --eval-docs-skip <sha>`.
+- **Duty 6 Cycle State Durability (`hq.md`, `reviews/20260913-c9/state.json`):**
+  - Codified Step 0 in `hq.md`: Every Duty 4+6 cycle maintains a machine-readable `reviews/<cycle-id>/state.json`.
+  - Step-0 Recovery Mandate: HQ must check for and restore from `state.json` after context compaction before repeating queries or reviewer dispatches.
+  - Backfilled canonical cycle state for `20260913-c9`.
+- **Tooling Enhancements (Toolsmith commit `4db9c6ba`):**
+  - C-1: Token-bounded regex in `oc-harvest-dispatch`.
+  - C-2: Integrated `oc-watcher-audit --json` into `oc-health`.
+  - E-1: Deprecated legacy alias wrappers in `tools/RC-CONTRACT.md`.
+  - E-2: Consolidated `oc-roster-selftest` into `tools/tests/`.
+  - F-1: Added `tools/RC-CONTRACT.md` to `DEFAULT_CORPUS` in `tools/oc-lint-laws`.
+  - F-2: Parameterized state dir paths in `tools/lib/oc-log.sh`.
+  - I-1: 11-lens catalog + waivers in `oc-review-persist`.
+  - Suite selftest battery: PASS=193 FAIL=0.
+- **Ops Profile Brain Scrub (BS-1, BS-2, BS-3, BS-4):**
+  - Pruned repetitive post-mortems in `AGENTS.md`, sanitized bashisms in `TOOLS.md`, and aligned `BOOT.md` service/build commands with Box Law.
+
+
 ## v0.4.169 (2026-09-13) — Zero-Ack Dispatch Law
 
 Codifies binding owner directive eliminating conversational notification acks:

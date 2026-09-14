@@ -95,8 +95,8 @@ hand from a stale registry.
    CUT="$(git rev-list --reverse origin/main..<lane-branch> | head -1)^"
    git rebase --onto origin/main "$CUT" <lane-branch>
    ```
-   **Zero-pending case — the count test comes FIRST, and it is not optional.**
-   `rev-list --reverse … | head -1` on an EMPTY range yields nothing, so `CUT`
+   **Zero-pending case — the patch-id test (step 0) comes FIRST, and it is not optional (proposal n=4067, v0.4.170).**
+   Do not rely solely on `git rev-list --count`: a branch sitting on an older synthesized base will report a non-zero count even when all commits are already absorbed. Always test `git cherry origin/main <lane-branch> | grep -c '^+'`. If `+` count is 0, the branch is fully absorbed post-synthesis — skip rebase and fast-forward/move pointer directly. Furthermore, `rev-list --reverse … | head -1` on an EMPTY range yields nothing, so `CUT`
    becomes the bare `^`, and `git rev-parse "^"` is **rc 128** (`fatal: ambiguous
    argument '^'`). A count of 0 means the branch is already fully contained in
    the new base: there is nothing to replay, so **skip the rebase** (or move the
@@ -142,7 +142,9 @@ hand from a stale registry.
    `git rev-parse --git-path rebase-merge` (correct in both layouts) or the
    `git status` header.
 8. Fork CI (`pr-checks`) GREEN on the rebased tree — the only CODE-TESTS locus
-   (box law; no local cargo per build-lane directive) → force-push
+   (box law; no local cargo per build-lane directive). Verify trailer retention across
+   rebased fork commits (`git log origin/main..<rebased-head> --format='%B' | git interpret-trailers --parse`)
+   to prevent silent trailer loss (v0.4.170, Finding H-1 / row n=2102) → force-push
    `--force-with-lease` to `origin/main`, consolidated report with the
    decisions table.
 9. **Swap stamp — REBASE heads are UNSIGNED BY CONSTRUCTION.**
