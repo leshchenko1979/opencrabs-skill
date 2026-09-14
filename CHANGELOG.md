@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.173 (2026-09-14) — 24-Hour Feature Soak Harvest Law
+
+Codification of the 24-hour feature maturation policy before upstream harvesting:
+- **24-Hour Feature Soak & Fix Dispatch Law (owner order 2026-09-14):**
+  - **New Features (`feat/*`):** Codified mandatory **≥24-hour post-swap soak period** in the live running deployment in `fleet-directives.md §HARVEST LAW` and `editor-upstream-pr.md §Step 4` before upstream PR harvest eligibility. Ensures multi-session resilience, edge-case exposure, and regression soak time on the live binary.
+  - **Bug Fixes (`fix/*`):** Maintained immediate upstream harvesting upon passing the verified 4-leg smoke gate (zero maturation hold).
+
 ## v0.4.172 (2026-09-14) — JIT Skill-Change Notification Policy & Topic Domain Governance
 
 Codification of daemon-level JIT skill diff hints and persistent topic domain governance:
