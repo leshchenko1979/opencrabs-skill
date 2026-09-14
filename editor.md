@@ -392,8 +392,8 @@ ops (surgical fixes, merge landings) are editor-own.
 
 ## Phase 3 — Explore before writing
 
-- **Structure, callers, impact chains:** `grep_code` (codegraph) — who calls this,
-  what else breaks when it changes.
+- **Structure, callers, impact chains:** `memory_search scope="external"` (and built-in `grep` for text) — who calls this,
+  what else breaks when it changes. `grep_code` / codegraph is gone.
 - **Library APIs and version behavior:** `grep_docs` (Context7) — verify the method
   EXISTS and which trait provides it BEFORE using it. *(teloxide setters are
   per-payload traits: import every trait whose method you call)*

@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.171
+version: 0.4.172
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -112,7 +112,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-watcher-audit [--json] [--notify-orphans]` | detached watcher compliance and sleep-loop audit across active sessions |
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5); `wait <ref> [--budget N] [--poll S]` provides single-invocation blocking gate. Full rc/adoption/lock/fmt-soft-fail register: RC-CONTRACT.md |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic; READ-ONLY — PROPOSE/WAIT judgment stays human |
-| `./tools/oc-wt add\|remove\|--force` | editor worktree manager (index step UN-SKIPPABLE; `--force` journals before removal) |
+| `./tools/oc-wt add\|remove\|--force` | editor worktree manager (`--force` journals before removal) |
 | `./tools/oc-drift-check <uuid> [--ack]` (omit-arg canonical; legacy `<uuid> <claimed-ver>` accepted) | editor §Mid-cycle skill drift step 1-2, mechanical |
 | `./tools/oc-branch-sweep --repo <p> [--dry-run]` | branch-death proof + archive-then-delete for MERGED only |
 | `./tools/oc-pr-fault-scope <pr#> --run <id>` | failing-files ∩ PR-files = IN-SCOPE/BASE-FAULT |

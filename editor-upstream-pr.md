@@ -25,11 +25,9 @@ git -C ~/opencrabs log --format='%H%x09%s%x09%(trailers:key=Session-Id,valueonly
   adolfousier/main..origin/main
 
 # 2. harvest onto a branch off UPSTREAM main — NEW worktree, usual hygiene
-#    (E1, v0.4.80: `oc-wt add --create` IS the sanctioned creation path — the
-#     UN-SKIPPABLE index chain runs INSIDE it. The old "oc-wt never creates"
-#     raw `worktree add -b` ritual taught a false interface fact; raw add +
-#     standalone oc-index-worktree stays the fallback only when --create is
-#     unavailable.)
+#    (E1, v0.4.80: `oc-wt add --create` IS the sanctioned creation path.
+#     The old "oc-wt never creates" raw `worktree add -b` ritual taught a
+#     false interface fact; use `--create` unless that flag is unavailable.)
 tools/oc-wt add up-<feature> leshchenko1979/<feature> --create --from adolfousier/main --repo ~/opencrabs
 git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
 # 2-fresh. BASE FRESHNESS before the gate dispatch (Duty-4 P4, v0.4.80;
