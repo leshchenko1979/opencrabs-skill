@@ -67,6 +67,7 @@ printf '200-thing\t/root/oc-wt-200-thing\tfeat/200\t0\n'
 printf '201-fix\t/root/oc-wt-201-fix\tfix/201\t2\n'
 printf '202-orph\t/root/oc-wt-202-orph\tfeat/202\t0\n'
 printf '203-phantom\t/root/oc-wt-203-phantom\tfeat/203\t0\n'
+printf 'fix-200-prefixed\t/root/oc-wt-fix-200-prefixed\tfix/200\t0\n'
 SH
 chmod +x "$D/oc-wt"
 
@@ -92,7 +93,7 @@ chk "live-count"     "$(wc -l < "$D/live.out")" "3"
 chk "live-no-subagent" "$(grep -c "$L5" "$D/live.out" || true)" "0"
 chk "forum-count"    "$(wc -l < "$D/forum.out")" "2"
 chk "claims-open-count" "$(wc -l < "$D/claims.out")" "3"
-chk "work-count"     "$(wc -l < "$D/work.out")" "4"
+chk "work-count"     "$(wc -l < "$D/work.out")" "5"
 chk "classify-rows"  "$(wc -l < "$D/class.out")" "5"
 
 # independent re-derivation of the live set (set-equality, not eyeball)
@@ -162,7 +163,7 @@ chk("work-json-count-matches-tsv", len(wj["rows"]) == len(slurp("/work.out")))
 chk("work-json-attach-200", [r["attributed"] for r in wj["rows"] if r["task"] == "200-thing"] == [U1],
     repr([r["attributed"] for r in wj["rows"] if r["task"] == "200-thing"]))
 att = {l.split("\t")[0]: l.split("\t")[4] for l in open(D + "/work.out").read().splitlines() if l.strip()}
-chk("work-attach-200", att.get("200-thing") == U1, repr(att))
+chk("work-attach-200", att.get("200-thing") == U1 and att.get("fix-200-prefixed") == U1, repr(att))
 chk("work-attach-201", att.get("201-fix") == U2, repr(att))
 chk("work-attach-202", att.get("202-orph") == U3, repr(att))
 op = set(l.split("\t")[0] for l in open(D + "/claims.out").read().splitlines() if l.strip())

@@ -174,11 +174,13 @@ def get_worker_roster(ledger_data, mock_classify=None):
         c_class = c_info.get("class")  # ACTIVE, IDLE, UNKNOWN
         dirty_trees = c_info.get("dirty", 0)
         c_worktrees = c_info.get("worktrees", "-")
+        c_claims = c_info.get("claims", "-")
 
-        # Determine if lane is busy
-        # Busy if: has non-empty worktrees (other than "-"), or dirty trees > 0
+        # Determine if lane is busy:
+        # Busy if: has open claims in classify, has non-empty worktrees, or dirty trees > 0
+        has_open_claims = c_claims not in ("-", "", None)
         has_active_worktrees = c_worktrees not in ("-", "", None)
-        is_busy = has_active_worktrees or (dirty_trees > 0)
+        is_busy = has_open_claims or has_active_worktrees or (dirty_trees > 0)
 
         # Check topic and feature for domain affinity
         feature = (w.get("feature") or "") + " " + (w.get("topic") or "")
@@ -189,6 +191,8 @@ def get_worker_roster(ledger_data, mock_classify=None):
             "topic_id": w.get("topic_id"),
             "feature": feature,
             "class": c_class or "UNKNOWN",
+            "claims": c_claims,
+            "worktrees": c_worktrees,
             "is_busy": is_busy,
             "raw": w
         })
@@ -386,7 +390,10 @@ def cmd_auto(args):
             print(f"  Delivery FAILED for issue #{num}")
         else:
             dispatched_count += 1
-            print(f"  Delivery SUCCESS for issue #{num}")
+            if args.dry_run:
+                print(f"  [DRY-RUN] Planned dispatch for issue #{num} -> {best_lane['uuid']}")
+            else:
+                print(f"  Delivery SUCCESS for issue #{num}")
 
     print(f"\nSummary: {dispatched_count} issue(s) dispatched.")
     return 0
@@ -467,7 +474,10 @@ def cmd_targeted(args):
         print(f"ERROR: Delivery failed with code {rc}", file=sys.stderr)
         return rc
 
-    print(f"SUCCESS: Issue #{issue_num} dispatched to editor {target_lane['uuid']}.")
+    if args.dry_run:
+        print(f"[DRY-RUN] Planned dispatch for issue #{issue_num} -> editor {target_lane['uuid']}.")
+    else:
+        print(f"SUCCESS: Issue #{issue_num} dispatched to editor {target_lane['uuid']}.")
     return 0
 
 
@@ -576,6 +586,17 @@ def run_selftest():
     assert_true("Issue with 'no claim without fresh approval' is gated", gated_1)
     assert_true("Issue with label 'parked' is gated", gated_2)
     assert_true("Normal issue is not gated (negative control)", not ungated)
+
+    # Test 6b: Lane busy detection with open claims
+    lane_with_claims = {
+        "uuid": "lane-claims",
+        "feature": "generic",
+        "class": "ACTIVE",
+        "is_busy": True,
+        "claims": "38,218",
+        "worktrees": "-"
+    }
+    assert_true("Lane with open claims is treated as busy", select_best_lane(issue_tg, [lane_with_claims]) is None)
 
     # Test 7: Negative control for CLI argument parsing
     p = argparse.ArgumentParser()
