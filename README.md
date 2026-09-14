@@ -13,16 +13,19 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 |---|---|
 | `SKILL.md` | Main entry: roles, hard rules, tool register, ship path, glossary |
 | `editor.md` | EDITOR role procedure — Phases 0–7b (issue claim → worktree → edit → gate → commit → ship → upstream PR) |
+| `editor-upstream-pr.md` | Harvest & upstream PR filing procedure (Phase 7b/7c) |
 | `hq.md` | HQ role — worker roster, duty cadence, CI-wait & waiter discipline, review lenses |
 | `review-lenses.md` | Full Duty-6 lens briefs (A–J) — split from hq.md v0.4.78 |
 | `war-stories.md` | Incident histories behind the hard rules (disclosed from SKILL.md, v0.4.80) |
 | `fleet-directives.md` | Binding owner directives (sync policy, PR law, builds, gates, triage) — re-homed from ops AGENTS.md/MEMORY.md, 2026-09-02 |
 | `upstream-merge-runbook.md` | Procedure for the merge-on-arrival policy: gates, roles, conflict classes, migration-union rule |
 | `s2-swap-journal-spec.md` | Journal vocabulary spec for the oc-deploy swap leg |
-| `CHANGELOG.md` | Version history, **newest entry LAST** |
-| `tools/` | The `oc-*` tool fleet (29 executables) + `lib/` + `tests/` |
+| `CHANGELOG.md` | Version history, **newest entry FIRST** |
+| `tools/` | The `oc-*` tool fleet |
 | `tools/lib/` | Shared shell libs: `oc-log.sh` (journal + rc register + flood guard), `oc-embed.sh` (job-embed decoder) |
 | `tools/RC-CONTRACT.md` | SOLE per-tool rc register: fleet conventions + verdict codes (v0.4.78) |
+| `tools/HEALTH-CHECKS.md` | Systematic health checks registry for the tool fleet |
+| `tools/HEALTH-CLASSES.md` | Health classification taxonomy and remediations |
 | `tools/tests/run.sh` | Battery: full selftest suite + coverage sections. Receipt → `tools/tests/battery-last.json` |
 | `tools/archive/compiler.md` | ARCHIVED runbook for the retired COMPILER role (re-enable = load this file) |
 

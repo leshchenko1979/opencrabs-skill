@@ -15,7 +15,7 @@ escalations from that lane land here. Skill-file authorship stays SOLELY
 with HQ (single-writer law unchanged; v0.4.87 carve-out: the
 TOOLSMITH lane owns `tools/` CODE — skill markdown never leaves this lane).
 
-Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `fleet-directives.md`,
+Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `editor-upstream-pr.md`, `fleet-directives.md`,
 `upstream-merge-runbook.md`, `war-stories.md`, `s2-swap-journal-spec.md`;
 `tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
 turn field evidence into rules. The HQ NEVER dispatches builds, NEVER swaps
@@ -119,11 +119,6 @@ Bump propagation mechanics (B-F4 v0.4.96 — moved out of the table cell):
 > Delivery cadence per fleet-directives (2026-09-04 law): quiet DEFAULT,
 > turn-end for boundary-bound signals, `interrupt=true` failsafe ONLY for
 > urgent wakes a lane is blocked on (SKILL.md §DELIVERY MODES).
-
-Inbox discipline for any (re-enabled) build lane: ORDERs / red-run handoffs /
-owner directives only; ACK bookkeeping stays ledger-internal. *(Historical:
-the compiler role was RETIRED 2026-08-28 — builds fire via `oc-deploy ship`;
-this paragraph is kept only as the runbook for any future re-enabled lane.)*
 
 ## Duty 4 — Poll workers for skill input (Direct Persistence & Ledger Intake)
 

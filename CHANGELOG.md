@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.175 (2026-09-14) — Duty 4+6 Review Cycle `20260914-c11` & Census Alignment
+- **Census & Single-Writer Expansion (Lens A, G):**
+  - Added `editor-upstream-pr.md` to the official single-writer census in `SKILL.md §Hard rules` and `hq.md`.
+  - Added `tools/HEALTH-CHECKS.md`, `tools/HEALTH-CLASSES.md`, and `editor-upstream-pr.md` to `README.md` documentation map.
+  - Clarified CHANGELOG ordering convention in `README.md` (newest entry FIRST).
+  - Cleaned tool count references in `editor.md` and pruned dead compiler inbox reference in `hq.md`.
+- **Review Cycle Persisted (Lenses A–J, Brain Scrub):**
+  - Evaluated 11/11 lenses, persisted reports under `reviews/20260914-c11/reports/` with cryptographic receipts in `skill-review-index.log`. Master verdict at `reviews/20260914-c11/verdict.md`.
+  - Battery verified: PASS=194, FAIL=0.
+
 ## v0.4.174 (2026-09-14) — Dependent Upstream PRs Law
 
 Codification of maintainer consensus on dependent upstream PRs:

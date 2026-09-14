@@ -419,10 +419,10 @@ def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_pa
         if not classify_ok:
             is_busy = True
         else:
-            # Busy if: has open claims in classify, has non-empty worktrees, or dirty trees > 0
+            # Busy if: has open claims in classify, or dirty trees > 0
+            # Note: Stale/inactive worktrees on disk (without open claims or dirty files) do NOT make a lane busy.
             has_open_claims = c_claims not in ("-", "", None)
-            has_active_worktrees = c_worktrees not in ("-", "", None)
-            is_busy = has_open_claims or has_active_worktrees or (dirty_trees > 0)
+            is_busy = has_open_claims or (dirty_trees > 0)
 
         # Check topic and feature for domain affinity
         feature = (w.get("feature") or "") + " " + (w.get("topic") or "")
