@@ -1,3 +1,6 @@
 oc-deploy-shadow.log
 *.lock
 run/
+__pycache__/
+*.pyc
+*.pyo
