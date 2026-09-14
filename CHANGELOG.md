@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.174 (2026-09-14) — Dependent Upstream PRs Law
+
+Codification of maintainer consensus on dependent upstream PRs:
+- **Dependent Upstream PRs Law (Maintainer Consensus, 2026-09-14):**
+  - Codified in `fleet-directives.md §Dependent Upstream PRs Law`: When PR B depends on PR A (which is not yet merged upstream), filing PR B while PR A is open/pending is explicitly permitted, provided the description explicitly states `Depends on #<PR_A> (do not merge before #<PR_A>)`.
+  - Upstream maintainer processes dependent PRs in commit/chronological sequence (PR A merged before PR B).
+  - Alternatively, automated harvest pipelines may hold PR B until PR A merges via harvest watch / cron triggers.
+  - Updated `editor-upstream-pr.md §Phase 7b Blocker Matrix`: Replaced rigid hold on unharvested prerequisites with explicit dependency notice allowance and deferred automated publish option.
+
 ## v0.4.173 (2026-09-14) — 24-Hour Feature Soak Harvest Law
 
 Codification of the 24-hour feature maturation policy before upstream harvesting:
