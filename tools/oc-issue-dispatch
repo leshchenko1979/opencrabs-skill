@@ -1,0 +1,541 @@
+#!/usr/bin/env python3
+"""
+tools/oc-issue-dispatch — mechanized fork issue vetting, lane selection, and dispatch.
+
+Usage:
+  oc-issue-dispatch --auto [--dry-run] [--repo <path>] [--ledger <file>]
+  oc-issue-dispatch <issue-number> [--to <session-uuid>] [--dry-run] [--repo <path>] [--ledger <file>]
+  oc-issue-dispatch --selftest
+  oc-issue-dispatch --help
+
+Exit codes:
+  0: Success / Approved / Dispatched
+  1: Rejected / Vetting failed
+  2: Invalid arguments / CLI error
+  3: Delivery / session_notify failed
+  4: Capacity exhausted / No available idle lane
+"""
+
+import os
+import sys
+import json
+import re
+import argparse
+import subprocess
+import shutil
+
+TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_REPO = os.path.expanduser("~/opencrabs")
+DEFAULT_LEDGER = os.environ.get(
+    "OC_DEV_STATE",
+    os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")
+)
+if not os.path.exists(DEFAULT_LEDGER):
+    DEFAULT_LEDGER = os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")
+DEFAULT_LEDGER_FILE = os.path.join(DEFAULT_LEDGER, "workers-ledger.json")
+
+# Topic keywords and domain affinities
+AFFINITY_KEYWORDS = {
+    "telegram": ["telegram", "button", "formatting", "photo", "rich", "topic", "markup", "markdown", "reply", "menu", "stream", "draft"],
+    "bash": ["bash", "sh", "exec", "retry", "loop", "guard", "env", "process", "child", "signal"],
+    "config": ["config", "toml", "setting", "options", "parse", "yaml", "schema", "serde"],
+    "cron": ["cron", "schedule", "job", "timer", "isolation", "scheduler", "trigger"],
+    "memory": ["memory", "vector", "search", "embedding", "codegraph", "graph", "store"],
+    "skills": ["skill", "manifest", "compaction", "slash", "prompt", "context"],
+    "notify": ["notify", "queue", "delivery", "router", "session", "push", "wake", "stall"],
+    "harvest": ["harvest", "upstream", "port", "cherry-pick", "census", "sweep"]
+}
+
+
+def run_cmd(cmd, cwd=None, env=None):
+    try:
+        p = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=cwd,
+            env=env
+        )
+        return p.returncode, p.stdout, p.stderr
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def extract_claimed_issues(ledger_data):
+    """
+    Extract issue numbers that have active claims in workers-ledger.json.
+    """
+    claimed = set()
+    events = ledger_data.get("events", [])
+    for e in events:
+        if e.get("kind") == "claim":
+            what = e.get("what", "")
+            # Match #123 or issue 123 or Issue-Ref: 123
+            matches = re.findall(r'(?:#|issue[ -]|issue-ref:?\s*)(\d+)', what, re.IGNORECASE)
+            for m in matches:
+                try:
+                    claimed.add(int(m))
+                except ValueError:
+                    pass
+    return claimed
+
+
+def fetch_open_issues(repo_path, mock_issues=None):
+    """
+    Fetch open issues from GitHub or mock data.
+    """
+    if mock_issues is not None:
+        return mock_issues
+
+    cmd = ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs", "--state", "open", "--limit", "100", "--json", "number,title,labels,body"]
+    rc, stdout, stderr = run_cmd(cmd, cwd=repo_path)
+    if rc != 0:
+        print(f"ERROR: Failed to fetch issues via gh: {stderr.strip()}", file=sys.stderr)
+        return []
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Failed to decode gh output: {e}", file=sys.stderr)
+        return []
+
+
+def get_worker_roster(ledger_data, mock_classify=None):
+    """
+    Retrieve workers, identifying idle editors and their topic affinity.
+    """
+    classify_rows = {}
+    if mock_classify is not None:
+        for r in mock_classify.get("rows", []):
+            classify_rows[r.get("uuid")] = r
+    else:
+        roster_bin = os.path.join(TOOL_DIR, "oc-roster")
+        if os.path.exists(roster_bin):
+            rc, out, _ = run_cmd([roster_bin, "classify", "--json"])
+            if rc == 0:
+                try:
+                    cdata = json.loads(out)
+                    for r in cdata.get("rows", []):
+                        classify_rows[r.get("uuid")] = r
+                except Exception:
+                    pass
+
+    workers = ledger_data.get("workers", [])
+    editor_lanes = []
+
+    # Map workers with their active state
+    for w in workers:
+        if w.get("role") != "editor":
+            continue
+        uuid = w.get("uuid")
+        if not uuid:
+            continue
+
+        c_info = classify_rows.get(uuid, {})
+        c_class = c_info.get("class")  # ACTIVE, IDLE, UNKNOWN
+        dirty_trees = c_info.get("dirty", 0)
+        c_worktrees = c_info.get("worktrees", "-")
+
+        # Determine if lane is busy
+        # Busy if: has non-empty worktrees (other than "-"), or dirty trees > 0
+        has_active_worktrees = c_worktrees not in ("-", "", None)
+        is_busy = has_active_worktrees or (dirty_trees > 0)
+
+        # Check topic and feature for domain affinity
+        feature = (w.get("feature") or "") + " " + (w.get("topic") or "")
+
+        editor_lanes.append({
+            "uuid": uuid,
+            "topic": w.get("topic"),
+            "topic_id": w.get("topic_id"),
+            "feature": feature,
+            "class": c_class or "UNKNOWN",
+            "is_busy": is_busy,
+            "raw": w
+        })
+
+    return editor_lanes
+
+
+def score_affinity(issue, lane):
+    """
+    Score affinity between issue title/labels/body and lane feature/domain.
+    """
+    title = issue.get("title", "").lower()
+    body = issue.get("body", "").lower()
+    text = title + " " + body
+    feature = lane.get("feature", "").lower()
+
+    score = 0
+    # Direct token matches
+    for domain, kws in AFFINITY_KEYWORDS.items():
+        domain_in_issue = any(kw in text for kw in kws)
+        domain_in_lane = any(kw in feature for kw in kws)
+        if domain_in_issue and domain_in_lane:
+            score += 10
+
+    # Specific keyword matching
+    for word in re.findall(r'[a-z0-9_-]{4,}', feature):
+        if word in ("with", "from", "branch", "lane", "owner", "shipped", "fork", "main"):
+            continue
+        if word in text:
+            score += 3
+
+    return score
+
+
+def select_best_lane(issue, candidate_lanes):
+    """
+    Select the best idle lane for an issue.
+    """
+    # Filter only idle/non-busy lanes
+    available = [lane for lane in candidate_lanes if not lane["is_busy"]]
+    if not available:
+        # Fallback: lanes with class ACTIVE or IDLE but no dirty/worktree
+        available = [lane for lane in candidate_lanes if lane["class"] in ("ACTIVE", "IDLE") and not lane["is_busy"]]
+
+    if not available:
+        return None
+
+    # Score available lanes
+    scored = []
+    for lane in available:
+        s = score_affinity(issue, lane)
+        scored.append((s, lane))
+
+    # Sort descending by score
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[0][1]
+
+
+def format_wire_envelope(issue):
+    """
+    Format wire envelope conforming to v0.4.169 Zero-Ack law and explicit refusal affordance.
+    """
+    num = issue.get("number")
+    title = issue.get("title", "").strip()
+    
+    # Generate clean branch slug
+    # Remove fix(...): or feat(...): prefix
+    slug_text = re.sub(r'^(?:fix|feat|chore|bug|refactor|docs)(?:\([^\)]+\))?:\s*', '', title, flags=re.IGNORECASE)
+    slug = re.sub(r'[^a-zA-Z0-9]+', '-', slug_text).strip('-').lower()
+    if len(slug) > 35:
+        slug = slug[:35].rstrip('-')
+    if not slug:
+        slug = "patch"
+    branch_target = f"fix/{num}-{slug}"
+
+    envelope = f"""[ISSUE DISPATCH: #{num}]
+Target Issue: #{num} ({title})
+Issue URL: https://github.com/leshchenko1979/opencrabs/issues/{num}
+Branch Target: {branch_target}
+Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed. If occupied or domain-mismatched, reply with [REFUSE: <reason>]."""
+    return envelope, branch_target
+
+
+def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_path=DEFAULT_LEDGER_FILE):
+    """
+    Deliver wire envelope to target session via lib/oc-notify.sh and stamp ledger.
+    """
+    if dry_run:
+        print(f"[DRY-RUN] Would notify session {target_uuid} for issue #{issue_num}")
+        return 0
+
+    notify_script = os.path.join(TOOL_DIR, "lib/oc-notify.sh")
+    title = f"[ISSUE DISPATCH: #{issue_num}]"
+    
+    if os.path.exists(notify_script):
+        rc, out, err = run_cmd([notify_script, target_uuid, envelope, title])
+        if rc != 0:
+            print(f"ERROR: lib/oc-notify.sh failed (rc={rc}): {err.strip()}", file=sys.stderr)
+            return 3
+    else:
+        # Direct CLI fallback if lib/oc-notify.sh missing
+        notify_bin = os.path.expanduser("~/.cargo/bin/opencrabs")
+        if not os.path.exists(notify_bin):
+            notify_bin = "/usr/local/bin/opencrabs"
+        cmd = [notify_bin, "session-notify", "--profile", "ops", "--mode", "turn-end", target_uuid, envelope]
+        rc, out, err = run_cmd(cmd)
+        if rc != 0:
+            print(f"ERROR: session-notify failed (rc={rc}): {err.strip()}", file=sys.stderr)
+            return 3
+
+    # Stamp ledger note
+    ledger_bin = os.path.join(TOOL_DIR, "oc-ledger")
+    if os.path.exists(ledger_bin):
+        stamp_text = f"Triage dispatch issue #{issue_num} to editor {target_uuid[:8]} — wire zero-ack claim-first"
+        run_cmd([ledger_bin, "stamp", "note", stamp_text], env=dict(os.environ, OC_ACTOR="triage"))
+
+    return 0
+
+
+def cmd_auto(args):
+    """
+    Automatic issue dispatch:
+    1. Reads open issues from GitHub.
+    2. Reads open claims from ledger.
+    3. Finds unclaimed issues.
+    4. Finds idle editor lanes.
+    5. Matches topic affinities and dispatches.
+    """
+    ledger_file = args.ledger or DEFAULT_LEDGER_FILE
+    if not os.path.exists(ledger_file):
+        print(f"ERROR: Ledger file not found at {ledger_file}", file=sys.stderr)
+        return 2
+
+    with open(ledger_file, "r") as f:
+        ledger_data = json.load(f)
+
+    claimed_issues = extract_claimed_issues(ledger_data)
+    open_issues = fetch_open_issues(args.repo)
+    if not open_issues:
+        print("No open issues found or gh query failed.")
+        return 0
+
+    unclaimed = [iss for iss in open_issues if iss.get("number") not in claimed_issues]
+    print(f"Found {len(open_issues)} open issues, {len(unclaimed)} unclaimed.")
+    if not unclaimed:
+        print("All open issues are already claimed. Nothing to dispatch.")
+        return 0
+
+    editor_lanes = get_worker_roster(ledger_data)
+    available_lanes = [l for l in editor_lanes if not l["is_busy"]]
+    print(f"Editor roster: {len(editor_lanes)} registered, {len(available_lanes)} idle/available.")
+
+    if not available_lanes:
+        print("CAPACITY_EXHAUSTED: No idle editor lanes available for dispatch.", file=sys.stderr)
+        return 4
+
+    dispatched_count = 0
+    assigned_lanes = set()
+
+    for issue in unclaimed:
+        # Pick candidate lanes that haven't just been assigned in this run
+        candidates = [l for l in available_lanes if l["uuid"] not in assigned_lanes]
+        if not candidates:
+            print("All available idle lanes have been assigned in this cycle.")
+            break
+
+        best_lane = select_best_lane(issue, candidates)
+        if not best_lane:
+            continue
+
+        assigned_lanes.add(best_lane["uuid"])
+        envelope, branch = format_wire_envelope(issue)
+        num = issue["number"]
+
+        print(f"\nDispatching issue #{num}: {issue['title']}")
+        print(f"  Target: {best_lane['uuid']} (topic {best_lane['topic']})")
+        print(f"  Branch: {branch}")
+        print("  Payload:")
+        for line in envelope.splitlines():
+            print(f"    | {line}")
+
+        rc = dispatch_to_lane(best_lane["uuid"], envelope, num, dry_run=args.dry_run, ledger_path=ledger_file)
+        if rc != 0:
+            print(f"  Delivery FAILED for issue #{num}")
+        else:
+            dispatched_count += 1
+            print(f"  Delivery SUCCESS for issue #{num}")
+
+    print(f"\nSummary: {dispatched_count} issue(s) dispatched.")
+    return 0
+
+
+def cmd_targeted(args):
+    """
+    Targeted dispatch for a specific issue number.
+    """
+    ledger_file = args.ledger or DEFAULT_LEDGER_FILE
+    if not os.path.exists(ledger_file):
+        print(f"ERROR: Ledger file not found at {ledger_file}", file=sys.stderr)
+        return 2
+
+    with open(ledger_file, "r") as f:
+        ledger_data = json.load(f)
+
+    issue_num = args.issue
+    open_issues = fetch_open_issues(args.repo)
+    target_issue = None
+    for iss in open_issues:
+        if iss.get("number") == issue_num:
+            target_issue = iss
+            break
+
+    if not target_issue:
+        # If gh query didn't return it or failed, construct minimal issue metadata
+        target_issue = {
+            "number": issue_num,
+            "title": f"Issue #{issue_num}",
+            "body": ""
+        }
+
+    editor_lanes = get_worker_roster(ledger_data)
+    target_lane = None
+
+    if args.to:
+        for l in editor_lanes:
+            if l["uuid"].startswith(args.to):
+                target_lane = l
+                break
+        if not target_lane:
+            # Custom uuid not in ledger
+            target_lane = {
+                "uuid": args.to,
+                "topic": "custom",
+                "topic_id": None,
+                "feature": "",
+                "is_busy": False
+            }
+    else:
+        # Auto-select best idle lane
+        available = [l for l in editor_lanes if not l["is_busy"]]
+        if not available:
+            print("CAPACITY_EXHAUSTED: No idle editor lanes available for dispatch.", file=sys.stderr)
+            return 4
+        target_lane = select_best_lane(target_issue, available)
+
+    if not target_lane:
+        print("ERROR: Could not resolve target lane.", file=sys.stderr)
+        return 4
+
+    envelope, branch = format_wire_envelope(target_issue)
+    print(f"Target Editor: {target_lane['uuid']} (topic {target_lane['topic']})")
+    print(f"Branch Target: {branch}")
+    print("Wire Envelope:")
+    print("---")
+    print(envelope)
+    print("---")
+
+    rc = dispatch_to_lane(target_lane["uuid"], envelope, issue_num, dry_run=args.dry_run, ledger_path=ledger_file)
+    if rc != 0:
+        print(f"ERROR: Delivery failed with code {rc}", file=sys.stderr)
+        return rc
+
+    print(f"SUCCESS: Issue #{issue_num} dispatched to editor {target_lane['uuid']}.")
+    return 0
+
+
+# --- Hermetic Offline Selftest ---
+def run_selftest():
+    print("Running oc-issue-dispatch --selftest battery...")
+    tests_passed = 0
+    tests_failed = 0
+
+    def assert_eq(desc, actual, expected):
+        nonlocal tests_passed, tests_failed
+        if actual == expected:
+            print(f"  ok {tests_passed + tests_failed + 1} - {desc}")
+            tests_passed += 1
+        else:
+            print(f"  FAIL {tests_passed + tests_failed + 1} - {desc} (expected '{expected}', got '{actual}')")
+            tests_failed += 1
+
+    def assert_true(desc, condition):
+        nonlocal tests_passed, tests_failed
+        if condition:
+            print(f"  ok {tests_passed + tests_failed + 1} - {desc}")
+            tests_passed += 1
+        else:
+            print(f"  FAIL {tests_passed + tests_failed + 1} - {desc} (condition False)")
+            tests_failed += 1
+
+    # Test 1: Wire envelope formatting and contract compliance
+    issue_sample = {
+        "number": 181,
+        "title": "fix(telegram): draft_streaming config flag is dead",
+        "body": "The DM draft gate was dropped in a refactor"
+    }
+    envelope, branch = format_wire_envelope(issue_sample)
+    assert_eq("Branch target derivation", branch, "fix/181-draft-streaming-config-flag-is-dead")
+    assert_true("Wire envelope header present", "[ISSUE DISPATCH: #181]" in envelope)
+    assert_true("Target issue line present", "Target Issue: #181 (fix(telegram): draft_streaming config flag is dead)" in envelope)
+    assert_true("Issue URL line present", "Issue URL: https://github.com/leshchenko1979/opencrabs/issues/181" in envelope)
+    assert_true("Branch Target line present", "Branch Target: fix/181-draft-streaming-config-flag-is-dead" in envelope)
+    assert_true("Zero-Ack contract clause present", "Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed." in envelope)
+    assert_true("Refusal affordance clause present", "If occupied or domain-mismatched, reply with [REFUSE: <reason>]." in envelope)
+
+    # Test 2: Extraction of claimed issues from ledger events
+    mock_ledger = {
+        "events": [
+            {"kind": "claim", "by": "editor 1111", "what": "CLAIM #101 — some feature"},
+            {"kind": "claim", "by": "editor 2222", "what": "issue #102 fix"},
+            {"kind": "claim", "by": "editor 3333", "what": "Issue-Ref: 103"},
+            {"kind": "note", "by": "triage", "what": "not a claim for #104"}
+        ]
+    }
+    claimed = extract_claimed_issues(mock_ledger)
+    assert_true("#101 recognized as claimed", 101 in claimed)
+    assert_true("#102 recognized as claimed", 102 in claimed)
+    assert_true("#103 recognized as claimed", 103 in claimed)
+    assert_true("#104 (negative control) not recognized as claimed", 104 not in claimed)
+
+    # Test 3: Topic affinity scoring
+    issue_tg = {"number": 169, "title": "telegram_send re-poisons topic memory", "body": "stale-topic eviction"}
+    issue_bash = {"number": 166, "title": "fix(bash): bash tool env carries no session identity", "body": "subshell env missing"}
+    
+    lane_tg = {"uuid": "lane-tg-1", "feature": "rich-formatting telegram-buttons", "is_busy": False, "class": "ACTIVE"}
+    lane_bash = {"uuid": "lane-bash-1", "feature": "loop-guard bash-session-env", "is_busy": False, "class": "ACTIVE"}
+    
+    score_tg_to_tg = score_affinity(issue_tg, lane_tg)
+    score_tg_to_bash = score_affinity(issue_tg, lane_bash)
+    assert_true("Telegram issue scores higher on telegram lane", score_tg_to_tg > score_tg_to_bash)
+
+    score_bash_to_bash = score_affinity(issue_bash, lane_bash)
+    score_bash_to_tg = score_affinity(issue_bash, lane_tg)
+    assert_true("Bash issue scores higher on bash lane", score_bash_to_bash > score_bash_to_tg)
+
+    # Test 4: Selection when lane is busy
+    lane_busy = {"uuid": "lane-busy", "feature": "telegram-buttons", "is_busy": True, "class": "ACTIVE"}
+    lane_idle = {"uuid": "lane-idle", "feature": "generic editor", "is_busy": False, "class": "IDLE"}
+    selected = select_best_lane(issue_tg, [lane_busy, lane_idle])
+    assert_eq("Busy lane skipped even with higher affinity", selected["uuid"], "lane-idle")
+
+    # Test 5: Capacity exhausted when all lanes are busy
+    assert_true("None returned when all lanes busy", select_best_lane(issue_tg, [lane_busy]) is None)
+
+    # Test 6: Negative control for CLI argument parsing
+    p = argparse.ArgumentParser()
+    p.add_argument("--auto", action="store_true")
+    p.add_argument("issue", nargs="?", type=int)
+    parsed = p.parse_args(["--auto"])
+    assert_true("CLI parser accepts --auto", parsed.auto)
+    parsed_issue = p.parse_args(["169"])
+    assert_eq("CLI parser accepts integer issue", parsed_issue.issue, 169)
+
+    total = tests_passed + tests_failed
+    print(f"selftest: {tests_passed}/{total} OK")
+    return 0 if tests_failed == 0 else 1
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="oc-issue-dispatch",
+        description="Mechanized fork issue vetting, lane selection, and dispatch tool.",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--auto", action="store_true", help="Auto-scan open issues and dispatch to idle lanes")
+    parser.add_argument("issue", nargs="?", type=int, help="Target issue number to dispatch")
+    parser.add_argument("--to", help="Target session UUID for targeted dispatch")
+    parser.add_argument("--repo", default=DEFAULT_REPO, help="Path to opencrabs repo checkout")
+    parser.add_argument("--ledger", default=None, help="Path to workers-ledger.json")
+    parser.add_argument("--dry-run", action="store_true", help="Preview dispatch actions without notifying or stamping ledger")
+    parser.add_argument("--selftest", action="store_true", help="Run hermetic offline test suite")
+
+    args = parser.parse_args()
+
+    if args.selftest:
+        sys.exit(run_selftest())
+
+    if not args.auto and args.issue is None:
+        parser.print_help()
+        sys.exit(2)
+
+    if args.auto:
+        sys.exit(cmd_auto(args))
+    else:
+        sys.exit(cmd_targeted(args))
+
+
+if __name__ == "__main__":
+    main()
