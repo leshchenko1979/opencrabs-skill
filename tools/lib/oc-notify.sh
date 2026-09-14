@@ -27,7 +27,8 @@ oc_notify_resolve_bin() { # -> echoes binary path, rc 1 if unresolvable
 oc_notify_session() { # $1=bin $2=profile $3=sender $4=uuid $5=title $6=text
   # -> 0 delivered / rc passthrough of the session-notify contract
   local bin="$1" profile="$2" sender="$3" uuid="$4" title="$5" text="$6"
-  local nrc=0 rrc=0
+  local nrc=0 rrc=0 t_start
+  t_start="$(date +%s)"
   "$bin" session notify --profile "$profile" --sender "$sender" \
     --title "$title" --text "$text" "$uuid" >/dev/null 2>&1 || nrc=$?
   if [ "$nrc" = 3 ]; then   # refused_in_flight: mid-turn target — MUST be woken
@@ -80,6 +81,42 @@ except Exception:
 " "$bin" "$profile" "$sender" "$uuid" "$title" "$text" 2>/dev/null || a2a_rc=$?
     if [ "$a2a_rc" -eq 0 ] || [ "$a2a_rc" -eq 2 ] || [ "$a2a_rc" -eq 3 ]; then
       nrc=$a2a_rc
+    fi
+  fi
+
+  # Final verification: if CLI or caller timed out or reported failure, check session-notify.journal
+  # to see if the notify actually landed (prevents false negative rc=124 on slow CLI returns).
+  if [ "$nrc" -ne 0 ] && [ "$nrc" -ne 2 ] && [ "$nrc" -ne 3 ]; then
+    local j_rc=1
+    python3 -c "
+import sys, os, datetime
+try:
+    target = sys.argv[1]
+    t0 = float(sys.argv[2])
+    profile = sys.argv[3]
+    jp = os.path.expanduser('~/.opencrabs/profiles/' + profile + '/logs/session-notify.journal')
+    if not os.path.exists(jp):
+        jp = os.path.expanduser('~/.opencrabs/logs/session-notify.journal')
+    if os.path.exists(jp):
+        with open(jp, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+        for line in reversed(lines[-50:]):
+            parts = line.strip().split('\t')
+            if len(parts) >= 5:
+                ts_str, caller, tgt, outcome, exit_str = parts[:5]
+                t_val = tgt.split('=', 1)[1] if '=' in tgt else tgt
+                o_val = outcome.split('=', 1)[1] if '=' in outcome else outcome
+                e_val = exit_str.split('=', 1)[1] if '=' in exit_str else exit_str
+                if t_val == target and o_val in ('delivered', 'injected', 'redirected', 'queued') and e_val == '0':
+                    dt = datetime.datetime.fromisoformat(ts_str)
+                    if dt.timestamp() >= t0 - 5:
+                        sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+" "$uuid" "$t_start" "$profile" 2>/dev/null || j_rc=$?
+    if [ "$j_rc" -eq 0 ]; then
+      nrc=0
     fi
   fi
   return "$nrc"
