@@ -26,6 +26,9 @@ import shutil
 import sqlite3
 import time
 import datetime
+import tempfile
+import fcntl
+import signal
 
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_REPO = os.path.expanduser("~/opencrabs")
@@ -36,6 +39,161 @@ DEFAULT_LEDGER = os.environ.get(
 if not os.path.exists(DEFAULT_LEDGER):
     DEFAULT_LEDGER = os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")
 DEFAULT_LEDGER_FILE = os.path.join(DEFAULT_LEDGER, "workers-ledger.json")
+
+# Unified tools log (D0, 2026-08-28; parity with lib/oc-log.sh)
+_LOG_ENABLED = False
+_LOG_TOOL = "oc-issue-dispatch"
+_LOG_ARGS = ""
+_LOG_EXTRA = {}
+_LOG_START = 0.0
+_LOG_FINISHED = False
+
+
+def _is_selftest():
+    args_str = f" {' '.join(sys.argv[1:])} "
+    if " --selftest " in args_str:
+        return True
+    if len(sys.argv) > 1 and sys.argv[1] == "selftest":
+        return True
+    return False
+
+
+def oc_log_init(tool_name="oc-issue-dispatch"):
+    global _LOG_ENABLED, _LOG_TOOL, _LOG_ARGS, _LOG_EXTRA, _LOG_START, _LOG_FINISHED
+    _LOG_TOOL = tool_name
+    _LOG_ARGS = " ".join(sys.argv[1:])
+    _LOG_EXTRA = {}
+    _LOG_FINISHED = False
+    if " --no-log " in f" {_LOG_ARGS} ":
+        os.environ["OC_TOOLS_NOLOG"] = "1"
+    if _is_selftest():
+        os.environ["OC_TOOLS_NOLOG"] = "1"
+    if os.environ.get("OC_TOOLS_NOLOG", "0") == "1":
+        _LOG_ENABLED = False
+        return
+
+    _LOG_ENABLED = True
+    _LOG_START = time.time()
+    _oc_log_flood_guard()
+
+    def _sig_handler(signum, frame):
+        sig_map = {signal.SIGTERM: ("TERM", 143), signal.SIGINT: ("INT", 130), signal.SIGHUP: ("HUP", 129)}
+        sig_name, exit_code = sig_map.get(signum, (f"SIG{signum}", 128 + signum))
+        oc_log_extra("signal", sig_name)
+        oc_log_finish(exit_code)
+        sys.exit(exit_code)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, _sig_handler)
+        except Exception:
+            pass
+
+
+def _oc_log_flood_guard():
+    if os.environ.get("OC_NO_FLOODGUARD", "0") == "1" or _is_selftest():
+        return
+    logf = os.environ.get(
+        "OC_TOOLS_LOG",
+        os.path.join(
+            os.environ.get("OC_DEV_STATE", os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")),
+            "tools.log"
+        )
+    )
+    if not os.path.isfile(logf):
+        return
+    cutoff = time.time() - 120
+    failed_count = 0
+    args_prefix = _LOG_ARGS[:500]
+    try:
+        with open(logf, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+        for line in lines[-300:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                if (
+                    row.get("tool") == _LOG_TOOL
+                    and row.get("args", "")[:500] == args_prefix
+                    and int(row.get("exit", 0)) != 0
+                ):
+                    ts_str = row.get("ts", "")
+                    if ts_str.endswith("Z"):
+                        ts_val = datetime.datetime.fromisoformat(ts_str[:-1] + "+00:00").timestamp()
+                    else:
+                        ts_val = datetime.datetime.fromisoformat(ts_str).timestamp()
+                    if ts_val >= cutoff:
+                        failed_count += 1
+            except Exception:
+                continue
+        if failed_count >= 4:
+            sys.stderr.write(
+                f"FLOOD-GUARD (rc 8): {_LOG_TOOL} with identical args already failed {failed_count}x in the last 120s — refusing to run again.\n"
+                f"  Fix the underlying failure, change the args, or set OC_NO_FLOODGUARD=1 to bypass (and say why in the lane journal).\n"
+            )
+            sys.exit(8)
+    except SystemExit:
+        raise
+    except Exception:
+        pass
+
+
+def oc_log_extra(key, value):
+    global _LOG_EXTRA
+    if not _LOG_ENABLED:
+        return
+    _LOG_EXTRA[str(key)] = str(value)
+
+
+def oc_log_finish(exit_code=0):
+    global _LOG_FINISHED
+    if not _LOG_ENABLED or _LOG_FINISHED:
+        return
+    _LOG_FINISHED = True
+    end_time = time.time()
+    secs = round(end_time - (_LOG_START if _LOG_START > 0 else end_time), 1)
+    actor = os.environ.get("OC_ACTOR", "unknown")
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    log_entry = {
+        "ts": ts,
+        "tool": _LOG_TOOL,
+        "actor": actor,
+        "args": _LOG_ARGS[:500],
+        "exit": int(exit_code) if isinstance(exit_code, int) else 1,
+        "secs": secs,
+        "extra": _LOG_EXTRA
+    }
+    line = json.dumps(log_entry, separators=(",", ":"))
+
+    logf = os.environ.get(
+        "OC_TOOLS_LOG",
+        os.path.join(
+            os.environ.get("OC_DEV_STATE", os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")),
+            "tools.log"
+        )
+    )
+    try:
+        os.makedirs(os.path.dirname(logf), exist_ok=True)
+        lock_file = f"{logf}.lock"
+        try:
+            with open(lock_file, "a") as lf:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                try:
+                    with open(logf, "a", encoding="utf-8") as f:
+                        f.write(f"{line}\n")
+                        f.flush()
+                finally:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            with open(logf, "a", encoding="utf-8") as f:
+                f.write(f"{line}\n")
+                f.flush()
+    except Exception:
+        pass
+
 
 # Topic keywords and domain affinities
 AFFINITY_KEYWORDS = {
@@ -745,12 +903,59 @@ def run_selftest():
     parsed_force = p.parse_args(["78", "--force"])
     assert_true("CLI parser accepts --force", parsed_force.force)
 
+    # Test 8: Unified log emission and suppression
+    tmp_log_dir = tempfile.mkdtemp()
+    tmp_log_file = os.path.join(tmp_log_dir, "test-tools.log")
+    try:
+        old_log = os.environ.get("OC_TOOLS_LOG")
+        old_nolog = os.environ.get("OC_TOOLS_NOLOG")
+        os.environ["OC_TOOLS_LOG"] = tmp_log_file
+        os.environ["OC_TOOLS_NOLOG"] = "0"
+        # Test simulated run logging
+        global _LOG_ENABLED, _LOG_TOOL, _LOG_ARGS, _LOG_EXTRA, _LOG_START, _LOG_FINISHED
+        _LOG_ENABLED = True
+        _LOG_TOOL = "oc-issue-dispatch"
+        _LOG_ARGS = "--auto --dry-run"
+        _LOG_EXTRA = {"test_key": "test_val"}
+        _LOG_START = time.time() - 1.2
+        _LOG_FINISHED = False
+        oc_log_finish(0)
+        assert_true("tools.log created by oc_log_finish", os.path.isfile(tmp_log_file))
+        with open(tmp_log_file, "r") as lf:
+            logged_lines = lf.readlines()
+        assert_eq("Exactly 1 line logged to tools.log", len(logged_lines), 1)
+        logged_json = json.loads(logged_lines[0])
+        assert_eq("Logged tool is oc-issue-dispatch", logged_json.get("tool"), "oc-issue-dispatch")
+        assert_eq("Logged exit code is 0", logged_json.get("exit"), 0)
+        assert_eq("Logged extra key matches", logged_json.get("extra", {}).get("test_key"), "test_val")
+
+        # Negative control: OC_TOOLS_NOLOG=1 suppresses logging
+        os.environ["OC_TOOLS_NOLOG"] = "1"
+        _LOG_ENABLED = False
+        _LOG_FINISHED = False
+        oc_log_finish(0)
+        with open(tmp_log_file, "r") as lf:
+            logged_lines_after = lf.readlines()
+        assert_eq("Suppressed invocation appends 0 lines (negative control)", len(logged_lines_after), 1)
+    finally:
+        shutil.rmtree(tmp_log_dir, ignore_errors=True)
+        if old_log is not None:
+            os.environ["OC_TOOLS_LOG"] = old_log
+        else:
+            os.environ.pop("OC_TOOLS_LOG", None)
+        if old_nolog is not None:
+            os.environ["OC_TOOLS_NOLOG"] = old_nolog
+        else:
+            os.environ.pop("OC_TOOLS_NOLOG", None)
+
     total = tests_passed + tests_failed
     print(f"selftest: {tests_passed}/{total} OK")
     return 0 if tests_failed == 0 else 1
 
 
 def main():
+    if not _is_selftest():
+        oc_log_init("oc-issue-dispatch")
     parser = argparse.ArgumentParser(
         prog="oc-issue-dispatch",
         description="Mechanized fork issue vetting, lane selection, and dispatch tool.",
@@ -772,12 +977,22 @@ def main():
 
     if not args.auto and args.issue is None:
         parser.print_help()
+        oc_log_finish(2)
         sys.exit(2)
 
-    if args.auto:
-        sys.exit(cmd_auto(args))
-    else:
-        sys.exit(cmd_targeted(args))
+    try:
+        if args.auto:
+            rc = cmd_auto(args)
+        else:
+            rc = cmd_targeted(args)
+    except SystemExit as se:
+        rc = se.code if isinstance(se.code, int) else 1
+    except Exception as e:
+        sys.stderr.write(f"UNHANDLED ERROR: {e}\n")
+        rc = 1
+    finally:
+        oc_log_finish(rc if 'rc' in locals() else 0)
+    sys.exit(rc)
 
 
 if __name__ == "__main__":
