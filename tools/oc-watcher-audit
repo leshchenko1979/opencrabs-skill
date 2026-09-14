@@ -282,6 +282,25 @@ BINSCRIPT
   orph_count="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d.get('orphans_recovered', [])))" "$out15" 2>/dev/null || echo 0)"
   assert_eq "recovers 2 orphan watchers (1 task + 1 checkpoint)" "2" "$orph_count"
 
+  # Test 15b: Live notify deduplication persists state in orphans_notified.json and skips repeat notification
+  local out15b
+  out15b="$(OC_GH="$d/bin/fake-gh" OC_DEV_STATE="$d/t15/state" OC_DEPLOY_STATE_DIR="$d/t15/state" "$SELF" --dir "$d/t15/detached" --notify-orphans --json 2>/dev/null)" || true
+  local orph_live=0
+  orph_live="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d.get('orphans_recovered', [])))" "$out15b" 2>/dev/null || echo 0)"
+  assert_eq "first live notify recovers 2 orphan watchers" "2" "$orph_live"
+
+  # Verify tracking file exists and contains task key
+  local track_exists=1
+  [ -f "$d/t15/state/orphans_notified.json" ] && track_exists=0
+  assert_eq "orphans_notified.json created on live notify" "0" "$track_exists"
+
+  # Second live run on the same directory should notify 0 (idempotent deduplication)
+  local out15c
+  out15c="$(OC_GH="$d/bin/fake-gh" OC_DEV_STATE="$d/t15/state" OC_DEPLOY_STATE_DIR="$d/t15/state" "$SELF" --dir "$d/t15/detached" --notify-orphans --json 2>/dev/null)" || true
+  local orph_dedup=0
+  orph_dedup="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d.get('orphans_recovered', [])))" "$out15c" 2>/dev/null || echo 0)"
+  assert_eq "second live notify skips already notified orphans (deduplicated)" "0" "$orph_dedup"
+
   # Negative control: running task with active PID is NOT flagged as orphan
   mkdir -p "$d/t16/detached" "$d/t16/state/runs/in-flight"
   cat > "$d/t16/detached/running.json" <<'JSON'
@@ -364,7 +383,7 @@ LOCK_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-/root/.opencrabs/profiles/ops/o
 CP_DIR="$LOCK_DIR/runs/in-flight"
 
 # Execute audit via python3
-python3 - "$TARGET_DIR" "$SINCE" "$JSON_MODE" "$NOTIFY_ORPHANS" "$DRY_RUN" "$CP_DIR" << 'PYEOF'
+python3 - "$TARGET_DIR" "$SINCE" "$JSON_MODE" "$NOTIFY_ORPHANS" "$DRY_RUN" "$CP_DIR" "$LOCK_DIR" << 'PYEOF'
 import sys, os, glob, json, re, datetime, subprocess
 
 target_dir = sys.argv[1]
@@ -373,6 +392,7 @@ json_mode = (sys.argv[3] == "1") if len(sys.argv) > 3 else False
 notify_orphans = (sys.argv[4] == "1") if len(sys.argv) > 4 else False
 dry_run = (sys.argv[5] == "1") if len(sys.argv) > 5 else False
 cp_dir = sys.argv[6] if len(sys.argv) > 6 else ""
+lock_dir = sys.argv[7] if len(sys.argv) > 7 else ""
 
 def check_task(task_text):
     violations = []
@@ -517,6 +537,16 @@ def notify_session(uuid, title, text):
 orphan_recoveries = []
 if notify_orphans:
     candidates = {} # session_id -> {run_id, repo, source, state, details}
+    # Load notified orphans tracking file to prevent spamming already notified tasks across repeated cron sweeps
+    notified_file = os.path.join(lock_dir, "orphans_notified.json") if lock_dir else ""
+    notified_orphans_state = {}
+    if notified_file and os.path.isfile(notified_file):
+        try:
+            with open(notified_file, "r", encoding="utf-8") as f:
+                notified_orphans_state = json.load(f)
+        except Exception:
+            notified_orphans_state = {}
+
     # 1. Check in-flight checkpoints
     if cp_dir and os.path.isdir(cp_dir):
         for cp_file in glob.glob(os.path.join(cp_dir, "*.json")):
@@ -535,8 +565,10 @@ if notify_orphans:
                         is_alive = True
                     except OSError:
                         is_alive = False
-                if sess and rid and not is_alive:
+                key = f"checkpoint:{sess}:{rid}"
+                if sess and rid and not is_alive and key not in notified_orphans_state:
                     candidates[sess] = {
+                        "key": key,
                         "session_id": sess,
                         "run_id": rid,
                         "repo": rp,
@@ -556,10 +588,13 @@ if notify_orphans:
         state = str(data.get("state", "")).strip()
         sess = str(data.get("session_id", "")).strip()
         cmd = str(data.get("task", data.get("command", "")))
-        if state.lower() == "interrupted" and sess and sess != "unknown":
+        tid = str(data.get("id", os.path.basename(file_path).replace(".json", "")))
+        key = f"task:{tid}"
+        if state.lower() == "interrupted" and sess and sess != "unknown" and key not in notified_orphans_state:
             rid, rp = extract_run_info(cmd)
             if rid and sess not in candidates:
                 candidates[sess] = {
+                    "key": key,
                     "session_id": sess,
                     "run_id": rid,
                     "repo": rp,
@@ -567,6 +602,7 @@ if notify_orphans:
                     "file": file_path
                 }
 
+    new_notified = False
     for sess, c in candidates.items():
         run_data = query_gh_run(c["run_id"], c["repo"])
         status = run_data.get("status") if run_data else "unknown"
@@ -587,11 +623,27 @@ if notify_orphans:
         orphan_recoveries.append(rec)
         if not dry_run:
             notify_session(sess, "Detached Watcher Recovered", msg)
+            if c.get("key"):
+                notified_orphans_state[c["key"]] = {
+                    "session_id": sess,
+                    "run_id": c["run_id"],
+                    "notified_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                }
+                new_notified = True
             if c["source"] == "checkpoint" and os.path.exists(c["file"]):
                 try:
                     os.remove(c["file"])
                 except Exception:
                     pass
+
+    if new_notified and notified_file:
+        try:
+            tmp_nf = notified_file + f".tmp.{os.getpid()}"
+            with open(tmp_nf, "w", encoding="utf-8") as f:
+                json.dump(notified_orphans_state, f, indent=2)
+            os.replace(tmp_nf, notified_file)
+        except Exception:
+            pass
 
 if json_mode:
     out_obj = results
