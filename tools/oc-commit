@@ -45,7 +45,7 @@ JSON
   R="$d/repo"; git init -q -b main "$R"
   git -C "$R" -c user.email=t@t -c user.name=T commit -q --allow-empty -m seed
   OC="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"; export OC_LEDGER="$d/wl.json"
-  # 1. unset OC_ACTOR -> 3
+  # 1. unset OC_ACTOR and OPENCRABS_SESSION_ID -> 3
   STUB_OK="$d/il-ok"; printf '#!/usr/bin/env bash
 echo "posted on $1"
 ' > "$STUB_OK"; chmod +x "$STUB_OK"
@@ -53,8 +53,11 @@ echo "posted on $1"
 exit 3
 ' > "$STUB_FAIL"; chmod +x "$STUB_FAIL"
   export OC_ISSUE_LOG_BIN="$STUB_OK"
-  ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR -u OPENCRABS_SESSION_ID "$OC" -m test --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: unset OC_ACTOR != 3" >&2; exit 1; }
+  # 1b. OPENCRABS_SESSION_ID fallback works -> 0
+  ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR OPENCRABS_SESSION_ID=u-fix "$OC" -m "test: fallback" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: OPENCRABS_SESSION_ID fallback != 0" >&2; exit 1; }
   # 2. detached HEAD -> 3
   ( cd "$R" && git checkout -q --detach && echo y > g && git add g \
       && OC_ACTOR=u-fix "$OC" -m test --repo "$R" ) >/dev/null 2>&1
@@ -111,8 +114,9 @@ G="git -C $REPO"
 # gate 1: HEAD attached (incident class: commits landing nowhere)
 $G symbolic-ref -q HEAD >/dev/null 2>&1 \
   || { echo "gate-fail: DETACHED HEAD in $REPO — attach a branch first" >&2; exit 3; }
-# gate 2: actor present
-[ -n "${OC_ACTOR:-}" ] || { echo "gate-fail: OC_ACTOR unset — Session-Id trailer cannot be derived" >&2; exit 3; }
+# gate 2: actor present (defaults to OPENCRABS_SESSION_ID when OC_ACTOR is unset)
+OC_ACTOR="${OC_ACTOR:-${OPENCRABS_SESSION_ID:-}}"
+[ -n "$OC_ACTOR" ] || { echo "gate-fail: OC_ACTOR unset — Session-Id trailer cannot be derived" >&2; exit 3; }
 # gate 3: something staged (never stages anything itself)
 $G diff --cached --quiet 2>/dev/null \
   && { echo "gate-fail: nothing staged — stage your paths first (stage-only-your-paths rule)" >&2; exit 3; }

@@ -363,11 +363,18 @@ JSON
   out="$(selfrun "$T/run-self-flag" "$L2" --self "$L1")"
   printf '%s' "$out" | grep -q "$L1" && chk 1 self-flag-overrides-actor || chk 0 self-flag-overrides-actor
   printf '%s' "$out" | grep -q "SKIP $L2 .*SCOPE" && chk 0 self-flag-actor-not-self || chk 1 self-flag-actor-not-self
-  rc="$(env -u OC_ACTOR -u OC_FANOUT_SELF OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+  rc="$(env -u OC_ACTOR -u OPENCRABS_SESSION_ID -u OC_FANOUT_SELF OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
     OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_RUN_DIR="$T/run-self-none" \
     bash "$0" --title T --text "brief {{UUID}}" --no-stamp --dry-run >"$T/self-none.out" 2>&1; echo $?)"
   [ "$rc" = 2 ] && chk 0 self-unresolved-rc2 || chk 1 "self-unresolved-rc2 (got $rc)"
   grep -q "self identity unresolved" "$T/self-none.out" && chk 0 self-unresolved-msg || chk 1 self-unresolved-msg
+
+  # 2b. OPENCRABS_SESSION_ID fallback works -> resolved without error
+  out="$(env -u OC_ACTOR -u OC_FANOUT_SELF OPENCRABS_SESSION_ID="$L1" OC_NOTIFY_DB="$T/db.sqlite" \
+    OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" \
+    OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$T/run-self-sessid" FAKE_NOTIFY_LOG="$T/fake-notify-log" \
+    bash "$0" --title T --text "brief {{UUID}}" --no-stamp --dry-run 2>&1)"
+  printf '%s' "$out" | grep -q "$L1" && chk 1 self-default-from-session-id || chk 0 self-default-from-session-id
 
   # 3. Dry-run behaves identically for scope (no send attempted).
   rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
@@ -948,15 +955,16 @@ excluded() { # $1=uuid $2=topic -> 0 if excluded (8-char prefix or full uuid or 
 # uuid, a selftest fixture value promoted into the production default by
 # 7c7844cd (v0.4.123) — excluded that lane from EVERY wave while leaving
 # --include-self dead for every other invoker (HQ self-notified its own brief).
-# Precedence: --self, then OC_FANOUT_SELF, then the invoking session's OC_ACTOR
+# Precedence: --self, then OC_FANOUT_SELF, then the invoking session's OC_ACTOR (or OPENCRABS_SESSION_ID fallback)
 # (trailing token, so a composed "<role> <uuid>" resolves too). Unresolved is a
 # HARD ERROR: a wrong self is invisible — it silently drops a real target from
 # the wave — so the tool refuses to guess one.
 if [ -z "$self_uuid" ]; then
   if [ -n "${OC_FANOUT_SELF:-}" ]; then
     self_uuid="$OC_FANOUT_SELF"
-  elif [ -n "${OC_ACTOR:-}" ]; then
-    self_uuid="${OC_ACTOR##* }"
+  elif [ -n "${OC_ACTOR:-${OPENCRABS_SESSION_ID:-}}" ]; then
+    local_actor="${OC_ACTOR:-${OPENCRABS_SESSION_ID:-}}"
+    self_uuid="${local_actor##* }"
   else
     die "self identity unresolved: pass --self <uuid> (or export OC_ACTOR=<your session uuid>); refusing to guess — a wrong self silently drops a real lane from the wave"
   fi
@@ -1154,9 +1162,9 @@ echo "--- summary ---"
 echo "sent=$sent skipped=$skipped failed=$failed version=$version dry=$dry"
 if [ "$stamp" = 1 ] && [ "$dry" = 0 ] && [ "$sent" -gt 0 ]; then
   # --by fallback (#19, 2026-09-12): oc-ledger refuses an anonymous row, so a
-  # wave stamps under the caller's OC_ACTOR when set, else under the tool name.
+  # wave stamps under the caller's OC_ACTOR (or OPENCRABS_SESSION_ID) when set, else under the tool name.
   bash "$SKILL_DIR/tools/oc-ledger" stamp notify-fanout \
-    --by "${OC_ACTOR:-oc-notify-fanout}" \
+    --by "${OC_ACTOR:-${OPENCRABS_SESSION_ID:-oc-notify-fanout}}" \
     "fanout '$title': sent=$sent skipped=$skipped failed=$failed ids: ${ids:-none}" || true
 fi
 if [ "$failed" -gt 0 ]; then

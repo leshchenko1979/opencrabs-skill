@@ -147,7 +147,7 @@ EOH
   TARGET_UUID="${1:-}"
   TEXT="${2:-}"
   TITLE="${3:-Task Complete}"
-  SENDER="${OC_ACTOR:-${SESSION_ID:-opencrabs-dev}}"
+  SENDER="${OC_ACTOR:-${OPENCRABS_SESSION_ID:-${SESSION_ID:-opencrabs-dev}}}"
   PROFILE="${OC_NOTIFY_PROFILE:-ops}"
 
   if [ -z "$TARGET_UUID" ] || [ -z "$TEXT" ]; then

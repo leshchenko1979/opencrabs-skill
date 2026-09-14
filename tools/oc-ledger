@@ -225,11 +225,11 @@ with_lock() { # runs "$@" with exclusive flock on $LEDGER.lock
 }
 
 derive_by() { # default stamp attribution (v0.4.58, Duty-4 IDEA from lane 7e1ebbb6, n=1386 trap):
-  # OC_ACTOR -> roster role label; unrostered actor says so; NO actor = LOUD
+  # OC_ACTOR (or OPENCRABS_SESSION_ID fallback) -> roster role label; unrostered actor says so; NO actor = LOUD
   # "(unattributed ...)" — the old silent "supervisor (topic 30220)" default
   # (quoted verbatim: that role string is now `hq`)
   # mis-attributed worker stamps (n=1337-correct-via---by vs n=1386-silent-lie).
-  local uuid="${OC_ACTOR:-}" hit
+  local uuid="${OC_ACTOR:-${OPENCRABS_SESSION_ID:-}}" hit
   if [ -n "$uuid" ] && [ -f "$LEDGER" ]; then
     uuid="$(printf '%s' "$uuid" | tr 'A-F' 'a-f')"   # M2-3: uuids are lowercase; an UPPERCASE actor could never match
     hit="$(jq -r --arg u "$uuid" '[.workers[] | select(.uuid==$u)][0] | if . == null then "" else (.role + " " + .uuid) end' "$LEDGER" 2>/dev/null || true)"
@@ -1236,14 +1236,16 @@ ACKEOF
   git -C "$T/state" init -q 2>/dev/null; git -C "$T/state" add -A 2>/dev/null; git -C "$T/state" -c user.email=t@t -c user.name=t commit -q -m regit 2>/dev/null
   bash "$ME" enroll "$W2" tester --topic 42 >/dev/null 2>&1; chk "enroll-w2" 0 $?
   # #19: an anonymous row is REFUSED (warn-and-write made the defect the default)
-  OC_ACTOR= bash "$ME" stamp note "anon-stamp" >/dev/null 2>&1; chk "anon-refused-rc" 2 $?
-  OC_ACTOR= bash "$ME" stamp note "anon-stamp" >/dev/null 2>"$T/anon.err"
+  OC_ACTOR= OPENCRABS_SESSION_ID= bash "$ME" stamp note "anon-stamp" >/dev/null 2>&1; chk "anon-refused-rc" 2 $?
+  OC_ACTOR= OPENCRABS_SESSION_ID= bash "$ME" stamp note "anon-stamp" >/dev/null 2>"$T/anon.err"
   chk "anon-refused-names-by" "true" "$(grep -qF -- '--by' "$T/anon.err" && echo true || echo false)"
   chk "anon-refused-names-actor" "true" "$(grep -qF -- 'OC_ACTOR' "$T/anon.err" && echo true || echo false)"
   chk "anon-refused-names-override" "true" "$(grep -qF -- '--allow-unattributed' "$T/anon.err" && echo true || echo false)"
   chk "anon-refused-wrote-nothing" "0" "$(jq -r '[.events[] | select(.what=="anon-stamp")] | length' "$OC_LEDGER")"
-  OC_ACTOR= bash "$ME" stamp note "anon-stamp" --allow-unattributed >/dev/null 2>&1; chk "anon-override-rc" 0 $?
+  OC_ACTOR= OPENCRABS_SESSION_ID= bash "$ME" stamp note "anon-stamp" --allow-unattributed >/dev/null 2>&1; chk "anon-override-rc" 0 $?
   chk "derive-by-no-actor-loud" "true" "$(jq -r '[.events[] | select(.what=="anon-stamp")][0].by | test("unattributed")' "$OC_LEDGER")"
+  OC_ACTOR= OPENCRABS_SESSION_ID="$W2" bash "$ME" stamp note "session-id-stamp" >/dev/null 2>&1; chk "derive-by-session-id-rc" 0 $?
+  chk "derive-by-session-id-label" "tester $W2" "$(jq -r '[.events[] | select(.what=="session-id-stamp")][0].by' "$OC_LEDGER")"
   OC_ACTOR="$W2" bash "$ME" stamp note "worker-stamp" >/dev/null 2>&1; chk "derive-by-roster-rc" 0 $?
   chk "derive-by-roster-label" "tester $W2" "$(jq -r '[.events[] | select(.what=="worker-stamp")][0].by' "$OC_LEDGER")"
   OC_ACTOR="99999999-8888-7777-6666-555555555555" bash "$ME" stamp note "ghost-stamp" >/dev/null 2>&1

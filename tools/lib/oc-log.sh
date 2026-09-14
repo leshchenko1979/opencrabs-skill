@@ -132,7 +132,7 @@ oc_log_finish() {
   line="$(jq -cn \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg tool "$OC_LOG_TOOL" \
-    --arg actor "${OC_ACTOR:-unknown}" \
+    --arg actor "${OC_ACTOR:-${OPENCRABS_SESSION_ID:-unknown}}" \
     --arg args "${OC_LOG_ARGS:0:500}" \
     --argjson exit "$rc" \
     --arg secs "$secs" \
