@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.170
+version: 0.4.171
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -109,7 +109,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-harvest-sweep <pr-branch> [--base adolfousier/main] [--repo P] [--port-of sha1,sha2]` | pre-gate harvest verification (editor Phase 7 sweep, mechanical legs); behavioral judgment stays human |
 | `./tools/oc-health [--json|--summary]` | daily & pre-flight health audit of worktrees, watchers, and cron consistency |
 | `./tools/oc-roster-selftest` | hermetic test runner for roster generation and classification |
-| `./tools/oc-watcher-audit [--json|--kill-stale]` | detached watcher compliance and sleep-loop audit across active sessions |
+| `./tools/oc-watcher-audit [--json] [--notify-orphans]` | detached watcher compliance and sleep-loop audit across active sessions |
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5); `wait <ref> [--budget N] [--poll S]` provides single-invocation blocking gate. Full rc/adoption/lock/fmt-soft-fail register: RC-CONTRACT.md |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic; READ-ONLY — PROPOSE/WAIT judgment stays human |
 | `./tools/oc-wt add\|remove\|--force` | editor worktree manager (index step UN-SKIPPABLE; `--force` journals before removal) |
@@ -340,6 +340,14 @@ the log is a FALSE receipt.
 - **TOOL_ACCUM** — the per-session tool-usage rows accumulated in the unified
   tools log; evidence base for Telegram surface-law audits (triage.md Duty T4
   — ex hq.md Duty 7).
+- **PARKED-OWNER-EYE** — non-blocking smoke row state (v0.4.152) stamped when
+  the sole remaining behavioral evidence requires the human owner (visual pass,
+  tap, UI inspection); frees the lane to continue or complete without blocking.
+- **4-Leg Smoke Rubric** — the mandatory verification standard (v0.4.104) for
+  shipping candidates: (1) Lineage (`git merge-base --is-ancestor`), (2) Identity
+  (`oc-smoke-evidence` artifact checksum), (3) CI Gate (GREEN run on head sha),
+  (4) Behavioral Probe (executing live binary path or structural N/A). All four
+  must pass before an upstream PR leaves a lane.
 
 ## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
 
@@ -461,10 +469,10 @@ Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
   synonyms for existing concepts; a NEW concept gets proposed via the poll
   format and named on owner word — never improvised mid-report. Reviewer A
   (REDUNDANCY + ONTOLOGY) enforces this lens-side.
-- ONLY HQ edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9): `SKILL.md` /
+- ONLY HQ edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9; `tools/HEALTH-CHECKS.md` + `tools/HEALTH-CLASSES.md` added v0.4.171): `SKILL.md` /
   `editor.md` / `hq.md` / `triage.md` / `toolsmith.md` / `review-lenses.md` / `fleet-directives.md` /
-  `upstream-merge-runbook.md` / `editor-phase7-rules.md` / `war-stories.md` /
-  `s2-swap-journal-spec.md` / `README.md` / `CHANGELOG.md` / `tools/RC-CONTRACT.md` — including all worker lanes AND the TRIAGE lane AND the TOOLSMITH lane (decision 7,
+  `upstream-merge-runbook.md` / `war-stories.md` /
+  `s2-swap-journal-spec.md` / `README.md` / `CHANGELOG.md` / `tools/RC-CONTRACT.md` / `tools/HEALTH-CHECKS.md` / `tools/HEALTH-CLASSES.md` — including all worker lanes AND the TRIAGE lane AND the TOOLSMITH lane (decision 7,
   2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
   write. ONE exception: `tools/**` CODE is owned by the TOOLSMITH lane (v0.4.87 carve-out) — every change ships
   with battery receipts (README.md's tool-fleet section and `tools/RC-CONTRACT.md`

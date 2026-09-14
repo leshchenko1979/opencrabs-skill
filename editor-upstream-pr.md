@@ -122,7 +122,7 @@ Rules:
   on a harvested branch, BEFORE the first gate dispatch — 4-leg sweep: symbol
   callers in the UPSTREAM tree, fork-side attribute port, foreign-hunk drop,
   `git patch-id` verify of rebase-ported commits. Full checklist:
-  `editor-phase7-rules.md` (same dir).
+  §Phase 7 Reference Rules below.
 - **BASE-FRESHNESS AT FILING TIME (Triage lesson n=2083, v0.4.111):** the
   sweep and every gate run are valid against a NAMED upstream base — record
   the `adolfousier/main` sha the verification was tested against; a census/
@@ -140,7 +140,7 @@ Rules:
   `leshchenko1979/opencrabs#N` or the full URL (GitHub autolinks bare `#N`
   against adolfo's issue space). Code spans exempt. Bare `#N` stays reserved
   for UPSTREAM-local references. Incident + rationale:
-  `editor-phase7-rules.md`.
+  §Phase 7 Reference Rules below.
 - One feature = one PR; never bundle two features to save a PR.
 - **ATOMICITY & ZERO BUNDLING (owner order 2026-09-13; lane 1a63f103 proposal):** issues, PRs and commits are atomic —
   one problem per issue, one logical change per commit, one issue per PR. **1 Intent = 1 Unit.**
@@ -235,3 +235,34 @@ Contract:
      `--fast` is strictly prohibited for pre-PR testing; upstream PRs require 100% full test suite verification.
 4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log`, Editor files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug>`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue. **A PR number is not FILED until a same-turn `gh pr create` (or `gh pr view <N>`) output names it** — if a guard flags the claim (`phantom_blocked`) or the output was not witnessed, the PR is UNFILED: re-verify and re-dispatch (v0.4.152 §Guard-Flag Escalation Law; worked example: an announced PR #1514 that never existed cost ~3 h).
 5. **Ack & Cleanup**: Remove harvest worktree, stamp completion in ledger, and notify Triage via `session_notify`.
+
+## Phase 7 Reference Rules (Harvest Verification & Qualified Fork Refs)
+
+Reference detail behind upstream PR harvesting and surfaces:
+
+- **HARVEST VERIFICATION SWEEP (Duty-4, v0.4.71):** after
+  conflict resolution on a harvested branch, BEFORE the first gate dispatch:
+  (a) `git diff origin/main...HEAD` symbol sweep — grep the branch diff for
+  fork-renamed/fork-only symbols and verify each has a live caller in the
+  UPSTREAM tree (a write-side helper whose fork-paired read side lived in a
+  renamed caller is a guaranteed clippy dead-code RED);
+  (b) fork-side-only attribute sweep — diff fork-main vs PR-tree for
+  `#[allow(clippy::…)]`/cfg gates on every function the PR touches, port them
+  explicitly (trailer-matched cherry-picks miss attributes that rode a
+  trailer-less fork commit);
+  (c) foreign-hunk conflicts (a hunk on fork `main` but absent on the target
+  base) resolve by DROPPING the foreign side, verified by diffstat delta vs the
+  fork-side pick;
+  (d) verify a rebase-ported commit by `git patch-id` before cherry-pick —
+  post-port shas differ from lane records while content is identical.
+
+- **QUALIFIED FORK REFS on upstream surfaces (fork [#54](https://github.com/leshchenko1979/opencrabs/issues/54)):**
+  a bare `#N` where N is a FORK issue number must never appear on an upstream
+  surface (PR body, PR title, issue body, comment) OUTSIDE a code span — GitHub
+  autolinks it against adolfousier's issue space and the tooltip points at an
+  unrelated upstream issue (upstream #29 = memory-process question vs fork #29 =
+  compaction signal). Write `leshchenko1979/opencrabs#N` or the full URL. Bare
+  `#N` stays reserved for UPSTREAM-local references. Code spans are exempt
+  (GitHub does not autolink inside backticks) — literal log-line quotes stay
+  verbatim. Fork-side surfaces are unaffected (bare #N resolves correctly there).
+

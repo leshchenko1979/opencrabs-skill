@@ -16,7 +16,7 @@ with HQ (single-writer law unchanged; v0.4.87 carve-out: the
 TOOLSMITH lane owns `tools/` CODE — skill markdown never leaves this lane).
 
 Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `fleet-directives.md`,
-`upstream-merge-runbook.md`, `editor-phase7-rules.md`, `war-stories.md`, `s2-swap-journal-spec.md`;
+`upstream-merge-runbook.md`, `war-stories.md`, `s2-swap-journal-spec.md`;
 `tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
 turn field evidence into rules. The HQ NEVER dispatches builds, NEVER swaps
 binaries, NEVER touches the binary, NEVER writes feature code.

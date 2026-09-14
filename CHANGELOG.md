@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.4.171 (2026-09-14) — Duty 4+6 Review Cycle 20260914-c10 Implementation
+
+Implementation of accepted Duty-4 intake proposals and Duty-6 review findings across documentation, role-file architecture, glossary ontology, and tools battery:
+- **Appendix Folding & File Retirement (Finding G-3):**
+  - Retired `editor-phase7-rules.md` and folded its contents (Harvest Verification Sweep and Qualified Fork Refs) directly into `editor-upstream-pr.md §Phase 7 Reference Rules`.
+  - Updated all pointers across `editor-upstream-pr.md`, `README.md`, and `SKILL.md`.
+- **Single-Writer Census Expansion (Finding G-1):**
+  - Updated single-writer law census in `SKILL.md` to formally include `tools/HEALTH-CHECKS.md` and `tools/HEALTH-CLASSES.md`.
+- **Glossary & Ontology Alignment (Findings A-5, J-02):**
+  - Formally defined `PARKED-OWNER-EYE` non-blocking smoke row state in `SKILL.md §Glossary`.
+  - Formally codified `4-Leg Smoke Rubric` (Lineage, Identity, CI Gate, Behavioral Probe) standard in `SKILL.md §Glossary`.
+  - Corrected `oc-watcher-audit` flag documentation in `SKILL.md` table from `--kill-stale` to canonical `--notify-orphans` (Finding A-2).
+- **Merge Runbook Execution Flow & Checkable Criteria (Findings G-2, G-4):**
+  - Re-ordered `upstream-merge-runbook.md` so that background reference sections (§Gates, §Roles) precede linear execution sequence under §Process.
+  - Added checkable criterion to Step 0 Roster Gate: `tools/oc-roster classify | grep '^ACTIVE' | wc -l` reports 0 active unpaused workers.
+- **Documentation Efficiency & LLM Burden Reduction (Findings B-1, B-2, B-3):**
+  - Updated HQ reload cost footprint warning in `fleet-directives.md` from `~54 kB` to `~115 kB` to reflect live growth.
+  - Eliminated duplicated CI watcher throttling rules in `editor.md`, replacing with a concise pointer to `fleet-directives.md §CI Watcher Discipline`.
+- **Brain Scrub Remediation (BS-1, BS-3):**
+  - Replaced repetitive subshell bash-ism narrative block in `AGENTS.md` with pointer to `fleet-directives.md §Verification-discipline additions`.
+  - Re-verified `BOOT.md` for explicit `systemctl --user` commands and zero local cargo compile patterns.
+- **Battery Verification:**
+  - Suite selftest battery verified: PASS=197, FAIL=0 across 8 parallel jobs (`tools/tests/battery-last.json`).
+
+
 ## v0.4.170 (2026-09-14) — Duty 4+6 Review Cycle 20260913-c9 Implementation & Cycle Durability
 
 Comprehensive implementation of accepted Duty-4 worker proposals, Duty-6 review findings across 11 lenses, and durable cycle state:

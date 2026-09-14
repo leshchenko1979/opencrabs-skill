@@ -15,26 +15,6 @@ model is RETIRED — it produced 31 merge commits and a 333-commit phantom ahead
 count, and its conflicts were resolved wholesale at merge time instead of
 per-commit at replay time.
 
-## Step 0 — ROSTER GATE (blocking; nothing else starts first)
-
-**The freeze list IS the roster.** Derive it with a tool; never assemble it by
-hand from a stale registry.
-
-- `tools/oc-roster live` — the DERIVED in-progress roster, joining four
-  independent signals: ledger `events[kind=claim]` (intent), `oc-wt list` dirty
-  state (evidence), the session DB live roster (liveness), forum bindings
-  (scope). It stores nothing.
-- `tools/oc-roster classify` — ACTIVE / IDLE / ORPHAN / UNKNOWN per row.
-- A claim author whose uuid the session DB has never seen is reported as a
-  **PHANTOM** and excluded from the roster — a hand-assembled id can never
-  enter a freeze list.
-- Any **ACTIVE** lane whose work is in flight is paused and its branch migrated
-  (Process step 7), or the sync is a roster defect and returns here.
-- **Role resolution is NOT `oc-roster`.** Use
-  `oc-ledger roster --live --role <role>`. `oc-roster`'s `--role` flag is
-  accepted and silently ignored (rc 0, no stderr, unfiltered output) — pointing
-  role resolution at it breaks dispatch fleet-wide.
-
 ## Gates (fail closed)
 
 1. **FREEZE check** — query the ledger for any carrier chain between dispatch
@@ -58,8 +38,26 @@ hand from a stale registry.
 
 ## Process
 
-1. **Step 0 roster gate** (above) — blocking. Record the pre-sync sha in the
-   ledger BEFORE any force-push; it is the rollback point.
+1. **Step 0 — ROSTER GATE (blocking; nothing else starts first)**.
+   **The freeze list IS the roster.** Derive it with a tool; never assemble it by
+   hand from a stale registry.
+   - `tools/oc-roster live` — the DERIVED in-progress roster, joining four
+     independent signals: ledger `events[kind=claim]` (intent), `oc-wt list` dirty
+     state (evidence), the session DB live roster (liveness), forum bindings
+     (scope). It stores nothing.
+   - `tools/oc-roster classify` — ACTIVE / IDLE / ORPHAN / UNKNOWN per row.
+   - A claim author whose uuid the session DB has never seen is reported as a
+     **PHANTOM** and excluded from the roster — a hand-assembled id can never
+     enter a freeze list.
+   - Any **ACTIVE** lane whose work is in flight is paused and its branch migrated
+     (Process step 7), or the sync is a roster defect and returns here.
+   - **Checkable criterion:** `tools/oc-roster classify | grep '^ACTIVE' | wc -l` reports 0
+     active unpaused workers before proceeding to Step 2. Record the pre-sync sha in the
+     ledger BEFORE any force-push; it is the rollback point.
+   - **Role resolution is NOT `oc-roster`.** Use
+     `oc-ledger roster --live --role <role>`. `oc-roster`'s `--role` flag is
+     accepted and silently ignored (rc 0, no stderr, unfiltered output) — pointing
+     role resolution at it breaks dispatch fleet-wide.
 2. Branch `sync/upstream-YYYYMMDD` off `origin/main`.
 3. `git rebase adolfousier/main` — **rebase, not merge.** Commits upstream has
    already accepted drop out of the replay automatically; that is the point of

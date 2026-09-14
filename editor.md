@@ -643,5 +643,4 @@ resolves there (law home: SKILL.md §ISSUE ROUTING, PR SHIPMENT row).
 
 ## CI Watcher Discipline & Throttling (v0.4.143)
 
-- **`gh run watch` throttling**: When invoking raw `gh run watch <run-id>` detached in background, **always specify `--interval 30`** (or `--interval 60`). The default interval is 3s, which saturates CPU loops and GitHub rate limits across parallel lanes.
-- **Automated Tool Polling**: `oc-prchecks` defaults to a 30s poll interval (`OC_PRCHECKS_POLL=30`) and 15s resolve poll (`OC_PRCHECKS_RESOLVE_POLL=15`).
+- **`gh run watch` throttling**: Mandatory `--interval 30` (or `60`) on raw `gh run watch` invocations per `fleet-directives.md §CI Watcher Discipline`. Prefer `tools/oc-prchecks wait`, which throttles mechanically.
