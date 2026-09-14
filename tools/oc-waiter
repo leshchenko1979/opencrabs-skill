@@ -24,7 +24,7 @@ Usage: $PROG --help
 RETIRED: oc-waiter has been replaced by native detached bash execution (background: true).
 Do not invoke oc-waiter. Instead:
   1. For CI checks: run 'oc-prchecks ...' with background: true.
-  2. For GitHub Actions runs: run 'gh run watch <id> --exit-status' with background: true.
+  2. For detached commands: run with background: true.
   3. For cross-session wakes: chain '<cmd> && tools/lib/oc-notify.sh <uuid> <msg>'.
 EOH
     exit 0

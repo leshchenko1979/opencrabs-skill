@@ -92,6 +92,9 @@
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
+#   sweep-closed-claims [--dry-run]        inspects claims against closed issues on
+#                                          GitHub/fork and reports or marks stale open
+#                                          claims closed.
 #   --selftest                             fixture suite (205 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
@@ -1877,6 +1880,92 @@ cmd_claims() { # oc-ledger claims [<N>] — dispatch=verify-unclaimed backend (#
   exit 0
 }
 
+cmd_sweep_closed_claims() { # oc-ledger sweep-closed-claims [--dry-run]
+  # Finds open claim rows in the ledger, checks if the referenced issue is closed,
+  # and if so prints or closes them.
+  local dry_run=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry_run=1; shift ;;
+      -h|--help) echo "usage: oc-ledger sweep-closed-claims [--dry-run]"; exit 0 ;;
+      *) die 2 "sweep-closed-claims: unknown argument '$1'" ;;
+    esac
+  done
+  ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+
+  python3 -c '
+import sys, os, json, subprocess, re
+
+ledger_file = sys.argv[1]
+dry_run = sys.argv[2] == "1"
+
+try:
+    with open(ledger_file) as f:
+        data = json.load(f)
+except Exception as e:
+    sys.stderr.write(f"failed to read ledger: {e}\n")
+    sys.exit(3)
+
+events = data.get("events", [])
+open_claims = []
+
+for idx, ev in enumerate(events):
+    if ev.get("kind") != "claim":
+        continue
+    by = ev.get("by", "")
+    what = ev.get("what", "")
+    t = ev.get("t", "")
+    
+    # Extract issue number
+    m = re.search(r"#?(\d+)", what)
+    if not m:
+        continue
+    iss_num = int(m.group(1))
+
+    # Check if closed later
+    closed = False
+    for later_ev in events[idx+1:]:
+        l_kind = later_ev.get("kind", "")
+        l_what = later_ev.get("what", "")
+        if l_kind in ["close", "confirm", "reject", "done", "unclaim"] and f"#{iss_num}" in l_what:
+            closed = True
+            break
+    if not closed:
+        open_claims.append({
+            "idx": idx, "by": by, "what": what, "t": t, "issue": iss_num
+        })
+
+if not open_claims:
+    print("No open claims found.")
+    sys.exit(0)
+
+print(f"Scanned {len(open_claims)} open claim(s). Checking status on GitHub...")
+stale = []
+for oc in open_claims:
+    iss = oc["issue"]
+    # Check issue state on fork repo
+    cmd = ["gh", "issue", "view", str(iss), "--repo", "leshchenko1979/opencrabs", "--json", "state,title"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode == 0:
+        try:
+            iss_data = json.loads(res.stdout)
+            if iss_data.get("state") == "CLOSED":
+                stale.append((oc, iss_data.get("title", "")))
+        except Exception:
+            pass
+
+if not stale:
+    print("All open claims map to OPEN issues.")
+    sys.exit(0)
+
+print(f"Found {len(stale)} open claim(s) for CLOSED issues:")
+for oc, title in stale:
+    print(f"  Issue #{oc[\"issue\"]} (CLOSED: {title[:50]}) claimed by {oc[\"by\"]}")
+
+' "$LEDGER" "$dry_run"
+  exit 0
+}
+
 # ---- ship-audit tail-chain (C-F4, v0.4.71) ------------------------------------
 # Tail-chains the deploy-journal orphan audit onto the Duty-3/4 sweep cadence:
 # rc1 = findings (orphaned/failed legs) -> loud stderr pointer; the audit's own
@@ -2129,12 +2218,13 @@ case "$sub" in
   confirm) cmd_confirm "${rest[@]+"${rest[@]}"}" ;;
   claim-ref) cmd_claim_ref "${rest[@]+"${rest[@]}"}" ;;
   claims) cmd_claims "${rest[@]+"${rest[@]}"}" ;;
+  sweep-closed-claims) cmd_sweep_closed_claims "${rest[@]+"${rest[@]}"}" ;;
   lessons) cmd_lessons "${rest[@]+"${rest[@]}"}" ;;
   roster) cmd_roster "${rest[@]+"${rest[@]}"}" ;;
   events|tail) cmd_events "${rest[@]+"${rest[@]}"}" ;;
   selftest) cmd_selftest; exit $? ;;
   --verbs)
-    echo "stamp sync check-version cadence ack enroll promote retire commit-pending confirm claim claim-ref claims lessons roster events tail"
+    echo "stamp sync check-version cadence ack enroll promote retire commit-pending confirm claim claim-ref claims sweep-closed-claims lessons roster events tail"
     exit 0
     ;;
   *)

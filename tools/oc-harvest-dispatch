@@ -66,7 +66,7 @@ EOF
 # --- Core Python Engine ---
 run_engine() {
   python3 -c '
-import sys, os, json, re, subprocess, argparse
+import sys, os, json, re, subprocess, argparse, time
 
 def run_cmd(cmd, cwd=None):
     res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
@@ -252,6 +252,27 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                 "commits": commits,
                 "exit_code": 1
             }
+
+    # Gate 2b: 24h feature soak gate (Finding C-1 / J-2 / J-3 / J-4)
+    # If candidate is a feat/* or subject begins with feat, ensure commit is >= 24h old
+    now_ts = int(os.environ.get("OC_HARVEST_NOW_TS") or time.time())
+    for c in commits:
+        rc, out, _ = run_cmd(["git", "-C", repo_path, "log", "-n", "1", "--format=%s%x09%ct", c])
+        if rc == 0 and out.strip():
+            parts = out.strip().split("\t")
+            c_subj = parts[0]
+            c_ts = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+            is_feat = c_subj.startswith("feat") or (slug and "feat" in slug) if "slug" in locals() else c_subj.startswith("feat")
+            if is_feat and c_ts > 0:
+                age_hours = (now_ts - c_ts) / 3600.0
+                if age_hours < 24.0:
+                    return {
+                        "status": "REJECTED",
+                        "verdict": f"SOAK_GATE_VIOLATION: Feature commit {c[:8]} is within 24h soak window (age: {max(0.0, age_hours):.1f}h < 24h)",
+                        "issue": issue_num,
+                        "commits": commits,
+                        "exit_code": 1
+                    }
 
     if not commits and issue_num:
         return {
@@ -497,12 +518,19 @@ cmd_selftest() {
   local commit_95
   commit_95="$(git -C "$mock_repo" rev-parse HEAD)"
 
-  # Commit with novel diff (#83)
+  # Commit with novel diff (#83) - old timestamp to pass soak
   echo "Config guard additions" >> "$mock_repo/config.rs"
   git -C "$mock_repo" add config.rs
-  git -C "$mock_repo" commit -q -m "fix(config): serde_ignored write guard (#83)"
+  GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" git -C "$mock_repo" commit -q -m "fix(config): serde_ignored write guard (#83)"
   local commit_83
   commit_83="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  # Fresh feat commit under 24h soak (#300)
+  echo "Fresh feature" >> "$mock_repo/feat.rs"
+  git -C "$mock_repo" add feat.rs
+  GIT_COMMITTER_DATE="2026-09-14T10:00:00Z" GIT_AUTHOR_DATE="2026-09-14T10:00:00Z" git -C "$mock_repo" commit -q -m "feat(new): fresh feature under soak (#300)"
+  local commit_300
+  commit_300="$(git -C "$mock_repo" rev-parse HEAD)"
 
   # Commit already merged in upstream (#82) - cut directly on upstream branch
   git -C "$mock_repo" checkout -q adolfousier/main
@@ -583,6 +611,16 @@ EOF
     echo "  ok 4 - vet #83 (novel diff) -> APPROVED exit 0"
   else
     echo "  bad 4 - vet #83 expected rc=0 APPROVED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 4b. Test #300 (fresh feat within 24h soak) -> REJECTED (rc 1)
+  rc=0
+  out="$(OC_HARVEST_NOW_TS="1789020000" run_engine "vet" "$commit_300" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "SOAK_GATE_VIOLATION"; then
+    echo "  ok 4b - vet #300 (fresh feat within soak window) -> REJECTED exit 1"
+  else
+    echo "  bad 4b - vet #300 expected rc=1 SOAK_GATE_VIOLATION, got rc=$rc ($out)"
     return 1
   fi
 
