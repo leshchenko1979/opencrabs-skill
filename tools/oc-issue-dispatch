@@ -208,36 +208,41 @@ AFFINITY_KEYWORDS = {
 }
 
 
-def check_journal_receipt(target_uuid, start_epoch, journal_path=None):
+def check_journal_receipt(target_uuid, start_epoch, journal_path=None, poll_grace_secs=0):
     """
     Verify if a delivery receipt for target_uuid exists in session-notify.journal
-    since start_epoch.
+    since start_epoch. Supports a polling grace window for slow async daemon writes.
     """
     if not journal_path:
         journal_path = os.path.expanduser("~/.opencrabs/profiles/ops/logs/session-notify.journal")
         if not os.path.exists(journal_path):
             journal_path = os.path.expanduser("~/.opencrabs/logs/session-notify.journal")
-    if not os.path.exists(journal_path):
-        return False
-    try:
-        with open(journal_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        for line in reversed(lines[-50:]):
-            parts = line.strip().split("\t")
-            if len(parts) >= 5:
-                ts_str, caller, tgt, outcome, exit_str = parts[:5]
-                t_val = tgt.split("=", 1)[1] if "=" in tgt else tgt
-                o_val = outcome.split("=", 1)[1] if "=" in outcome else outcome
-                e_val = exit_str.split("=", 1)[1] if "=" in exit_str else exit_str
-                if t_val == target_uuid and o_val in ("delivered", "injected", "redirected", "queued") and e_val == "0":
-                    try:
-                        dt = datetime.datetime.fromisoformat(ts_str)
-                        if dt.timestamp() >= start_epoch - 5:
-                            return True
-                    except Exception:
-                        continue
-    except Exception:
-        pass
+    
+    deadline = time.time() + (poll_grace_secs if poll_grace_secs > 0 else 0)
+    while True:
+        if os.path.exists(journal_path):
+            try:
+                with open(journal_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                for line in reversed(lines[-60:]):
+                    parts = line.strip().split("\t")
+                    if len(parts) >= 5:
+                        ts_str, caller, tgt, outcome, exit_str = parts[:5]
+                        t_val = tgt.split("=", 1)[1] if "=" in tgt else tgt
+                        o_val = outcome.split("=", 1)[1] if "=" in outcome else outcome
+                        e_val = exit_str.split("=", 1)[1] if "=" in exit_str else exit_str
+                        if t_val == target_uuid and o_val in ("delivered", "injected", "redirected", "queued") and e_val == "0":
+                            try:
+                                dt = datetime.datetime.fromisoformat(ts_str)
+                                if dt.timestamp() >= start_epoch - 5:
+                                    return True
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+        if time.time() >= deadline:
+            break
+        time.sleep(2)
     return False
 
 
@@ -526,11 +531,11 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
     
     t0 = time.time()
     if os.path.exists(notify_script):
-        # 90s timeout allows A2A / CLI dispatch to complete even under heavy daemon load
-        rc, out, err = run_cmd([notify_script, target_uuid, envelope, title], timeout=90)
+        # 120s timeout allows A2A / CLI dispatch to complete even under heavy daemon load
+        rc, out, err = run_cmd([notify_script, target_uuid, envelope, title], timeout=120)
         if rc != 0:
-            # Fallback receipt check against session-notify.journal in case wrapper was killed
-            if check_journal_receipt(target_uuid, t0):
+            # Fallback receipt check against session-notify.journal with 30s grace window in case wrapper was killed
+            if check_journal_receipt(target_uuid, t0, poll_grace_secs=30):
                 rc = 0
             else:
                 print(f"ERROR: lib/oc-notify.sh failed (rc={rc}): {err.strip()}", file=sys.stderr)
@@ -541,9 +546,9 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
         if not os.path.exists(notify_bin):
             notify_bin = "/usr/local/bin/opencrabs"
         cmd = [notify_bin, "session-notify", "--profile", "ops", "--mode", "turn-end", target_uuid, envelope]
-        rc, out, err = run_cmd(cmd, timeout=90)
+        rc, out, err = run_cmd(cmd, timeout=120)
         if rc != 0:
-            if check_journal_receipt(target_uuid, t0):
+            if check_journal_receipt(target_uuid, t0, poll_grace_secs=30):
                 rc = 0
             else:
                 print(f"ERROR: session-notify failed (rc={rc}): {err.strip()}", file=sys.stderr)

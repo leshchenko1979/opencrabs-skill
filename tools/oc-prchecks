@@ -68,12 +68,18 @@ if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-prchecks" "$@"; el
 # exit 0 with NO verdict and NO signal extras — a success-shaped row for an
 # interrupted run, despite the lib TERM/INT/HUP traps (26da3914). The kill
 # mechanism was not fully reconstructed; the CLASS is killed here instead:
+_pr_cleanup_checkpoint() {
+  if [ -n "${CHECKPOINT_FILE:-}" ] && [ -f "$CHECKPOINT_FILE" ]; then
+    rm -f "$CHECKPOINT_FILE" 2>/dev/null || :
+  fi
+}
+
 # once a run is ADOPTED (extra run_id/resume present), an exit 0 without
 # extra.verdict is never legitimate in this tool's state machine — re-journal
 # as 5 (in-flight-timeout, nearest RC-CONTRACT code) + anomaly marker.
 # Pre-adoption exits (--help, usage, shape/fork gates) pass through untouched.
 _pr_exit_guard() {
-  local _rc=$?
+  local _rc="${1:-$?}"
   trap - EXIT
   if [ "$_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
     local _e="${OC_LOG_EXTRA:-{\}}"
@@ -82,6 +88,15 @@ _pr_exit_guard() {
       oc_log_extra "watch" "interrupted"
       _rc=5
     fi
+  fi
+  # Clean up in-flight checkpoint on clean / completed exits (< 128)
+  # Preserves checkpoint if killed by signal (TERM=143, INT=130, HUP=129, KILL)
+  local _sig=""
+  if command -v jq >/dev/null 2>&1; then
+    _sig="$(printf '%s' "${OC_LOG_EXTRA:-{\}}" | jq -r '.signal // empty' 2>/dev/null)"
+  fi
+  if [ "$_rc" -lt 128 ] && [ -z "$_sig" ]; then
+    _pr_cleanup_checkpoint
   fi
   oc_log_finish "$_rc"
   exit "$_rc"
@@ -100,6 +115,33 @@ LOCK_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
 LOCK_FILE="$LOCK_DIR/.oc-prchecks-dispatch.lock"
 LOCK_WAIT="${OC_PRCHECKS_LOCK_WAIT:-90}"
 FAULT_TOOL="${OC_PRCHECKS_FAULT_SCOPE:-$(cd "$(dirname "$0")" && pwd)/oc-pr-fault-scope}"   # E5: RED triage backend
+
+# In-flight run checkpoint directory and state file
+CHECKPOINT_DIR="$LOCK_DIR/runs/in-flight"
+CHECKPOINT_FILE=""
+
+_pr_write_checkpoint() {
+  local actor="${OC_ACTOR:-unknown}"
+  [ "$actor" = "unknown" ] && [ -n "${OPENCRABS_SESSION_ID:-}" ] && actor="$OPENCRABS_SESSION_ID"
+  [ -n "$RUN_ID" ] || return 0
+  mkdir -p "$CHECKPOINT_DIR" 2>/dev/null || return 0
+  CHECKPOINT_FILE="$CHECKPOINT_DIR/${actor}.json"
+  local tmp_cp="${CHECKPOINT_FILE}.tmp.$$"
+  if command -v jq >/dev/null 2>&1; then
+    jq -n \
+      --arg session_id "$actor" \
+      --arg run_id "$RUN_ID" \
+      --arg repo "$REPO" \
+      --arg carrier "$CARRIER" \
+      --arg ref "${REF:-}" \
+      --arg sha "${SHA:-}" \
+      --arg pid "$$" \
+      --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --argjson wait_secs "${WAIT_SECS:-600}" \
+      --argjson poll "${POLL:-30}" \
+      '{session_id:$session_id, run_id:$run_id, repo:$repo, carrier:$carrier, ref:$ref, sha:$sha, pid:($pid|tonumber), started_at:$started_at, wait_secs:$wait_secs, poll:$poll}' > "$tmp_cp" 2>/dev/null && mv -f "$tmp_cp" "$CHECKPOINT_FILE" 2>/dev/null || rm -f "$tmp_cp"
+  fi
+}
 
 CALL_ARGS="$*"   # C-#1: backoff identity — same args dying rc=2 repeatedly
 usage() { # [reason] — C-#1: prints WHY before the usage block. A repeat of the
@@ -436,6 +478,50 @@ do_selftest() {
     t_ok "--fast flag dispatches fast=true payload to carrier"
   else t_bad "--fast flag (rc=$T_RC out=$T_OUT)"; fi
 
+  # (h) in-flight checkpoint created upon adoption, cleaned up on normal exit (<128)
+  mk_shim "$D/gh" inflight
+  CP_DIR="$D/state/runs/in-flight"
+  rm -rf "$CP_DIR"
+  OC_ACTOR="test-actor-123" OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+    OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+    OC_TOOLS_NOLOG=1 "$SELF" "$SHA" --wait 120 >/dev/null 2>&1 &
+  CP_PID=$!
+  cp_found=0
+  for _ in 1 2 3 4 5; do
+    if [ -f "$CP_DIR/test-actor-123.json" ]; then
+      cp_found=1
+      break
+    fi
+    sleep 1
+  done
+  cp_valid=0
+  if [ "$cp_found" -eq 1 ]; then
+    cp_run_id="$(jq -r '.run_id // empty' "$CP_DIR/test-actor-123.json" 2>/dev/null)"
+    cp_session="$(jq -r '.session_id // empty' "$CP_DIR/test-actor-123.json" 2>/dev/null)"
+    [ "$cp_run_id" = "222" ] && [ "$cp_session" = "test-actor-123" ] && cp_valid=1
+  fi
+  kill -9 "$CP_PID" 2>/dev/null
+  wait "$CP_PID" 2>/dev/null || :
+  cp_preserved=0
+  [ -f "$CP_DIR/test-actor-123.json" ] && cp_preserved=1
+
+  # Clean exit test: run green, checkpoint must be cleaned up on exit 0
+  OC_ACTOR="test-actor-123" run_t green "$SHA"
+  cp_cleaned=0
+  [ ! -f "$CP_DIR/test-actor-123.json" ] && cp_cleaned=1
+
+  # Negative control: dispatch failure must NOT create any checkpoint
+  rm -rf "$CP_DIR"
+  OC_ACTOR="test-actor-failed" run_t dispatch_fail "$SHA"
+  cp_neg_absent=0
+  [ ! -f "$CP_DIR/test-actor-failed.json" ] && cp_neg_absent=1
+
+  if [ "$cp_valid" -eq 1 ] && [ "$cp_preserved" -eq 1 ] && [ "$cp_cleaned" -eq 1 ] && [ "$cp_neg_absent" -eq 1 ]; then
+    t_ok "in-flight checkpoint: created upon adoption, preserved on SIGTERM, cleaned up on exit 0, negative control absent on fail"
+  else
+    t_bad "in-flight checkpoint (valid=$cp_valid preserved=$cp_preserved cleaned=$cp_cleaned neg_absent=$cp_neg_absent)"
+  fi
+
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
@@ -710,6 +796,7 @@ RUN_URL="${RUN_URL:-}"; RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
 if [ "${OC_PR_SKIPPED_DISPATCH:-0}" != 1 ]; then adopting_pin; fi
 
 # ---------- step 4: watch ------------------------------------------------------
+_pr_write_checkpoint
 deadline=$(( $(date +%s) + WAIT_SECS ))
 while :; do
   ST="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json status,conclusion,createdAt 2>/dev/null)" || {

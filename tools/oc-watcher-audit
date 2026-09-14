@@ -10,18 +10,24 @@
 #   4. HANDROLLED_SLEEP_LOOP: Hand-rolled 'while ... sleep' or 'for ... sleep' pollers
 #
 # Usage:
-#   oc-watcher-audit [--since <ts>] [--json] [--dir <dir>] | --selftest
+#   oc-watcher-audit [--since <ts>] [--json] [--dir <dir>] [--notify-orphans] [--dry-run] | --selftest
 #
-# --since <ts>  Rolling audit window (ISO-8601). Tasks spawned BEFORE <ts> are
-#               skipped, so a long-terminal task stops re-alarming once it ages
-#               out. Timestamps are parsed as datetimes (fractional seconds and
-#               +00:00 offsets included); a task whose timestamp cannot be parsed
-#               is INCLUDED — its age is unprovable, so it is never silently
-#               dropped. Callers pass `date -u -d 'N hours ago' +%Y-%m-%dT%H:%M:%SZ`.
+# --since <ts>       Rolling audit window (ISO-8601). Tasks spawned BEFORE <ts> are
+#                   skipped, so a long-terminal task stops re-alarming once it ages
+#                   out. Timestamps are parsed as datetimes (fractional seconds and
+#                   +00:00 offsets included); a task whose timestamp cannot be parsed
+#                   is INCLUDED — its age is unprovable, so it is never silently
+#                   dropped. Callers pass `date -u -d 'N hours ago' +%Y-%m-%dT%H:%M:%SZ`.
 #
-# --json        Emits a JSON ARRAY of violation objects (never an object), each:
-#               task_id, session_id, spawned_at, state, live, violation, detail,
-#               command. `live` is true when the recorded task state is Running.
+# --json             Emits a JSON ARRAY of violation objects (never an object), each:
+#                   task_id, session_id, spawned_at, state, live, violation, detail,
+#                   command. `live` is true when the recorded task state is Running.
+#
+# --notify-orphans   Scan for interrupted/dead detached tasks or in-flight checkpoints,
+#                   resolve workflow run conclusion via gh run view, and wake the lane
+#                   with session_notify so post-restart comas are broken automatically.
+#
+# --dry-run          Preview orphan recovery actions without sending notifies.
 #
 # Exit codes:
 #   0 clean (zero violations)
@@ -39,7 +45,7 @@ PROG="oc-watcher-audit"
 DEFAULT_DIR="${OC_DETACHED_DIR:-/root/.opencrabs/profiles/ops/tmp/detached}"
 
 usage() {
-  echo "usage: $PROG [--since <ts>] [--json] [--dir <dir>] | --selftest" >&2
+  echo "usage: $PROG [--since <ts>] [--json] [--dir <dir>] [--notify-orphans] [--dry-run] | --selftest" >&2
   exit 2
 }
 
@@ -238,6 +244,69 @@ JSON
   "$SELF" --unknown-flag-xyz >/dev/null 2>&1 || rc14=$?
   assert_eq "unknown flag returns 2" "2" "$rc14"
 
+  # Test 15: --notify-orphans resolves Interrupted detached task and in-flight checkpoint
+  mkdir -p "$d/t15/detached" "$d/t15/state/runs/in-flight" "$d/bin"
+  cat > "$d/t15/detached/interrupted.json" <<'JSON'
+{
+  "id": "task-interrupted",
+  "session_id": "sess-interrupted-1",
+  "task": "gh run watch 555111 --repo leshchenko1979/opencrabs --interval 30 --exit-status",
+  "spawned_at": "2026-09-11T10:00:00Z",
+  "state": "Interrupted"
+}
+JSON
+  cat > "$d/t15/state/runs/in-flight/sess-cp-1.json" <<'JSON'
+{
+  "session_id": "sess-cp-1",
+  "run_id": "555222",
+  "repo": "leshchenko1979/opencrabs",
+  "pid": 99999999
+}
+JSON
+  cat > "$d/bin/fake-gh" <<'BINSCRIPT'
+#!/usr/bin/env bash
+if [ "$1" = "run" ] && [ "$2" = "view" ]; then
+  rid="$3"
+  echo "{\"status\":\"completed\",\"conclusion\":\"success\",\"url\":\"https://github.com/test/runs/$rid\"}"
+  exit 0
+fi
+exit 1
+BINSCRIPT
+  chmod +x "$d/bin/fake-gh"
+
+  local rc15=0
+  local out15
+  out15="$(OC_GH="$d/bin/fake-gh" OC_DEV_STATE="$d/t15/state" OC_DEPLOY_STATE_DIR="$d/t15/state" "$SELF" --dir "$d/t15/detached" --notify-orphans --dry-run --json 2>/dev/null)" || rc15=$?
+  assert_eq "orphan recovery clean audit returns 0" "0" "$rc15"
+  local orph_count=0
+  orph_count="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d.get('orphans_recovered', [])))" "$out15" 2>/dev/null || echo 0)"
+  assert_eq "recovers 2 orphan watchers (1 task + 1 checkpoint)" "2" "$orph_count"
+
+  # Negative control: running task with active PID is NOT flagged as orphan
+  mkdir -p "$d/t16/detached" "$d/t16/state/runs/in-flight"
+  cat > "$d/t16/detached/running.json" <<'JSON'
+{
+  "id": "task-running",
+  "session_id": "sess-running",
+  "task": "gh run watch 555333 --repo leshchenko1979/opencrabs --interval 30 --exit-status",
+  "spawned_at": "2026-09-11T10:00:00Z",
+  "state": "Running"
+}
+JSON
+  cat > "$d/t16/state/runs/in-flight/sess-active.json" <<JSON
+{
+  "session_id": "sess-active",
+  "run_id": "555444",
+  "repo": "leshchenko1979/opencrabs",
+  "pid": $$
+}
+JSON
+  local out16
+  out16="$(OC_GH="$d/bin/fake-gh" OC_DEV_STATE="$d/t16/state" OC_DEPLOY_STATE_DIR="$d/t16/state" "$SELF" --dir "$d/t16/detached" --notify-orphans --dry-run --json 2>/dev/null || true)"
+  local orph_active=0
+  orph_active="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d.get('orphans_recovered', [])))" "$out16" 2>/dev/null || echo 0)"
+  assert_eq "negative control: running task and live PID checkpoint produce 0 orphans" "0" "$orph_active"
+
   rm -rf "$d"
   echo "oc-watcher-audit selftest: PASS=$pass FAIL=$fail"
   [ "$fail" -eq 0 ] || exit 1
@@ -248,11 +317,13 @@ JSON
 SINCE=""
 JSON_MODE=0
 TARGET_DIR="$DEFAULT_DIR"
+NOTIFY_ORPHANS=0
+DRY_RUN=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)
-      echo "usage: $PROG [--since <ts>] [--json] [--dir <dir>] | --selftest"
+      echo "usage: $PROG [--since <ts>] [--json] [--dir <dir>] [--notify-orphans] [--dry-run] | --selftest"
       exit 0
       ;;
     --selftest|selftest)
@@ -271,6 +342,12 @@ while [ $# -gt 0 ]; do
       [ $# -gt 0 ] || usage
       TARGET_DIR="$1"
       ;;
+    --notify-orphans)
+      NOTIFY_ORPHANS=1
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      ;;
     *)
       usage
       ;;
@@ -283,13 +360,19 @@ if [ ! -d "$TARGET_DIR" ]; then
   exit 3
 fi
 
+LOCK_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-/root/.opencrabs/profiles/ops/opencrabs-dev}}"
+CP_DIR="$LOCK_DIR/runs/in-flight"
+
 # Execute audit via python3
-python3 - "$TARGET_DIR" "$SINCE" "$JSON_MODE" << 'PYEOF'
-import sys, os, glob, json, re, datetime
+python3 - "$TARGET_DIR" "$SINCE" "$JSON_MODE" "$NOTIFY_ORPHANS" "$DRY_RUN" "$CP_DIR" << 'PYEOF'
+import sys, os, glob, json, re, datetime, subprocess
 
 target_dir = sys.argv[1]
 since_ts = sys.argv[2] if len(sys.argv) > 2 else ""
 json_mode = (sys.argv[3] == "1") if len(sys.argv) > 3 else False
+notify_orphans = (sys.argv[4] == "1") if len(sys.argv) > 4 else False
+dry_run = (sys.argv[5] == "1") if len(sys.argv) > 5 else False
+cp_dir = sys.argv[6] if len(sys.argv) > 6 else ""
 
 def check_task(task_text):
     violations = []
@@ -396,9 +479,131 @@ for file_path in task_files:
             "command": task_cmd.strip().replace("\n", " ")[:120]
         })
 
+def extract_run_info(cmd_text):
+    if not cmd_text:
+        return None, None
+    m_run = re.search(r'(?:--gated-run\s+(\d+)|\bgh\s+run\s+watch\s+(\d+)|runs/(\d+)|\boc-prchecks\b.*?(?:resume|wait|gate)?\s+(\d+))', cmd_text)
+    run_id = None
+    if m_run:
+        for g in m_run.groups():
+            if g:
+                run_id = g
+                break
+    m_repo = re.search(r'(?:--repo|-R)\s+([a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+)', cmd_text)
+    repo = m_repo.group(1) if m_repo else "leshchenko1979/opencrabs"
+    return run_id, repo
+
+def query_gh_run(run_id, repo):
+    gh_bin = os.environ.get("OC_GH", "gh")
+    try:
+        res = subprocess.run([gh_bin, "run", "view", str(run_id), "--repo", repo, "--json", "status,conclusion,url"], capture_output=True, text=True, timeout=15)
+        if res.returncode == 0:
+            return json.loads(res.stdout)
+    except Exception:
+        pass
+    return None
+
+def notify_session(uuid, title, text):
+    script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else "/root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools"
+    notify_sh = os.path.join(script_dir, "lib", "oc-notify.sh")
+    if not os.path.exists(notify_sh):
+        notify_sh = "/root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/lib/oc-notify.sh"
+    try:
+        subprocess.run([notify_sh, uuid, text, title], capture_output=True, text=True, timeout=90)
+    except Exception:
+        pass
+
+# Orphan recovery processing if --notify-orphans is requested
+orphan_recoveries = []
+if notify_orphans:
+    candidates = {} # session_id -> {run_id, repo, source, state, details}
+    # 1. Check in-flight checkpoints
+    if cp_dir and os.path.isdir(cp_dir):
+        for cp_file in glob.glob(os.path.join(cp_dir, "*.json")):
+            try:
+                with open(cp_file, "r", encoding="utf-8") as f:
+                    cp_data = json.load(f)
+                sess = cp_data.get("session_id")
+                rid = cp_data.get("run_id")
+                rp = cp_data.get("repo", "leshchenko1979/opencrabs")
+                pid = cp_data.get("pid")
+                # Check if pid is alive
+                is_alive = False
+                if pid:
+                    try:
+                        os.kill(int(pid), 0)
+                        is_alive = True
+                    except OSError:
+                        is_alive = False
+                if sess and rid and not is_alive:
+                    candidates[sess] = {
+                        "session_id": sess,
+                        "run_id": rid,
+                        "repo": rp,
+                        "source": "checkpoint",
+                        "file": cp_file
+                    }
+            except Exception:
+                pass
+
+    # 2. Check detached tasks in target_dir with state Interrupted
+    for file_path in task_files:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        state = str(data.get("state", "")).strip()
+        sess = str(data.get("session_id", "")).strip()
+        cmd = str(data.get("task", data.get("command", "")))
+        if state.lower() == "interrupted" and sess and sess != "unknown":
+            rid, rp = extract_run_info(cmd)
+            if rid and sess not in candidates:
+                candidates[sess] = {
+                    "session_id": sess,
+                    "run_id": rid,
+                    "repo": rp,
+                    "source": "detached_task",
+                    "file": file_path
+                }
+
+    for sess, c in candidates.items():
+        run_data = query_gh_run(c["run_id"], c["repo"])
+        status = run_data.get("status") if run_data else "unknown"
+        conclusion = run_data.get("conclusion") if run_data else "unknown"
+        url = run_data.get("url") if run_data else f"https://github.com/{c['repo']}/actions/runs/{c['run_id']}"
+        
+        msg = f"[WATCHER RECOVERED] Detached watcher was interrupted by daemon restart.\nTarget: {c['repo']} run {c['run_id']}\nRun status: {status}, conclusion: {conclusion}\nRun URL: {url}\nResume command: oc-prchecks resume {c['run_id']}"
+        
+        rec = {
+            "session_id": sess,
+            "run_id": c["run_id"],
+            "repo": c["repo"],
+            "status": status,
+            "conclusion": conclusion,
+            "source": c["source"],
+            "notified": not dry_run
+        }
+        orphan_recoveries.append(rec)
+        if not dry_run:
+            notify_session(sess, "Detached Watcher Recovered", msg)
+            if c["source"] == "checkpoint" and os.path.exists(c["file"]):
+                try:
+                    os.remove(c["file"])
+                except Exception:
+                    pass
+
 if json_mode:
-    print(json.dumps(results, indent=2))
+    out_obj = results
+    if notify_orphans:
+        print(json.dumps({"violations": results, "orphans_recovered": orphan_recoveries}, indent=2))
+    else:
+        print(json.dumps(results, indent=2))
 else:
+    if notify_orphans:
+        print(f"ORPHAN RECOVERY REPORT: {len(orphan_recoveries)} orphan watchers resolved")
+        for r in orphan_recoveries:
+            print(f"  SESSION: {r['session_id']}\tRUN: {r['run_id']}\tSTATUS: {r['status']}\tCONCLUSION: {r['conclusion']}\tNOTIFIED: {r['notified']}")
     if results:
         print(f"TASK_ID\tSESSION_ID\tSPAWNED_AT\tLIVE\tVIOLATION\tDETAIL\tCOMMAND")
         for r in results:
