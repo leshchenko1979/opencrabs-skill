@@ -23,6 +23,7 @@ import re
 import argparse
 import subprocess
 import shutil
+import sqlite3
 
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_REPO = os.path.expanduser("~/opencrabs")
@@ -139,9 +140,10 @@ def fetch_open_issues(repo_path, mock_issues=None):
         return []
 
 
-def get_worker_roster(ledger_data, mock_classify=None):
+def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_path=None):
     """
     Retrieve workers, identifying idle editors and their topic affinity.
+    Validates existence against the sessions SQLite database to filter phantom workers.
     """
     classify_rows = {}
     if mock_classify is not None:
@@ -159,6 +161,31 @@ def get_worker_roster(ledger_data, mock_classify=None):
                 except Exception:
                     pass
 
+    # Validate sessions existence against SQLite database (or mock_sessions in tests)
+    known_sessions = None
+    if mock_sessions is not None:
+        known_sessions = set(mock_sessions)
+    else:
+        target_db = db_path or os.environ.get(
+            "OC_DEV_DB",
+            os.environ.get(
+                "OC_ROSTER_DB",
+                os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs.db")
+            )
+        )
+        if os.path.exists(target_db):
+            try:
+                con = sqlite3.connect(f"file:{target_db}?mode=ro", uri=True)
+                cur = con.cursor()
+                cur.execute(
+                    "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%')"
+                )
+                known_sessions = {row[0] for row in cur.fetchall()}
+                con.close()
+            except Exception as e:
+                # If DB read fails, do not hard-crash, but report warning on stderr
+                print(f"WARN: Failed to query sessions DB for liveness check: {e}", file=sys.stderr)
+
     workers = ledger_data.get("workers", [])
     editor_lanes = []
 
@@ -168,6 +195,10 @@ def get_worker_roster(ledger_data, mock_classify=None):
             continue
         uuid = w.get("uuid")
         if not uuid:
+            continue
+
+        # Prune phantom workers whose UUID is absent from sessions DB
+        if known_sessions is not None and uuid not in known_sessions:
             continue
 
         c_info = classify_rows.get(uuid, {})
@@ -597,6 +628,34 @@ def run_selftest():
         "worktrees": "-"
     }
     assert_true("Lane with open claims is treated as busy", select_best_lane(issue_tg, [lane_with_claims]) is None)
+
+    # Test 6c: Phantom worker exclusion and classify-absent live worker retention
+    mock_ledger_roster = {
+        "workers": [
+            {"role": "editor", "uuid": "phantom-uuid-1", "topic": "dead lane"},
+            {"role": "editor", "uuid": "live-idle-classify-present", "topic": "active lane"},
+            {"role": "editor", "uuid": "e14ea3a3-d1a1-4dd5-9902-8e90d5576439", "topic": "stale but alive"}
+        ]
+    }
+    mock_classify_data = {
+        "rows": [
+            {"uuid": "live-idle-classify-present", "class": "IDLE", "dirty": 0, "worktrees": "-", "claims": "-"}
+            # Notice e14ea3a3 is ABSENT from classify rows (stale beyond 24h)
+        ]
+    }
+    mock_live_sessions = {"live-idle-classify-present", "e14ea3a3-d1a1-4dd5-9902-8e90d5576439"}
+
+    filtered_roster = get_worker_roster(
+        mock_ledger_roster,
+        mock_classify=mock_classify_data,
+        mock_sessions=mock_live_sessions
+    )
+    filtered_uuids = {l["uuid"] for l in filtered_roster}
+    assert_true("Phantom worker absent from sessions DB is pruned", "phantom-uuid-1" not in filtered_uuids)
+    assert_true("Classify-present live worker is retained", "live-idle-classify-present" in filtered_uuids)
+    assert_true("Classify-absent but DB-alive worker (e14ea3a3) is retained", "e14ea3a3-d1a1-4dd5-9902-8e90d5576439" in filtered_uuids)
+    e14_lane = next(l for l in filtered_roster if l["uuid"] == "e14ea3a3-d1a1-4dd5-9902-8e90d5576439")
+    assert_true("Classify-absent DB-alive worker defaults to idle", not e14_lane["is_busy"])
 
     # Test 7: Negative control for CLI argument parsing
     p = argparse.ArgumentParser()
