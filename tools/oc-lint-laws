@@ -67,7 +67,7 @@ SKILL_DIR="$(dirname "$TOOLS_DIR")"
 # deliberate — CHANGELOG.md and war-stories.md quote historical invocations that
 # were correct when written and may legitimately name a retired flag; failing on
 # history makes the lint unusable. Law files are the live contract.
-DEFAULT_CORPUS="SKILL.md fleet-directives.md editor.md editor-phase7-rules.md editor-upstream-pr.md hq.md triage.md toolsmith.md review-lenses.md upstream-merge-runbook.md s2-swap-journal-spec.md"
+DEFAULT_CORPUS="SKILL.md fleet-directives.md editor.md editor-phase7-rules.md editor-upstream-pr.md hq.md triage.md toolsmith.md review-lenses.md upstream-merge-runbook.md s2-swap-journal-spec.md tools/RC-CONTRACT.md"
 
 usage() { awk 'NR>2 && /^#/ { sub(/^# ?/, ""); print; next } NR>2 { exit }' "$SELF"; exit 0; }
 

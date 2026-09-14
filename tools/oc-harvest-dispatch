@@ -134,13 +134,22 @@ def check_upstream_pr(issue_num, upstream_repo, mock_prs=None):
             return None
         prs = json.loads(out)
     for p in prs:
+        if p.get("state") not in ["MERGED", "OPEN"]:
+            continue
         body = p.get("body", "") or ""
         head = p.get("headRefName", "") or ""
         title = p.get("title", "") or ""
-        text = f"{title} {head} {body}"
-        if f"#{issue_num}" in text or f"/{issue_num}" in text or f"-{issue_num}" in text:
-            if p.get("state") in ["MERGED", "OPEN"]:
-                return p
+
+        if re.search(rf"leshchenko1979/opencrabs(?:/issues/|#){issue_num}\b", body) or \
+           re.search(rf"leshchenko1979/opencrabs(?:/issues/|#){issue_num}\b", title):
+            return p
+        if re.search(rf"Original issue:\s*(?:https?://[^\s]+/)?(?:issues/|#)?{issue_num}\b", body, re.IGNORECASE):
+            return p
+        if re.search(rf"(?:^|/)(?:fix|feat|up|harvest)[/-]{issue_num}(?:-|$)", head) or \
+           re.search(rf"/{issue_num}(?:-|$)", head):
+            return p
+        if re.search(rf"(?:\(|^|\s)(?:fix|fixes|feat|close|closes)?\s*#{issue_num}\b", title, re.IGNORECASE) and not re.search(rf"(?:follow-up to|reverts?|related to)\s*#{issue_num}\b", title, re.IGNORECASE):
+            return p
     return None
 
 def get_active_claims(ledger_file):
@@ -320,7 +329,19 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
 
 action = sys.argv[1]
 
-if action == "vet":
+if action == "test-check-pr":
+    issue_num = int(sys.argv[2])
+    mock_file = sys.argv[3]
+    with open(mock_file) as f:
+        mock_prs = json.load(f)
+    pr = check_upstream_pr(issue_num, "mock/repo", mock_prs=mock_prs)
+    if pr:
+        print("FOUND:" + str(pr.get("number")))
+    else:
+        print("NOT_FOUND")
+    sys.exit(0)
+
+elif action == "vet":
     candidate = sys.argv[2]
     repo_path = sys.argv[3]
     base_ref = sys.argv[4]
@@ -585,27 +606,78 @@ EOF
     return 1
   fi
 
-  # 7. Help exits 0
+  # 7. Negative control: check_upstream_pr does not reject #216 on prose reference in PR #301
+  local mock_pr_file="$st_dir/mock_prs.json"
+  cat << 'EOF' > "$mock_pr_file"
+[
+  {
+    "number": 301,
+    "title": "feat(engine): new loop parser (follow-up to #216)",
+    "body": "Implements extended parsing. Mentioning #216 here as related background.",
+    "headRefName": "feat/parser-v2",
+    "state": "MERGED"
+  },
+  {
+    "number": 216,
+    "title": "fix(core): real fix for #216",
+    "body": "Original issue: https://github.com/leshchenko1979/opencrabs/issues/216",
+    "headRefName": "fix/216-core-leak",
+    "state": "MERGED"
+  }
+]
+EOF
+
+  rc=0
+  out="$(run_engine "test-check-pr" "216" "$mock_pr_file" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && [ "$out" = "FOUND:216" ]; then
+    echo "  ok 7 - check_upstream_pr matches real issue #216 PR -> exit 0"
+  else
+    echo "  bad 7 - check_upstream_pr expected FOUND:216, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # Negative control: test issue 999 which only appears as prose follow-up in #301
+  cat << 'EOF' > "$mock_pr_file"
+[
+  {
+    "number": 301,
+    "title": "feat(engine): new loop parser (follow-up to #999)",
+    "body": "Implements extended parsing. Mentioning #999 here as related background.",
+    "headRefName": "feat/parser-v2",
+    "state": "MERGED"
+  }
+]
+EOF
+  rc=0
+  out="$(run_engine "test-check-pr" "999" "$mock_pr_file" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && [ "$out" = "NOT_FOUND" ]; then
+    echo "  ok 8 - check_upstream_pr ignores prose follow-up to #999 -> exit 0"
+  else
+    echo "  bad 8 - check_upstream_pr expected NOT_FOUND for prose #999, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 9. Help exits 0
   rc=0
   bash "$0" --help >/dev/null 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
-    echo "  ok 7 - --help -> exit 0"
+    echo "  ok 9 - --help -> exit 0"
   else
-    echo "  bad 7 - --help expected rc=0, got rc=$rc"
+    echo "  bad 9 - --help expected rc=0, got rc=$rc"
     return 1
   fi
 
-  # 8. Missing args exits 2
+  # 10. Missing args exits 2
   rc=0
   bash "$0" vet >/dev/null 2>&1 || rc=$?
   if [ "$rc" -eq 2 ]; then
-    echo "  ok 8 - missing args -> exit 2"
+    echo "  ok 10 - missing args -> exit 2"
   else
-    echo "  bad 8 - missing args expected rc=2, got rc=$rc"
+    echo "  bad 10 - missing args expected rc=2, got rc=$rc"
     return 1
   fi
 
-  echo "selftest: 8/8 OK"
+  echo "selftest: 10/10 OK"
   return 0
 }
 

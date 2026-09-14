@@ -114,6 +114,19 @@ while [ $# -gt 0 ]; do
     --issue)   LATE_ISSUE="${2:-}";    shift 2 ;;
     --target)  LATE_TARGET="${2:-}";   shift 2 ;;
     --evidence) LATE_EVIDENCE="${2:-}"; shift 2 ;;
+    --log-stats)
+      # Dynamic smoke log statistics
+      shift
+      target="${1:-$CANON_LOG}"
+      case "$target" in
+        --*|-h) target="$CANON_LOG" ;;
+        /*) ;;
+        *) target="$STATE_DIR/$target" ;;
+      esac
+      [ -f "$target" ] || die 3 "smoke log missing: $target"
+      total="$(wc -l < "$target")"
+      echo "total_rows=$total log=$target"
+      exit 0 ;;
     --selftest)
       d="$(mktemp -d)"
       printf 'x%.0s' {1..100} > "$d/a"; cp "$d/a" "$d/b"; printf 'x%.0s' {1..100} > "$d/c"; printf 'y' >> "$d/c"

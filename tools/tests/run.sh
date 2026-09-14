@@ -702,6 +702,13 @@ if tool oc-rebase-safety; then
   "$TOOLS_DIR/oc-rebase-safety" audit >/dev/null 2>&1; [ $? -eq 2 ] && ok "audit missing args -> 2" || bad "audit missing args -> expected 2"
 fi
 
+section "oc-roster"
+run_selftest oc-roster
+if tool oc-roster; then
+  "$TOOLS_DIR/oc-roster" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/oc-roster" --no-such-arg >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2" || bad "unknown arg -> expected 2"
+fi
+
 section "oc-ship-chain (5→swapped orchestrator, owner GO 16:16Z)"
 run_selftest oc-ship-chain
 if tool oc-ship-chain; then

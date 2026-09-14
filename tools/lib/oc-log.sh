@@ -94,7 +94,7 @@ oc_log_flood_guard() {
   [ "${OC_NO_FLOODGUARD:-0}" = "1" ] && return 0
   if oc_is_selftest; then return 0; fi   # M2-21: the bare `selftest` subcommand bypasses too
   command -v jq >/dev/null 2>&1 || return 0
-  local logf="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
+  local logf="${OC_TOOLS_LOG:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/tools.log}"
   [ -f "$logf" ] || return 0
   local cutoff n
   cutoff="$(($(date +%s) - 120))"
@@ -139,7 +139,7 @@ oc_log_finish() {
     --argjson extra "${OC_LOG_EXTRA:-{\}}" \
     '{ts:$ts, tool:$tool, actor:$actor, args:$args, exit:$exit, secs:($secs|tonumber), extra:$extra}' 2>/dev/null)" || return 0
   [ -n "$line" ] || return 0
-  logf="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
+  logf="${OC_TOOLS_LOG:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/tools.log}"
   mkdir -p "$(dirname "$logf")" 2>/dev/null
   if command -v flock >/dev/null 2>&1; then
     ( flock -x 9; printf '%s\n' "$line" >>"$logf" ) 9>>"$logf.lock" 2>/dev/null \

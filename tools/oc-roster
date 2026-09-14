@@ -318,7 +318,7 @@ sys.stderr.write("oc-roster: rows=%d %s phantoms=%d\n" % (
     len(rows), " ".join("%s=%d" % kv for kv in sorted(tallies.items())), len(phantoms)))
 PY
     ;;
-  --selftest|selftest) "$SELF_DIR/oc-roster-selftest" ;;
+  --selftest|selftest) "$SELF_DIR/tests/oc-roster-selftest" ;;
   -h|--help) usage 0 ;;
   "") usage ;;
   *) echo "$PROG: unknown verb '$verb'" >&2; usage ;;

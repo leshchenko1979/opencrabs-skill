@@ -8,7 +8,7 @@ set -o pipefail
 export OC_TOOLS_NOLOG=1
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-TOOL="$SELF_DIR/oc-roster"
+TOOL="$(dirname "$SELF_DIR")/oc-roster"
 D="$(mktemp -d)"
 trap 'rm -rf "$D"' EXIT
 
