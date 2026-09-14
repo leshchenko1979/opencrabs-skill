@@ -1,11 +1,16 @@
 # Changelog
 
 ## v0.4.175 (2026-09-14) — Duty 4+6 Review Cycle `20260914-c11` & Census Alignment
-- **Census & Single-Writer Expansion (Lens A, G):**
-  - Added `editor-upstream-pr.md` to the official single-writer census in `SKILL.md §Hard rules` and `hq.md`.
-  - Added `tools/HEALTH-CHECKS.md`, `tools/HEALTH-CLASSES.md`, and `editor-upstream-pr.md` to `README.md` documentation map.
-  - Clarified CHANGELOG ordering convention in `README.md` (newest entry FIRST).
-  - Cleaned tool count references in `editor.md` and pruned dead compiler inbox reference in `hq.md`.
+- **Census & Single-Writer Expansion (Lens A, G; Findings G-01, G-03):**
+  - Added `editor-upstream-pr.md` to official single-writer census in `SKILL.md §Hard rules` and `hq.md`.
+  - Added `editor-upstream-pr.md`, `tools/RC-CONTRACT.md`, `tools/HEALTH-CHECKS.md`, and `tools/HEALTH-CLASSES.md` to `README.md` layout table.
+  - Clarified CHANGELOG ordering convention in `README.md` (prepend newest-FIRST).
+- **Contract & Count Hygiene (Findings A-01, A-02, C-01):**
+  - Harmonized tool fleet counts across `README.md` and `editor.md` to authoritative 39 tools.
+  - Deduplicated `oc-issue-dispatch` contract entry in `tools/RC-CONTRACT.md`.
+- **Dead Prose & Brain Scrub (Findings B-02, BS-01):**
+  - Removed historical Compiler inbox note from active `hq.md §Duty 3` block.
+  - Pruned duplicated subshell bash-ism narrative in `AGENTS.md:41` (BS-01) to a concise canonical pointer to `fleet-directives.md §Verification-discipline additions`.
 - **Review Cycle Persisted (Lenses A–J, Brain Scrub):**
   - Evaluated 11/11 lenses, persisted reports under `reviews/20260914-c11/reports/` with cryptographic receipts in `skill-review-index.log`. Master verdict at `reviews/20260914-c11/verdict.md`.
   - Battery verified: PASS=194, FAIL=0.
