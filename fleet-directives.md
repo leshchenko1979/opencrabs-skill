@@ -242,7 +242,7 @@ Mandatory standards for any code slated for upstream harvest (`adolfousier/openc
 3. **W3 (Invocation verification):** Verify job dispatch identity before entering wait loops; never poll an ambiguous or unverified run ID.
 4. **W4 (Notify wiring):** Automated watchers notify directly to the owning session UUID via `session_notify` upon terminal completion.
 5. **W5 (Log-window cuts):** Grep and log queries must bound search ranges (`--since` or fixed tail) to avoid context compaction floods.
-6. **W6 (Actor attribution):** Every `oc-*` tool call must export `OC_ACTOR=<session-uuid>`.
+6. **W6 (Actor attribution — automatic via ambient `OPENCRABS_SESSION_ID`, v0.4.176):** Tools automatically derive attribution from `$OPENCRABS_SESSION_ID`. Manual `export OC_ACTOR` is retired.
 
 Procedure detail: `editor.md §CI-wait discipline & actor attribution`.
 
@@ -407,9 +407,9 @@ Sibling of the receipt laws (phantom #6, §Receipt + delivery discipline additio
 
 ## Attribution & Goal Hygiene (v0.4.152, owner order 2026-09-12) [LANE]
 
-### A1 — Ledger rows carry an actor, by tool default
+### A1 — Ledger rows carry an actor, by tool default (v0.4.176)
 
-Every `oc-*` invocation MUST export `OC_ACTOR=<session-uuid>` (SKILL.md; `lib/oc-log.sh` stamps `unknown` otherwise). Sharpened: a tool that ALREADY KNOWS the owning session (e.g. `oc-ship-chain` inside a chain) MUST default the actor to that session rather than writing an unattributed row — an `(unattributed — pass --by or export OC_ACTOR)` row is a TOOL defect, not lane sloppiness, and is dispatched to Toolsmith.
+Tools (`lib/oc-log.sh`, `oc-commit`, `oc-ledger`, etc.) automatically derive the actor from `$OPENCRABS_SESSION_ID` (commit `978fe5fe`). Manual `export OC_ACTOR` is retired. Sharpened: tools default the actor to the ambient session rather than writing an unattributed row — an `(unattributed — pass --by or export OC_ACTOR)` row is a TOOL defect, not lane sloppiness, and is dispatched to Toolsmith.
 
 Worked examples (2026-09-12): 34 `shipchain` rows written unattributed by `oc-ship-chain` while the tool held the owning session id (n=3515 class); and an actor string that is not a rostered role (a lane stamping its factory label instead of its roster role) trips `unrostered-actor` — **stamp as your ROSTER ROLE**.
 

@@ -21,8 +21,8 @@ EDITOR territory — this lane touches neither.
 ## Role Boundaries (affirmative scope)
 
 - **Toolsmith Scope:** Toolsmith owns CLI tools under `tools/` and the selftest battery (`tools/tests/run.sh`).
-- **Skill Documentation:** Skill markdown, role files, and `fleet-directives.md` are authored strictly by HQ. Tooling gaps requiring skill documentation leave as `IDEA:` items to Triage.
-- **Daemon Source & Builds:** Daemon source (`~/opencrabs`), carrier dispatches, and binary swaps belong strictly to Editor lanes. Daemon defects leave as `QUIRK:`/`IDEA:` items to Triage.
+- **Skill Documentation:** Skill markdown, role files, and `fleet-directives.md` are authored strictly by HQ. Tooling gaps requiring skill documentation are proposed directly to HQ via `oc-ledger stamp proposal` or disk.
+- **Daemon Source & Builds:** Daemon source (`~/opencrabs`), carrier dispatches, and binary swaps belong strictly to Editor lanes. Daemon defects are filed directly as GitHub fork issues.
 - **Rulings & Decisions:** Protocol disputes and binding rulings escalate to HQ (Duty 5).
 - **Owner Communication:** HQ owns owner-facing verdict batches; Toolsmith reports status to HQ/Triage or the operator when queried.
 

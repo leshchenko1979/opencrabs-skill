@@ -25,47 +25,23 @@ deputization. Expected reply shape: "routed to <lane>", not done-work.
 
 ## Role boundaries & responsibilities
 
-- **Skill file authoring**: Exclusively owned by HQ (SKILL.md §Hard rules census). Triage captures skill feedback and ideas as `IDEA:` and `QUIRK:` ledger entries for HQ batch processing.
+- **Skill file authoring**: Exclusively owned by HQ (SKILL.md §Hard rules census).
 - **Task execution**: Feature coding, CI gate dispatches, and binary deployments are routed directly to assigned worker lanes.
 - **Protocol governance**: Binding protocol rulings are owned by HQ (hq.md Duty 5); protocol disputes escalate to HQ.
-- **Owner reporting**: Owner-facing verdict batches are compiled and delivered by HQ (Duty 4 / hq.md §Duty 7 discipline).
+- **Upstream lifecycle tracking**: Harvester role lifecycle duties are consolidated in Triage (upstream delta watch, upstream PR census, maintainer dependency tracking). Editor exclusively authors, smokes, and files upstream PRs per Phase 7.
 
-## Duty T1 — Idea box intake (historical origin: ex hq.md Duty 7, first half — migrated v0.4.86; HQ Duty 7 no longer carries numbered items)
+## Duty T1 — RETIRED: Idea box intake (retired v0.4.176 per direct process-owner routing)
 
-Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
-a wrong tool or a wrong process MAY report it the moment it happens; no
-waiting for a poll.
+The intermediate idea intake queue is RETIRED. Ideas and proposals route directly to process owners:
+- Direct to **HQ** for skill laws, process directives, and governance.
+- Direct to **Toolsmith** for tool creation, fixes, and CLI enhancements.
+- Direct to **Editor/Domain Lanes** for subsystem code features.
 
-1. Format = Duty-4 strict format with an `IDEA:` prefix, sent to THIS lane via
-   `session_notify`:
-   `IDEA: ADD|CHANGE <rule/tool> in <file+section> BECAUSE <gap actually hit>`
-   + date + evidence. Ideas NEVER edit skill files — HQ authors,
-   the owner approves.
-2. INBOX = the ledger: on receipt stamp an `idea` event into
-   `workers-ledger.json` (sender session, ts, text) — durable, jq-filterable,
-   cannot die in a session log. The ledger is flock-serialized via `oc-ledger`;
-   Triage + HQ writing ONE ledger is mechanically safe.
-3. Same-turn ACK to the sender (quiet delivery), then triage; the verdict is
-   stamped as an `idea-verdict` ledger event:
-   - ACCEPT-MECHANICAL → queued into the next skill version batch: hand the
-     item to HQ via `session_notify` (quiet, batched at turn-end).
-   - KERNEL-SEMANTIC → escalate to HQ, who batches to the owner
-     with a verdict table; ships ONLY on his word.
-   - REJECT → reason journaled, never silently dropped.
-4. Overlap: an idea matching an open Duty-4 proposal MERGES into it
-   (convergence beats volume); duplicate ideas stamp ONE event, not N.
+## Duty T2 — RETIRED: Quirk intake & relay (retired v0.4.176 per Direct Dispatch Law)
 
-## Duty T2 — Tool anomaly audit & orphan check (updated v0.4.133 per Direct Dispatch Law)
-
-**Scope note (owner order 2026-09-10 ~02:4xZ & 14:3xZ, fleet-directives §Direct dispatch):** Triage
-is an AUDITOR, not a relay hub. Direct dispatch mandates that workers report tool anomalies directly
+Intermediate quirk intake is RETIRED. Direct dispatch mandates that workers report tool anomalies directly
 to the active **TOOLSMITH** lane (`session_notify`; resolved dynamically via `oc-ledger roster --live --role toolsmith`),
-while core anomalies are filed directly as GitHub fork issues. Triage does NOT relay quirk tickets.
-
-Triage's responsibility under T2 is AUDITING:
-1. Periodic ledger sweeps for open/unclaimed tool quirks or orphaned dispatches.
-2. Escalating stale unhandled quirks directly to the active Toolsmith or owning editor.
-3. Verify-unclaimed checks before new editor assignment (audit role, not relay).
+while daemon runtime anomalies are filed directly as GitHub fork issues.
 
 ## Duty T3 — Create a new editor (standing authority, transferred from HQ at v0.4.86)
 

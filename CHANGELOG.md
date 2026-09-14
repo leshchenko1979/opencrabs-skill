@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.4.176 (2026-09-14) — Role Duties Realignment & OC_ACTOR Auto-Derivation
+
+Codification of direct process-owner feedback routing, Harvester consolidation into Triage, and ambient actor attribution:
+- **Direct Process-Owner Feedback Routing (owner order 2026-09-14 19:25Z):**
+  - Retired centralized Idea Box coordination in HQ (`hq.md §Duty 7`) and intermediate Idea/Quirk intake in Triage (`triage.md §Duty T1/T2`).
+  - Feedback, quirk reports, and improvement proposals route directly to process owners:
+    - **Tool anomalies & CLI tooling**: Route directly to the active **TOOLSMITH** lane (`session_notify` or ledger).
+    - **Skill directives & process governance**: Route directly to **HQ** (`reviews/<cycle-id>/proposals/` or `oc-ledger stamp proposal`).
+    - **Domain/subsystem code & features**: Route directly to owning **Editor / Domain Lanes** via fork issue tracker.
+- **Harvester Consolidation into Triage (owner order 2026-09-14 19:25Z):**
+  - Reaffirmed that Editor lanes exclusively own authoring, smoking, and filing upstream PRs (`editor-upstream-pr.md` Phase 7).
+  - Consolidated all remaining Harvester lifecycle duties (upstream delta watch, upstream PR census, maintainer dependency tracking) into **Triage** (`triage.md §Role boundaries & responsibilities`).
+- **Actor Attribution Auto-Derivation (Toolsmith commit `978fe5fe`):**
+  - Tools (`lib/oc-log.sh`, `oc-commit`, `oc-ledger`, `oc-notify-fanout`, etc.) automatically derive attribution from the ambient session environment variable `$OPENCRABS_SESSION_ID`.
+  - Retired mandatory manual `export OC_ACTOR=<session-uuid>` requirement from `SKILL.md`, `editor.md`, and `fleet-directives.md`. `OC_ACTOR` remains supported as an optional override.
+
 ## v0.4.175 (2026-09-14) — Duty 4+6 Review Cycle `20260914-c11` & Census Alignment
 - **Census & Single-Writer Expansion (Lens A, G; Findings G-01, G-03):**
   - Added `editor-upstream-pr.md` to official single-writer census in `SKILL.md §Hard rules` and `hq.md`.

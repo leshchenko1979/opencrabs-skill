@@ -92,14 +92,11 @@ receipt id via oc-ledger.**
    bash tool parameter `background: true`. Hand-rolled `nohup` scripts, sleep loops,
    and custom background daemons are FORBIDDEN. The daemon harness natively tracks
    detached execution and auto-resumes your session with the result upon exit.
-2. **`OC_ACTOR=<session-uuid>` MUST be exported on every `oc-*` tool
-   invocation** — `lib/oc-log.sh` stamps `actor:` from it (unset → `"unknown"`),
-   making floods and behavior attributable after the fact and feeding the
-   ledger-beats-memory guard (the CONSENT REGISTER live-record rule: ledger
-   beats memory when they disagree). This session's uuid comes from the runtime
-   prompt/session context; a
-   lane that cannot recall its own uuid reads it from its Session-Id trailer /
-   the HQ roster before running any tool.
+2. **Actor attribution is automatic via ambient `OPENCRABS_SESSION_ID` (v0.4.176):**
+   Tools (`oc-log.sh`, `oc-commit`, `oc-ledger`, etc.) automatically derive attribution from
+   the ambient session environment variable `$OPENCRABS_SESSION_ID`. Manual `export OC_ACTOR` is
+   retired and no longer required on tool calls; `OC_ACTOR` remains supported only as an optional
+   override if running outside an agent session.
 3. Re-running the same CI because the head moved is inherent to a fix loop, but
    only via oc-prchecks re-dispatch — pr-checks.yml carries a concurrency group
    (`cancel-in-progress: true`, owner fix) so the superseded run is auto-cancelled.
@@ -240,7 +237,7 @@ follows it:**
 Canonical descriptions + selftest contracts: `tools/RC-CONTRACT.md` (full
 inventory of tools) + SKILL.md tool table. The
 editor-relevant subset, invocation forms only (all paths relative to the skill
-dir; `OC_ACTOR=<your full uuid>` on every call):
+dir; actor derived automatically from ambient `$OPENCRABS_SESSION_ID`):
 
 | Tool | Invocation | For |
 |------|-----------|-----|
@@ -248,7 +245,7 @@ dir; `OC_ACTOR=<your full uuid>` on every call):
 | `oc-prchecks` | `tools/oc-prchecks wait <branch>` / `<branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; `wait` provides single-command blocking gate |
 | `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) |
 | `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | per-commit implementation comment (body-file discipline inside; chained by oc-ship-chain Leg 2) |
-| `oc-commit` | `tools/oc-commit -m "<msg>" [--issue N] [--no-comment]` | gated SIGNED commit: Session-Id + Issue-Ref trailers derived from OC_ACTOR + ledger claim; implementation comment folded in (oc-issue-log leg) — Phase 6c step 2 default |
+| `oc-commit` | `tools/oc-commit -m "<msg>" [--issue N] [--no-comment]` | gated SIGNED commit: Session-Id + Issue-Ref trailers derived from session ID + ledger claim; implementation comment folded in (oc-issue-log leg) — Phase 6c step 2 default |
 | `oc-ledger` | `stamp claim --what "…"` · `--verbs` · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack; `--verbs` discovers subcommands |
 | `oc-drift-check` | `tools/oc-drift-check <your-uuid> [--ack]` (legacy: `<uuid> <claimed-ver>`) | §Mid-cycle skill drift step 1–2 |
 | `oc-deploy` | `ship --execute` · `poll` · `status [--json]` · `watch` · `fanout` | ship chain (dispatch → watch → swap); `status` verifies running vs disk binary |
@@ -619,7 +616,7 @@ Your answer is always the SAME sequence:
 # 1. fresh worktree at the relevant sha (worktree lifecycle, Phase 2)
 tools/oc-wt add <task> <branch>
 # 2. reproduce → fix → SIGNED commit (E1, v0.4.78)
-tools/oc-commit -m "<msg>"   # gated wrapper: Session-Id from OC_ACTOR, Issue-Ref
+tools/oc-commit -m "<msg>"   # gated wrapper: Session-Id from ambient session ID, Issue-Ref
 #    derived from your latest ledger claim, implementation comment folded in
 #    (oc-issue-log leg). RAW FALLBACK — rebase/cherry-pick/harvest contexts only:
 #    git -C ~/oc-wt-<task> commit --trailer "Session-Id: <full session uuid>" --trailer "Issue-Ref: #<issue-n>"

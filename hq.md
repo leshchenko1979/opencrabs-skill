@@ -237,39 +237,20 @@ Method:
 Rationale: HQ authors most rules — author-blindness is structural.
 Independent subagent eyes + the owner gate keep the set honest.
 
-## Duty 7 — Idea box: OPERATES in the TRIAGE lane (carve-out v0.4.86)
+## Duty 7 — RETIRED: Direct Process-Owner Feedback (owner order 2026-09-14, v0.4.176)
 
-Standing PUSH channel — the complement of Duty 4's pull. Any editor that hits
-a wrong tool or a wrong process MAY report it to the HQ lane the
-moment it happens; no waiting for a poll.
+The centralized Idea Box coordination queue is RETIRED. Feedback, quirk reports, and improvement proposals route directly to the respective process owner without intermediate queuing:
+- **Tool anomalies & CLI tooling**: Route directly to the active **TOOLSMITH** lane (`session_notify` or ledger).
+- **Skill directives & process governance**: Route directly to **HQ** (`reviews/<cycle-id>/proposals/` or `oc-ledger stamp proposal`).
+- **Domain/subsystem code & features**: Route directly to the owning **Editor / Domain Lane** via the fork issue tracker.
 
-Operations (same-turn ACKs, ledger stamps, evidence verification, fix
-routing to the owning editor, new-editor creation) live in `triage.md`
-§Duty T1/T2/T3 — the channel's policy is unchanged. THIS SECTION CARRIES
-NO PROCEDURE COPY (lens A2/G-F4, v0.4.89 — one concept, one home):
-
-- Format = Duty-4 strict format with an `IDEA:` prefix (T1); tool problems
-  use the `QUIRK:` format (T2, owner order 2026-09-01 22:2xZ); verdict
-  taxonomy + INBOX mechanics live in triage.md §Duty T1/T2 (one concept, one
-  home — no restatement here, lens B-F14 v0.4.96).
-
-What stays HERE (HQ side):
-
-- ACCEPT-MECHANICAL items arrive batched from the Triage lane (quiet,
-  turn-end delivery) and queue into the next skill version batch (Duty 1).
-- KERNEL-SEMANTIC escalations get batched to the owner with a verdict table;
-  ships ONLY on his word.
-- Overlap: an idea matching an open Duty-4 proposal MERGES into it
-  (convergence beats volume); duplicate ideas stamp ONE event, not N.
-
-Cross-references saying "hq.md Duty 7" resolve to `triage.md` T1/T2
-for operations and HERE for batch/verdict ownership.
+Legacy references to "hq.md Duty 7" are retired.
 
 ### Related Triage operations (ownership pointers)
-- **Backlog assignment (Duty T5, v0.4.92):** post-compaction sweep of OPEN fork issues against ledger claim-refs; unclaimed → route (T2) or surface here for dispatch.
+- **Backlog assignment (Duty T5, v0.4.92):** post-compaction sweep of OPEN fork issues against ledger claim-refs; unclaimed → route or surface here for dispatch.
 - **Telegram-law TOOL_ACCUM enforcement (Duty T4, v0.4.43):** OPERATES in the TRIAGE lane since v0.4.86 — full procedure in `triage.md` §Duty T4. Repeat offenders escalate HERE for review-toggle decisions.
 
-**Upstream-relations ownership (B8, v0.4.43)**: the upstream WATCH (item 1) is an HQ-owned duty; fork branch lifecycle / clean sweep (item 7) is delegated to and executed by Triage (`triage.md §Duty T4`) — canonical text stays in SKILL.md §Upstream relations; this line is the HQ-side ownership pointer.
+**Upstream-relations ownership (v0.4.176)**: All upstream lifecycle tracking (upstream delta watch, upstream PR census, maintainer dependency tracking) is consolidated in **Triage** (`triage.md §Duty T4/T8`). Fork branch lifecycle / clean sweep is executed by Triage (`triage.md §Duty T4`). Editor exclusively authors and files upstream PRs (`editor-upstream-pr.md`).
 
 ## Upstream sync — watch & governance (sync execution delegated to Triage)
 
