@@ -235,7 +235,10 @@ Method:
    (incidents become rules/proposals, not lenses); no auto-growth. Lenses
    are quality dimensions (stable, few); objects change every batch and are
    re-derived from the skill root at spawn time.
-- **Checkable Completion Formula**: `DONE = all 11 lens reports persisted via oc-review-persist + receipts logged in skill-review-index.log + master verdict compiled in reviews/<cycle-id>/verdict.md + review manifest marked COMPLETED in reviews/<cycle-id>/state.json.`
+8. **Duty-6 Ledger Cadence Reset Stamp (owner order 2026-09-15):** Upon completing the cycle (reports persisted, master verdict written, codifications applied or planned), HQ **MUST explicitly stamp the cycle close note** onto the ledger:
+   `tools/oc-ledger stamp note "v<version> ACCEPTED — Duty 6 Cycle <cycle-id> closed" --by "hq <uuid>"`
+   This stamps the mechanical boundary recognized by `oc-ledger cadence` (`^v[0-9]+\.[0-9]+\.[0-9]+ ACCEPTED`), resetting the review cadence counter from `FIRE` back to `0/5 WAIT`. Without this stamp, `oc-ledger cadence` will fail to reset and will continuously report overdue review cycles.
+- **Checkable Completion Formula**: `DONE = all 11 lens reports persisted via oc-review-persist + receipts logged in skill-review-index.log + master verdict compiled in reviews/<cycle-id>/verdict.md + review manifest marked COMPLETED in reviews/<cycle-id>/state.json + oc-ledger stamp note "v<version> ACCEPTED — Duty 6 Cycle <id> closed" executed (resetting cadence to 0/5 WAIT).`
 
 Rationale: HQ authors most rules — author-blindness is structural.
 Independent subagent eyes + the owner gate keep the set honest.

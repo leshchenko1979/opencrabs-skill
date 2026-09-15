@@ -1,6 +1,14 @@
 # Changelog
 
-## v0.4.185 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c18` Codification
+## v0.4.186 (2026-09-15) — Duty 6 Ledger Cadence Stamp & 24h Soak Deployment Time Amendment
+
+- **Duty 6 Ledger Cadence Reset Stamp (`hq.md` Duty 6):**
+  - Codified mandatory step 8 in `hq.md` Duty 6: upon completing a review cycle, HQ must explicitly execute `oc-ledger stamp note "v<version> ACCEPTED — Duty 6 Cycle <id> closed" --by "hq <uuid>"`.
+  - Stamping this note creates the `^v[0-9]+\.[0-9]+\.[0-9]+ ACCEPTED` event boundary recognized by `oc-ledger cadence`, properly resetting the review cadence counter from `FIRE` back to `0/5 WAIT`.
+  - Updated Duty 6 `DONE = ...` checkable completion formula to require this ledger stamp.
+- **24-Hour Feature Soak Deployment Timestamp Amendment (`fleet-directives.md` & `editor-upstream-pr.md`):**
+  - Explicitly codified that the 24-hour feature maturation soak window counts strictly from the **live deployment / hot-swap timestamp** (`deployed.ts` / swap journal timestamp when the commit was actually deployed to production), **NOT** from git commit timestamp or issue filing time.
+  - Updated upstream PR filing prerequisites in `editor-upstream-pr.md` Phase 7.
 
 Codification of findings from Duty 4+6 Review Cycle `20260915-c18`:
 - **Tools & Mechanics Fixes (Findings F-01, F-02, E-01, C-01, J-01):**

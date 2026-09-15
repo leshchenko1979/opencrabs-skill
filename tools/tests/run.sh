@@ -621,7 +621,7 @@ if tool oc-pr-fault-scope; then
 fi
 
 section "oc-ledger confirm + derive_by"
-run_selftest oc-ledger
+# (oc-ledger selftest executed in section 11)
 
 # ---- 17. lens-F coverage batch (v0.4.72, F8: tools the battery never ran) ---
 section "oc-shadow-rotate"
