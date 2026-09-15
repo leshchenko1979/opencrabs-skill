@@ -254,9 +254,9 @@ except Exception as e:
 issue_map, pr_entries = parse_issue_map(prs)
 
 if action == "check":
-    # Target can be issue number (e.g. 144 or #144) or slug
-    m = re.search(r"(\d+)", target)
-    target_iss = int(m.group(1)) if m else None
+    # Target can be issue number (e.g. 144 or #144 or issue-144) or slug or sha
+    m_iss = re.fullmatch(r"#?(\d+)", target) or re.fullmatch(r"issue-?(\d+)", target, re.IGNORECASE)
+    target_iss = int(m_iss.group(1)) if m_iss else None
     
     match = None
     if target_iss and target_iss in issue_map:
@@ -268,6 +268,7 @@ if action == "check":
                 match = p
                 break
 
+    closed_match = None
     if match:
         st = match["state"]
         num = match["pr"]
@@ -279,8 +280,7 @@ if action == "check":
             print(f"REFUSED: Target {target} is currently IN_FLIGHT upstream in PR #{num}: {ti}")
             sys.exit(1)
         elif st == "CLOSED":
-            print(f"ELIGIBLE_REWORK: Target {target} had PR #{num} CLOSED without merge: {ti}")
-            sys.exit(0)
+            closed_match = match
     
     # CONSULT MANUAL RECORDS before declaring a unit unharvested. record
     # exists to register a PR filed OUTSIDE the scan window (or while GH was
@@ -312,7 +312,12 @@ if action == "check":
         if not iss_c:
             m_sb = re.search(r"#?(\d+)", c.get("subject", ""))
             iss_c = int(m_sb.group(1)) if m_sb else None
-        if (target_iss is not None and iss_c == target_iss) or (target.lower() in c.get("subject", "").lower()):
+        c_sha = c.get("sha", "")
+        c_short = c.get("short_sha", "")
+        matches_sha = bool(target and (c_sha.lower().startswith(target.lower()) or c_short.lower().startswith(target.lower())))
+        matches_iss = bool(target_iss is not None and iss_c == target_iss)
+        matches_subj = bool(target.lower() in c.get("subject", "").lower())
+        if matches_iss or matches_subj or matches_sha:
             matching_commits.append(c)
 
     now_ts = int(os.environ.get("OC_HARVEST_NOW_TS") or time.time())
@@ -334,6 +339,12 @@ if action == "check":
             if age_hours < 24.0:
                 print("REFUSED: Target %s is within 24h feature soak window (age: %.1fh < 24h, commit %s: %s)" % (target, max(0.0, age_hours), mc.get("short_sha", "")[:7], subj[:50]))
                 sys.exit(1)
+
+    if closed_match:
+        num = closed_match["pr"]
+        ti = closed_match["title"]
+        print(f"ELIGIBLE_REWORK: Target {target} had PR #{num} CLOSED without merge: {ti}")
+        sys.exit(0)
 
     print(f"ELIGIBLE: Target {target} is confirmed UNHARVESTED (clean to branch and gate)")
     sys.exit(0)
@@ -541,6 +552,14 @@ cmd_selftest() {
     "headRefName": "port/111-notify-queue",
     "mergedAt": null,
     "body": "Fixes #111"
+  },
+  {
+    "number": 1457,
+    "title": "feat(rework-soak): closed pr fresh feature (#112)",
+    "state": "CLOSED",
+    "headRefName": "port/112-rework-fresh",
+    "mergedAt": null,
+    "body": "Fixes #112"
   }
 ]
 EOF
@@ -566,6 +585,14 @@ EOF
     "short_sha": "8888888",
     "subject": "feat(soak): fresh feature under soak (#300)",
     "trailer": "leshchenko1979/opencrabs#300",
+    "commit_ts": 1789000000,
+    "deployed_ts": 1789000000
+  },
+  {
+    "sha": "7777777cb0000000000000000000000000000000",
+    "short_sha": "7777777",
+    "subject": "feat(rework-soak): closed pr fresh feature (#112)",
+    "trailer": "leshchenko1979/opencrabs#112",
     "commit_ts": 1789000000,
     "deployed_ts": 1789000000
   }
@@ -721,7 +748,36 @@ sys.exit(0 if d.get('manual_records') and d['manual_records'][0].get('unit')=='U
     return 1
   fi
 
-  echo "selftest: 10/10 OK"
+  # 10. Check by commit SHA lookup -> correctly matched
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "8888888" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
+    echo "  ok   - sha lookup for fresh feature -> REFUSED 24h soak exit 1"
+  else
+    echo "  bad  - sha lookup expected rc=1 soak refusal, got rc=$rc ($out)"
+    return 1
+  fi
+
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "9999999" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    echo "  ok   - sha lookup for mature feature -> ELIGIBLE exit 0"
+  else
+    echo "  bad  - sha lookup expected rc=0 ELIGIBLE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 11. Check on CLOSED PR with fresh feature -> exits 1 REFUSED soak (not bypassed)
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "112" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
+    echo "  ok   - closed PR fresh feature -> REFUSED 24h soak exit 1"
+  else
+    echo "  bad  - closed PR fresh feature expected rc=1 soak refusal, got rc=$rc ($out)"
+    return 1
+  fi
+
+  echo "selftest: 12/12 OK"
   return 0
 }
 
