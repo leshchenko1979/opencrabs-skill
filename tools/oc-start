@@ -147,7 +147,12 @@ printf '%s' "$TASK" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' \
   exit 4; }
 
 # ---- step 1: claim ----------------------------------------------------------
-if ! "$LEDGER_BIN" claim --issue "$ISSUE" --what "CLAIM #$ISSUE — editor start branch=$BRANCH" 2>&1; then
+CLAIM_ARGS=(claim --issue "$ISSUE" --what "CLAIM #$ISSUE — editor start branch=$BRANCH")
+if [ -n "${OPENCRABS_SESSION_ID:-}" ]; then
+  CLAIM_ARGS+=(--by "$OPENCRABS_SESSION_ID")
+fi
+
+if ! "$LEDGER_BIN" "${CLAIM_ARGS[@]}" 2>&1; then
   echo "$PROG: CLAIM REFUSED (see above) — resume: fix the claim, then re-run:" >&2
   echo "  oc-start $ISSUE --branch $BRANCH --task $TASK --repo $REPO" >&2
   exit 3

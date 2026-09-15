@@ -58,6 +58,7 @@ per-commit at replay time.
      `oc-ledger roster --live --role <role>`. `oc-roster`'s `--role` flag is
      accepted and silently ignored (rc 0, no stderr, unfiltered output) — pointing
      role resolution at it breaks dispatch fleet-wide.
+   - **`DONE = tools/oc-roster classify | grep '^ACTIVE' | wc -l` returns 0 and pre-sync rollback SHA is recorded in ledger.**
 2. Branch `sync/upstream-YYYYMMDD` off `origin/main`.
 3. `git rebase adolfousier/main` — **rebase, not merge.** Commits upstream has
    already accepted drop out of the replay automatically; that is the point of
@@ -145,6 +146,7 @@ per-commit at replay time.
    to prevent silent trailer loss (v0.4.170, Finding H-1 / row n=2102) → force-push
    `--force-with-lease` to `origin/main`, consolidated report with the
    decisions table.
+   - **`DONE = tools/oc-prchecks wait <synced-head> returns GREEN, trailers retained, origin/main updated via --force-with-lease.`**
 9. **Swap stamp — REBASE heads are UNSIGNED BY CONSTRUCTION.**
    A rebase (like a synthesis or merge) cannot carry a `Session-Id` trailer, so
    the build leg's ORDER gate 4 refuses the head: `oc-order-validate: UNSIGNED
@@ -167,13 +169,16 @@ per-commit at replay time.
    The owner's swap ruling carries over unchanged: the marker changes no bytes.
    Pre-verified in the PR lane by `pr-checks.yml` swap mode (`swap=true`,
    gate-4 mirror — same commit as this rule).
+   - **`DONE = Signed empty marker commit on top of synced head passes all 4 properties and fast-forwards onto origin/main.`**
 10. **DEPLOY the synced main.** The sync is NOT complete when CI goes green —
     a cutover that stops at the force-push leaves main stranded undeployed
     while the live binary runs an older sha. Dispatch the build leg on the
     marker commit and let the swap complete (or record explicitly why it is
     deferred, with the reason). Verify with `deployed.sha` vs `origin/main`
     after the swap. **No sync step is "done" with main stranded.**
+    - **`DONE = oc-deploy ship <marker-sha> finishes carrier build, binary swapped, and deployed.sha matches origin/main.`**
 11. Ledger stamps; auto-swap completes on GREEN carrier build.
+    - **`DONE = oc-ledger sync records sync event and session_notify notifies active lanes with new base SHA.`**
 
 ## Risk register
 

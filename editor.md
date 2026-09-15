@@ -451,7 +451,7 @@ When shipping features via `oc-ship-chain` or deploying via `oc-deploy`, failure
 **Gate-idle question sweep:** CI gate and carrier build waits are idle time — do not sit silent on open questions. Circle back to the user in your topic with anything unresolved (scope doubts, naming, approach forks) while the chain runs; waiting is never a reason to hold a question or to guess.
 DONE = `tools/oc-ship-chain` exited 0 (SWAPPED) with new binary running live on `opencrabs-ops` unit and worktree cleaned.
 
-## Phase 6b — Smoke-test-on-notify (your features, after any swap)
+## Phase 6 — Smoke Verification (oc-smoke)
 
 A post-swap notify announcing a new binary (mechanical fan-out — `oc-deploy
 fanout`, [#24](https://github.com/leshchenko1979/opencrabs/issues/24) LIVE
@@ -531,7 +531,7 @@ until Alexey fixes it otherwise. If a bounce kills your smoke mid-run: re-arm to
 schemas (step 1), re-run from scratch — NEVER report the bounce itself as a feature
 FAIL.
 
-## Phase 6c — Fix request from a RED run (red build or failed smoke)
+## Phase 6-Fix — Fix Loop (Red Carrier Build or Failed Smoke)
 
 A RED `oc-deploy ship`/poll run or a failed smoke attributes the failure (via
 `oc-attrib` Session-Id trailers) and routes the fix to the guilty editor WITH evidence.

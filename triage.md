@@ -27,19 +27,6 @@ deputization. Expected reply shape: "routed to <lane>", not done-work.
 - **Upstream lifecycle tracking**: Harvester role lifecycle duties are consolidated in Triage (upstream delta watch, upstream PR census, maintainer dependency tracking). Editor exclusively authors, smokes, and files upstream PRs per Phase 7.
 - **Priority authority (owner order 2026-09-15)**: Triage has complete, independent authority over intake triage, patrol sequence, and backlog sorting — never ask the human operator about priorities.
 
-## Duty T1 — RETIRED: Idea box intake (retired v0.4.176 per direct process-owner routing)
-
-The intermediate idea intake queue is RETIRED. Ideas and proposals route directly to process owners:
-- Direct to **HQ** for skill laws, process directives, and governance.
-- Direct to **Toolsmith** for tool creation, fixes, and CLI enhancements.
-- Direct to **Editor/Domain Lanes** for subsystem code features.
-
-## Duty T2 — RETIRED: Quirk intake & relay (retired v0.4.176 per Direct Dispatch Law)
-
-Intermediate quirk intake is RETIRED. Direct dispatch mandates that workers report tool anomalies directly
-to the active **TOOLSMITH** lane (`session_notify`; resolved dynamically via `oc-ledger roster --live --role toolsmith`),
-while daemon runtime anomalies are filed directly as GitHub fork issues.
-
 ## Duty T3 — Create a new editor (standing authority, transferred from HQ at v0.4.86)
 
 Procedure = fleet-directives.md §Creating new editors, unchanged: topic FIRST
@@ -218,6 +205,12 @@ protocol disputes, skill-edit requests, semantic questions, sanctioned-sender
 judgments, upstream matters, owner-verdict-table material.
 
 HOW: same escalation mechanics as toolsmith.md §Escalation (canonical HOW —
+session_notify to HQ session).
+
+## Retired Duties & Forwarding Pointers
+
+- **Duty T1 (Idea box intake)**: Retired v0.4.176 per direct process-owner routing. Ideas route directly to HQ (skill/governance), Toolsmith (CLI tools), or Editors (code features).
+- **Duty T2 (Quirk intake & relay)**: Retired v0.4.176 per Direct Dispatch Law. Tool anomalies route directly to Toolsmith; daemon faults route directly to GitHub fork issues.
 one concept, one home, lens A-L7 v0.4.116). Receipts, ACKs, and ROUTED
 stamps NEVER escalate; they live in the ledger.
 

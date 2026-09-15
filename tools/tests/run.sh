@@ -754,6 +754,8 @@ NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_SELF="$NFSELF" OC_FANOUT_LEDGER="$HOME/.open
 printf '%s' "$NFOUT" | grep -q "sent=0" \
   && ok "fanout --roles filter respected" \
   || bad "fanout --roles filter leaked sends"
+# 61d. oc-notify-fanout internal selftest suite
+run_selftest "oc-notify-fanout" "$NF"
 
 # ---- 62. oc-health (owner-ordered hourly health & cleanliness sweep, 2026-09-11)
 section "oc-health (hourly health & cleanliness sweep)"

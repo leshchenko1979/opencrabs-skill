@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.4.185 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c18` Codification
+
+Codification of findings from Duty 4+6 Review Cycle `20260915-c18`:
+- **Tools & Mechanics Fixes (Findings F-01, F-02, E-01, C-01, J-01):**
+  - **`tools/oc-start`**: Added explicit actor attribution (`--by "$OPENCRABS_SESSION_ID"`) when recording ledger claims.
+  - **`tools/tests/run.sh`**: Integrated `oc-notify-fanout --selftest` into test battery Section 61, advancing total passing tests to 196/196.
+  - **`tools/oc-smoke`**: Enforced robust issue claim owner attribution query from ledger events.
+- **Documentation & Phasing Alignment (Findings A-01, B-01, G-01, G-02, A-02):**
+  - **`editor.md`**: Renumbered and clarified Phase 6 as `Phase 6 — Smoke Verification (oc-smoke)` and `Phase 6-Fix — Fix Loop (Red Carrier Build or Failed Smoke)`.
+  - **`upstream-merge-runbook.md`**: Codified explicit `DONE = ...` checkable completion criteria for Steps 0, 8, 9, 10, and 11.
+  - **`triage.md` & `hq.md`**: Consolidated retired duty records under structured `## Retired Duties & Forwarding Pointers` sections.
+- **Brain & State Directory Scrub (Findings BS-1, BS-2, BS-3, D-01, D-02):**
+  - **`AGENTS.md`**: Pruned historical incident war stories and post-mortem narratives; streamlined hard execution rules.
+  - **State Hygiene**: Pruned stale `fanout.*.lock`, `ship.lock`, `.oc-prchecks-dispatch.lock`, and archived `.bak` files older than 24h.
+
 ## v0.4.184 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c17` Codification
 
 Codification of findings from Duty 4+6 Review Cycle `20260915-c17`:
