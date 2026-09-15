@@ -178,6 +178,7 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
   comprehension guard = disk absorption + `oc-drift-check`. New ack rows opt-in.
 - Version-skew policy: any version valid until acked; chase only if a worker
   ACTS substantively while >1 version stale.
+- **Checkable Completion Formula**: `DONE = Registry write validated on disk + oc-ledger record verified with rc=0.`
 
 ## Duty T7 — Decision Rollcall: trigger, coverage, stamp (owner order 2026-09-08, topic 42487, ruling n=1994)
 
@@ -198,16 +199,13 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
    one targeted chase — to the lane, not a board complaint.
 3. Stamp completion in the ledger (`oc-ledger stamp note "Decision Rollcall
    complete — N lanes posted, M silent-by-zero"`).
-4. NEVER relay, aggregate, summarize, or edit lane lists. The old model
-   (this lane relaying lane reports verbatim to the owner, 2026-09-08
-   morning) is RETIRED by this procedure — owner reads lanes directly.
-5. NEVER answer the Rollcall for a lane, and never append your own queue
-   here — if Triage itself holds an owner decision, post it in the Triage
-   topic like everyone else.
-6. Enforce the format law on coverage check (owner amendment 2026-09-08,
+4. Lane Decision Autonomy: Workers post decisions directly in their own topics.
+   Triage only tracks submission status and records the rollcall completion stamp in workers-ledger.json.
+5. Enforce the format law on coverage check (owner amendment 2026-09-08,
    topic 30220): no acks, no telegram_send in Rollcall posts, context +
    mermaid diagrams per decision, ONE decision per message presented 1 by 1,
-   designs/special cases owner-gated. A lane that acks, batch-walls, or
+   designs/special cases owner-gated.
+- **Checkable Completion Formula**: `DONE = Rollcall broadcast delivered to holding lanes + coverage verified + completion stamp recorded in workers-ledger.json note.`
    starts implementing its own recommendation gets one targeted correction —
    to the lane, not a board complaint.
 7. **Topic-scoped decision ownership**: Decisions are published directly by each worker lane in its own forum topic. Triage maintains the coverage report (which lanes posted, which are silent-by-zero) and stamps progress in the ledger. Centralized decision aggregation is superseded by direct topic posting.

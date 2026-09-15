@@ -273,6 +273,7 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
 - Before building on an existing branch: diff it against its merge-base to confirm no
   foreign WIP rode along from parallel agents. Take a backup branch ref before any
   `rebase --onto`. *(SKILL.md §Shared war stories)*
+- **Checkable Completion Formula**: `DONE = Remotes origin and adolfousier fetched + origin/main tip verified.`
 
 ## Phase 1 — Claim on the fork BEFORE editing
 
@@ -641,7 +642,9 @@ tools/oc-wt remove <task>
 ```
 
 **Per-commit laws live in their phases:** branch-attached HEAD + signing → §Phase 4; worktree-writer exclusivity → §Phase 2. They bind EVERY commit in ANY phase — read them there.
-## Phase 7 + 7b — upstream PR → `editor-upstream-pr.md`
+- **Checkable Completion Formula**: `DONE = Bug reproduced + fix committed with trailers + tools/oc-ship-chain exits 0 (SWAPPED) + worktree removed.`
+
+## Phase 7 + 7b �� upstream PR → `editor-upstream-pr.md`
 
 Feature-complete → upstream PR filing (Phase 7) and PR lifecycle / blocker
 routing (Phase 7b) are split out of this file — single home:

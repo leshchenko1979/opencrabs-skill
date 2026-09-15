@@ -3,7 +3,7 @@
 **Owns:** binding owner directives for opencrabs-dev work (sync policy, upstream PR law, builds/carriers, cargo prohibition, telegram surface law, tool logging, gates, editors, triage, cadence). Re-homed here from ops AGENTS.md/MEMORY.md per owner order 2026-09-02. Where a ruling's full text already lives canonically in another skill file, this file carries only a pointer — one concept, one home.
 
 **Thematic index** (lens B-17/G-F9 v0.4.90 — file is flat; jump via section name). **[LANE] tag (v0.4.95):** sections every worker MUST read in full at spawn/compaction reload (editor.md/triage.md/toolsmith.md/hq.md RELOAD LAW v0.4.95). EXCEPTION (v0.4.96, lens B-F1): HQ re-reads THIS ENTIRE FILE IN FULL (~115 kB and growing — exact size varies per cycle; it owns and rules on the directives; the other three roles may use the thematic-index minimum for non-[LANE] sections):
-**Remotes & sync** (remotes, sync policy) · **Seam-resolution shape** (REBASE model; upstream-byte-exact, overlay disposition) · **Upstream-merge cadence · HARVEST LAW · NO-HOLD** (daily patrol, filing gate, port-work ownership) · **Upstream** (issue filings, PR base-Lint, cross-fork PR, PR naming) · **Builds & ships** (S3/oc-deploy, swap-head signature, swap-sha coverage, features-compat gate, hotfix REDs, no auto-rollback) · **Process & verification** (stage-entry consent, attribution guard, inherited-claim pillars, truncated-output rule, post-compaction reload, what-now/next) · **Channels** (telegram surface law, telegram_send addressing law + TO-BE appendix (outside reload path), post-swap notify, cross-lane delivery cadence, tool logging) · **Lanes** (creating new editors, tool-problem reports/Triage, cadence boundary, parked issues, brain-scrub, discussion links, every-turn verdicts, rule-text provenance, daemon no-reap).
+**Remotes & sync** (remotes, sync policy) · **Seam-resolution shape** (REBASE model; upstream-byte-exact, overlay disposition) · **Upstream-merge cadence · HARVEST LAW · NO-HOLD** (daily patrol, filing gate, port-work ownership) · **Upstream** (issue filings, PR base CI gate, cross-fork PR, PR naming) · **Builds & ships** (S3/oc-deploy, swap-head signature, swap-sha coverage, features-compat gate, hotfix REDs, no auto-rollback) · **Process & verification** (stage-entry consent, attribution guard, inherited-claim pillars, truncated-output rule, post-compaction reload, what-now/next) · **Channels** (telegram surface law, telegram_send addressing law, post-swap notify, cross-lane delivery cadence, tool logging) · **Lanes** (creating new editors, tool-problem reports/Triage, cadence boundary, parked issues, brain-scrub, discussion links, every-turn verdicts, rule-text provenance, daemon no-reap).
 
 <!-- source: AGENTS block1 (remotes/upstream/source-work/impl-comment) -->
 ## Remotes & sync
@@ -567,9 +567,9 @@ Standing lens in the Duty 4+6 skill-review rotation (registered in `oc-review-pe
 
 Reports persist via `oc-review-persist brain-scrub <text|@file>`. Same mechanics as every other lens: verdict consolidated → stamped (`review-battery` boundary law above applies unchanged).
 
-## Upstream PR filing — base Lint pre-claim (Duty-4 proposal, theme-1 lane, owner-approved 2026-09-06) [LANE]
+## Upstream PR filing — base CI gate pre-claim (Duty-4 proposal, theme-1 lane, owner-approved 2026-09-06) [LANE]
 
-Before filing an upstream PR, poll base-main Lint state and pre-claim any
+Before filing an upstream PR, poll base-main CI gate state and pre-claim any
 OWNERLESS red files by carrying a sweep commit in the PR itself
 (Session-Id-only trailer, no Issue-Ref). Do NOT rely on sequencing comments
 or separate base-repair PRs landing first — the 2026-09-05 #1394/#1393/#1395
@@ -626,109 +626,3 @@ AND explicit `thread_id` (for forum-enabled chats). Never omit either.
 - `thread_id: null` (explicit General) is the only sanctioned way to target
   General; blind omission is not.
 
-## telegram_send TO-BE target states — NOT LAW YET (owner rulings 2026-09-07; tool changes, NOT lane law)
-
-Two adopted-but-unshipped tool changes live OUTSIDE the reload path (this
-appendix) until they ship: (1) origin-default omission semantics — omitted
-chat_id/thread_id sends to the originating topic, never the owner DM;
-(2) landing echo — success output names the resolved chat_id + thread_id so
-misdelivery becomes visible. Full text of both targets: git history (v0.4.130,
-fleet-directives.md) and the ledger ruling trail. The [LANE] AS-IS addressing
-rule above governs until these ship.
-
-## Deployed-state markers and state-repo hygiene (owner incident #2066, ruled 2026-09-08 ~16:4xZ)
-
-- **NO `git stash`/`checkout`/`clean` inside the opencrabs-dev STATE repo** without first checking for uncommitted deployed-state files (`deployed.sha`, `deployed.meta.json`, `baseline.json`). oc-deploy writes swap markers as working-tree changes; they are committed only by oc-ledger's next state commit. Stashing reverts deployed-state to a stale sha while the box runs the new binary — smoke-evidence then reports MISMATCH on a CORRECT deploy. Origin: HQ stash at 16:06:54Z during a cleanliness check reverted #134 swap markers (n=2066).
-- **`oc-smoke-evidence` MISMATCH is not yet a verdict**: before anyone treats the running binary as wrong, cross-check `/proc/<pid>/exe` sha256 against the swap journal. Mismatch between marker file and disk must be resolved as "stale marker" vs "stale binary" — never assumed.
-- State-repo stashes that still hold other lanes' WIP (waiters/, tools.log, fanout locks) are recovered ONLY by the owning lane, deliberately — never bulk-popped by HQ.
-
-## CI-run identity + verdict laws (v0.4.109, owner "Go then duty 4+6" 2026-09-08 — consolidated Duty-4/6 batch; all premises HQ-verified same-turn)
-
-- **Gate-run adoption identity = job-name sha pin, never run headSha** (lane 1a63f103, gap hit 17:45Z; HQ-verified live: run 34258955672 headSha=470494c8=default branch, job pin=d949c4e8=actual tip). Before adopting/attributing any PR-lane gate run, grep its job-name full-sha pin against YOUR tip. Run headSha and checkout ref are NOT identity. Carrier workflow_dispatch runs report headBranch/headSha = carrier branch and are unfindable via `gh run list --branch/--commit` — those filters must never be cited as absence evidence (editor 329bf3a3, two chase cycles + n=2028 phantom adoption).
-- **Verdict attribution requires run-existence + head-sha match** (harvest rich-buttons lane aaa8d8ae; HQ-verified: run 34110139 → HTTP 404 both repos). Before claiming a CI verdict on your sha: verify the run EXISTS (404 = no verdict) AND its head_sha/job-pin equals your sha.
-- **Gate-verdict staleness** (editor 329bf3a3): a GREEN gate binds to (sha, main-at-dispatch). If main advances between dispatch and verdict, rebase + FULL re-gate before marker/ship; a job-pinned GREEN on a non-main-contained tip does not authorize ship.
-- **Watcher timeout = resume, not verdict** (mermaid lane c6b1a539, #65): a watcher dying or timing out with the run still in_progress is neither RED nor drop — resume via one-shot `gh run view` + re-verify job-pin before adopting. **Detached execution law:** CI verdict waits, test batteries, and long-running chains run detached via the bash tool parameter `background: true`; hand-rolled `nohup` scripts, sleep loops, and custom background daemons are forbidden (raw `gh run watch` is NOT banned — it is the sanctioned resume form, `editor.md` §Detached command execution). **A watcher that dies without a verdict is NO-VERDICT, never GREEN** (editor lane 1a63f103, 2026-09-11 ~12:2xZ: `oc-prchecks` died on a `fork: retry: Resource temporarily unavailable` storm and **exited 0 with no verdict** — a false-success shape). Any `fork: retry`, `run view … failed`, or empty-verdict line in watcher output means NO VERDICT WAS OBTAINED: re-verify with a one-shot `gh run view` + job-pin before adopting, and never report a gate result the watcher never received.
-- **Rendered-output acceptance** (editor 329bf3a3): an acceptance check over model-visible text must paste the actual rendered output — never a grep/symbol-presence result.
-- **Structural-pending-organic smoke leg** (editor d5863180, #135): render-side fixes with no headless probe surface may stamp leg 4 as `structural-pending organic` — the stamp MUST name the surface that will observe it and the evidence class already captured. Distinguisher from silent-skip; forced probing would be false evidence.
-
-## Receipt + delivery discipline additions (v0.4.109, same batch)
-
-- **UI-emit verbs need same-turn tool receipt** (lane 1a63f103, phantom #7 11:10Z): "probe armed / button attached / options under this reply" claims require a same-turn suggest_options/send_buttons receipt naming the call — sibling of the gate/verdict-verb law. Sibling (editor c78e78e0): a misdirected session_notify that self-delivers (from=me receipt) is a REAL delivery failure — re-send to the verified target same turn from session_search output, flag the stray in the next relay.
-- **Lane-side verify-unclaimed on owner Go** (aaa8d8ae, #119 near double-implement; commit 9c238a5d pre-existed): before implementing an owner-approved issue in your lane, grep the fork for an existing branch/commit implementing it (trailer sweep) — an owner Go does not void another lane's earlier dispatch. Extends Dispatch=verify-unclaimed-first to the RECEIVING lane.
-- **Fork-issue lookup conflicts settle via REST** (1a63f103, #119: `gh issue view` stale vs search; HQ-verified via gh api): when two receipts for issue N contradict, settle with `gh api repos/OWNER/REPO/issues/N` before citing the number.
-- **Worktree path resolved before any cd/git -C** (lane 61161247, 4 wrong-path hits 09-02→09-08): `ls /root | grep oc-wt` (or the owning tool's state) BEFORE first git op in any turn touching a worktree.
-- **Research Telegram API semantics before rate-limit/transport designs** (61161247, 429-pause narrowed on owner-ordered research): design against sourced provider behavior, never assumed behavior; per-surface enforcement is documented reality.
-- **Post-swap live-box proof = /proc/<pid>/exe** (editor facd50af, swap 1593ea5e 07:48Z): deployed.meta.json is INTENT; forward-looking post-swap verification step in editor-upstream-pr.md Phase 7/7b mandates the /proc cross-check (sharpens the n=2066 mismatch law from after-the-fact to at-swap-time).
-- **oc-deploy poll target-run pinning** (facd50af, stale GREEN surfaced for 1593ea5e): poll must require the surfaced run's job-name to pin the TARGET sha before GREEN surfaces, else emit "target in-flight, no matching terminal run" — a swap bridged outside the journal path is forbidden.
-- **Deployed-state dir is profile-scoped, not repo-scoped** (editor c78e78e0, two failed path guesses): resolve the state dir via the owning tool's source (oc-attrib) before reading deployed.meta.json — never assume/guess; a guessed read = a fabricated identity receipt.
-
-## Verification-discipline additions (Task-8 governance pass, 2026-09-11)
-
-- **Never trust a seam-resolution commit MESSAGE — diff the TREE.** A commit message states an intent ("took upstream's version", "kept ours"); the tree states the outcome. Resolve the actual merge result mechanically against a computed one, before any gate, ledger stamp, or report rests on it: `git merge-tree --write-tree <base> <ours> <theirs>` produces the canonical merged tree for the same three inputs, so `git diff` between the recorded seam commit and that tree isolates every deviation from the declared policy. A message that says upstream-verbatim while the tree carries our bytes is a **silent semantic override** — the exact failure class the Seam-resolution shape and the [GATE] on keep-ours exist to catch. Corollary: this is why the marker commit is checked by `git diff <head> <marker>` being EMPTY rather than by its subject line.
-- **Always record the literal COMMAND beside any control hash.** A hash alone is not reproducible evidence: the same input yields different output under a different invocation, and a reader cannot re-derive which was used. Whenever a hash is cited as a control (a probe artifact's md5, a tree-identity check, a fidelity check, a pre-sync rollback sha), the receipt must carry the command that produced it — `md5sum /tmp/probe.txt` and not just `16107875c5026ca891af79f085c78762`. Origin: the `branix`/`brant` read-back family, where a hash was nearly used to "settle" a rendering artifact whose bytes had never been established by an executable check; and the 0-byte fidelity check on merge `247fed2b`, whose value is only meaningful with its diff command attached.
-- **A probe against a path that does not exist returns silence, not a verdict.** An empty result from a wrong path is indistinguishable from an empty result from a right one, so it must never be read as absence. Confirm the path exists (`ls` / `find`) before trusting an empty result, and re-derive paths from a live hit rather than from memory. (Twice in one lane: a grep against a nonexistent `src/requests/payloads/` nearly wrote off a *correct* issue path; the crate keeps payloads at `src/payloads/`.)
-- **Shell verdicts are read FIRST-HAND, never through a pipe.** The bash tool's shell is `/bin/sh` → **dash**: `${PIPESTATUS[0]}`, `[[ ]]`, arrays and `${var:0:110}` die with `Bad substitution` (rc 2), and `cmd | head; echo $?` reports *head's* rc, not the command's. Redirect and read the tool's own rc — `cmd > /tmp/o 2>/tmp/e; echo rc=$?` — and prefer `grep -E` over bash-isms. Two false verdicts from this in one lane: a `cargo` call reported "compiles clean" off a pipe rc while the stub actually printed `BLOCKED`, and a roster tool was one step from a false defect report when the real fault was the caller's own `${PIPESTATUS}`.
-- **Verification is SCOPED BY LOAD-BEARING; its value-add is the CONTRADICTION check.** Re-deriving a fact another lane has already verified and stated — when it is not load-bearing for your own next action or report — is cost without new information. Verify what you will act on or report; accept receipted facts you will not. In a cross-lane verification pass the value is the contradiction: does this claim conflict with what I already verified, with another claim in flight, or with the state on disk? Corollary for tool defaults: an empty result is a verdict only if the invocation was right — the built-in `grep` matches LITERALLY unless `regex=true` is passed, so a regex pattern handed to it returns "no matches" on text that is present.
-
-## In-flight script rewrite is a hazard — write `tools/` atomically (Toolsmith finding 2026-09-11; fork issue #167)
-
-- **NEVER rewrite a `tools/oc-*` file in place while any invocation of it is running.** `bash` does not hold a script in memory: it reads from the file by byte offset as it goes. An in-place rewrite (truncate + write — which is what both `write_file` and `edit_file` do, inode preserved) makes the interpreter's saved offset land in the NEW content, so it resumes mid-line and executes whatever is there. Observed shape: `oc-ship-chain: line 284: g: command not found` — a fragment of a new line executed as a command.
-- **It is SILENT and yields a FALSE-SUCCESS rc.** The caller in the incident piped through `tail` and read *tail's* rc, so a dead chain reported as a successful one. Any chain that stops emitting LEG rows without a terminal verdict is DEAD, never done (sibling law: NO-VERDICT is never GREEN, §Verification-discipline additions).
-- **Incident:** CHAIN `87ac2aa0` (#150, editor 4b4463d5) reached LEG1 gate pre-verified GREEN (ledger n=2836) and died before LEG2 (ledger n=2846) because `tools/oc-ship-chain` was rewritten in place at 13:00:05Z (shipped 13:08:06Z as `2aaa8d5a`). ~30 min of gate time lost; relaunched on `--gated-run 34600384787`.
-- **THE LAW — the exposure window is the RUN LENGTH, so check before you write.** Before writing ANY file under `tools/`, list in-flight invocations:
-  ```bash
-  ps -eo pid,etime,args | grep -E 'oc-ship-chain|oc-deploy|oc-prchecks|oc-job-verify' | grep -v grep
-  ```
-  Any hit → do NOT write that file in place. If the write cannot wait, write a temp file **in the same directory** and `mv` it over the target: `mv` replaces the directory entry, so a running interpreter keeps reading the OLD inode and completes safely. The four long-running tools are the exposure — the other ~33 finish in milliseconds.
-- **Not only an agent-edit hazard.** Issue #167 notes that `git checkout` / `git pull` write working-tree files in place too, so a lane checking out a different revision mid-chain can kill a sibling's chain. The rename form is the only safe write during a live chain.
-- Filed as `leshchenko1979/opencrabs#167` (verified OPEN 2026-09-11T13:23:42Z). The tool-side fix — snapshot the running script to the same directory and re-exec behind an env guard, for the four long-running tools only — is Toolsmith-owned, design signed off, pending a quiet tree.
-
-## Daytime-Editing & Nighttime-Batch-Sync Cadence (v0.4.146)
-
-**Cadence & Trigger Law (owner order 2026-09-12):**
-1. **The SOLE trigger for the Night Shift (Batch Merge, Harvest & Issue Triage Window) is an explicit operator command.** All automated triggers (quiescence heuristics, census threshold auto-triggers, background auto-batching) are strictly removed. In the absence of an explicit operator command, the fleet remains in standard daytime editing / passive patrol mode.
-2. **Daytime (Active Operator Window / Interactive Hours):**
-   - Focus is exclusively on **feature editing, design approvals, and smoke verification**.
-   - No large upstream merge/rebase synchronization is performed across the fleet during daytime.
-   - Editors advance topic branches and smoke-test against the stable deployed fork base.
-3. **Nighttime (Batch Merge, Harvest & Issue Triage Window — Operator-Initiated ONLY):**
-   - Fleet-wide synchronization and rebases against upstream `adolfousier/main` are executed in **one consolidated batch** ONLY when explicitly ordered by the operator.
-   - **Batch Harvesting:** Upstream harvest PRs are generated, rebased, and CI-gated in consolidated waves following operator command, with strict 4-leg smoke verification recorded in `smoke-verdicts.log`.
-   - **Batch Issue Triage (v0.4.157):** the window CLOSES with every idle editor holding an assigned issue — open issues are swept, classified, and dispatched to idle lanes so the daytime window starts warm. This phase is covered by the window's operator trigger; it is NOT a separate command. Full procedure: §Phase 3 — Idle-Lane Issue Triage.
-
-## Atomic Write Executable Preservation Law (v0.4.142)
-
-When modifying executable scripts (`tools/oc-*`, bash helpers) via temporary staging files (`temp + mv` atomic write pattern), **never assume default permissions**:
-- Standard temp file creation (`touch`, `tempfile`) defaults to mode `0644`. `mv` preserves the source inode permissions, stripping the `+x` bit on the target executable.
-- **Mandatory rule:** Always explicitly apply `chmod --reference="$target" "$temp"` (or `chmod 755 "$temp"`) prior to moving the temp file over the target.
-
-## Phase 3 — Idle-Lane Issue Triage (v0.4.157; supersedes §Post-Harvest Issue Assignment v0.4.143)
-
-**Position:** the CLOSING phase of the Night Shift window — runs after Phase 2 (Batch Harvest) closes, inside the same operator-initiated window. It is covered by the window's trigger; it is NOT a separate command.
-
-**Owner:** Triage — standing lane-allocation authority (v0.4.143) plus Duty T3 (editor creation) and Duty T5 (issue sweep).
-
-**Purpose:** the daytime window starts warm — every idle editor holds an assigned issue with a design in progress.
-
-**Procedure:**
-1. **Census** — `gh issue list -R leshchenko1979/opencrabs --state open`. Fresh receipt every run, never from memory (Duty T5).
-2. **Classify** — each open issue lands in exactly ONE bucket:
-   - **CLAIMED** — an open claim-ref exists in the workers-ledger → no action; the owning lane's chain owns it.
-   - **PARKED** — owner standdown / no-go → never re-ignite.
-   - **UNVETTABLE** — no problem statement or acceptance criteria → park with the reason; never guess the work.
-   - **DISPATCHABLE** — unclaimed AND vetted.
-3. **Capacity** — `oc-ledger roster --live --role editor` → idle editors (zero unfinished claims). **Mechanical derivation of idle status (proposal 329bf3a3, v0.4.170):** because `oc-ledger claim-ref` retains historical issue numbers indefinitely, define "unfinished" by cross-referencing against the open issues census (`gh issue list -R leshchenko1979/opencrabs --state open`). A lane is idle if its latest claim-ref points to an issue that is `CLOSED` or if it holds zero open claims. **Reuse-first is mandatory** (owner order 2026-09-11: reuse existing lanes over spawning new ones).
-4. **Dispatch** — `[ISSUE TRIAGE DISPATCH: #N]` via `session_notify` (turn-end), with a ledger claim stamp. **Verify-unclaimed FIRST** (PHOP stage 2, Verify-Unclaimed & Idle Law): inspect claim status via `./tools/oc-ledger claims <issue-number>` before routing — two recorded violations, #106 and #107, were both already held when a fan-out routed them.
-5. **Expansion — the exception, never the default** — create new editors ONLY when the dispatchable backlog exceeds idle capacity, and only up to the measured shortfall. Each creation follows Duty T3 (topic FIRST → spawn → brief via `session_notify` → `oc-ledger enroll`), and the phase exit line records the shortfall count that justified it.
-6. **Overnight contract — LOAD-BEARING** — an editor dispatched inside the window produces **analysis + design** and **PARKS at the owner design gate**. It MUST NOT open its autonomous `/goal`: the v0.4.149 Autonomous Editor Goal mandate begins only AFTER the owner confirms the design. The park row names the issue, the design artifact, and the owner action required.
-
-**Exit:** `triaged=N · dispatched=M · expanded=K · parked=P · waiting=0` — the L2 shift shape. Any non-zero `waiting` means the phase is not done; unclosed candidates roll to the next cycle, never chased across it.
-
-## Code-Structure Exploration & Scoutgraph Indexing Law (v0.4.143)
-
-- **Per-worktree local code indexes are RETIRED**: worktrees do not keep a separate on-disk code index. Use `memory_search` with `scope="external"`.
-- **Centralized `memory_search`**: All structural code queries ("who calls X", "where is X defined", "callees of Y") route through the core OpenCrabs `memory_search` tool with `scope="external"`, indexing `/root/opencrabs/src/**/*.rs`.
-
-## CI Polling & Watcher Throttling Law (v0.4.143)
-
-- **`gh run watch` default interval (3s) is FORBIDDEN**: Any manual or script-driven `gh run watch` execution MUST pass `--interval 30` (or `60`) to protect host 1-vCPU resources and API quotas.

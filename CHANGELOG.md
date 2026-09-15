@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.181 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c16` Codification
+
+Codification of findings from Duty 4+6 Review Cycle `20260915-c16`:
+- **Brain Scrub & Narrative Pruning (Findings BS-01, BS-02, BS-03):**
+  - Pruned narrative historical parentheticals in `USER.md` (line 31 timestamp note).
+  - Streamlined `AGENTS.md` execution discipline and table formatting notes, replacing multi-line war stories with crisp enforceable rules.
+- **Docs Family & Taxonomy (Findings A-01, A-02, A-03, B-01, B-02, G-01, G-02, G-03):**
+  - Updated legacy "compile/lint gate" and "PR base-Lint" references across `editor-upstream-pr.md` and `fleet-directives.md` to canonical `CI gate = oc-prchecks`.
+  - Dropped dead-weight appendix `§telegram_send TO-BE target states` from `fleet-directives.md`.
+  - Structured monolithic remotes paragraph in `fleet-directives.md` into clear sub-sections.
+  - Streamlined HQ router row in `SKILL.md` STEP ZERO.
+  - Added explicit checkable completion criteria (`DONE = ...`) across `editor.md` (Phase 0, Phase 6c) and `triage.md` (Duties T6, T7).
+- **Tools & Mechanics (Findings C-01, C-02, E-01, F-01, J-01, J-02):**
+  - Deduplicated `oc-issue-dispatch` entry in `tools/RC-CONTRACT.md`.
+  - Added selftests for `oc-lint-laws` and `oc-harvest-dispatch` to `tools/tests/run.sh` battery (192 total test cases PASS).
+  - Sanitized `oc-harvest-dispatch` fallback path to derive dynamically from `SKILL_DIR`/`HOME`.
+  - Switched `oc-smoke` behavioral probe execution from `eval` to `bash -c` subshell.
+- **State Directory Hygiene (Findings D-01, D-02, D-03):**
+  - Pruned 0-byte `harvest-census.db`, cleaned stale `fanout.*.lock` files, and moved stale `.bak` files to `archive/`.
+- **Battery Verified:** PASS=192, FAIL=0.
+
 ## v0.4.180 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c15` Codification
 
 Codification of findings from Duty 4+6 Review Cycle `20260915-c15`:

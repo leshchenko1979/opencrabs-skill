@@ -821,6 +821,22 @@ if tool oc-issue-dispatch; then
   "$TOOLS_DIR/oc-issue-dispatch" --help >/dev/null 2>&1 && ok "oc-issue-dispatch --help rc=0" || bad "oc-issue-dispatch --help rc!=0"
 fi
 
+# ---- 67. oc-lint-laws (markdown law syntax & tool reference linter)
+section "oc-lint-laws (law syntax & reference linter)"
+run_selftest oc-lint-laws
+if tool oc-lint-laws; then
+  "$TOOLS_DIR/oc-lint-laws" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/oc-lint-laws" --help >/dev/null 2>&1 && ok "oc-lint-laws --help rc=0" || bad "oc-lint-laws --help rc!=0"
+fi
+
+# ---- 68. oc-harvest-dispatch (automated harvest order dispatcher)
+section "oc-harvest-dispatch (harvest order dispatcher)"
+run_selftest oc-harvest-dispatch
+if tool oc-harvest-dispatch; then
+  "$TOOLS_DIR/oc-harvest-dispatch" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/oc-harvest-dispatch" --help >/dev/null 2>&1 && ok "oc-harvest-dispatch --help rc=0" || bad "oc-harvest-dispatch --help rc!=0"
+fi
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \

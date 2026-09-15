@@ -462,9 +462,11 @@ Contract: AUTO-SHIP on GREEN CI gate. File PR on {upstream_repo}:main citing gat
         sys.exit(0)
 
     # Live delivery
-    notify_script = os.path.join(os.path.dirname(ledger_file), "../skills/opencrabs-dev/tools/lib/oc-notify.sh")
+    skill_dir = os.environ.get("SKILL_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    notify_script = os.path.join(skill_dir, "tools/lib/oc-notify.sh")
     if not os.path.exists(notify_script):
-        notify_script = "/root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/lib/oc-notify.sh"
+        home_dir = os.environ.get("HOME", "/root")
+        notify_script = os.path.join(home_dir, ".opencrabs/profiles/ops/skills/opencrabs-dev/tools/lib/oc-notify.sh")
     
     rc, _, err = run_cmd([notify_script, w_uuid, envelope, f"[HARVEST DISPATCH: {iss_str}]"])
     if rc != 0:

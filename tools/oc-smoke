@@ -280,7 +280,7 @@ PROBE_DETAILS=""
 if [ -n "$PROBE_CMD" ]; then
   echo "$PROG: running behavioral probe: $PROBE_CMD"
   set +e
-  PROBE_OUT="$(eval "$PROBE_CMD" 2>&1)"
+  PROBE_OUT="$(bash -c "$PROBE_CMD" 2>&1)"
   PROBE_RC=$?
   set -e
   printf '%s\n' "$PROBE_OUT"
