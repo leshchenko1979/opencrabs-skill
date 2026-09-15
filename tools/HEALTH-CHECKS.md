@@ -62,7 +62,7 @@ after sloppy lanes and hide the pattern.
 
 - **Where:** `/root/.opencrabs/profiles/ops/skills/opencrabs-dev` (shared skill repository).
 - **Invariant:** `git status --porcelain` must be clean of unexpected untracked/modified files.
-  Remote tracking must satisfy `HEAD == origin/main == mirror2/main`.
+  Remote tracking must satisfy `HEAD == origin/main`.
 - **Remediation:** Warn only, naming untracked/modified files.
 
 ## 7. Version / ledger consistency — `QUIRK`

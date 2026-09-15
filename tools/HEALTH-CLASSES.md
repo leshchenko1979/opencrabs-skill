@@ -81,7 +81,7 @@ into two tiers:
 - **Invariants Checked:**
   - Orphaned / unregistered worktree directories on disk (`/root/oc-work/*`, `/root/oc-wt-*` vs `git worktree list`).
   - Shared skill checkout cleanliness (`git status --porcelain`).
-  - Remote tracking divergence (`HEAD` vs `origin/main` vs `mirror2/main`).
+  - Remote tracking divergence (`HEAD` vs `origin/main`).
   - Version/ledger consistency (`oc-ledger check-version`).
 - **Remediation:** Report only. Worktree removal must use `oc-wt remove` (dirty-tree safety gate).
 

@@ -61,27 +61,10 @@ Fleet conventions:
 | oc-watcher-audit | 0 | 2 | `[--since <ts>] [--json] [--dir <dir>] [--notify-orphans] [--dry-run]` · 0 clean / 1 violations-found (alarm) / 3 dir-missing · scans `tmp/detached/*.json` for `UNTHROTTLED_WATCH` (no `--interval`), `OFF_SPEC_INTERVAL` (interval other than 30/60 — the fleet law), `NOHUP_SPAWN`, `HANDROLLED_SLEEP_LOOP` · `--notify-orphans` scans interrupted detached tasks and in-flight checkpoints, resolves workflow run conclusion via `gh run view`, wakes dormant lanes with `session_notify`, and tracks notified tasks in `$LOCK_DIR/orphans_notified.json` to guarantee idempotent single-notification across repeated sweep cycles · `--since` is a rolling window: tasks spawned earlier are skipped, timestamps are parsed as datetimes (fractional seconds and `+00:00` offsets included), and a task with an unparseable timestamp is INCLUDED (age unprovable — never silently dropped) · `--json` emits a JSON **ARRAY** of violation objects carrying `state` + `live`, never an object · `--selftest` = 26 offline fixture assertions |
 | oc-wt | 0 | 2 | 0 ok / 3 path-exists-dirty / 4 index-failed / 5 repo-branch-missing / 6 behind-base |
 
-## Remote topology — `mirror2` and `origin` are ONE repository (verified 2026-09-12)
+## Remote topology — `origin` is the single canonical remote (updated 2026-09-15)
 
-The "push `mirror2` first, then `origin`" ritual buys **no redundancy**. In the skill
-repo both remotes point at the SAME GitHub repository; only the transport differs:
-
-| Remote | URL | Transport |
-|---|---|---|
-| `mirror2` | `git@github.com:leshchenko1979/opencrabs-skill.git` | SSH |
-| `origin` | `https://github.com/leshchenko1979/opencrabs-skill.git` | HTTPS |
-
-Evidence (same-turn receipts, 2026-09-12): `git remote -v` shows the two URLs above;
-after `git push mirror2 main` succeeded, `git push origin main` reported
-**"Everything up-to-date"**; and `git ls-remote mirror2 HEAD` / `git ls-remote origin HEAD`
-return the same sha. A push to either updates both.
-
-**Consequence:** do NOT count the two remotes as a second copy, a backup, or an
-independent mirror when reasoning about durability or about "did the push land twice".
-The push order still stands as process (it is the fleet ritual), but the honest reading
-is ONE remote reached two ways. A genuine second copy needs a DIFFERENT host or
-repository. Reported by HQ `d72bd52d` 2026-09-12 and verified first-hand here before
-this note was written (a finding is not a fact until the surface is read).
+`origin` is the sole push and fetch remote for the skill repo (`git@github.com:leshchenko1979/opencrabs-skill.git`, SSH transport).
+The redundant `mirror2` alias (which pointed to the exact same repository) has been retired.
 
 ## Unified tools log (moved from SKILL.md v0.4.131)
 
