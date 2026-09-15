@@ -78,6 +78,7 @@ Hard discipline for every change:
   receipts do not cover doc/behavior skew. Skill markdown (SKILL.md,
   CHANGELOG.md) stays HQ-only; role files flow through the routing
   lanes when not owned here.
+- **Checkable Completion Formula**: `DONE = tool code edited under tools/ + tools/tests/run.sh battery PASS (194/194) + tools/RC-CONTRACT.md updated (if rc changed) + dual-pushed.`
 
 ## Duty TM2 — Battery stewardship
 
@@ -88,6 +89,8 @@ collision with the Duty-6 review cycle; lenses E/F)
 runs on every tool change and on HQ request; failures route back to
 the offending change, never waived. Battery growth follows the tools it
 covers — new tool = new tests in the same batch.
+
+- **Checkable Completion Formula**: `DONE = bash tools/tests/run.sh exits 0 (all test cases PASS, zero failed or skipped) + test count recorded in battery-last.json.`
 
 ## Escalation to HQ
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.4.178 (2026-09-15) — Duty 4+6 Review Cycle `20260914-c13` Codification
+
+Codification of findings from Duty 4+6 Review Cycle `20260914-c13`:
+- **Role Files & Skill Census Synchronization (Findings A-01, A-02, G-01, G-02, G-03):**
+  - Synchronized single-writer skill documentation census across `SKILL.md` and `hq.md`.
+  - Added explicit checkable completion criteria (`DONE = ...`) to `triage.md` (Duty T3) and `toolsmith.md` (Duties TM1, TM2).
+- **Brain File Modernization (Findings BS-01, BS-02):**
+  - Modernized deprecated `follow_up_question` references to `suggest_options` in `USER.md` and `TOOLS.md`.
+- **State Root Hygiene (Findings D-01, D-02):**
+  - Pruned 52 stale `fanout.*.lock` files from state repository.
+- **Tooling Implementation Shipped (Toolsmith `d8416817`):**
+  - 24h Feature Soak mechanical gate in `oc-harvest-census` / `oc-harvest-dispatch`.
+  - Stale claims sweep in `oc-ledger sweep-closed-claims`.
+  - Updated `RC-CONTRACT.md` assertion count to 44.
+- **Review Cycle Persisted (Lenses A–J, Brain Scrub):**
+  - Evaluated 11/11 lenses, persisted reports under `reviews/20260914-c13/reports/` with cryptographic receipts in `skill-review-index.log`. Master verdict at `reviews/20260914-c13/verdict.md`.
+  - Battery verified: PASS=194, FAIL=0.
+
 ## v0.4.177 (2026-09-14) — Duty 4+6 Review Cycle `20260914-c12` Codification
 
 Codification of findings from Duty 4+6 Review Cycle `20260914-c12`:

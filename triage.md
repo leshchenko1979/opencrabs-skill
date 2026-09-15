@@ -51,6 +51,8 @@ prompt ("Load opencrabs-dev skill. You are an editor." + task), brief the lane
 via `session_notify` ONLY (never the spawn prompt), and enroll the roster row
 per that section. Owner veto overrides retroactively, as with rulings.
 
+- **Checkable Completion Formula**: `DONE = Forum topic created + Editor session spawned & enrolled in ledger + task brief delivered via session_notify (target_session confirmed woke).`
+
 ## Duty T4 — Enforcement patrols
 
 - **Parallel Harvest Orchestration Patrol (PHOP) & Pre-Dispatch Vetting (v0.4.136, 2026-09-10):**
