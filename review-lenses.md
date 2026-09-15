@@ -71,6 +71,13 @@ on census evidence + owner word (hq.md step 7).
      PLUS the ONE-TRIGGER-PER-BRANCH pointer test: a context pointer's
      branches are the distinct cases that reach the material; synonyms
      renaming one branch are one branch written twice — collapse them.
+     PLUS the SUBSUMED PROCEDURE PRUNING RULE (v0.4.182): when a composite or
+     milestone tool ships (e.g. `oc-start`, `oc-ship-chain`, `oc-smoke`),
+     lower-level step-by-step plumbing rituals (manual worktree manipulation,
+     manual `oc-prchecks` loops, manual issue log comments, manual push to main,
+     manual log formatting) must be aggressively pruned from role files.
+     Role files must document only the single milestone invocation and its
+     recovery semantics, not internal plumbing procedures the tool handles.
    - **Reviewer G — ROLE-FILE STRUCTURE:** the ORGANIZATION of EACH role file
      — the role files (re-derived from `ls *.md` at spawn time; count not
      hardcoded — lens G-F8 v0.4.89) plus every
@@ -86,6 +93,12 @@ on census evidence + owner word (hq.md step 7).
      for CO-LOCATION (a concept's definition, rules, and caveats under one
      heading). Findings must weigh the cost of a split (cross-refs, worker
      reading load) against the cost of growth.
+     PLUS the EXPLORATION & DRY VERIFICATION GATE (v0.4.182): every code-producing
+     role file (e.g. `editor.md` Phase 3) MUST explicitly mandate structural symbol
+     exploration (`memory_search scope="external"`) and DRY verification before
+     editing or writing code. Flag any exploration phase that permits blind code edits
+     based on literal text grep alone without symbol-graph, caller-tree, and
+     shared-abstraction analysis.
      LOAD-PATH MANDATE (owner order 2026-09-07): any split or regroup verdict
      MUST also trace the skill's LOADING — which parts are always-injected
      (AGENTS.md anchors) vs on-demand (`load_brain_file` / SKILL.md section

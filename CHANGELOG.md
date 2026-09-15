@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.182 (2026-09-15) — Editor Milestone Streamlining & Imperative memory_search Gate
+
+- **Editor Law Streamlining (`editor.md`):**
+  - Pruned manual multi-step plumbing prose (manual `oc-wt`, manual `oc-prchecks` polling loops, manual issue logging, manual git push to `main`, and manual log formatting).
+  - Aligned workflow strictly around the 3 canonical milestones: `oc-start` (Milestone 1: claim & worktree), `oc-ship-chain` (Milestone 2: CI gate, comment, ff-merge, carrier build, swap), and `oc-smoke` (Milestone 3: 4-leg smoke verification).
+  - Streamlined Editor Quick Table to daily tools only, documenting that lower-level utilities are orchestrated internally.
+- **Imperative `memory_search` & DRY Gate (`editor.md` Phase 3):**
+  - Mandated `memory_search scope="external"` as a strict prerequisite before editing or writing code across `/root/opencrabs/src/**/*.rs`.
+  - Enforced mandatory symbol-graph and caller/callee impact analysis (`"who calls X"`, `"where is X defined"`) and DRY shared abstraction checks.
+  - Prohibited blind code modifications based on literal text `grep` alone.
+- **Reviewer Lens Updates (`review-lenses.md`):**
+  - Codified the **Subsumed Procedure Pruning Rule** in Lens B (LLM Efficiency).
+  - Codified the **Exploration & DRY Verification Gate** in Lens G (Role-File Structure).
+
 ## v0.4.181 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c16` Codification
 
 Codification of findings from Duty 4+6 Review Cycle `20260915-c16`:

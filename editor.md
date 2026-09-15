@@ -227,31 +227,24 @@ follows it:**
 - **Designs and special cases are OWNER-GATED** — you present them, you do
   not start them on your own recommendation.
 
-## Tool reference — editor's quick table
+## Tool reference — editor's daily table
 
 Canonical descriptions + selftest contracts: `tools/RC-CONTRACT.md` (full
 inventory of tools) + SKILL.md tool table. The
-editor-relevant subset, invocation forms only (all paths relative to the skill
+editor-relevant daily subset, invocation forms only (all paths relative to the skill
 dir; actor derived automatically from ambient `$OPENCRABS_SESSION_ID`):
 
 | Tool | Invocation | For |
 |------|-----------|-----|
-| `oc-start` | `tools/oc-start <issue-N> --branch <branch>` | one-command entry: claim + branch + worktree |
-| `oc-smoke` | `tools/oc-smoke <issue-N> [--probe <cmd>]` | unified 4-leg smoke verification & verdict logging |
-| `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add |
-| `oc-prchecks` | `tools/oc-prchecks wait <branch>` / `<branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; `wait` provides single-command blocking gate |
-| `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) |
-| `oc-issue-log` | `tools/oc-issue-log <issue-n> <sha>` | per-commit implementation comment (body-file discipline inside; chained by oc-ship-chain Leg 2) |
-| `oc-commit` | `tools/oc-commit -m "<msg>" [--issue N] [--no-comment]` | gated SIGNED commit: Session-Id + Issue-Ref trailers derived from session ID + ledger claim; implementation comment folded in (oc-issue-log leg) — Phase 6c step 2 default |
-| `oc-ledger` | `stamp claim --what "…"` · `--verbs` · `ack <uuid> <0.N.N>` · `commit-pending` · `confirm` | roster + receipts + version ack; `--verbs` discovers subcommands |
-| `oc-drift-check` | `tools/oc-drift-check <your-uuid> [--ack]` (legacy: `<uuid> <claimed-ver>`) | §Mid-cycle skill drift step 1–2 |
-| `oc-deploy` | `ship --execute` · `poll` · `status [--json]` · `watch` · `fanout` | ship chain (dispatch → watch → swap); `status` verifies running vs disk binary |
-| `oc-upstream-delta` | `tools/oc-upstream-delta` | fork vs upstream divergence read |
-| `oc-attrib` | `tools/oc-attrib --deployed` | who owns the deployed range (fanout targeting) |
-| `oc-branch-sweep` | `tools/oc-branch-sweep --repo <path>` | merged/stale branch proof; deletes MERGED only |
-| `oc-pr-fault-scope` | `tools/oc-pr-fault-scope <pr> --run <id>` | failing-files ∩ PR-files (blame hygiene) |
+| `oc-start` | `tools/oc-start <issue-N> --branch <branch>` | Milestone 1: atomic issue claim + branch + worktree setup |
+| `oc-ship-chain` | `tools/oc-ship-chain --sha <sha> --branch <branch>` | Milestone 2: single-invocation gate → comment → ff-merge → carrier build → live swap |
+| `oc-smoke` | `tools/oc-smoke <issue-N> [--probe "<cmd>"]` | Milestone 3: unified 4-leg smoke verification & verdict logging |
+| `oc-commit` | `tools/oc-commit -m "<msg>" [--issue N]` | Gated SIGNED commit: Session-Id + Issue-Ref trailers derived from session ID + ledger claim |
+| `oc-drift-check` | `tools/oc-drift-check <your-uuid> [--ack]` | §Mid-cycle skill drift pull-check on detached resume |
+| `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R]` | Phase 1 uniqueness gate (fork open+closed + upstream closed) |
+| `oc-ledger` | `stamp claim --what "…"` · `ack <uuid> <0.N.N>` | Roster receipts + version ack |
 
-Per-tool rc registers: `tools/RC-CONTRACT.md` (sole register; rows above carry purpose only).
+*Note: Underlying plumbing tools (`oc-wt`, `oc-deploy`, `oc-prchecks`, `oc-issue-log`, `oc-attrib`, `oc-pr-fault-scope`) are orchestrated internally by `oc-start`, `oc-ship-chain`, and `oc-smoke`.*
 
 Rules that outlive any table: journal read-back after every `oc-ledger`
 claim/stamp (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
@@ -275,136 +268,58 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
   `rebase --onto`. *(SKILL.md §Shared war stories)*
 - **Checkable Completion Formula**: `DONE = Remotes origin and adolfousier fetched + origin/main tip verified.`
 
-## Phase 1 — Claim on the fork BEFORE editing
+## Phase 1 — Claim & Worktree Setup (`oc-start`)
 
 0. **Claim-time fresh re-read & Goal Mandate (v0.4.14 / v0.4.149, owner order 2026-09-12)**:
    - **Fresh Re-read**: FIRST action after claiming/waking — re-read `SKILL.md` + `editor.md` + `fleet-directives.md` from disk (never from recalled memory) — SKILL.md and editor.md in FULL, fleet-directives at thematic-index minimum with every `[LANE]`-tagged section in FULL. DONE = all three files re-read THIS turn.
    - **Design-gate precondition (owner order 2026-09-12)**: Issue the goal **ONLY AFTER the owner has confirmed the design** (owner design gate, v0.4.128). While the design is unapproved the editor stays in the design/approval phase — an early `/goal` would carry it past the very gate that requires owner approval BEFORE code. Fixed sequence: design → owner confirms → `/goal` → continuous execution through Phase 6b.
-   - **Autonomous Goal Mandate**: After the owner's design confirmation, the editor MUST execute `/goal follow the skill until the smoke test phase` (via `slash_command` with `/goal follow the skill until the smoke test phase` or setting the goal prompt). The Editor is mandated to drive autonomously and continuously from Phase 1 through Phase 6b smoke testing (claim → worktree → code → sign → ship via `oc-ship-chain` → live behavioral smoke test on swapped binary → record 4-leg smoke verdict in `smoke-verdicts.log`). **Editors MUST NOT stop or ask for confirmation after Phase 4 (writing code) or after intermediate ship legs.** The task is only complete once the live behavioral smoke test is recorded in `smoke-verdicts.log`.
-1. Search existing issues first — MECHANIZED: `tools/oc-issue-sweep '<query>'`
-   (closed-issue hygiene sweep: fork open + fork closed + upstream closed,
-   harvests `close-reason:` lines from comments, TSV; the raw form is
-   `gh search issues ... -R leshchenko1979/opencrabs`
-   (the issues home). UNIQUENESS GATE (v0.4.17):
-   "no issue covers this" may be asserted only after a CLOSED-state sweep AND
-   paginated comments (--paginate) — an open-only page-one check missed entire
-   closed-issue families.
-   TWO histories to sweep: the fork (open + closed — ours) AND upstream closed
-   issues (pre-2026-08-27 issues were filed on `adolfousier/opencrabs`; the
-   reason for any close is always in the comments — read with `--paginate`).
-2. None fits → open ONE issue ON THE FORK:
-   `gh issue create -R leshchenko1979/opencrabs` (symptom + evidence: error
-   text, run link, sha). Routing + body rules: SKILL.md §ISSUE ROUTING.
-3. **NO CLAIMING ON THE FORK** (SKILL.md §ISSUE ROUTING): no tackling comments, self-assignment, labels/reactions
-   on fork issues — the owner's notification surface stays clean. Claim
-   record = `Issue-Ref: #N` trailer on commits/PR + your feature row in
-   `workers-ledger.json` (first ledger timestamp wins; conflicts are HQ
-   rulings, never GitHub chatter). The uniqueness sweep in step 1 stays
-   read-only search.
-   - **ZERO-ACK ON DISPATCH (owner order 2026-09-13)**: When receiving a task dispatch (`[ISSUE TRIAGE DISPATCH: #N]`) or harvest dispatch, **NEVER reply with a `session_notify` ack** (`[ack] Received...`). Stamp `oc-ledger claim <issue>` on the ledger immediately. The ledger claim IS the receipt. Replying via notify violates communication discipline and interrupts the dispatch lane.
-4. **Claim read-back (Duty-4, v0.4.71):** after EVERY
-   `oc-ledger claim`/`stamp`, RE-READ the returned event row and verify it
-   carries your uuid + issue + branch + the full non-empty `what` text you
-   passed — a glitched argv can silently produce an empty claim the lane cites
-   as proof. A read-back mismatch
-   = re-stamp + `tools.log` check before anything cites the event number.
-5. **Requirement intake — persist processed, not verbatim:** when the editor receives a NEW or MATERIALLY UPDATED requirement
-   (owner word, or a clarification that changes scope/shape mid-task), persist
-   it in a fork issue BEFORE executing: update the issue already being worked
-   when the requirement extends it; open a new one when it is a distinct
-   concern. The persisted form is the PROCESSED requirement — normalized into
-   the actionable statement (what changes, acceptance, out-of-scope) — never a
-   raw chat quote. Subsequent commits/claims carry `Issue-Ref: #N` like any
-   other work. Why: a session that dies mid-task must leave the requirement
-   recoverable from durable state, not chat memory.
+   - **Autonomous Goal Mandate**: After the owner's design confirmation, the editor MUST execute `/goal follow the skill until the smoke test phase` (via `slash_command`). The Editor is mandated to drive autonomously and continuously from Phase 1 through Phase 6b smoke testing (claim → worktree → code → sign → ship via `oc-ship-chain` → live behavioral smoke test on swapped binary → record 4-leg smoke verdict in `smoke-verdicts.log`). **Editors MUST NOT stop or ask for confirmation after Phase 4 (writing code) or after intermediate ship legs.** The task is only complete once the live behavioral smoke test is recorded in `smoke-verdicts.log`.
+1. **Uniqueness Gate**: Search existing issues first via `tools/oc-issue-sweep '<query>'` (sweeps fork open/closed + upstream closed).
+2. **Issue Creation (if new)**: If no issue fits, open ONE issue on the fork: `gh issue create -R leshchenko1979/opencrabs` (symptom + evidence).
+3. **Atomic Claim & Worktree (Milestone 1 — `oc-start`)**:
+   ```bash
+   tools/oc-start <issue-N> --branch <type>/<slug>
+   ```
+   `oc-start` automatically executes:
+   - Uniqueness check and ledger claim (`oc-ledger claim`).
+   - Remote fetch and clean branch creation off fresh `origin/main`.
+   - Clean worktree mounting at `~/oc-wt-<task>`.
+   *(Manual fallback `oc-wt add <task> <branch>` is reserved only for raw non-issue worktrees).*
+   - **ZERO-ACK ON DISPATCH (owner order 2026-09-13)**: When receiving a task dispatch (`[ISSUE TRIAGE DISPATCH: #N]`), **NEVER reply with a `session_notify` ack**. Running `oc-start` or stamping `oc-ledger claim` is the sole required action.
 
-**Issue/PR body claims require code-verified evidence** (v0.4.71, Duty-4).
-Before filing or
-updating issue/PR text, every causal claim carries `file:line` or executed
-command output. AGENTS.md's verify-everything covers actions; this gate
-covers WRITTEN ARTIFACT claims.
-DONE = Issue verified/filed, claimed on ledger, and requirement recorded (or initialized via `tools/oc-start`).
+DONE = Issue verified/filed, atomically claimed on ledger, and clean worktree mounted at `~/oc-wt-<task>` on branch `<type>/<slug>` tracking fresh `origin/main`.
 
-## Phase 2 — Worktree per task, before any edits
+## Phase 2 — Worktree Lifecycle & Isolation
 
-```bash
-# Unified entrypoint (preferred):
-~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-start <issue-N> --branch <type>/<slug>
+- **Exclusivity**: ALL edits happen in `~/oc-wt-<task>`, NEVER in the shared checkout. Parallel agents share the repository.
+- **Inline Execution**: While holding an active worktree, ALL execution runs inline in the owning session (`isolated=false`). Auto-spawned isolated workers are forbidden.
+- **Teardown**: After shipping via `oc-ship-chain` (Phase 5), remove the worktree:
+  ```bash
+  tools/oc-wt remove <task>
+  ```
+DONE = Worktree exclusivity maintained, edits isolated to `~/oc-wt-<task>`.
 
-# Or manual worktree management:
-~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-wt add <task> <branch>
-# oc-wt chains prune -> fetch origin -> validate local branch -> behind-base gate -> worktree add.
-# Per-worktree indexing is RETIRED (v0.4.143): code-structure exploration is handled
-# centrally via core memory_search(query="who calls X", scope="external").
-# Teardown:
-#   tools/oc-wt remove <task>   (dirty-tree gate; --force journals the listing)
-```
+## Phase 3 — Explore before writing (Imperative `memory_search` & DRY Gate)
 
-DONE = Clean worktree mounted at `~/oc-wt-<task>` on branch `<type>/<slug>` tracking fresh `origin/main`.
+**Using `memory_search scope="external"` is STRICTLY IMPERATIVE before writing or editing any code.**
 
-Branch name = `<type>/<slug>` (type ∈ `feat|fix|ci|chore`) per the reserved
-namespace rule in SKILL.md. The `leshchenko1979/*` namespace is OFF LIMITS here (reserved
-for Phase 7 — its own rules live there).
+1. **Symbol Graph & Call Sites (Structural Mandate)**:
+   - `memory_search scope="external"` routes directly to the code symbol graph for `/root/opencrabs/src/**/*.rs`.
+   - Run queries like `"who calls <Function>"`, `"where is <Symbol> defined"`, or `"who implements <Trait>"` before touching any file.
+   - Enumerate all callers, callees, and consumers to avoid breaking upstream callers or introducing unhandled match arms.
+2. **DRY & Shared Abstraction Verification (Mandatory Reuse)**:
+   - Always assume a helper, parser, or abstraction already exists in `/root/opencrabs/src/**/*.rs`.
+   - Search with `memory_search scope="external"` before writing any new helper function or struct.
+   - Copy-pasting, reimplementing, or creating redundant parallel abstractions is a direct violation of the DRY mandate.
+3. **Prohibition on Blind Grep**:
+   - Plain text `grep` is for literal text matching only.
+   - Editing code based solely on literal `grep` without first mapping structural symbol connections via `memory_search scope="external"` is strictly prohibited.
+4. **Library APIs & Traits**:
+   - Verify external/crate traits and version-specific methods with `grep_docs` (Context7) before calling them.
+5. **Module Sizing**:
+   - Prefer extracting a clean, modular submodule over growing any existing file past ~1000 lines.
 
-Worktrees are cut from FRESHLY FETCHED `origin/main`, never from the shared
-checkout's current branch state (v0.4.5). After any upstream rebase-port, RELOCATE
-your own merged fixes by Session-Id trailer or commit MESSAGE, never by old shas —
-porting rewrites history and shas dangle.
-
-ALL edits happen in the worktree, never in the shared checkout. One task = one
-worktree = one branch. Parallel agents share the repo; the shared checkout can be
-switched under you mid-task at any moment.
-
-Never reuse another live task's path — `oc-wt` prunes stale entries and
-validates on every add (lifecycle below).
-
-**Worktree lifecycle — delete early, recreate on demand**
-
-The worktree's job ends the moment your code is committed AND pushed — CI
-compiles on GitHub, not here. Proven fixes fast-forward into fork `main`
-(Phase 5 `oc-ship-chain`), so fork main accumulates everything we ship; upstream receives
-finished features only via the completion-time PR (Phase 7).
-
-DELETE immediately after a verified clean push:
-
-```bash
-git -C ~/oc-wt-<task> status --porcelain   # must be empty — all committed & pushed
-tools/oc-wt remove <task>                  # dirty-tree gate + journals the destroyed listing
-```
-
-RECREATE whenever a fix round begins (red run handed back, smoke-test fix
-request): ALWAYS a NEW tree — same branch, same creation steps as the first
-time (`tools/oc-wt add <task> <branch>` — prune/fetch/validate/behind-base
-gates chained; continue Phase 3/5):
-
-```bash
-tools/oc-wt add <task> <branch>
-```
-
-`oc-wt` prunes stale entries on every add — never run bare
-`git worktree prune` as a ritual step; `git worktree list` only to view.
-
-**Worktree-writer exclusivity (P6 v0.4.14 + P9 v0.4.17): while holding an
-active worktree ALL delegated execution runs INLINE in the owning session —
-plan-driven tasks included (isolated=false), never auto-spawned isolated
-sub-agents of ANY scope**: auto-spawned isolated workers
-report "done" while the diff is still empty, then their edits surface LATE and
-UNCOMMITTED in your tree, racing the parent's verification reads. Deliverable
-ops (surgical fixes, merge landings) are editor-own.
-
-## Phase 3 — Explore before writing
-
-- **Structure, callers, impact chains:** `memory_search scope="external"` (and built-in `grep` for text) — who calls this,
-  what else breaks when it changes. `grep_code` / codegraph is gone.
-- **Library APIs and version behavior:** `grep_docs` (Context7) — verify the method
-  EXISTS and which trait provides it BEFORE using it. *(teloxide setters are
-  per-payload traits: import every trait whose method you call)*
-- **Duplication check (DRY):** assume a helper already exists — find it before
-  writing a new one. Reuse beats re-implement.
-- **Module size:** prefer extracting a NEW module over growing any file past
-  ~1000 lines.
-DONE = callers enumerated (or confirmed absent) and every new API call
-verified against its trait/docs before the first edit.
+DONE = Full symbol graph & caller tree mapped via `memory_search scope="external"`, DRY reuse verified, and trait/API signatures confirmed via `grep_docs` before the first edit.
 
 ## Phase 4 — Shape the change
 
@@ -644,7 +559,7 @@ tools/oc-wt remove <task>
 **Per-commit laws live in their phases:** branch-attached HEAD + signing → §Phase 4; worktree-writer exclusivity → §Phase 2. They bind EVERY commit in ANY phase — read them there.
 - **Checkable Completion Formula**: `DONE = Bug reproduced + fix committed with trailers + tools/oc-ship-chain exits 0 (SWAPPED) + worktree removed.`
 
-## Phase 7 + 7b �� upstream PR → `editor-upstream-pr.md`
+## Phase 7 + 7b — upstream PR → `editor-upstream-pr.md`
 
 Feature-complete → upstream PR filing (Phase 7) and PR lifecycle / blocker
 routing (Phase 7b) are split out of this file — single home:
