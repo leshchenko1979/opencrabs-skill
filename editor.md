@@ -2,12 +2,7 @@
 
 **Load only after SKILL.md confirmed the role is EDITOR.**
 
-> **RELOAD LAW (v0.4.96, lens B-F2/G-5):** after ANY context compaction or
-> session spawn — not only at claim time (Phase 1 step 0) — re-read from disk,
-> IN FULL: `SKILL.md` + this file + `fleet-directives.md` (thematic index
-> minimum; every `[LANE]`-tagged section in FULL). Same law as the other three
-> roles; this header is the in-file trigger a compacted mid-task editor hits
-> even when it never re-claims.
+> **RELOAD LAW:** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload` (re-read `SKILL.md` + `editor.md` + `fleet-directives.md` on compaction/spawn).
 
 Scope: work from an issue filed on the FORK (`leshchenko1979/opencrabs` — the issues home;
 upstream receives PRs only), fix the code in a
@@ -558,8 +553,8 @@ right here (`opencrabs-ops` user unit).
    under the PR SHIPMENT law (SKILL.md §ISSUE ROUTING, PR SHIPMENT row) smoke PASS
    proceeds to upstream PR preparation; no owner wait.
 5. FAIL → FILE THE ISSUE FIRST (Phase 1 procedure: symptom + evidence — you
-   found it, you file it). Then send raw evidence + the issue link to the
-   HQ lane (`session_notify`) — do NOT attribute, do NOT fix another
+   found it, you file it). Then send raw evidence + the issue link directly to
+   the owning editor or Triage lane (`session_notify`) — do NOT attribute, do NOT fix another
    editor's feature; attribution via Session-Id trailers is MECHANICAL
    (`oc-attrib`; decision 2026-08-25 2a, mechanical fan-out above).
 6. SHIPPED UPSTREAM notice (v0.4.0): if HQ (or the post-swap

@@ -1960,7 +1960,9 @@ if not stale:
 
 print(f"Found {len(stale)} open claim(s) for CLOSED issues:")
 for oc, title in stale:
-    print(f"  Issue #{oc[\"issue\"]} (CLOSED: {title[:50]}) claimed by {oc[\"by\"]}")
+    iss_n = oc["issue"]
+    claimed_by = oc["by"]
+    print(f"  Issue #{iss_n} (CLOSED: {title[:50]}) claimed by {claimed_by}")
 
 ' "$LEDGER" "$dry_run"
   exit 0

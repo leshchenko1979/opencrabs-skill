@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.4.179 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c14` Codification
+
+Codification of findings from Duty 4+6 Review Cycle `20260915-c14`:
+- **Role-File Header Deduplication (Findings A-01, B-02):**
+  - Replaced verbose RELOAD LAW blocks in `editor.md`, `hq.md`, `triage.md`, and `toolsmith.md` with concise 1-line canonical pointers to `fleet-directives.md §Post-compaction skill reload`.
+- **Build Trigger Deduplication (Finding A-02):**
+  - Deduplicated BUILD TRIGGERS rule between `SKILL.md` and `editor-upstream-pr.md`, leaving canonical wording in `SKILL.md §Hard rules` and a 1-line pointer in `editor-upstream-pr.md`.
+- **HQ Checkable Completion Formulas (Finding G-01):**
+  - Added explicit checkable completion criteria formulas (`DONE = ...`) to `hq.md` Duties 1 through 6.
+- **Editor Escalation Routing (Finding G-02):**
+  - Updated `editor.md` smoke failure escalation pointers from HQ to direct dispatch to the owning editor or Triage.
+- **Verification Law Modernization (Findings J-01, J-05):**
+  - Standardized verification CLI law in `fleet-directives.md` to mandate `./tools/oc-ledger claims <issue-number>` instead of manual ledger grepping.
+- **State Repository Hygiene (Finding D-02):**
+  - Archived obsolete pre-S3 `orders.json` to `archive/orders.json`.
+- **Tooling Fixes & Enhancements (Findings H-02, RC Contract):**
+  - Fixed Python string quote formatting in `oc-ledger sweep-closed-claims` and verified claim sweep across closed GitHub issues.
+  - Added `--help` rc=0 support to `oc-start` adhering to `RC-CONTRACT.md`.
+  - Battery verified: PASS=195, FAIL=0.
+
 ## v0.4.178 (2026-09-15) — Duty 4+6 Review Cycle `20260914-c13` Codification
 
 Codification of findings from Duty 4+6 Review Cycle `20260914-c13`:

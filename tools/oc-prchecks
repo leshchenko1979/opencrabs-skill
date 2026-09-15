@@ -105,6 +105,32 @@ trap '_pr_exit_guard' EXIT
 
 PROG="$(basename "$0")"
 GH_BIN="${OC_GH:-gh}"
+GH_RETRIES="${OC_PRCHECKS_GH_RETRIES:-3}"
+GH_BACKOFF="${OC_PRCHECKS_GH_BACKOFF:-5}"
+# gh_retry (Cycle c14): 403/rate-limit exponential backoff wrapper. Transient
+# GitHub quota errors (rate limit / secondary rate / abuse / 403) sleep with
+# exponential backoff instead of hard-failing the poll loop; any other error
+# passes through immediately with its original rc. Poll loops MUST call this,
+# never $GH_BIN directly.
+gh_retry() {
+  local attempt=0 delay="$GH_BACKOFF" _rc=0 _out="" _e=""
+  local _errf; _errf="$(mktemp)" || return 1
+  while :; do
+    _out="$("$GH_BIN" "$@" 2>"$_errf")"; _rc=$?
+    if [ "$_rc" -eq 0 ]; then printf '%s' "$_out"; rm -f "$_errf"; return 0; fi
+    _e="$(cat "$_errf" 2>/dev/null)"
+    case "$_e" in
+      *[Rr]ate*limit*|*[Ss]econdary*rate*|*[Aa]buse*detection*|*403*)
+        attempt=$((attempt+1))
+        if [ "$attempt" -gt "$GH_RETRIES" ]; then cat "$_errf" >&2; rm -f "$_errf"; printf '%s' "$_out"; return "$_rc"; fi
+        echo "$PROG: gh 403/rate-limit (attempt $attempt/$GH_RETRIES) - backoff ${delay}s" >&2
+        oc_log_extra "gh_backoff" "$attempt" 2>/dev/null || :
+        sleep "$delay" 2>/dev/null || sleep 1
+        delay=$((delay*2));;
+      *) cat "$_errf" >&2; rm -f "$_errf"; printf '%s' "$_out"; return "$_rc";;
+    esac
+  done
+}
 REPO="leshchenko1979/opencrabs"
 CARRIER="ci/quick-build-linux"
 WAIT_SECS=600
@@ -224,6 +250,10 @@ case "\$*" in
       nullconclusion) printf '{"status":"completed","conclusion":null,"headBranch":"ci/quick-build-linux","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' ;;
       run_view_fail)  exit 1 ;;
       run_view_die)   exit 1 ;;
+      rate_limited)
+        _cf="\$0.count"; _nn="\$(cat "\$_cf" 2>/dev/null || echo 0)"; _nn=\$((_nn+1)); printf '%s' "\$_nn" > "\$_cf";
+        if [ "\$_nn" -le 2 ]; then echo "gh: API rate limit exceeded (403 secondary rate limit, abuse detection)" >&2; exit 1; fi;
+        printf '{"status":"completed","conclusion":"success","headBranch":"ci/quick-build-linux","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' ;;
       adopt_mismatch) printf '{"status":"completed","conclusion":"success","headBranch":"main","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' ;;
       *)              printf '{"status":"completed","conclusion":"success","headBranch":"ci/quick-build-linux","event":"workflow_dispatch","headSha":"ffffffffffffffffffffffffffffffffffffffff"}\n' ;;
     esac ;;
@@ -306,6 +336,19 @@ do_selftest() {
   if [ "$T_RC" -eq 5 ] && case "$T_OUT" in *"runs/222"*) true ;; *) false ;; esac; then
     t_ok "in-flight timeout -> 5 with run URL for resume"
   else t_bad "in-flight (rc=$T_RC out=$T_OUT)"; fi
+  # 403/rate-limit backoff (Cycle c14): transient 403s on run view are retried
+  # inside gh_retry with exponential backoff instead of hard-failing adoption/watch.
+  rm -f "$D/gh.count"
+  mk_shim "$D/gh" rate_limited
+  T_OUT="$(OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+    OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+    OC_PRCHECKS_GH_BACKOFF=1 OC_TOOLS_NOLOG=1 "$SELF" "$SHA" 2>&1)" && T_RC=0 || T_RC=$?
+  _b=0; _g=0
+  case "$T_OUT" in *"backoff"*) _b=1;; esac
+  case "$T_OUT" in *"VERDICT GREEN"*) _g=1;; esac
+  if [ "$T_RC" -eq 0 ] && [ "$_b" -eq 1 ] && [ "$_g" -eq 1 ]; then
+    t_ok "gh 403 backoff: 2x transient rate-limit retried -> GREEN"
+  else t_bad "gh 403 backoff (rc=$T_RC out=$T_OUT)"; fi
   # journal line present (extra.verdict)
   mk_shim "$D/gh" green
   OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
@@ -752,8 +795,8 @@ CARRIER_HEAD="$("$GH_BIN" api "repos/$REPO/git/ref/heads/$CARRIER" --jq '.object
 TS_FLOOR="$(date -u -d "$DISPATCH_TS -5 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$DISPATCH_TS")"
 deadline=$(( $(date +%s) + RESOLVE_WAIT ))
 while [ -z "$RUN_ID" ]; do
-  LIST="$("$GH_BIN" run list --workflow pr-checks.yml --repo "$REPO" --limit 30 \
-    --json databaseId,createdAt,event,headBranch,headSha 2>/dev/null)" || LIST="[]"
+  LIST="$(gh_retry run list --workflow pr-checks.yml --repo "$REPO" --limit 30 \
+    --json databaseId,createdAt,event,headBranch,headSha)" || LIST="[]"
   RUN_ID="$(printf '%s' "$LIST" | jq -r --arg br "$CARRIER" --arg ch "${CARRIER_HEAD:-}" --arg ft "$TS_FLOOR" \
     '[.[] | select(.event=="workflow_dispatch" and .headBranch==$br and ($ch=="" or .headSha==$ch) and .createdAt >= $ft)] | sort_by(.createdAt) | .[-1].databaseId // empty' 2>/dev/null)"
   [ -n "$RUN_ID" ] && break
@@ -777,7 +820,7 @@ RUN_URL="${RUN_URL:-}"; RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
 # equality with the tested sha can NEVER hold — the identity pin verifies what
 # misadoption actually violated (event + branch; n=1721 B / goal re-open).
  adopting_pin() { # adopted run -> event+branch identity check (B, this batch)
-  PIN_ST="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json headBranch,event,headSha 2>/dev/null)" || PIN_ST=""
+  PIN_ST="$(gh_retry run view "$RUN_ID" --repo "$REPO" --json headBranch,event,headSha)" || PIN_ST=""
   PIN_EVENT="$(printf '%s' "$PIN_ST" | jq -r '.event // empty' 2>/dev/null)"
   PIN_BRANCH="$(printf '%s' "$PIN_ST" | jq -r '.headBranch // empty' 2>/dev/null)"
   PIN_HEADSHA="$(printf '%s' "$PIN_ST" | jq -r '.headSha // empty' 2>/dev/null)"
@@ -799,7 +842,7 @@ if [ "${OC_PR_SKIPPED_DISPATCH:-0}" != 1 ]; then adopting_pin; fi
 _pr_write_checkpoint
 deadline=$(( $(date +%s) + WAIT_SECS ))
 while :; do
-  ST="$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json status,conclusion,createdAt 2>/dev/null)" || {
+  ST="$(gh_retry run view "$RUN_ID" --repo "$REPO" --json status,conclusion,createdAt)" || {
     echo "$PROG: run view $RUN_ID failed" >&2; exit 4; }
   STATUS="$(printf '%s' "$ST" | jq -r '.status')"
   [ "$STATUS" = "completed" ] && break

@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.178
+version: 0.4.179
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -544,16 +544,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
   `opencrabs-family.service` SIDECAR (journal-sequence verified) — never the
   default-profile daemon.
 - Never trust watcher exit codes alone — read the run's own `conclusion` via API.
-- BUILD TRIGGERS = exactly TWO, NO exceptions (v0.4.3, S3-rewired 2026-08-28;
-  A3 owner ruling 2026-08-29): an editor's `oc-deploy ship <full-sha>`
-  background task, or Alexey's word. No other dispatch — the Phase-7 step-2b
-  quick-build PR-head dispatch is RETIRED (superseded by the step-2c pr-checks
-  gate; ORDER gate 3 (CONTAINMENT, oc-order-validate) rejects any sha outside fork `main` anyway).
-  Stray unordered commits get reported by the ~2 h watchdog (`oc-deploy` watch),
-  never built autonomously. A SECOND dispatch of the same sha+set is NEVER
-  created — `oc-deploy ship` serializes (single-flight). SINGLE FLIGHT enforced
-  twice: `oc-deploy`'s dispatch invariant + the carrier-yml concurrency group
-  (commit `1ae46000`).
+- BUILD TRIGGERS = exactly TWO, NO exceptions (v0.4.3, S3-rewired 2026-08-28; A3 owner ruling 2026-08-29): an editor's `oc-deploy ship <full-sha>` background task, or Alexey's word. No other dispatch — the direct PR-head dispatch is retired (superseded by `oc-prchecks`; ORDER gate 3 containment rejects any sha outside fork `main` anyway). All builds serialize under single-flight.
 
 ## Shared war stories (why these rules exist)
 

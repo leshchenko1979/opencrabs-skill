@@ -160,11 +160,7 @@ Rules:
   FORWARD on the same PR or the PR is closed — no draft limbo. A MERGED PR is
   closed forever: follow-up work = new branch + new PR, NEVER extend a merged
   branch.
-- **BUILD TRIGGERS = exactly TWO, no exceptions** (full rule + rationale +
-  yml-location law = SKILL.md §Hard rules BUILD TRIGGERS — canonical, do not
-  restate here): checkable consequence for the editor — no direct quick-build
-  PR-head dispatch; ORDER gate 3 (CONTAINMENT) rejects any PR-head sha;
-  compile+lint evidence = step 2c's pr-checks dispatch.
+- **BUILD TRIGGERS = exactly TWO, no exceptions:** Canonical law lives in `SKILL.md §Hard rules` (`oc-deploy ship` or owner word; compile/lint gate = `oc-prchecks`).
 - **PR-BASE-PRE-OPEN (v0.4.71, Duty-4 P6):** an upstream PR head is a harvest
   branch off `adolfousier/main` — NEVER a fork-main-based branch; base +
   atomicity check runs BEFORE the PR opens (a post-open atomicity FALSE

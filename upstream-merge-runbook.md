@@ -20,8 +20,8 @@ per-commit at replay time.
 1. **FREEZE check** — query the ledger for any carrier chain between dispatch
    and swap. Chain mid-flight → NO sync; report and wait. (Checkout-ref
    hazard class.)
-2. **Synced ≠ deployed** — the sync landing on fork main never touches prod.
-   The binary swap stays its own explicit act.
+2. **Automatic sync deployment** — the sync cutover dispatches the carrier build
+   leg and auto-swaps on GREEN (owner order 2026-09-15: manual swap gate removed).
 3. **Semantic overrides** — any feature pair where OUR version should beat
    upstream's is **[GATE]**: owner decides per pair. Default is upstream-wins.
 
@@ -34,7 +34,7 @@ per-commit at replay time.
 | **Review lens** (one spawn) | audits each semantic pair — diff fork behavior vs upstream's, flag anything upstream's version *loses* |
 | **Editor lane** (hosting editor; TOOLSMITH builds no trees per toolsmith.md law) | runs `oc-deploy ship` on the marker commit via the `oc-deploy` lane, runs the battery — HQ never hand-builds |
 | **Harvest lane** | unaffected for open PRs, but **pauses new branch creation** off fork main until the sync lands (stale bases). **v0.4.93:** filed upstream PRs stay FROZEN during the window — the sync does NOT trigger re-ports; conflicts on filed PRs are maintainer-side (editor.md Phase 7 PR-freeze law) |
-| **Owner** | semantic-pair overrides + the final prod swap |
+| **Owner** | semantic-pair overrides |
 
 ## Process
 
@@ -173,7 +173,7 @@ per-commit at replay time.
     marker commit and let the swap complete (or record explicitly why it is
     deferred, with the reason). Verify with `deployed.sha` vs `origin/main`
     after the swap. **No sync step is "done" with main stranded.**
-11. Ledger stamps; prod swap stays owner-explicit.
+11. Ledger stamps; auto-swap completes on GREEN carrier build.
 
 ## Risk register
 

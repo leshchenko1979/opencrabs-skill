@@ -1,11 +1,6 @@
 # HQ — skill maintenance & worker coordination
 
-**RELOAD LAW (v0.4.95, owner order 2026-09-07 19:47Z):** after compaction or
-spawn, re-read from disk: `SKILL.md` + `hq.md` + `fleet-directives.md`
-IN FULL (HQ OWNS the directives file and RULES on disputes citing
-it — a compacted HQ enforcing half-remembered directives is worse than a lane
-missing the cadence law). Post-compaction anchor lives in ops AGENTS.md; this
-line is the in-skill backstop.
+**RELOAD LAW:** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload` (re-read `SKILL.md` + `hq.md` + `fleet-directives.md` IN FULL on compaction/spawn).
 
 **Load only after SKILL.md confirmed the role is HQ.** This is HQ
 session's standing role. Interrupt-shaped duties (idea-box / QUIRK intake,
@@ -57,6 +52,7 @@ stay here. Expected reply shape: "routed to <worker>", not done-work.
   bumps, and fleet-directives (single-writer law for skill text unchanged).
 - Provenance = the `## v<v>` CHANGELOG entry, written at ship time (fleet-
   directives §Rule-text provenance, F13 — rule text carries NO biography).
+- **Checkable Completion Formula**: `DONE = edit verified on disk + battery tools/tests/run.sh PASS + CHANGELOG.md entry present + git commit in skill repo + oc-ledger sync --version <v> returns rc=0.`
 
 ## Duty 2 — Worker registry: identity + versions, NEVER live status
 
@@ -87,6 +83,7 @@ answers "who is alive right now".
 - Auto-discovery (decision 5): on every roster sweep, an unknown active
   session becomes a provisional registry row, confirmed by its first signed
   commit (Session-Id trailer = identity proof).
+- **Checkable Completion Formula**: `DONE = oc-roster live / classify executed same-turn + registry state verified via oc-ledger roster --live.`
 
 ## Duty 3 — Push updates to idle workers
 
@@ -119,6 +116,7 @@ Bump propagation mechanics (B-F4 v0.4.96 — moved out of the table cell):
 > Delivery cadence per fleet-directives (2026-09-04 law): quiet DEFAULT,
 > turn-end for boundary-bound signals, `interrupt=true` failsafe ONLY for
 > urgent wakes a lane is blocked on (SKILL.md §DELIVERY MODES).
+- **Checkable Completion Formula**: `DONE = oc-notify-fanout (or session_notify) executed + same-turn receipts verified (target confirmed woke or deferred receipt id recorded).`
 
 ## Duty 4 — Poll workers for skill input (Direct Persistence & Ledger Intake)
 
@@ -155,6 +153,7 @@ or record them onto the ledger via `oc-ledger stamp proposal "ADD|CHANGE <rule> 
 5. Consolidated verdict table to the owner; ships ONLY on his word.
 6. Convergence beats volume: several workers burning independently on the same
    gap is stronger signal than any single proposal — merge them into one rule.
+- **Checkable Completion Formula**: `DONE = poll fanout dispatched + submissions read from reviews/<cycle-id>/proposals/ and oc-ledger events --kind proposal + verdict recorded in review state.`
 
 ## Duty 5 — Procedure rulings (decision 6)
 
@@ -167,6 +166,7 @@ RULING-CORRECTION #1: PR-open denial ruling was overturned by consent msg
 found in-topic AFTER issuing — lesson lives in SKILL.md §CONSENT REGISTER
 (deploy gate retired 2026-08-28; the lesson survives for NON-deploy ruling
 discipline: never deny from codified text without checking the live record).
+- **Checkable Completion Formula**: `DONE = ruling reasoning recorded in workers-ledger.json rulings event + notification delivered to involved lanes via session_notify.`
 
 ## Duty 6 — Periodic subagent skill review
 
@@ -233,6 +233,7 @@ Method:
    (incidents become rules/proposals, not lenses); no auto-growth. Lenses
    are quality dimensions (stable, few); objects change every batch and are
    re-derived from the skill root at spawn time.
+- **Checkable Completion Formula**: `DONE = all 11 lens reports persisted via oc-review-persist + receipts logged in skill-review-index.log + master verdict compiled in reviews/<cycle-id>/verdict.md + review manifest marked COMPLETED in reviews/<cycle-id>/state.json.`
 
 Rationale: HQ authors most rules — author-blindness is structural.
 Independent subagent eyes + the owner gate keep the set honest.
