@@ -121,7 +121,7 @@ while [ $# -gt 0 ]; do
     --base) BASE="${2:-}"; [ -n "$BASE" ] || usage "empty --base"; shift 2 ;;
     --repo) REPO="${2:-}"; [ -n "$REPO" ] || usage "empty --repo"; shift 2 ;;
     --no-log) shift ;;
-    -h|--help) usage "" ;;
+    -h|--help) usage "" 0 ;;
     -*) usage "unknown flag '$1'" ;;
     *) if [ -z "$ISSUE" ]; then ISSUE="$1"; else usage "unexpected arg '$1'"; fi; shift ;;
   esac
@@ -129,11 +129,22 @@ done
 [ -n "$ISSUE" ] || usage "missing <issue-N>"
 [ -n "$BRANCH" ] || usage "missing --branch <type>/<slug>"
 printf '%s' "$ISSUE" | grep -Eq '^[0-9]+$' || usage "issue must be numeric (got '$ISSUE')"
-printf '%s' "$BRANCH" | grep -Eq '^(feat|fix|ci|chore)/[a-z0-9][a-z0-9-]{0,60}$' \
-  || usage "branch must be <type>/<slug> with type in feat|fix|ci|chore (got '$BRANCH')"
+printf '%s' "$BRANCH" | grep -Eq '^(feat|fix|ci|chore|docs|refactor)/[a-z0-9][a-z0-9-]{0,60}$' \
+  || usage "branch must be <type>/<slug> with type in feat|fix|ci|chore|docs|refactor (got '$BRANCH')"
 [ -z "$TASK" ] && TASK="${BRANCH#*/}"
 printf '%s' "$TASK" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' \
   || usage "task slug '$TASK' fails oc-wt shape — pass --task explicitly"
+
+# ---- step 0: git pre-flight (verify repo & base ref, ensure branch does not exist) ---
+[ -d "$REPO" ] || usage "repo directory not found: $REPO"
+"$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null && {
+  echo "$PROG: branch '$BRANCH' already exists — refusing to clobber." >&2
+  echo "  resume: oc-wt add $TASK $BRANCH --repo $REPO   (branch is yours, just attach the tree)" >&2
+  exit 4; }
+"$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || {
+  echo "$PROG: base ref '$BASE' not found in $REPO." >&2
+  echo "  resume: git -C $REPO fetch origin && oc-start $ISSUE --branch $BRANCH --task $TASK --repo $REPO" >&2
+  exit 4; }
 
 # ---- step 1: claim ----------------------------------------------------------
 if ! "$LEDGER_BIN" claim --issue "$ISSUE" --what "CLAIM #$ISSUE — editor start branch=$BRANCH" 2>&1; then
@@ -143,14 +154,6 @@ if ! "$LEDGER_BIN" claim --issue "$ISSUE" --what "CLAIM #$ISSUE — editor start
 fi
 
 # ---- step 2: create branch (lane named it, tool executes — oc-wt posture) ---
-"$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null && {
-  echo "$PROG: branch '$BRANCH' already exists — refusing to clobber." >&2
-  echo "  resume: oc-wt add $TASK $BRANCH --repo $REPO   (branch is yours, just attach the tree)" >&2
-  exit 4; }
-"$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || {
-  echo "$PROG: base ref '$BASE' not found in $REPO." >&2
-  echo "  resume: git -C $REPO fetch origin && oc-start $ISSUE --branch $BRANCH --task $TASK --repo $REPO" >&2
-  exit 4; }
 "$GIT_BIN" -C "$REPO" branch "$BRANCH" "$BASE" 2>&1 || {
   echo "$PROG: branch create failed: $BRANCH from $BASE." >&2
   echo "  resume: oc-start $ISSUE --branch $BRANCH --task $TASK --repo $REPO" >&2

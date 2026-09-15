@@ -70,9 +70,14 @@ JSON
   echo "selftest OK"; exit 0
 fi
 
-: "${LEDGER:=${OC_LEDGER:-/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}}"
+_SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+_DEFAULT_STATE="${OC_DEV_STATE:-${HOME:-/root}/.opencrabs/profiles/ops/opencrabs-dev}"
+: "${LEDGER:=${OC_LEDGER:-$_DEFAULT_STATE/workers-ledger.json}}"
 if [ -z "$CURRENT" ]; then
-  SKILL="/root/.opencrabs/profiles/ops/skills/opencrabs-dev/SKILL.md"
+  SKILL="$_SELF_DIR/../SKILL.md"
+  if [ ! -f "$SKILL" ]; then
+    SKILL="${HOME:-/root}/.opencrabs/profiles/ops/skills/opencrabs-dev/SKILL.md"
+  fi
   CURRENT="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL" 2>/dev/null | head -1)"
   [ -n "$CURRENT" ] || die 3 "cannot parse version: from $SKILL frontmatter"
 fi

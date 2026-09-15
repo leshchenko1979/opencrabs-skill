@@ -42,7 +42,7 @@ if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-watcher-audit" "$@
 trap 'oc_log_finish $?' EXIT
 
 PROG="oc-watcher-audit"
-DEFAULT_DIR="${OC_DETACHED_DIR:-/root/.opencrabs/profiles/ops/tmp/detached}"
+DEFAULT_DIR="${OC_DETACHED_DIR:-${HOME:-/root}/.opencrabs/profiles/ops/tmp/detached}"
 
 usage() {
   echo "usage: $PROG [--since <ts>] [--json] [--dir <dir>] [--notify-orphans] [--dry-run] | --selftest" >&2
@@ -379,7 +379,7 @@ if [ ! -d "$TARGET_DIR" ]; then
   exit 3
 fi
 
-LOCK_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-/root/.opencrabs/profiles/ops/opencrabs-dev}}"
+LOCK_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-${HOME:-/root}/.opencrabs/profiles/ops/opencrabs-dev}}"
 CP_DIR="$LOCK_DIR/runs/in-flight"
 
 # Execute audit via python3
@@ -524,10 +524,11 @@ def query_gh_run(run_id, repo):
     return None
 
 def notify_session(uuid, title, text):
-    script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else "/root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools"
+    home_dir = os.environ.get("HOME", "/root")
+    script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.path.join(home_dir, ".opencrabs/profiles/ops/skills/opencrabs-dev/tools")
     notify_sh = os.path.join(script_dir, "lib", "oc-notify.sh")
     if not os.path.exists(notify_sh):
-        notify_sh = "/root/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/lib/oc-notify.sh"
+        notify_sh = os.path.join(home_dir, ".opencrabs/profiles/ops/skills/opencrabs-dev/tools/lib/oc-notify.sh")
     try:
         subprocess.run([notify_sh, uuid, text, title], capture_output=True, text=True, timeout=90)
     except Exception:

@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.4.184 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c17` Codification
+
+Codification of findings from Duty 4+6 Review Cycle `20260915-c17`:
+- **Tools & Mechanics Fixes (Findings J-1, F-1, E-1, C-1, J-2, F-2, J-3, C-2, E-2, E-3):**
+  - **`tools/oc-smoke`**: Fixed actor fallback by checking the specific issue's claim event in `workers-ledger.json` before falling back to latest enrolled worker. Removed duplicate identity block logging by running `oc-smoke-evidence` without inner `--append-log`.
+  - **`tools/oc-start`**: Added git pre-flight checks (verifying repo & base ref, ensuring branch does not already exist) before mutating ledger state with a claim. Expanded branch taxonomy regex to accept `docs/` and `refactor/` branches alongside standard `feat|fix|ci|chore`.
+  - **`tools/oc-skew-scan`**: Replaced hardcoded `/root/` paths with dynamic `SKILL_DIR` / `${HOME}` fallbacks.
+  - **`tools/oc-watcher-audit`**: Replaced hardcoded `/root/` default directories and `oc-notify.sh` paths with dynamic `${HOME}` resolution.
+  - **`tools/tests/run.sh`**: Added Section 69 test battery coverage for `oc-log-search` (`--selftest`, `--help`, arg handling), bringing test battery to 195/195 passing tests.
+- **Documentation & Role Laws (Findings A-1, B-1, G-1):**
+  - Cleaned remaining manual worktree and branch instructions in documentation.
+  - Verified checkable `DONE = ...` exit formulas across all role duties (`hq.md`, `triage.md`, `toolsmith.md`, `editor.md`).
+- **Brain & State Hygiene (Findings BS-1, BS-2, BS-3, D-1):**
+  - Relocated git uncommitted changes rules from `TOOLS.md` to `AGENTS.md § Git and brain files`.
+  - Cleaned stale `fanout.*.lock` files from state root.
+
 ## v0.4.183 (2026-09-15) — Autonomous Priority Authority Law
 
 - **Autonomous Priority Authority Law (`fleet-directives.md §Autonomous Priority Authority Law`):**

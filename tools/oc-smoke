@@ -249,7 +249,12 @@ RUN_ID="${RUN_ID:-unknown}"
 
 ACTOR="${OPENCRABS_SESSION_ID:-}"
 if [ -z "$ACTOR" ] && [ -f "$STATE_DIR/workers-ledger.json" ]; then
-  ACTOR="$(jq -r '.workers[-1].uuid // empty' "$STATE_DIR/workers-ledger.json" 2>/dev/null || true)"
+  CLAIM_ACTOR="$(jq -r --arg iss "$ISSUE" '.events[]? | select(.kind == "claim" and ((.issue|tostring) == $iss)) | .actor // empty' "$STATE_DIR/workers-ledger.json" 2>/dev/null | tail -1 || true)"
+  if [ -n "$CLAIM_ACTOR" ]; then
+    ACTOR="$CLAIM_ACTOR"
+  else
+    ACTOR="$(jq -r '.workers[-1].uuid // empty' "$STATE_DIR/workers-ledger.json" 2>/dev/null || true)"
+  fi
 fi
 ACTOR="${ACTOR:-unknown-actor}"
 
@@ -263,7 +268,7 @@ IDENTITY_RC=0
 if [ -x "$EVIDENCE_BIN" ]; then
   echo "$PROG: running identity verification on $UNIT..."
   set +e
-  IDENTITY_OUT="$("$EVIDENCE_BIN" --unit "$UNIT" ${MARKERS:+--markers "$MARKERS"} --append-log "$CANON_LOG" 2>&1)"
+  IDENTITY_OUT="$("$EVIDENCE_BIN" --unit "$UNIT" ${MARKERS:+--markers "$MARKERS"} 2>&1)"
   IDENTITY_RC=$?
   set -e
   printf '%s\n' "$IDENTITY_OUT"

@@ -837,6 +837,14 @@ if tool oc-harvest-dispatch; then
   "$TOOLS_DIR/oc-harvest-dispatch" --help >/dev/null 2>&1 && ok "oc-harvest-dispatch --help rc=0" || bad "oc-harvest-dispatch --help rc!=0"
 fi
 
+# ---- 69. oc-log-search (telemetry-only daemon-log search)
+section "oc-log-search (telemetry-only log search)"
+run_selftest oc-log-search
+if tool oc-log-search; then
+  "$TOOLS_DIR/oc-log-search" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/oc-log-search" --help >/dev/null 2>&1 && ok "oc-log-search --help rc=0" || bad "oc-log-search --help rc!=0"
+fi
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \
