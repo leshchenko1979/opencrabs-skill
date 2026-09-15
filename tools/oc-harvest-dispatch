@@ -66,7 +66,79 @@ EOF
 # --- Core Python Engine ---
 run_engine() {
   python3 -c '
-import sys, os, json, re, subprocess, argparse, time
+import sys, os, json, re, subprocess, argparse, time, datetime, glob
+
+def parse_iso_ts(ts_str):
+    if not ts_str: return 0
+    try:
+        if ts_str.endswith("Z"):
+            ts_str = ts_str[:-1] + "+00:00"
+        return int(datetime.datetime.fromisoformat(ts_str).timestamp())
+    except Exception:
+        return 0
+
+def load_swap_history(state_dir):
+    swaps = []
+    if not state_dir or not os.path.exists(state_dir):
+        return swaps
+    journals = glob.glob(os.path.join(state_dir, "oc-deploy", "journal", "swap-*.jsonl"))
+    for jf in journals:
+        try:
+            with open(jf) as f:
+                for line in f:
+                    if not line.strip(): continue
+                    data = json.loads(line)
+                    if data.get("step") == "auto-swap" and data.get("sha") and data.get("ts"):
+                        ts_val = parse_iso_ts(data["ts"])
+                        if ts_val > 0:
+                            swaps.append((data["sha"], ts_val))
+                        break
+        except Exception:
+            pass
+    meta_path = os.path.join(state_dir, "deployed.meta.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path) as f:
+                data = json.load(f)
+                ts_str = data.get("swapped_at") or data.get("ts")
+                sha = data.get("sha")
+                ts_val = parse_iso_ts(ts_str)
+                if sha and ts_val > 0:
+                    swaps.append((sha, ts_val))
+        except Exception:
+            pass
+    swaps.sort(key=lambda x: x[1])
+    return swaps
+
+def get_commit_deploy_ts(commit_sha, repo_path, swaps):
+    mock_env = os.environ.get("OC_HARVEST_MOCK_DEPLOYED_TS")
+    if mock_env and mock_env.isdigit() and int(mock_env) > 0:
+        return int(mock_env)
+    if not swaps:
+        return 0
+    for s_sha, s_ts in swaps:
+        if commit_sha == s_sha or commit_sha.startswith(s_sha) or s_sha.startswith(commit_sha):
+            return s_ts
+    if not os.path.isdir(repo_path):
+        return 0
+    latest_sha = swaps[-1][0]
+    rc = subprocess.run(["git", "-C", repo_path, "merge-base", "--is-ancestor", commit_sha, latest_sha], capture_output=True).returncode
+    if rc != 0:
+        return 0
+    low = 0
+    high = len(swaps) - 1
+    earliest_idx = high
+    while low <= high:
+        mid = (low + high) // 2
+        mid_sha = swaps[mid][0]
+        rc = subprocess.run(["git", "-C", repo_path, "merge-base", "--is-ancestor", commit_sha, mid_sha], capture_output=True).returncode
+        if rc == 0:
+            earliest_idx = mid
+            high = mid - 1
+        else:
+            low = mid + 1
+    return swaps[earliest_idx][1]
+
 
 def run_cmd(cmd, cwd=None):
     res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
@@ -253,9 +325,14 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                 "exit_code": 1
             }
 
-    # Gate 2b: 24h feature soak gate (Finding C-1 / J-2 / J-3 / J-4)
-    # If candidate is a feat/* or subject begins with feat, ensure commit is >= 24h old
+    # Gate 2b: 24h feature soak gate (Finding C-1 / J-2 / J-3 / J-4, Owner 2026-09-15)
+    # 24H SOAK AMENDMENT: Soak must explicitly count from deployment/swap timestamp, not git commit timestamp.
     now_ts = int(os.environ.get("OC_HARVEST_NOW_TS") or time.time())
+    st_dir = os.environ.get("STATE_DIR", "")
+    if not st_dir:
+        home_dir = os.environ.get("HOME", "/root")
+        st_dir = os.path.join(home_dir, ".opencrabs/profiles/ops/opencrabs-dev")
+    swaps = load_swap_history(st_dir)
     for c in commits:
         rc, out, _ = run_cmd(["git", "-C", repo_path, "log", "-n", "1", "--format=%s%x09%ct", c])
         if rc == 0 and out.strip():
@@ -263,8 +340,14 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
             c_subj = parts[0]
             c_ts = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
             is_feat = c_subj.startswith("feat") or (slug and "feat" in slug) if "slug" in locals() else c_subj.startswith("feat")
-            if is_feat and c_ts > 0:
-                age_hours = (now_ts - c_ts) / 3600.0
+            if is_feat:
+                d_ts = get_commit_deploy_ts(c, repo_path, swaps)
+                if not d_ts and not swaps and not os.environ.get("OC_HARVEST_MOCK_DEPLOYED_TS"):
+                    d_ts = c_ts
+                if d_ts > 0:
+                    age_hours = (now_ts - d_ts) / 3600.0
+                else:
+                    age_hours = 0.0
                 if age_hours < 24.0:
                     return {
                         "status": "REJECTED",
@@ -618,7 +701,7 @@ EOF
 
   # 4b. Test #300 (fresh feat within 24h soak) -> REJECTED (rc 1)
   rc=0
-  out="$(OC_HARVEST_NOW_TS="1789020000" run_engine "vet" "$commit_300" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  out="$(OC_HARVEST_NOW_TS="1789020000" OC_HARVEST_MOCK_DEPLOYED_TS="1789000000" run_engine "vet" "$commit_300" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "SOAK_GATE_VIOLATION"; then
     echo "  ok 4b - vet #300 (fresh feat within soak window) -> REJECTED exit 1"
   else

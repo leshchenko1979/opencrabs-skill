@@ -64,7 +64,80 @@ EOF
 # --- Core Python Engine (Deterministic Parsing & Matching) ---
 run_engine() {
   python3 -c '
-import sys, os, json, re, subprocess, argparse, time
+import sys, os, json, re, subprocess, argparse, time, datetime, glob
+def parse_iso_ts(ts_str):
+    if not ts_str: return 0
+    try:
+        if ts_str.endswith("Z"):
+            ts_str = ts_str[:-1] + "+00:00"
+        return int(datetime.datetime.fromisoformat(ts_str).timestamp())
+    except Exception:
+        return 0
+
+def load_swap_history(state_dir):
+    swaps = []
+    if not state_dir or not os.path.exists(state_dir):
+        return swaps
+    journals = glob.glob(os.path.join(state_dir, "oc-deploy", "journal", "swap-*.jsonl"))
+    for jf in journals:
+        try:
+            with open(jf) as f:
+                for line in f:
+                    if not line.strip(): continue
+                    data = json.loads(line)
+                    if data.get("step") == "auto-swap" and data.get("sha") and data.get("ts"):
+                        ts_val = parse_iso_ts(data["ts"])
+                        if ts_val > 0:
+                            swaps.append((data["sha"], ts_val))
+                        break
+        except Exception:
+            pass
+    meta_path = os.path.join(state_dir, "deployed.meta.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path) as f:
+                data = json.load(f)
+                ts_str = data.get("swapped_at") or data.get("ts")
+                sha = data.get("sha")
+                ts_val = parse_iso_ts(ts_str)
+                if sha and ts_val > 0:
+                    swaps.append((sha, ts_val))
+        except Exception:
+            pass
+    swaps.sort(key=lambda x: x[1])
+    return swaps
+
+def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None):
+    if mock_deployed_ts is not None and int(mock_deployed_ts) > 0:
+        return int(mock_deployed_ts)
+    mock_env = os.environ.get("OC_HARVEST_MOCK_DEPLOYED_TS")
+    if mock_env and mock_env.isdigit() and int(mock_env) > 0:
+        return int(mock_env)
+    if not swaps:
+        return 0
+    for s_sha, s_ts in swaps:
+        if commit_sha == s_sha or commit_sha.startswith(s_sha) or s_sha.startswith(commit_sha):
+            return s_ts
+    if not os.path.isdir(repo_path):
+        return 0
+    latest_sha = swaps[-1][0]
+    rc = subprocess.run(["git", "-C", repo_path, "merge-base", "--is-ancestor", commit_sha, latest_sha], capture_output=True).returncode
+    if rc != 0:
+        return 0
+    low = 0
+    high = len(swaps) - 1
+    earliest_idx = high
+    while low <= high:
+        mid = (low + high) // 2
+        mid_sha = swaps[mid][0]
+        rc = subprocess.run(["git", "-C", repo_path, "merge-base", "--is-ancestor", commit_sha, mid_sha], capture_output=True).returncode
+        if rc == 0:
+            earliest_idx = mid
+            high = mid - 1
+        else:
+            low = mid + 1
+    return swaps[earliest_idx][1]
+
 
 def get_prs(upstream_repo, mock_prs_file=None):
     if mock_prs_file and os.path.exists(mock_prs_file):
@@ -243,13 +316,21 @@ if action == "check":
             matching_commits.append(c)
 
     now_ts = int(os.environ.get("OC_HARVEST_NOW_TS") or time.time())
+    st_dir = os.path.dirname(registry_file) if registry_file else os.environ.get("STATE_DIR", "")
+    swaps = load_swap_history(st_dir)
     for mc in matching_commits:
         subj = mc.get("subject", "")
-        cts = mc.get("commit_ts", 0)
+        c_sha = mc.get("sha", "")
         is_feat = subj.startswith("feat") or "feat/" in target.lower()
-        if is_feat and cts > 0:
-            age_sec = now_ts - cts
-            age_hours = age_sec / 3600.0
+        if is_feat:
+            # 24H SOAK AMENDMENT: Soak must explicitly count from deployment/swap timestamp
+            d_ts = mc.get("deployed_ts") or get_commit_deploy_ts(c_sha, repo_path, swaps, mc.get("deployed_ts"))
+            if not d_ts and not swaps and not os.environ.get("OC_HARVEST_MOCK_DEPLOYED_TS"):
+                d_ts = mc.get("commit_ts", 0)
+            if d_ts > 0:
+                age_hours = (now_ts - d_ts) / 3600.0
+            else:
+                age_hours = 0.0
             if age_hours < 24.0:
                 print("REFUSED: Target %s is within 24h feature soak window (age: %.1fh < 24h, commit %s: %s)" % (target, max(0.0, age_hours), mc.get("short_sha", "")[:7], subj[:50]))
                 sys.exit(1)
@@ -485,7 +566,8 @@ EOF
     "short_sha": "8888888",
     "subject": "feat(soak): fresh feature under soak (#300)",
     "trailer": "leshchenko1979/opencrabs#300",
-    "commit_ts": 1789000000
+    "commit_ts": 1789000000,
+    "deployed_ts": 1789000000
   }
 ]
 EOF
