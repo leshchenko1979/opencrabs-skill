@@ -101,6 +101,8 @@ per that section. Owner veto overrides retroactively, as with rulings.
   via the cron tool, fresh receipt); a dead patrol cron posts no census and
   trips no alarm, so the liveness check IS the heartbeat for the heartbeat.
 
+- **Checkable Completion Formula**: `DONE = all patrol dimensions checked with tool receipts (or explicit zero-event statement) + census posted to board topic 30220.`
+
 ## Duty T5 — Post-compaction + daily issue sweep (owner order 2026-09-07
 17:23Z, v0.4.92; daily cadence added owner order 2026-09-08 20:0xZ, v0.4.112)
 
@@ -152,6 +154,8 @@ census + classification, extended with capacity resolution, dispatch, and
 bounded expansion, under the overnight design-gate contract (a dispatched
 editor designs and PARKS at the owner gate; it does NOT open `/goal`). Exit
 line: `triaged=N · dispatched=M · expanded=K · parked=P · waiting=0`.
+
+- **Checkable Completion Formula**: `DONE = open fork issues queried via gh issue list + diffed against ledger claim-refs + all unclaimed issues routed via wire envelope or escalated to HQ.`
 
 ## Duty T6 — Registry writes: schema + seed rules (moved from hq.md Duty 2, lens B-F10 v0.4.96)
 

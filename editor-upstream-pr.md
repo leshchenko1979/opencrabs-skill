@@ -116,11 +116,7 @@ Rules:
   feature's commits, no bare CI-config churn unless it IS the feature.
 - Cherry-pick conflicts → resolve, re-run the Phase 5 gate (pr-checks), continue. NEVER merge fork
   `main` into the PR branch — upstream gets clean commits only.
-- **HARVEST VERIFICATION SWEEP (Duty-4, v0.4.71):** after conflict resolution
-  on a harvested branch, BEFORE the first gate dispatch — 4-leg sweep: symbol
-  callers in the UPSTREAM tree, fork-side attribute port, foreign-hunk drop,
-  `git patch-id` verify of rebase-ported commits. Full checklist:
-  §Phase 7 Reference Rules below.
+- **HARVEST VERIFICATION SWEEP (Duty-4, v0.4.71):** Full 4-leg sweep checklist (symbols, attributes, foreign hunks, patch-ids) lives in §Phase 7 Reference Rules below.
 - **BASE-FRESHNESS AT FILING TIME (Triage lesson n=2083, v0.4.111):** the
   sweep and every gate run are valid against a NAMED upstream base — record
   the `adolfousier/main` sha the verification was tested against; a census/
@@ -180,6 +176,8 @@ Rules:
   fork `main` — and NOT deleted while their PR is still open (GitHub needs the
   head alive).
 
+- **Checkable Completion Formula**: `DONE = Upstream PR created + fork issue closed with pointer comment + harvest worktree removed via oc-wt.`
+
 ## Phase 7b — PR lifecycle (monitor & unblock, v0.4.0)
 
 Every OPEN upstream PR has an owning editor: the Session-Id trailers of its
@@ -207,6 +205,8 @@ cherry-pick round toward a PR head (v0.4.14, proposal P4)**: before investing a
 round, fresh `gh pr view <n> --json state` — if MERGED/CLOSED, STOP and report,
 do not invest the round.
 
+- **Checkable Completion Formula**: `DONE = PR state checked via API + blockers routed to responsible party (maintainer or owning editor) or closed with note.`
+
 ## Phase 7c — Mechanized Harvest Execution (v0.4.136, 2026-09-10; tightened v0.4.146)
 
 Trigger: Operator harvest command (e.g. `/goal harvest ...`) dispatched to Editor lane via `session_notify` `[HARVEST DISPATCH: #N]` wire envelope from Triage.
@@ -229,6 +229,7 @@ Contract:
      `--fast` is strictly prohibited for pre-PR testing; upstream PRs require 100% full test suite verification.
 4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log` (and ≥24h post-swap soak completed for `feat/*` commits per 24h Feature Soak Harvest Law), Editor files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug>`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue. **A PR number is not FILED until a same-turn `gh pr create` (or `gh pr view <N>`) output names it** — if a guard flags the claim (`phantom_blocked`) or the output was not witnessed, the PR is UNFILED: re-verify and re-dispatch (v0.4.152 §Guard-Flag Escalation Law; worked example: an announced PR #1514 that never existed cost ~3 h).
 5. **Ack & Cleanup**: Remove harvest worktree, stamp completion in ledger, and notify Triage via `session_notify`.
+   - **Checkable Completion Formula**: `DONE = 4-leg smoke pass in smoke-verdicts.log + full oc-prchecks green + upstream PR filed + harvest worktree cleaned up.`
 
 ## Phase 7 Reference Rules (Harvest Verification & Qualified Fork Refs)
 

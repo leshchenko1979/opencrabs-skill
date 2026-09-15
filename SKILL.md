@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.179
+version: 0.4.180
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -108,8 +108,12 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` â€
 | `./tools/oc-harvest-dispatch <issue> [--dry-run]` | dispatches automated harvest-to-upstream work order for eligible features |
 | `./tools/oc-harvest-sweep <pr-branch> [--base adolfousier/main] [--repo P] [--port-of sha1,sha2]` | pre-gate harvest verification (editor Phase 7 sweep, mechanical legs); behavioral judgment stays human |
 | `./tools/oc-health [--json|--summary]` | daily & pre-flight health audit of worktrees, watchers, and cron consistency |
-| `./tools/oc-roster-selftest` | hermetic test runner for roster generation and classification |
+| `./tools/oc-roster --selftest` | hermetic test runner for roster generation and classification |
 | `./tools/oc-watcher-audit [--json] [--notify-orphans]` | detached watcher compliance and sleep-loop audit across active sessions |
+| `./tools/oc-start <issue-N> --branch <branch>` | unified entry: claim + branch + worktree initialization |
+| `./tools/oc-smoke <issue-N> [--probe <cmd>]` | unified 4-leg smoke verification & verdict row logging |
+| `./tools/oc-issue-dispatch [--auto] [--issue N] [--lane U]` | mechanized issue triage dispatch to idle editor lanes |
+| `./tools/oc-lint-laws [--strict]` | mechanical syntax & tool existence lint of skill markdown laws |
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5); `wait <ref> [--budget N] [--poll S]` provides single-invocation blocking gate. Full rc/adoption/lock/fmt-soft-fail register: RC-CONTRACT.md |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic; READ-ONLY â€” PROPOSE/WAIT judgment stays human |
 | `./tools/oc-wt add\|remove\|--force` | editor worktree manager (`--force` journals before removal) |

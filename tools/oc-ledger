@@ -95,7 +95,7 @@
 #   sweep-closed-claims [--dry-run]        inspects claims against closed issues on
 #                                          GitHub/fork and reports or marks stale open
 #                                          claims closed.
-#   --selftest                             fixture suite (205 cases)
+#   --selftest                             fixture suite (311 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·

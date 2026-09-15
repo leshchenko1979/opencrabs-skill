@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.180 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c15` Codification
+
+Codification of findings from Duty 4+6 Review Cycle `20260915-c15`:
+- **Editor Entry & Smoke Ritual Simplification (Findings A-01, A-02, J-01, J-02):**
+  - Updated `editor.md` Phase 1 & 2 to reference canonical `tools/oc-start <issue> [--branch <branch>]` for unified claim, branch setup, and worktree mounting with failure recovery guidance.
+  - Updated `editor.md` Phase 6b to reference canonical `tools/oc-smoke <issue> [--verdict PASS|FAIL] [--probe <cmd>]` for 4-leg smoke verification and newline-safe row logging.
+- **Checkable Completion Formulas (Findings G-01, G-02, G-03):**
+  - Added explicit `DONE = ...` criteria formulas across `editor.md` (Phases 1, 2, 4, 5, 6b), `triage.md` (Duties T4, T5), and `editor-upstream-pr.md` (Phases 7, 7b, 7c).
+- **Doc Deduplication & Hierarchy (Findings A-03, I-01):**
+  - Deduplicated HARVEST VERIFICATION SWEEP checklist in `editor-upstream-pr.md` with a single reference pointer.
+  - Added explicit `#### FAMILY: META — review machinery and catalog` section header in `review-lenses.md`.
+- **Tool Registers & Contract Synchronization (Findings C-01, C-02, C-03, H-01):**
+  - Added `oc-start`, `oc-smoke`, `oc-issue-dispatch`, and `oc-lint-laws` to `SKILL.md` Canonical Tool Register.
+  - Fixed `./tools/oc-roster --selftest` path in `SKILL.md:111`.
+  - Deduplicated `RC-CONTRACT.md` entries for `oc-ledger sweep-closed-claims`.
+  - Updated `tools/oc-ledger` header comment with live selftest case count (311 cases).
+- **Brain File & State Hygiene (Findings BS-01, D-01, D-02, D-03):**
+  - Pruned historical narrative parentheticals from always-loaded `AGENTS.md:238, 255`.
+  - Cleaned up stale locks in state repository.
+- **Battery Verified:** PASS=202, FAIL=0.
+
 ## v0.4.179 (2026-09-15) — Duty 4+6 Review Cycle `20260915-c14` Codification
 
 Codification of findings from Duty 4+6 Review Cycle `20260915-c14`:

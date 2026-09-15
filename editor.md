@@ -236,6 +236,8 @@ dir; actor derived automatically from ambient `$OPENCRABS_SESSION_ID`):
 
 | Tool | Invocation | For |
 |------|-----------|-----|
+| `oc-start` | `tools/oc-start <issue-N> --branch <branch>` | one-command entry: claim + branch + worktree |
+| `oc-smoke` | `tools/oc-smoke <issue-N> [--probe <cmd>]` | unified 4-leg smoke verification & verdict logging |
 | `oc-wt` | `tools/oc-wt add <task> <branch>` / `remove <task>` | worktree per task; chains prune→fetch→add |
 | `oc-prchecks` | `tools/oc-prchecks wait <branch>` / `<branch> --repo leshchenko1979/opencrabs` | dispatch + wait PR gate; `wait` provides single-command blocking gate |
 | `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R] [--upstream R] [--limit N]` | Phase 1 step 1 uniqueness gate (fork open+closed + upstream closed) |
@@ -320,10 +322,15 @@ Before filing or
 updating issue/PR text, every causal claim carries `file:line` or executed
 command output. AGENTS.md's verify-everything covers actions; this gate
 covers WRITTEN ARTIFACT claims.
+DONE = Issue verified/filed, claimed on ledger, and requirement recorded (or initialized via `tools/oc-start`).
 
 ## Phase 2 — Worktree per task, before any edits
 
 ```bash
+# Unified entrypoint (preferred):
+~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-start <issue-N> --branch <type>/<slug>
+
+# Or manual worktree management:
 ~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-wt add <task> <branch>
 # oc-wt chains prune -> fetch origin -> validate local branch -> behind-base gate -> worktree add.
 # Per-worktree indexing is RETIRED (v0.4.143): code-structure exploration is handled
@@ -331,6 +338,8 @@ covers WRITTEN ARTIFACT claims.
 # Teardown:
 #   tools/oc-wt remove <task>   (dirty-tree gate; --force journals the listing)
 ```
+
+DONE = Clean worktree mounted at `~/oc-wt-<task>` on branch `<type>/<slug>` tracking fresh `origin/main`.
 
 Branch name = `<type>/<slug>` (type ∈ `feat|fix|ci|chore`) per the reserved
 namespace rule in SKILL.md. The `leshchenko1979/*` namespace is OFF LIMITS here (reserved
@@ -461,6 +470,7 @@ the **receiver** (`&self` / `&mut self` / none), and **`Drop`-impl move rules**
 (moving a field out of `&mut self` in `drop` is `E0507` — take it with
 `Option::take()`). Lane `facd50af` (2026-09-11, #111) burned a whole gate budget
 on exactly these two classes after a clean fmt pre-pass.
+DONE = Target change implemented, formatted via rustfmt, call-site shapes verified, and signed commit landed on branch with Session-Id trailer.
 
 ## Phase 5 — Ship (`oc-ship-chain`)
 
@@ -521,6 +531,7 @@ When shipping features via `oc-ship-chain` or deploying via `oc-deploy`, failure
 3. Grep the tree for duplicate imports and doubled tests the resolution may have left behind.
 
 **Gate-idle question sweep:** CI gate and carrier build waits are idle time — do not sit silent on open questions. Circle back to the user in your topic with anything unresolved (scope doubts, naming, approach forks) while the chain runs; waiting is never a reason to hold a question or to guess.
+DONE = `tools/oc-ship-chain` exited 0 (SWAPPED) with new binary running live on `opencrabs-ops` unit and worktree cleaned.
 
 ## Phase 6b — Smoke-test-on-notify (your features, after any swap)
 
@@ -533,21 +544,26 @@ zero cargo. CODE TESTS (fmt/clippy/cargo test) are a different kind, CI-only —
 Phase 5 (Phase 7 step 2c reuses it on upstream PR heads). The binary is live
 right here (`opencrabs-ops` user unit).
 
+```bash
+# Unified 4-leg smoke verification & verdict row logging:
+~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-smoke <issue-N> --probe "<command-to-verify-behavior>"
+```
+
 1. Read run id + built sha from the notification body. **If the daemon bounced**
    (any restart since your last turn), RE-SURFACE lazy tool schemas via
    `tool_search` BEFORE any smoke invocation — a restart kills activated schemas
    and intents misfire onto wrong tools.
-2. **IDENTITY RECEIPT first (C-F3, v0.4.72):** run `oc-smoke-evidence`
-   BEFORE driving the feature — it compares the RUNNING unit's exe sha against
-   the deployed markers (rc 0 IDENTITY-MATCH / 1 MISMATCH / 3 unit fail).
+2. **IDENTITY RECEIPT & BEHAVIORAL PROBE:** Run `tools/oc-smoke <issue-N> --probe "<cmd>"`
+   (or manual `oc-smoke-evidence`). It verifies unit exe identity vs deployed sha,
+   executes the probe command, and writes the canonical row to `smoke-verdicts.log`.
    MISMATCH → STOP: you would be smoking a binary that is not the one that was
    built — report the mismatch to the sender, do not smoke on a stale unit.
 3. Drive your feature end-to-end against the RUNNING unit on its normal
    surfaces (Telegram, cron, MCP — whatever the feature touches).
    **Checkable completion criteria (v0.4.170, Finding G-2):**
-   DONE = Mechanical proof demonstrating target feature execution against the running binary (command output, log line with PID/timestamp match, or API receipt); confirmed via `tools/oc-smoke-evidence` (exit 0) and recorded in `smoke-verdicts.log`.
+   DONE = Mechanical proof demonstrating target feature execution against the running binary (command output, log line with PID/timestamp match, or API receipt); confirmed via `tools/oc-smoke` (exit 0) and recorded in `smoke-verdicts.log`.
 4. PASS → reply to the sender (`session_notify`, `target_session` = the `from`
-   header): feature OK + one line of evidence + the oc-smoke-evidence
+   header): feature OK + one line of evidence + the oc-smoke
    IDENTITY-MATCH receipt. If the feature is COMPLETE,
    this same evidence goes to your forum topic as the filing notification —
    under the PR SHIPMENT law (SKILL.md §ISSUE ROUTING, PR SHIPMENT row) smoke PASS

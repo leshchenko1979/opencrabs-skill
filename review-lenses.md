@@ -239,6 +239,9 @@ on census evidence + owner word (hq.md step 7).
      the ledger row n + the verifiable artifact (git/gh/log) that confirms or
      breaks it — quote-or-no-finding. H reviews the JOURNAL, never edits it;
      corrections land as new rows or law edits via HQ.
+
+#### FAMILY: META — review machinery and catalog (added v0.4.114)
+
    - **Reviewer I — META-REVIEW (added v0.4.114, owner pick 2026-09-08 ~20:4xZ, recommended shape 1):**
      reviews the LENS CATALOG AND ITS OUTPUT — the only reviewer whose object
      is the review machinery itself. Scope: (1) BRIEF CORRECTNESS — each brief
