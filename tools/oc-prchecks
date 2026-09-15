@@ -36,7 +36,7 @@
 #       2 usage / sha-shape / unknown ref / repo-path-no-origin
 #       3 RED (run conclusion failure/timed_out/startup_failure,
 #         or a FAILED step — soft-fail exposed; skipped/neutral steps pass)
-#       5 non-terminal at verdict time (resume: gh run view <id>)
+#       5 non-terminal at verdict time (resume: oc-prchecks resume <id> --wait N)
 # Verdict rule (v0.4.56, owner Go 08-31 03:05Z): the RUN conclusion is the
 # verdict; per-step detail is a tiebreak ONLY for conclusion=failure steps
 # (kills false GREEN on cancelled and false RED on skipped fmt — issue-lane
@@ -218,6 +218,7 @@ case "\$*" in
     [ "\$S" = "yml_missing" ] && exit 1
     printf '{"name":"pr-checks.yml"}\n' ;;
   *"api repos/"*"git/ref/heads/"*)
+    [ "\$S" = "carrier_unresolvable" ] && exit 1
     # emulate gh api --jq: the tool asks for '.object.sha', gh returns ONLY the sha
     printf '%s\n' 'ffffffffffffffffffffffffffffffffffffffff' ;;
   *"workflow run"*)
@@ -320,7 +321,11 @@ do_selftest() {
     t_ok "live step names: real fmt failure -> 3 RED (soft-fail exposed)"
   else t_bad "live step names fmt failure (rc=$T_RC out=$T_OUT)"; fi
   run_t job_failed "$SHA";           [ "$T_RC" -eq 3 ] && t_ok "job failed -> 3 RED" || t_bad "job failed (rc=$T_RC)"
-  run_t cancelled "$SHA"
+  run_t carrier_unresolvable "$SHA"
+  if [ "$T_RC" -eq 7 ] && case "$T_OUT" in *"carrier head unresolvable"*"re-run once the carrier ref resolves: oc-prchecks"*) true ;; *) false ;; esac; then
+    t_ok "carrier head unresolvable -> 7 with re-run resume line"
+  else t_bad "carrier_unresolvable (rc=$T_RC out=$T_OUT)"; fi
+  run_t cancelled "$SHA" 
   if [ "$T_RC" -eq 6 ] && case "$T_OUT" in *"VERDICT CANCELLED"*"superseded"*) true ;; *) false ;; esac; then
     t_ok "run conclusion cancelled -> 6 CANCELLED superseded (P4: churn is not gate failure)"
   else t_bad "cancelled (rc=$T_RC out=$T_OUT)"; fi
@@ -788,7 +793,7 @@ RUN_ID=""
 # so a stale older lane's run is never adopted.
 CARRIER_HEAD="$("$GH_BIN" api "repos/$REPO/git/ref/heads/$CARRIER" --jq '.object.sha' 2>/dev/null || true)"
 [ -n "$CARRIER_HEAD" ] || {
-  echo "$PROG: carrier head unresolvable via branches API (ref $CARRIER on $REPO) — refusing time-window adoption (would match ANY run); use a detached gh run list poller" >&2
+  echo "$PROG: carrier head unresolvable via branches API (ref $CARRIER on $REPO) — refusing time-window adoption (would match ANY run); re-run once the carrier ref resolves: oc-prchecks $REF --wait $WAIT_SECS" >&2
   oc_log_extra "carrier_head" "unresolvable"
   exit 7
 }
@@ -847,7 +852,7 @@ while :; do
   STATUS="$(printf '%s' "$ST" | jq -r '.status')"
   [ "$STATUS" = "completed" ] && break
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "IN-FLIGHT run=$RUN_ID $RUN_URL (still $STATUS after ${WAIT_SECS}s — resume: gh run view $RUN_ID)"
+    echo "IN-FLIGHT run=$RUN_ID $RUN_URL (still $STATUS after ${WAIT_SECS}s — resume: oc-prchecks resume $RUN_ID --wait $WAIT_SECS)"
     oc_log_extra "watch" "timeout"
     exit 5
   fi
@@ -861,7 +866,7 @@ oc_log_extra "conclusion" "$CONCLUSION"
 # Verdicts fire ONLY on a terminal run conclusion (the 23:45:07Z RED fired 7s
 # BEFORE conclusion=success — stale reads must never verdict).
 if [ -z "$CONCLUSION" ] || [ "$CONCLUSION" = "null" ]; then
-  echo "IN-FLIGHT run=$RUN_ID $RUN_URL (non-terminal at verdict time — resume: gh run view $RUN_ID)" >&2
+  echo "IN-FLIGHT run=$RUN_ID $RUN_URL (non-terminal at verdict time — resume: oc-prchecks resume $RUN_ID --wait $WAIT_SECS)" >&2
   oc_log_extra "verdict_reason" "non-terminal"
   exit 5
 fi
@@ -904,7 +909,7 @@ case "$CONCLUSION" in
     oc_log_extra "verdict" "CANCELLED"
     oc_log_extra "verdict_reason" "superseded${SUP:+; superseding=$SUP}"
     echo "VERDICT CANCELLED (run $RUN_ID was concurrency-cancelled — superseded, not failed)"
-    echo "  superseding run: ${SUP:-unknown}${SUP:+ — https://github.com/$REPO/actions/runs/$SUP} (re-arm: oc-prchecks gate <sha> --wait)"
+    echo "  superseding run: ${SUP:-unknown}${SUP:+ — https://github.com/$REPO/actions/runs/$SUP} (re-arm: oc-prchecks $SHA --wait $WAIT_SECS${SUP:+ — or resume superseding run: oc-prchecks resume $SUP --wait $WAIT_SECS})"
     echo "RUN $RUN_URL"
     exit 6
     ;;

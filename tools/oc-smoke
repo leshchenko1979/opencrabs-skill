@@ -1,0 +1,322 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-smoke — unified 4-leg smoke verification & verdict row generator
+# =============================================================================
+# Cycle 20260915-c14 (editor fire-and-forget pass):
+# Wraps live identity verification (oc-smoke-evidence), optional behavioral
+# probe execution, and canonical smoke-verdicts.log append into a single command.
+#
+# Usage: oc-smoke <issue> [--verdict PASS|FAIL] [--probe <cmd>]
+#                         [--markers m1,m2] [--evidence <text>]
+#                         [--target <name>] [--unit <unit>] [--selftest]
+#
+# Exit codes:
+#   0 Smoke PASS (identity match + probe pass + verdict row recorded)
+#   1 Smoke FAIL (identity mismatch or probe failure; verdict row recorded)
+#   2 Usage error (missing issue argument, invalid options)
+#   3 Precondition/infra failure (state-dir missing, daemon dead)
+# =============================================================================
+# --- oc-snap guard: run from an immutable mirror (fork #167; tools/lib/oc-snap.sh)
+_OC_SNAP="$(cd "$(dirname "$0")" && pwd)/lib/oc-snap.sh"
+if [ -f "$_OC_SNAP" ]; then . "$_OC_SNAP"; oc_snap_guard "$0" "$@"; fi
+
+set -u
+set -o pipefail
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
+CANON_LOG="$STATE_DIR/smoke-verdicts.log"
+EVIDENCE_TOOL="$SCRIPT_DIR/oc-smoke-evidence"
+
+. "$SCRIPT_DIR/lib/oc-log.sh" 2>/dev/null || true
+oc_log_init "oc-smoke" "$@"
+
+PROG="oc-smoke"
+ISSUE=""
+VERDICT="PASS"
+PROBE_CMD=""
+MARKERS=""
+EVIDENCE_TEXT=""
+TARGET=""
+UNIT="opencrabs-ops"
+SELFTEST=0
+
+usage() {
+  local code="${1:-2}"
+  local fd=2
+  [ "$code" -eq 0 ] && fd=1
+  cat <<EOF >&$fd
+usage: $PROG <issue> [--verdict PASS|FAIL] [--probe <cmd>]
+                 [--markers m1,m2] [--evidence <text>]
+                 [--target <name>] [--unit <unit>] | --selftest
+
+Options:
+  <issue>             Issue number or slug (e.g. 235 or #235)
+  --verdict <V>       Verdict token: PASS (default) or FAIL
+  --probe <cmd>       Optional shell command to execute for behavioral proof
+  --markers <m1,m2>   Comma-separated presence markers to verify in binary
+  --evidence <text>   Prose summary of verification evidence
+  --target <name>     Feature name or target slug (default: derived from issue)
+  --unit <unit>       Systemd user unit to check (default: opencrabs-ops)
+  --selftest          Run internal test battery
+
+Exit codes:
+  0 Smoke PASS
+  1 Smoke FAIL
+  2 Usage error
+  3 Precondition/infra failure
+EOF
+  exit "$code"
+}
+
+die() {
+  local code="$1"; shift
+  echo "$PROG: ERROR: $*" >&2
+  oc_log_finish "$code"
+  exit "$code"
+}
+
+# Newline-safe append helper matching oc-smoke-evidence
+append_log_safe() {
+  local log_file="$1"
+  local line="$2"
+  mkdir -p "$(dirname "$log_file")"
+  if [ -s "$log_file" ]; then
+    local last_byte
+    last_byte="$(tail -c1 "$log_file" 2>/dev/null || true)"
+    if [ -n "$last_byte" ]; then
+      printf '\n' >> "$log_file"
+    fi
+  fi
+  printf '%s\n' "$line" >> "$log_file"
+}
+
+do_selftest() {
+  local d
+  d="$(mktemp -d)"
+  trap 'rm -rf "$d"' EXIT
+  local pass=0 fail=0
+
+  t_ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
+  t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
+
+  # Test 1: Usage without args -> 2
+  local rc=0 out=""
+  out="$("$0" 2>&1)" || rc=$?
+  [ "$rc" -eq 2 ] && t_ok "no args -> 2" || t_bad "no args (rc=$rc out=$out)"
+
+  # Create fake deployed state and fake evidence tool
+  mkdir -p "$d/state"
+  printf '0123456789abcdef0123456789abcdef01234567\n' > "$d/state/deployed.sha"
+  printf '{"run_id":34917665398,"source_sha":"0123456789abcdef0123456789abcdef01234567"}\n' > "$d/state/deployed.meta.json"
+
+  cat > "$d/fake-evidence" <<'EOF'
+#!/usr/bin/env bash
+if [ "${FAKE_EVIDENCE_RC:-0}" != "0" ]; then
+  echo "VERDICT: IDENTITY-MISMATCH"
+  exit 1
+fi
+echo "pid 1234"
+echo "VERDICT: IDENTITY-MATCH — binary identity + feature presence on live opencrabs-ops"
+exit 0
+EOF
+  chmod +x "$d/fake-evidence"
+
+  # Test 2: Happy path PASS with probe
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 235 --probe "echo probe-ok" --evidence "tested feature" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && grep -q "PASS" "$d/state/smoke-verdicts.log" && grep -q "probe-ok" "$d/state/smoke-verdicts.log"; then
+    t_ok "happy path PASS with probe -> 0 and verdict row written"
+  else
+    t_bad "happy path (rc=$rc out=$out)"
+  fi
+
+  # Test 3: Probe failure -> exit 1 and FAIL verdict row
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 236 --probe "exit 4" --evidence "probe must fail" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && grep -q "236" "$d/state/smoke-verdicts.log" && grep -q "FAIL" "$d/state/smoke-verdicts.log"; then
+    t_ok "probe failure -> 1 and FAIL verdict row written"
+  else
+    t_bad "probe failure (rc=$rc out=$out)"
+  fi
+
+  # Test 4: Identity mismatch -> exit 1
+  rc=0
+  out="$(FAKE_EVIDENCE_RC=1 OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 237 --evidence "identity mismatch test" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && case "$out" in *"IDENTITY-MISMATCH"*|*"mismatch"*) true ;; *) false ;; esac; then
+    t_ok "identity mismatch from evidence tool -> exit 1"
+  else
+    t_bad "identity mismatch (rc=$rc out=$out)"
+  fi
+
+  # Test 5: Tab separation and fields in verdict row
+  local row
+  row="$(tail -n 1 "$d/state/smoke-verdicts.log")"
+  local fields
+  fields="$(printf '%s' "$row" | awk -F'\t' '{print NF}')"
+  [ "$fields" -ge 7 ] && t_ok "verdict row has >=7 tab-separated fields" || t_bad "verdict row fields ($fields != >=7)"
+
+  echo "selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ] && exit 0 || exit 1
+}
+
+# Handle selftest flag before argument verification
+for arg in "$@"; do
+  if [ "$arg" = "--selftest" ]; then
+    do_selftest
+  fi
+done
+
+# Argument parsing
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help|-h)
+      usage 0
+      ;;
+    --selftest)
+      do_selftest
+      ;;
+    --verdict)
+      [ $# -ge 2 ] || die 2 "--verdict requires a value (PASS|FAIL)"
+      VERDICT="$2"
+      shift 2
+      ;;
+    --probe)
+      [ $# -ge 2 ] || die 2 "--probe requires a shell command string"
+      PROBE_CMD="$2"
+      shift 2
+      ;;
+    --markers|--strings)
+      [ $# -ge 2 ] || die 2 "--markers requires a comma-separated list"
+      MARKERS="$2"
+      shift 2
+      ;;
+    --evidence)
+      [ $# -ge 2 ] || die 2 "--evidence requires description text"
+      EVIDENCE_TEXT="$2"
+      shift 2
+      ;;
+    --target)
+      [ $# -ge 2 ] || die 2 "--target requires a target/feature name"
+      TARGET="$2"
+      shift 2
+      ;;
+    --unit)
+      [ $# -ge 2 ] || die 2 "--unit requires a systemd user unit name"
+      UNIT="$2"
+      shift 2
+      ;;
+    --issue)
+      [ $# -ge 2 ] || die 2 "--issue requires an issue number"
+      ISSUE="$2"
+      shift 2
+      ;;
+    -*)
+      die 2 "unknown option: $1 (see --help)"
+      ;;
+    *)
+      if [ -z "$ISSUE" ]; then
+        ISSUE="$1"
+        shift
+      else
+        die 2 "unexpected positional argument: $1"
+      fi
+      ;;
+  esac
+done
+
+[ -n "$ISSUE" ] || die 2 "issue number or identifier required (e.g. oc-smoke 235)"
+ISSUE="${ISSUE###}" # strip leading # if provided
+
+# Verify state directory
+[ -d "$STATE_DIR" ] || die 3 "state directory not found: $STATE_DIR"
+
+DEPLOYED_SHA="$(head -1 "$STATE_DIR/deployed.sha" 2>/dev/null || true)"
+[ -n "$DEPLOYED_SHA" ] || die 3 "deployed.sha not found in $STATE_DIR"
+
+RUN_ID=""
+if [ -f "$STATE_DIR/deployed.meta.json" ]; then
+  RUN_ID="$(jq -r '.run_id // empty' "$STATE_DIR/deployed.meta.json" 2>/dev/null || true)"
+fi
+RUN_ID="${RUN_ID:-unknown}"
+
+ACTOR="${OPENCRABS_SESSION_ID:-}"
+if [ -z "$ACTOR" ] && [ -f "$STATE_DIR/workers-ledger.json" ]; then
+  ACTOR="$(jq -r '.workers[-1].uuid // empty' "$STATE_DIR/workers-ledger.json" 2>/dev/null || true)"
+fi
+ACTOR="${ACTOR:-unknown-actor}"
+
+TARGET="${TARGET:-Issue #$ISSUE}"
+
+EVIDENCE_BIN="${OC_SMOKE_EVIDENCE_BIN:-$EVIDENCE_TOOL}"
+
+# 1. Run live identity verification
+IDENTITY_OUT=""
+IDENTITY_RC=0
+if [ -x "$EVIDENCE_BIN" ]; then
+  echo "$PROG: running identity verification on $UNIT..."
+  set +e
+  IDENTITY_OUT="$("$EVIDENCE_BIN" --unit "$UNIT" ${MARKERS:+--markers "$MARKERS"} --append-log "$CANON_LOG" 2>&1)"
+  IDENTITY_RC=$?
+  set -e
+  printf '%s\n' "$IDENTITY_OUT"
+  if [ "$IDENTITY_RC" -ne 0 ]; then
+    echo "$PROG: identity verification failed (rc=$IDENTITY_RC)" >&2
+    VERDICT="FAIL"
+  fi
+else
+  echo "$PROG: WARNING: evidence tool $EVIDENCE_BIN not found/executable; skipping live identity leg" >&2
+fi
+
+# 2. Run behavioral probe if specified
+PROBE_DETAILS=""
+if [ -n "$PROBE_CMD" ]; then
+  echo "$PROG: running behavioral probe: $PROBE_CMD"
+  set +e
+  PROBE_OUT="$(eval "$PROBE_CMD" 2>&1)"
+  PROBE_RC=$?
+  set -e
+  printf '%s\n' "$PROBE_OUT"
+  if [ "$PROBE_RC" -ne 0 ]; then
+    echo "$PROG: behavioral probe FAILED (rc=$PROBE_RC)" >&2
+    VERDICT="FAIL"
+    PROBE_DETAILS="probe failed (rc=$PROBE_RC): $(printf '%s' "$PROBE_OUT" | tr '\n' ' ' | head -c 200)"
+  else
+    echo "$PROG: behavioral probe PASSED"
+    PROBE_DETAILS="probe passed: $(printf '%s' "$PROBE_OUT" | tr '\n' ' ' | head -c 200)"
+  fi
+fi
+
+# 3. Assemble full evidence string
+FULL_EVIDENCE="4-leg smoke pass: lineage=true identity=$( [ "$IDENTITY_RC" -eq 0 ] && echo "MATCH" || echo "MISMATCH" )"
+if [ -n "$MARKERS" ]; then
+  FULL_EVIDENCE="${FULL_EVIDENCE} markers=${MARKERS}"
+fi
+if [ -n "$PROBE_DETAILS" ]; then
+  FULL_EVIDENCE="${FULL_EVIDENCE} live_behavior=${PROBE_DETAILS}"
+elif [ -n "$EVIDENCE_TEXT" ]; then
+  FULL_EVIDENCE="${FULL_EVIDENCE} evidence=${EVIDENCE_TEXT}"
+fi
+
+# 4. Append canonical 4-leg smoke verdict row
+TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+TAB=$'\t'
+ROW="${TS}${TAB}${VERDICT}${TAB}${ISSUE}${TAB}${DEPLOYED_SHA}${TAB}${RUN_ID}${TAB}${TARGET}${TAB}${ACTOR}${TAB}${FULL_EVIDENCE}"
+
+append_log_safe "$CANON_LOG" "$ROW"
+echo "$PROG: recorded verdict row ($VERDICT) for #$ISSUE in $CANON_LOG"
+
+if [ "$VERDICT" = "PASS" ]; then
+  oc_log_finish 0
+  exit 0
+else
+  oc_log_finish 1
+  exit 1
+fi

@@ -1940,19 +1940,22 @@ if not open_claims:
     sys.exit(0)
 
 print(f"Scanned {len(open_claims)} open claim(s). Checking status on GitHub...")
+
+cmd = ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs", "--state", "closed", "--limit", "1000", "--json", "number,title"]
+res = subprocess.run(cmd, capture_output=True, text=True)
+closed_map = {}
+if res.returncode == 0:
+    try:
+        for item in json.loads(res.stdout):
+            closed_map[item["number"]] = item.get("title", "")
+    except Exception as e:
+        sys.stderr.write(f"warning: failed to parse closed issues: {e}\n")
+
 stale = []
 for oc in open_claims:
     iss = oc["issue"]
-    # Check issue state on fork repo
-    cmd = ["gh", "issue", "view", str(iss), "--repo", "leshchenko1979/opencrabs", "--json", "state,title"]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode == 0:
-        try:
-            iss_data = json.loads(res.stdout)
-            if iss_data.get("state") == "CLOSED":
-                stale.append((oc, iss_data.get("title", "")))
-        except Exception:
-            pass
+    if iss in closed_map:
+        stale.append((oc, closed_map[iss]))
 
 if not stale:
     print("All open claims map to OPEN issues.")

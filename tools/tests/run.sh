@@ -797,6 +797,22 @@ if tool oc-watcher-audit; then
   "$TOOLS_DIR/oc-watcher-audit" --help >/dev/null 2>&1 && ok "oc-watcher-audit --help rc=0" || bad "oc-watcher-audit --help rc!=0"
 fi
 
+# ---- 65. oc-start (unified claim, branch, worktree initializer, Cycle c14)
+section "oc-start (unified task initializer)"
+run_selftest oc-start
+if tool oc-start; then
+  "$TOOLS_DIR/oc-start" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/oc-start" --help >/dev/null 2>&1 && ok "oc-start --help rc=0" || bad "oc-start --help rc!=0"
+fi
+
+# ---- 66. oc-smoke (unified 4-leg smoke verification & verdict row generator, Cycle c14)
+section "oc-smoke (unified 4-leg smoke verification)"
+run_selftest oc-smoke
+if tool oc-smoke; then
+  "$TOOLS_DIR/oc-smoke" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/oc-smoke" --help >/dev/null 2>&1 && ok "oc-smoke --help rc=0" || bad "oc-smoke --help rc!=0"
+fi
+
 # ---- 64. oc-issue-dispatch (mechanized fork issue dispatch, v0.4.169 Zero-Ack)
 section "oc-issue-dispatch (mechanized issue triage dispatch)"
 run_selftest oc-issue-dispatch

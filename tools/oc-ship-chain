@@ -569,7 +569,7 @@ elif [ -n "$GATED_RUN" ]; then
       case "$GATE_RC" in
         0) journal "LEG1 gate GREEN (resumed run $GATED_RUN)" ;;
         3) journal "LEG1 gate RED (resumed run $GATED_RUN)"; printf '%s\n' "$GATE_OUT"; die "GATE-RED" 4 ;;
-        5) journal "LEG1 gate run $GATED_RUN still in flight after budget"; printf '%s\n' "$GATE_OUT"; die "gate still in flight (run=$GATED_RUN) — wait and resume" 7 ;;
+        5) journal "LEG1 gate run $GATED_RUN still in flight after budget"; printf '%s\n' "$GATE_OUT"; die "gate still in flight (run=$GATED_RUN) — wait for it, then re-run: oc-ship-chain --sha $SHA --branch $BRANCH --gated-run $GATED_RUN" 7 ;;
         *) journal "LEG1 gate resume failed rc=$GATE_RC"; printf '%s\n' "$GATE_OUT"; die "gate resume failed" 6 ;;
       esac
       ;;
@@ -662,7 +662,7 @@ else
     # it, a short-sha refusal). prchecks rc 6 CANCELLED-superseded stays in the
     # infra arm below — pre-existing, out of scope for this report.
     2) journal "LEG1 gate PRECONDITION rc=2 (not infra)"; printf '%s\n' "$GATE_OUT"
-       die "gate precondition failed rc=2 — the branch/sha is not usable on the fork remote (see the oc-prchecks line above); push it and re-run. This is NOT an infrastructure fault." 3 ;;
+       die "gate precondition failed rc=2 — the branch/sha is not usable on the fork remote (see the oc-prchecks line above); push it and re-run: oc-ship-chain --sha $SHA --branch $BRANCH. This is NOT an infrastructure fault." 3 ;;
     *) journal "LEG1 gate INFRA rc=$GATE_RC"; printf '%s\n' "$GATE_OUT"; die "gate infra rc=$GATE_RC" 6 ;;
   esac
 fi
@@ -699,7 +699,7 @@ TIP="$(git -C "$FORK_REPO" rev-parse --verify --quiet "refs/heads/$BRANCH" || tr
 [ -n "$TIP" ] || die "branch $BRANCH not found in $FORK_REPO — push it to the fork remote first" 3
 if [ "$TIP" != "$SHA" ]; then
   journal "LEG3 TIP-MOVED branch=$BRANCH tip=$(printf '%s' "$TIP" | cut -c1-8) expected=$(printf '%s' "$SHA" | cut -c1-8)"
-  die "branch tip moved under the chain: $BRANCH is now $(printf '%s' "$TIP" | cut -c1-8), expected $SHA — the gate validated $SHA, so re-gate and relaunch" 5
+  die "branch tip moved under the chain: $BRANCH is now $(printf '%s' "$TIP" | cut -c1-8), expected $SHA — the gate validated $SHA, so re-gate and relaunch: oc-ship-chain --sha $TIP --branch $BRANCH" 5
 fi
 set +e
 git -C "$FORK_REPO" merge --ff-only "$TIP" >/dev/null 2>&1
@@ -707,7 +707,7 @@ FF_RC=$?
 set -e
 if [ "$FF_RC" != "0" ]; then
   journal "LEG3 NON-FF — branch not fast-forwardable"
-  die "NON-FF: rebase $BRANCH onto fork main (oc-rebase-safety) and re-run" 5
+  die "NON-FF: rebase $BRANCH onto fork main (oc-rebase-safety) and re-run: oc-ship-chain --sha $SHA --branch $BRANCH" 5
 fi
 MERGED="$(git -C "$FORK_REPO" rev-parse --short HEAD)"
 journal "LEG3 ff-merge ok fork-main=$MERGED"
@@ -757,7 +757,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
   POLL_OUT="$(cd "$FORK_REPO" && OC_TOOLS_NOLOG=1 NOTIFY_SESSION= "$DEPLOY_BIN" poll --execute 2>&1)"
   POLL_RC=$?
   set -e
-  [ "$POLL_RC" = "0" ] || { journal "LEG5 poll rc=$POLL_RC"; die "swap poll rc=$POLL_RC" 6; }
+  [ "$POLL_RC" = "0" ] || { journal "LEG5 poll rc=$POLL_RC"; die "swap poll failed rc=$POLL_RC — check oc-deploy status and resume via: oc-deploy poll --execute" 6; }
   set +e
   ST_OUT="$(cd "$FORK_REPO" && OC_TOOLS_NOLOG=1 NOTIFY_SESSION= "$DEPLOY_BIN" status --json 2>/dev/null)"
   set -e
@@ -769,7 +769,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
 done
 if [ "$SWAPPED" != "1" ]; then
   journal "LEG5 swap NOT confirmed after 12 polls (deployed=${CUR_DEPLOYED:-none} expected=$SHA)"
-  die "swap not confirmed — deployed.sha is ${CUR_DEPLOYED:-none}, expected $SHA" 6
+  die "swap not confirmed after 12 polls — deployed.sha is ${CUR_DEPLOYED:-none}, expected $SHA (inspect via: oc-deploy status)" 6
 fi
 journal "DONE SWAPPED sha=$SHA"
 echo "SHIP-CHAIN $CHAIN: SWAPPED sha=$SHA"
@@ -984,6 +984,7 @@ EOF
   RC=0; OUT="$(run_chain --sha "$TSHA" --branch feat 2>&1)" || RC=$?
   check_rc "tip-moved-rc5" "$RC" 5
   case "$OUT" in *"branch tip moved under the chain"*) ok "tip-moved-message" ;; *) bad "tip-moved-message: $OUT" ;; esac
+  case "$OUT" in *"oc-ship-chain --sha "*"--branch feat"*) ok "tip-moved-resume-command" ;; *) bad "tip-moved-resume-command: $OUT" ;; esac
   grep -q "LEG3 TIP-MOVED" "$T/journal.log" && ok "tip-moved-journal" || bad "tip-moved-journal"
   [ "$(git -C "$T/clone" rev-parse HEAD)" = "$MAIN_BEFORE" ] && ok "tip-moved-main-untouched" || bad "tip-moved-main-untouched"
   git -C "$T/clone" branch -f feat "$FSHA"   # restore for the tests that follow
@@ -1138,6 +1139,7 @@ EOF
   RC=0; OUT="$(GATE_MODE=always OC_SHIPCHAIN_GATE_RESUMES=2 run_chain_inflight --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
   check_rc "gate-rc5-exhausted-rc7" "$RC" 7
   case "$OUT" in *"still in flight (run=888)"*) ok "gate-rc5-exhausted-names-run" ;; *) bad "gate-rc5-exhausted-names-run: $OUT" ;; esac
+  case "$OUT" in *"re-run with --gated-run 888"*) ok "gate-rc5-exhausted-resume-command" ;; *) bad "gate-rc5-exhausted-resume-command: $OUT" ;; esac
   case "$OUT" in *"resume-poll 2/2"*) ok "gate-rc5-exhausted-resume-count" ;; *) bad "gate-rc5-exhausted-resume-count" ;; esac
   grep -q "LEG1 gate STILL IN FLIGHT run=888" "$T/journal.log" && ok "gate-rc5-exhausted-journaled" || bad "gate-rc5-exhausted-journaled"
 
