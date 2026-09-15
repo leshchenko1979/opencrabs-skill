@@ -1787,97 +1787,92 @@ cmd_lessons() { # oc-ledger lessons — H-2 (v0.4.116): extract lesson/incident 
 }
 
 cmd_claims() { # oc-ledger claims [<N>] — dispatch=verify-unclaimed backend (#129
-  # family, v0.4.97): print every OPEN claim-refs on issue #N (or ALL open claims if omitted)
-  # from the ledger events, one line per claim: "<uuid> <t> <what>". Empty output + rc 0 =
+  # family, v0.4.97, optimized v0.4.182): print every OPEN claim-refs on issue #N (or ALL open claims if omitted)
+  # from the ledger events, one line per claim: "<uuid>\t<t>\t<what>". Empty output + rc 0 =
   # clean (unclaimed) — the grep-lane hand query, mechanized. rc 3 = ledger
   # unreadable. Read-only, no mutation, no lock.
   case "${1:-}" in -h|--help) echo "usage: oc-ledger claims [<issue-number|#N>]"; exit 0 ;; esac
-  if [ -z "${1:-}" ]; then
-    ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
-    local uuid t what kind cidx
-    while IFS=$'\t' read -r cidx uuid kind t what; do
-      [ -n "$uuid" ] || continue
-      [ "$kind" = claim ] || continue
-      local toks; toks="$(_issue_ref_tokens "$what" || true)"
-      [ -n "$toks" ] || continue
-      local open_tok=0
-      for tok in $toks; do
-        local closed=0 ctype cwhat unattr=0
-        case "$uuid" in "(unattributed"*|"unrostered-actor"*) unattr=1 ;; esac
-        while IFS=$'\t' read -r ctype cwhat; do
-          case "$ctype" in
-            close|confirm|reject|done|unclaim) if _issue_ref_has "$cwhat" "$tok"; then closed=1; fi ;;
-          esac
-        done < <(jq -r --arg u "$uuid" --argjson idx "$cidx" --argjson unattr "$unattr"           '.events | to_entries[]
-           | select(.key > $idx and .value.kind != "claim")
-           | select(($unattr == 1) or ((.value.by // "") | contains($u)))
-           | [(.value.kind // "?"), (.value.what // "")] | @tsv' "$LEDGER" 2>/dev/null)
-        if [ "$closed" = 0 ]; then
-          open_tok=1
-          break
-        fi
-      done
-      [ "$open_tok" = 1 ] && printf '%s\t%s\t%s\n' "$uuid" "$t" "$what"
-    done < <(jq -r       '.events | to_entries[] | select(.value.kind == "claim")
-       | [(.key // 0), (.value.by // "?"), (.value.kind // "?"), (.value.t // ""), (.value.what // "")] | @tsv' "$LEDGER" 2>/dev/null)
-    exit 0
+  local target=""
+  if [ -n "${1:-}" ]; then
+    target="${1#\#}"
+    case "$target" in ''|*[!0-9]*) die 2 "claims: issue number must be numeric (got '$1')" ;; esac
   fi
-  local n="${1#\#}"
-  case "$n" in ''|*[!0-9]*) die 2 "claims: issue number must be numeric (got '$1')" ;; esac
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
-  # A claim on #N is OPEN unless a LATER event for the same actor closes the
-  # loop: kind in (close|confirm|reject|done|unclaim) whose what references
-  # the same #N. Bash-side scan is the single owner — close semantics stay
-  # readable, no jq gymnastics.
-  #
-  # RESIDUAL (lane c6b1a539 report, 2026-09-12; the D-2 family — the gate must
-  # not LIE): two more ways this scan could not be trusted. (1) FALSE-CLEAN:
-  # the ref was matched as a SUBSTRING of "#N", so a claim written "issue=N"
-  # (21 of 130 claim rows carry no "#N" at all) was invisible and the issue
-  # answered CLEAN although it IS claimed. Refs are now TOKENS
-  # (_issue_ref_has), which also kills the mirror false POSITIVE: contains
-  # ("#76") matched a claim on "#760". (2) UNCLOSABLE: the closure keyed on
-  # the CLAIM's own `by`, so the 20 sentinel-`by` rows could never close.
-  local uuid t what kind cidx
-  while IFS=$'\t' read -r cidx uuid kind t what; do
-    [ -n "$uuid" ] || continue
-    [ "$kind" = claim ] || continue
-    _issue_ref_has "$what" "$n" || continue
-    # any LATER event (array order — timestamps can collide within a second)
-    # by the same uuid referencing #n -> not open
-    local closed=0 ctype cwhat unattr=0
-    # RESIDUAL (lane c6b1a539 report): a claim whose `by` is the unattributed
-    # sentinel could never close — the linker is contains($by) and no real
-    # closure carries that literal — so it read OPEN forever. An unattributed
-    # claim has no actor to discriminate on, so the actor test is DROPPED for
-    # it and any later closer referencing #N closes it. New unattributed rows
-    # are already refused by #19, so this reaches legacy data only.
-    #
-    # EXTENDED (lane a5b34466 report, corroborated by 6cd8175f): the SIBLING
-    # sentinel `unrostered-actor <uuid>` — what derive_by writes when OC_ACTOR
-    # is not in the roster — was NOT matched, so its rows could only be closed
-    # by hand-reproducing the historical `by` string, which writes a row
-    # attributed to ANOTHER actor (the false-attribution family). Both sentinels
-    # mean "no resolvable actor", so both drop the actor test. Bounded the same
-    # way: the closer must still be LATER and must reference the same #N, and
-    # #19 refuses NEW anonymous rows, so this reaches legacy data only.
-    # Attribution-preserving closure (a third-party closure verb) is the larger
-    # fix and is deliberately NOT this change.
-    case "$uuid" in "(unattributed"*|"unrostered-actor"*) unattr=1 ;; esac
-    while IFS=$'\t' read -r ctype cwhat; do
-      case "$ctype" in
-        close|confirm|reject|done|unclaim) if _issue_ref_has "$cwhat" "$n"; then closed=1; fi ;;
-      esac
-    done < <(jq -r --arg u "$uuid" --argjson idx "$cidx" --argjson unattr "$unattr" \
-      '.events | to_entries[]
-       | select(.key > $idx and .value.kind != "claim")
-       | select(($unattr == 1) or ((.value.by // "") | contains($u)))
-       | [(.value.kind // "?"), (.value.what // "")] | @tsv' "$LEDGER" 2>/dev/null)
-    [ "$closed" = 0 ] && printf '%s\t%s\t%s\n' "$uuid" "$t" "$what"
-  done < <(jq -r \
-    '.events | to_entries[] | select(.value.kind == "claim")
-     | [(.key // 0), (.value.by // "?"), (.value.kind // "?"), (.value.t // ""), (.value.what // "")] | @tsv' "$LEDGER" 2>/dev/null)
-  exit 0
+
+  python3 -c '
+import sys, json, re
+
+ledger_file = sys.argv[1]
+target_issue = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
+
+def issue_ref_tokens(text):
+    if not text:
+        return []
+    matches = re.findall(r"(?:#[0-9]+|issue[ \t=#]*[0-9]+)", text, re.IGNORECASE)
+    res = []
+    for m in matches:
+        for num in re.findall(r"[0-9]+", m):
+            if num not in res:
+                res.append(num)
+    return res
+
+try:
+    with open(ledger_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+except Exception as e:
+    sys.stderr.write("claims: ledger unreadable: %s\n" % e)
+    sys.exit(3)
+
+events = data.get("events", [])
+parsed = []
+for idx, e in enumerate(events):
+    parsed.append({
+        "idx": idx,
+        "by": e.get("by") or "",
+        "kind": e.get("kind") or "",
+        "t": e.get("t") or "",
+        "what": e.get("what") or "",
+        "tokens": issue_ref_tokens(e.get("what") or "")
+    })
+
+close_kinds = {"close", "confirm", "reject", "done", "unclaim"}
+open_claims = []
+
+for c in parsed:
+    if c["kind"] != "claim":
+        continue
+    if not c["tokens"]:
+        continue
+    if target_issue is not None and str(target_issue) not in c["tokens"]:
+        continue
+        
+    c_by = c["by"]
+    unattr = 1 if ("(unattributed" in c_by or "unrostered-actor" in c_by) else 0
+    c_idx = c["idx"]
+    
+    check_tokens = [str(target_issue)] if target_issue is not None else c["tokens"]
+    
+    is_open = False
+    for tok in check_tokens:
+        closed = False
+        for e in parsed[c_idx + 1:]:
+            if e["kind"] in close_kinds:
+                if unattr == 1 or (c_by and c_by in e["by"]):
+                    if tok in e["tokens"]:
+                        closed = True
+                        break
+        if not closed:
+            is_open = True
+            break
+    if is_open:
+        open_claims.append(c)
+
+for oc in open_claims:
+    by = oc["by"]
+    t = oc["t"]
+    what = oc["what"]
+    sys.stdout.write("%s\t%s\t%s\n" % (by, t, what))
+' "$LEDGER" "$target"
 }
 
 cmd_sweep_closed_claims() { # oc-ledger sweep-closed-claims [--dry-run]
