@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.183 (2026-09-15) — Autonomous Priority Authority Law
+
+- **Autonomous Priority Authority Law (`fleet-directives.md §Autonomous Priority Authority Law`):**
+  - Codified that all active lanes (Editor, Triage, Toolsmith, HQ) have complete, independent authority over task ordering, execution sequencing, and operational priorities within their respective codified laws.
+  - Prohibited asking the human operator (Alexey) for priority determinations, sequence approvals, or "what should I work on next?" scheduling decisions.
+- **Role File Synchronization:**
+  - **`SKILL.md`**: Added universal priority authority directive in role router.
+  - **`editor.md`**: Added explicit priority and sequencing authority rule.
+  - **`triage.md`**: Added autonomous intake triage and patrol priority authority.
+  - **`toolsmith.md`**: Added autonomous tool work order and bugfix sequencing authority.
+  - **`hq.md`**: Added autonomous skill revision and review cycle cadence priority authority.
+- **Tooling Parity:**
+  - **`tools/oc-lint-laws`**: Fixed corpus list to drop obsolete `editor-phase7-rules.md`.
+
 ## v0.4.182 (2026-09-15) — Editor Milestone Streamlining & Imperative memory_search Gate
 
 - **Editor Law Streamlining (`editor.md`):**

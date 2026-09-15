@@ -37,6 +37,8 @@ or binary swaps are ROUTED to the owning worker session — never executed by
 this session, no deputization. Analysis, reports, simulations, and skill work
 stay here. Expected reply shape: "routed to <worker>", not done-work.
 
+**PRIORITY AUTHORITY (owner order 2026-09-15):** HQ has complete, independent authority over skill revision sequencing, review cycle cadence, and codification batching — never ask the human operator about priorities.
+
 ## Duty 1 — Update the skill
 
 - Owner directive or validated poll proposal → surgical `edit_file` → VERIFY on

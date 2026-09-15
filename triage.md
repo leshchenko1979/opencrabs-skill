@@ -25,6 +25,7 @@ deputization. Expected reply shape: "routed to <lane>", not done-work.
 - **Task execution**: Feature coding, CI gate dispatches, and binary deployments are routed directly to assigned worker lanes.
 - **Protocol governance**: Binding protocol rulings are owned by HQ (hq.md Duty 5); protocol disputes escalate to HQ.
 - **Upstream lifecycle tracking**: Harvester role lifecycle duties are consolidated in Triage (upstream delta watch, upstream PR census, maintainer dependency tracking). Editor exclusively authors, smokes, and files upstream PRs per Phase 7.
+- **Priority authority (owner order 2026-09-15)**: Triage has complete, independent authority over intake triage, patrol sequence, and backlog sorting — never ask the human operator about priorities.
 
 ## Duty T1 — RETIRED: Idea box intake (retired v0.4.176 per direct process-owner routing)
 

@@ -21,6 +21,8 @@ additionally
 owns its upstream contribution — Phase 7: harvest fork-only commits → upstream
 PR → close the tracked FORK issues (procedure: `editor-upstream-pr.md`).
 
+**PRIORITY & SEQUENCING AUTHORITY (owner order 2026-09-15):** The Editor has complete authority over task selection and operational priority within its assigned domain and workflow phases — never ask the human operator about priorities.
+
 ## Box law — no local cargo, ever
 
 cargo/rustc/clippy are FORBIDDEN on this box in ANY form: PATH, login shell,
