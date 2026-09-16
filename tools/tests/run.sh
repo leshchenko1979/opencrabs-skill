@@ -82,7 +82,7 @@ emit_summary() {
 if [ "$JOBS" -gt 1 ]; then
   BATTERY_MODE="parallel jobs=$JOBS"
   NCH="$(grep -cE '^# ---- [0-9]' "$0")"
-  PT="$(mktemp -d)"
+  PT="$(mktemp -d -t oc-battery-pt.XXXXXX)"
   for k in $(seq 1 "$NCH"); do
     ( bash "$0" --chunk "$k" > "$PT/$k.log" 2>&1 ) &
     while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; done
@@ -511,8 +511,8 @@ case "\$*" in
 esac
 GHEOF
   chmod +x "$d3/gh"
-  OC_DEPLOY_STATE_DIR="$SD3" OC_DEPLOY_GH="$d3/gh" OC_DEPLOY_NOFANOUT=1 \
-    "$TOOLS_DIR/oc-deploy" poll --wait 2 --sha "$PEN_SHA" --execute >/dev/null 2>&1
+  OC_DEPLOY_STATE_DIR="$SD3" OC_DEPLOY_GH="$d3/gh" OC_DEPLOY_NOFANOUT=1 OC_DEPLOY_POLL_INTERVAL=1 \
+    "$TOOLS_DIR/oc-deploy" poll --wait 2 --sha "$PEN_SHA" --execute --features telegram >/dev/null 2>&1
   RC3=$?
   grep -q "nothing new" "$d3"/oc-deploy-shadow.log 2>/dev/null && MISSED=1 || MISSED=0
   [ "$RC3" != 5 ] && [ "$MISSED" = 0 ] && ok "poll --sha pending: dispatched-sha GREEN never reports 'already deployed'" || bad "poll --sha pending: rc=$RC3 missed=$MISSED"
@@ -541,7 +541,7 @@ GHEOF
   git -C "$d/repo" checkout -q -B main "$SHA2"
   git -C "$d/repo" push -q -f "$d/remote.git" main~1:refs/heads/main
   OUT2="$(cd "$d/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$d/remote.git" \
-    OC_DEPLOY_GH="$SD/gh" "$TOOLS_DIR/oc-deploy" ship --sha "$SHA2" --features telegram 2>&1)"; rc=$?
+    OC_DEPLOY_VALIDATE="$SD/tools/val" OC_DEPLOY_GH="$SD/gh" "$TOOLS_DIR/oc-deploy" ship --sha "$SHA2" --features telegram 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ] && case "$OUT2" in *"FF ok"*) true ;; *) false ;; esac; then
     ok "stale pinned ref: FF ok after diverge/restore round-trip"
   else

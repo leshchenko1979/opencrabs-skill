@@ -18,13 +18,13 @@
 #
 # Subcommands:
 #   vet <issue-or-commits> [--repo <path>] [--base <ref>] [--json]
-#   dispatch <issue> <commits> [--to <uuid>] [--repo <path>] [--base <ref>] [--dry-run]
+#   dispatch <issue> <commits> [--to <uuid>] [--repo <path>] [--base <ref>] [--draft] [--dry-run]
 #   --help | -h
 #   --selftest
 #
 # Exit codes:
 #   0: APPROVED / Clean / Success / --help
-#   1: REJECTED (already merged, superseded, empty diff, in-flight, soak, dependent-soak, in-flight-lane)
+#   1: REJECTED (already merged, superseded, empty diff, in-flight, soak, dependent-soak, in-flight-lane, parent-unharvested, blocked-by)
 #   2: Usage error
 #   3: Git or GitHub API failure
 #   4: CAPACITY_EXHAUSTED / Target lane busy with active claims
@@ -32,7 +32,9 @@
 set -u
 set -o pipefail
 
-_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+_OC_TOOLS="$(cd "$(dirname "$0")" && pwd)"
+export SKILL_DIR="${SKILL_DIR:-$(cd "$_OC_TOOLS/.." && pwd)}"
+_OC_LIB="$_OC_TOOLS/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then
   source "$_OC_LIB"
   oc_log_init "oc-harvest-dispatch" "$@"
@@ -52,13 +54,13 @@ usage() {
   cat <<EOF
 Usage:
   $PROG vet <issue-or-commits> [--repo <path>] [--base <ref>] [--json]
-  $PROG dispatch <issue> <commits> [--to <uuid>] [--repo <path>] [--base <ref>] [--dry-run]
+  $PROG dispatch <issue> <commits> [--to <uuid>] [--repo <path>] [--base <ref>] [--draft] [--dry-run]
   $PROG --help | -h
   $PROG --selftest
 
 Exit codes:
   0: APPROVED / Eligible / Success
-  1: REJECTED (already merged upstream, empty diff, superseded, soak, held)
+  1: REJECTED (already merged upstream, empty diff, superseded, soak, held, unharvested parent/blocker)
   2: Usage error
   3: Git or API failure
   4: CAPACITY_EXHAUSTED / Target lane busy with active claims
@@ -170,8 +172,12 @@ def check_files_diff(files, base_ref, repo_path):
 
 def resolve_issue_commits(issue_num, repo_path):
     pattern = f'#{issue_num}'
+    range_arg = 'adolfousier/main..origin/main'
+    rc_rev, _, _ = run_cmd(['git', '-C', repo_path, 'rev-parse', '--verify', 'origin/main'])
+    if rc_rev != 0:
+        range_arg = 'HEAD'
     rc, out, _ = run_cmd([
-        'git', '-C', repo_path, 'log', '--reverse', 'adolfousier/main..origin/main',
+        'git', '-C', repo_path, 'log', '--reverse', range_arg,
         '--format=%H%x09%h%x09%s%x09%(trailers:key=Issue-Ref,valueonly)'
     ])
     if rc != 0 or not out.strip():
@@ -186,6 +192,62 @@ def resolve_issue_commits(issue_num, repo_path):
         if pattern in subject or pattern in trailer:
             commits.append(full_sha)
     return commits
+
+def get_fork_issue_hierarchy(issue_num, repo_path=None, mock_hierarchy=None):
+    if mock_hierarchy is not None:
+        return mock_hierarchy.get(str(issue_num)) or mock_hierarchy.get(issue_num)
+    mock_env = os.environ.get('OC_HARVEST_MOCK_HIERARCHY')
+    if mock_env:
+        try:
+            with open(mock_env) as f:
+                data = json.load(f)
+                return data.get(str(issue_num)) or data.get(issue_num)
+        except Exception:
+            pass
+    cmd = ['gh', 'issue', 'view', str(issue_num), '--repo', 'leshchenko1979/opencrabs', '--json', 'number,title,state,parent,blockedBy']
+    rc, out, _ = run_cmd(cmd)
+    if rc != 0 or not out.strip():
+        return None
+    try:
+        return json.loads(out)
+    except Exception:
+        return None
+
+def is_issue_harvested_upstream(issue_num, upstream_repo, repo_path, base_ref, swaps=None, mock_prs=None):
+    # 1. Check if upstream PR exists
+    pr = check_upstream_pr(issue_num, upstream_repo, mock_prs=mock_prs)
+    if pr and pr.get('state') == 'MERGED':
+        return True
+    
+    # 2. Check if base_ref already has a commit mentioning this issue
+    if repo_path and os.path.isdir(repo_path):
+        rc, out, _ = run_cmd(['git', '-C', repo_path, 'log', '-n', '100', f'--grep=#{issue_num}', '--format=%H', base_ref])
+        if rc == 0 and out.strip():
+            return True
+
+    # 3. Check if all commits for this issue are ancestors of base_ref or match patch-ids
+    if repo_path and os.path.isdir(repo_path):
+        commits = resolve_issue_commits(issue_num, repo_path)
+        if commits:
+            all_ancestor = True
+            for c in commits:
+                if not check_ancestor(c, base_ref, repo_path):
+                    pid = get_patch_id(c, repo_path)
+                    matched_pid = False
+                    if pid:
+                        rc, out, _ = run_cmd(['git', '-C', repo_path, 'log', '-n', '100', '--format=%H', base_ref])
+                        if rc == 0:
+                            for up_c in out.strip().split('\n'):
+                                if not up_c.strip(): continue
+                                if get_patch_id(up_c.strip(), repo_path) == pid:
+                                    matched_pid = True
+                                    break
+                    if not matched_pid:
+                        all_ancestor = False
+                        break
+            if all_ancestor:
+                return True
+    return False
 
 def get_affected_files(commits, repo_path):
     files = set()
@@ -428,9 +490,59 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
             if overlap:
                 overlap_sample = ', '.join(sorted(list(overlap))[:3])
                 c_uuid = claim.get('uuid', '')[:8]
+                iss_label = str(c_iss) if c_iss else '?'
                 return {
                     'status': 'REJECTED',
-                    'verdict': f'HELD_IN_FLIGHT_LANE: Candidate touches files of active lane {c_uuid} claim #{c_iss or \"?\"} (overlap: {overlap_sample})',
+                    'verdict': f'HELD_IN_FLIGHT_LANE: Candidate touches files of active lane {c_uuid} claim #{iss_label} (overlap: {overlap_sample})',
+                    'issue': issue_num,
+                    'commits': commits,
+                    'files': affected_files,
+                    'exit_code': 1
+                }
+
+    # Gate 2e & 2f: Native Sub-Issues (parent) and Dependencies (blockedBy) (Issue #255)
+    if issue_num:
+        hier = get_fork_issue_hierarchy(issue_num, repo_path=repo_path)
+        if hier:
+            # 2e: Parent Sub-Issue Check
+            parent = hier.get('parent')
+            if parent and isinstance(parent, dict):
+                p_num = parent.get('number')
+                p_state = parent.get('state', '').upper()
+                if p_num:
+                    p_harvested = is_issue_harvested_upstream(p_num, upstream_repo, repo_path, base_ref, swaps=swaps, mock_prs=mock_prs)
+                    if not p_harvested or p_state == 'OPEN':
+                        return {
+                            'status': 'REJECTED',
+                            'verdict': f'HELD_PARENT_UNHARVESTED: Issue #{issue_num} has unharvested parent #{p_num}',
+                            'issue': issue_num,
+                            'commits': commits,
+                            'files': affected_files,
+                            'exit_code': 1
+                        }
+
+            # 2f: Issue Dependencies (blockedBy) Check
+            blocked_by = hier.get('blockedBy')
+            blocker_nodes = []
+            if isinstance(blocked_by, dict):
+                blocker_nodes = blocked_by.get('nodes', [])
+            elif isinstance(blocked_by, list):
+                blocker_nodes = blocked_by
+
+            unharvested_blockers = []
+            for b in blocker_nodes:
+                b_num = b.get('number') if isinstance(b, dict) else b
+                b_state = b.get('state', '').upper() if isinstance(b, dict) else ''
+                if b_num:
+                    b_harvested = is_issue_harvested_upstream(b_num, upstream_repo, repo_path, base_ref, swaps=swaps, mock_prs=mock_prs)
+                    if not b_harvested or b_state == 'OPEN':
+                        unharvested_blockers.append(f'#{b_num}')
+
+            if unharvested_blockers:
+                blockers_str = ', '.join(unharvested_blockers)
+                return {
+                    'status': 'REJECTED',
+                    'verdict': f'HELD_BLOCKED_BY_DEPENDENCY: Issue #{issue_num} is blocked by {blockers_str}',
                     'issue': issue_num,
                     'commits': commits,
                     'files': affected_files,
@@ -546,7 +658,8 @@ elif action == 'dispatch':
     base_ref = sys.argv[6]
     upstream_repo = sys.argv[7]
     ledger_file = sys.argv[8]
-    dry_run = sys.argv[9] == 'true'
+    draft_flag = sys.argv[9] == 'true' if len(sys.argv) > 9 else False
+    dry_run = sys.argv[10] == 'true' if len(sys.argv) > 10 else False
 
     # Step 1: Vet candidate
     v = vet_candidate(commits_arg if commits_arg else issue_arg, repo_path, base_ref, upstream_repo, mock_ledger=ledger_file)
@@ -583,9 +696,13 @@ elif action == 'dispatch':
     rc, base_sha, _ = run_cmd(['git', '-C', repo_path, 'rev-parse', base_ref])
     tip_sha = base_sha.strip()[:8] if rc == 0 else base_ref
 
+    draft_line = 'Draft: true (--draft)\n' if draft_flag else ''
+    contract_mode = '--draft' if draft_flag else 'ready'
+    contract_line = f'Contract: AUTO-SHIP on GREEN CI gate. File PR ({contract_mode}) on {upstream_repo}:main citing gate run ID, link fork {iss_str}, notify Triage.'
+
     envelope = f'''[HARVEST DISPATCH: {iss_str}]
 Target Issue: {iss_str} ({slug})
-Source Commits: {commits_str}
+{draft_line}Source Commits: {commits_str}
 Upstream Base: {base_ref} ({tip_sha})
 Target Branch: {branch_name}
 Commands:
@@ -594,7 +711,7 @@ Commands:
   3. tools/oc-harvest-sweep {branch_name} --base {base_ref}
   4. git push origin {branch_name}
   5. tools/oc-prchecks {branch_name}
-Contract: AUTO-SHIP on GREEN CI gate. File PR on {upstream_repo}:main citing gate run ID, link fork {iss_str}, notify Triage.'''
+{contract_line}'''
 
     w_uuid = selected_worker.get('uuid', '')
     w_top = selected_worker.get('topic_id', 'N/A')
@@ -611,13 +728,8 @@ Contract: AUTO-SHIP on GREEN CI gate. File PR on {upstream_repo}:main citing gat
     # Live delivery
     skill_dir = os.environ.get('SKILL_DIR')
     if not skill_dir:
-        if '__file__' in globals():
-            skill_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
-        elif sys.argv and sys.argv[0] and os.path.exists(sys.argv[0]):
-            skill_dir = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), '..')
-        else:
-            home_dir = os.environ.get('HOME', '/root')
-            skill_dir = os.path.join(home_dir, '.opencrabs/profiles/ops/skills/opencrabs-dev')
+        home_dir = os.environ.get('HOME', '/root')
+        skill_dir = os.path.join(home_dir, '.opencrabs/profiles/ops/skills/opencrabs-dev')
     notify_script = os.path.join(skill_dir, 'tools/lib/oc-notify.sh')
     if not os.path.exists(notify_script):
         home_dir = os.environ.get('HOME', '/root')
@@ -661,12 +773,13 @@ cmd_vet() {
 }
 
 cmd_dispatch() {
-  local issue="" commits="" to_uuid="none" dry_run="false"
+  local issue="" commits="" to_uuid="none" draft_flag="false" dry_run="false"
   while [ $# -gt 0 ]; do
     case "$1" in
       --to) to_uuid="$2"; shift 2 ;;
       --repo) REPO="$2"; shift 2 ;;
       --base) BASE_REF="$2"; shift 2 ;;
+      --draft) draft_flag="true"; shift ;;
       --dry-run) dry_run="true"; shift ;;
       -h|--help) usage 0 ;;
       -*) usage ;;
@@ -686,7 +799,7 @@ cmd_dispatch() {
   if [ -z "$issue" ] || [ -z "$commits" ]; then
     usage
   fi
-  run_engine "dispatch" "$issue" "$commits" "$to_uuid" "$REPO" "$BASE_REF" "$UPSTREAM_REPO" "$LEDGER_FILE" "$dry_run"
+  run_engine "dispatch" "$issue" "$commits" "$to_uuid" "$REPO" "$BASE_REF" "$UPSTREAM_REPO" "$LEDGER_FILE" "$draft_flag" "$dry_run"
 }
 
 # --- Offline Selftest ---
@@ -845,7 +958,7 @@ EOF
 
   # 5. Dispatch to busy lane -> CAPACITY_EXHAUSTED (rc 4)
   rc=0
-  out="$(run_engine "dispatch" "83" "$commit_83" "11111111-1111-1111-1111-111111111111" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "true" 2>&1)" || rc=$?
+  out="$(run_engine "dispatch" "83" "$commit_83" "11111111-1111-1111-1111-111111111111" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "false" "true" 2>&1)" || rc=$?
   if [ "$rc" -eq 4 ] && echo "$out" | grep -q "CAPACITY_EXHAUSTED"; then
     echo "  ok 5 - dispatch to busy lane -> CAPACITY_EXHAUSTED exit 4"
   else
@@ -856,7 +969,7 @@ EOF
   # 6. Dispatch auto-selects idle lane -> SUCCESS (rc 0)
   rc=0
   export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
-  out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "true" 2>&1)" || rc=$?
+  out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "false" "true" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "22222222-2222-2222-2222-222222222222"; then
     echo "  ok 6 - dispatch auto-selects idle lane -> SUCCESS exit 0"
   else
@@ -901,6 +1014,98 @@ EOF
     echo "  bad 8 - check_upstream_pr #999 expected NOT_FOUND, got ($out)"
     return 1
   fi
+
+  # 8b. Test Native Sub-Issues (parent) and Dependencies (blockedBy) (Issue #255)
+  local mock_hier_file="$st_dir/mock_hier.json"
+  cat << 'EOF' > "$mock_hier_file"
+{
+  "501": {
+    "number": 501,
+    "title": "Child issue with unharvested parent",
+    "state": "OPEN",
+    "parent": {"number": 500, "title": "Parent issue", "state": "OPEN"},
+    "blockedBy": {"nodes": [], "totalCount": 0}
+  },
+  "502": {
+    "number": 502,
+    "title": "Blocked issue",
+    "state": "OPEN",
+    "parent": null,
+    "blockedBy": {"nodes": [{"number": 450, "title": "Blocker", "state": "OPEN"}], "totalCount": 1}
+  },
+  "503": {
+    "number": 503,
+    "title": "Clean issue with merged parent",
+    "state": "OPEN",
+    "parent": {"number": 95, "title": "Merged parent", "state": "CLOSED"},
+    "blockedBy": {"nodes": [{"number": 95, "title": "Merged blocker", "state": "CLOSED"}], "totalCount": 1}
+  }
+}
+EOF
+
+  # Commit for 501
+  echo "Child issue content" >> "$mock_repo/child.rs"
+  git -C "$mock_repo" add child.rs
+  GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" git -C "$mock_repo" commit -q -m "fix(child): sub-issue (#501)"
+  local commit_501
+  commit_501="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  # Commit for 502
+  echo "Blocked issue content" >> "$mock_repo/blocked.rs"
+  git -C "$mock_repo" add blocked.rs
+  GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" git -C "$mock_repo" commit -q -m "fix(blocked): dependency (#502)"
+  local commit_502
+  commit_502="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  # Commit for 503
+  echo "Clean issue content" >> "$mock_repo/clean.rs"
+  git -C "$mock_repo" add clean.rs
+  GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" git -C "$mock_repo" commit -q -m "fix(clean): resolved hierarchy (#503)"
+  local commit_503
+  commit_503="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  export OC_HARVEST_MOCK_HIERARCHY="$mock_hier_file"
+  export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
+
+  rc=0
+  out="$(run_engine "vet" "$commit_501" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+    echo "  ok 8b - vet #501 (unharvested parent) -> REJECTED HELD_PARENT_UNHARVESTED exit 1"
+  else
+    echo "  bad 8b - vet #501 expected rc=1 HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  rc=0
+  out="$(run_engine "vet" "$commit_502" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_BLOCKED_BY_DEPENDENCY"; then
+    echo "  ok 8c - vet #502 (unharvested blocker) -> REJECTED HELD_BLOCKED_BY_DEPENDENCY exit 1"
+  else
+    echo "  bad 8c - vet #502 expected rc=1 HELD_BLOCKED_BY_DEPENDENCY, got rc=$rc ($out)"
+    return 1
+  fi
+
+  rc=0
+  out="$(run_engine "vet" "$commit_503" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED"; then
+    echo "  ok 8d - vet #503 (merged parent/blocker) -> APPROVED exit 0"
+  else
+    echo "  bad 8d - vet #503 expected rc=0 APPROVED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 8e. Test dispatch with --draft flag
+  rc=0
+  out="$(run_engine "dispatch" "503" "$commit_503" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "true" "true" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Draft: true (--draft)"; then
+    echo "  ok 8e - dispatch with --draft -> envelope carries Draft: true exit 0"
+  else
+    echo "  bad 8e - dispatch with --draft expected Draft: true in envelope, got rc=$rc ($out)"
+    return 1
+  fi
+
+  unset OC_HARVEST_MOCK_HIERARCHY
+  unset OC_HARVEST_MOCK_DEPLOYED_TS
 
   # 9. --help exit 0
   rc=0

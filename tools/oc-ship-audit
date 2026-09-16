@@ -107,14 +107,16 @@ done < "$LOG"
 [ "$BAD" -gt 0 ] && echo "audit: $BAD non-JSON legacy lines skipped — log format contract violated, scan covers JSON rows only" >&2
 
 SINCE="$(date -u -d "-$HOURS hours" +%s)"
+SINCE_ISO="$(date -u -d "-$HOURS hours" +%Y-%m-%dT%H:%M:%SZ)"
 NOW="$(date -u +%s)"
 ORPHANS=0
 
-# successful dispatch rows within the window
-jq -r --argjson since "$SINCE" 'select(.tool=="oc-deploy" and .exit==0)
-  | .args | select(startswith("ship --sha ")) | select(contains("--execute")) | capture("^ship --sha (?<sha>[0-9a-f]{7,40})").sha' \
-  "$JSON_LOG" 2>/dev/null | while read -r sha; do
-  ts="$(jq -r --arg sha "$sha" 'select(.tool=="oc-deploy" and .exit==0 and (.args|contains($sha))) | .ts' "$JSON_LOG" | tail -1)"
+# successful dispatch rows within the window (single-pass extraction)
+jq -r --arg since "$SINCE_ISO" 'select(.tool=="oc-deploy" and .exit==0 and .ts >= $since)
+  | select(.args | startswith("ship --sha ")) | select(.args | contains("--execute"))
+  | [(.args | capture("^ship --sha (?<sha>[0-9a-f]{7,40})").sha), .ts] | @tsv' \
+  "$JSON_LOG" 2>/dev/null | while IFS=$'\t' read -r sha ts; do
+  [ -n "$sha" ] && [ -n "$ts" ] || continue
   short="${sha:0:7}"
   TE="$(date -u -d "$ts" +%s 2>/dev/null)" || continue
   [ "$TE" -ge "$SINCE" ] || continue

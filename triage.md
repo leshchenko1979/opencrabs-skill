@@ -39,11 +39,14 @@ per that section. Owner veto overrides retroactively, as with rulings.
 
 ## Duty T4 — Enforcement patrols
 
-- **Parallel Harvest Orchestration Patrol (PHOP) & Pre-Dispatch Vetting (v0.4.136, 2026-09-10):**
+- **Parallel Harvest Orchestration Patrol (PHOP) & Pre-Dispatch Vetting (v0.4.136, 2026-09-10; Native GitHub Protection 2026-09-16):**
   When orchestrating harvest work, Triage MUST mechanically vet candidate packages before dispatching harvest work orders to editor lanes:
   1. Run `tools/oc-harvest-dispatch vet <issue-or-commits>` to verify upstream absence (tree-diff non-empty, patch-id unmerged, not already merged upstream, not superseded).
-  2. Verify target editor lane availability using `tools/oc-harvest-dispatch dispatch <issue> <commits> [--to <uuid>]`. If target lane is busy with an active claim, the tool refuses dispatch (rc 4); Triage must select an idle editor or commission a dedicated harvest worker.
-  3. Never dispatch unvetted candidates or busy editors. (Worktree creation belongs to the Editor lane per `fleet-directives.md §PHOP`).
+  2. **Native Sub-Issues & Blockers Check (owner order 2026-09-16):**
+     - Sub-issues: If candidate is a sub-issue (child linked via `gh issue edit <issue> --parent <parent-issue>`), verify parent feature is already merged upstream. If parent is unmerged, reject candidate harvest as blocked sub-issue.
+     - Blockers: If candidate has active blockers declared via `gh issue edit <issue> --add-blocked-by <blocker-issue>`, reject dispatch as `HELD_BLOCKED_BY_DEPENDENCY` until blockers land upstream.
+  3. Verify target editor lane availability using `tools/oc-harvest-dispatch dispatch <issue> <commits> [--to <uuid>]`. If target lane is busy with an active claim, the tool refuses dispatch (rc 4); Triage must select an idle editor or commission a dedicated harvest worker.
+  4. Never dispatch unvetted candidates or busy editors. (Worktree creation belongs to the Editor lane per `fleet-directives.md §PHOP`).
 
 - **Stale-branch sweep patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** run

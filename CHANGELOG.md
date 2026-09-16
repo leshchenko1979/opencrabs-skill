@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.190 (2026-09-16) — GitHub Native Harvest Protection Mandates
+
+- **Native Sub-Issues Mandate (Owner Order 2026-09-16, `fleet-directives.md` & `triage.md`):**
+  - Mandated that any `fix/*` or derivative work that modifies, repairs, or extends an unharvested fork subsystem (or any fork-only feature) must be linked to the parent subsystem feature issue via `gh issue edit <issue> --parent <parent-issue>`.
+  - In isolation, fixes to unreleased/fork-only subsystems are strictly forbidden from harvest: child issues cannot harvest unless the parent subsystem is already recorded as merged upstream.
+- **Native Issue Dependencies Mandate (Owner Order 2026-09-16, `fleet-directives.md` & `triage.md`):**
+  - Mandated that any candidate issue blocked by an in-flight fork feature or prerequisite upstream PR must declare it via `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
+  - Mechanical vet gate (`tools/oc-harvest-dispatch vet`) rejects any candidate with open/unharvested blockers as `HELD_BLOCKED_BY_DEPENDENCY`.
+- **Staged Upstream Draft PR Mandate (Owner Order 2026-09-16, `fleet-directives.md` & `editor-upstream-pr.md`):**
+  - Mandated that when an upstream PR depends on another in-flight upstream PR or is part of a multi-part staged wave, it MUST be filed with `gh pr create --draft` so upstream maintainers cannot merge out of order before prerequisites land. Once prerequisite PR merges upstream, draft status is converted to ready for review.
+
 ## v0.4.189 (2026-09-16) — Autonomous Harvest Dispatch Restored
 
 - **Autonomous Harvest Dispatch Restored (Owner Order 2026-09-16 10:43 UTC, `fleet-directives.md` & `triage.md`):**

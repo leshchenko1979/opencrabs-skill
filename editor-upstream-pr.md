@@ -79,9 +79,13 @@ git -C ~/oc-wt-up-<feature> push -u origin leshchenko1979/<feature>
 #    `leshchenko1979:<branch>`, literal branch name kept whole. The bare
 #    `--head leshchenko1979/<branch>` form fails cross-repo with
 #    "No commits between" (2026-09-01, adolfousier/opencrabs#1277 filing).
+#    STAGED DRAFT PR MANDATE (owner order 2026-09-16):
+#    When an upstream PR depends on another in-flight upstream PR or is part of a
+#    multi-part staged wave, add `--draft` so upstream maintainers cannot merge out of order.
 gh pr create -R adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/<feature> \
   --title "<fix:|feat:|chore:> <concise feature title>" \
-  --body "<detailed what/why, implementation notes, green run link, smoke-test evidence. Original issue: https://github.com/leshchenko1979/opencrabs/issues/N (exactly one)>"
+  --body "<detailed what/why, implementation notes, green run link, smoke-test evidence. Original issue: https://github.com/leshchenko1979/opencrabs/issues/N (exactly one)>" \
+  [--draft]
 
 # 5. close the tracked FORK issue with a pointer comment
 gh issue close <issue-n> -R leshchenko1979/opencrabs -c "Implemented in upstream PR adolfousier/opencrabs#<pr-number>"
@@ -231,7 +235,7 @@ Contract:
      tools/oc-prchecks leshchenko1979/fix/<slug>
      ```
      `--fast` is strictly prohibited for pre-PR testing; upstream PRs require 100% full test suite verification.
-4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log` (and ≥24h post-swap soak completed for `feat/*` or dependent fix bundles, counted strictly from live deployment timestamp `deployed.ts` of the youngest behavioral change in the bundle, per 24h Feature Soak Harvest Law), Editor files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug>`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue. **A PR number is not FILED until a same-turn `gh pr create` (or `gh pr view <N>`) output names it** — if a guard flags the claim (`phantom_blocked`) or the output was not witnessed, the PR is UNFILED: re-verify and re-dispatch (v0.4.152 §Guard-Flag Escalation Law; worked example: an announced PR #1514 that never existed cost ~3 h).
+4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log` (and ≥24h post-swap soak completed for `feat/*` or dependent fix bundles, counted strictly from live deployment timestamp `deployed.ts` of the youngest behavioral change in the bundle, per 24h Feature Soak Harvest Law), Editor files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug> [--draft]`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue. (Note: Use `--draft` if the PR depends on another in-flight upstream PR per Staged Upstream Draft PR Mandate). **A PR number is not FILED until a same-turn `gh pr create` (or `gh pr view <N>`) output names it** — if a guard flags the claim (`phantom_blocked`) or the output was not witnessed, the PR is UNFILED: re-verify and re-dispatch (v0.4.152 §Guard-Flag Escalation Law; worked example: an announced PR #1514 that never existed cost ~3 h).
 5. **Ack & Cleanup**: Remove harvest worktree, stamp completion in ledger, and notify Triage via `session_notify`.
    - **Checkable Completion Formula**: `DONE = 4-leg smoke pass in smoke-verdicts.log + full oc-prchecks green + upstream PR filed + harvest worktree cleaned up.`
 

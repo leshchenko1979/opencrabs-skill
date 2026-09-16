@@ -278,6 +278,7 @@ swap_in_bounce_cgroup() { # rc 0 = this process IS inside the unit's cgroup
 
 swap_ensure_detached() { # re-exec outside the bounce cgroup (argv from ORIG_ARGS)
   [ "${OC_SWAP_DETACHED:-0}" = "1" ] && return 0   # already detached (loop guard)
+  [ "${OC_SWAP_IN_UNIT_CGROUP:-auto}" = "0" ] && return 0  # test/selftest hook: disabled
   swap_in_bounce_cgroup || return 0
   local cmd="${OC_SWAP_DETACH_CMD:-systemd-run --user --scope --collect}"
   echo "oc-deploy: swap-execute is INSIDE ${OC_SWAP_UNIT:-opencrabs-ops.service}'s cgroup — the step-8 bounce would SIGKILL it before the receipt/fanout/ledger steps (v0.4.153 silent-ledger defect). Re-executing outside the unit via: $cmd" >&2
@@ -570,6 +571,7 @@ selftest() {
   local T pass=0 fail=0 rc out
   T="$(mktemp -d)" || return 1
   export OC_DEPLOY_NO_WATCH=1  # piggyback OFF in selftest (explicit watch tests below run it for real)
+  export OC_SWAP_IN_UNIT_CGROUP=0 # selftest sandboxes everything — do not systemd-run re-exec
   # v0.4.153: hermetic cgroup. The battery itself runs INSIDE opencrabs-ops.service,
   # so auto-detection would make every nested swap-execute re-exec via systemd-run.
   # Forced OFF here; section 22 sets it per-invocation to exercise the detach path.
