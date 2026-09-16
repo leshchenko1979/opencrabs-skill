@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.187 (2026-09-16) — Harvest Law: Subsystem Cohesion & Dependency Inheritance
+
+- **Atomic Subsystem Bundling (`fleet-directives.md` & `editor-upstream-pr.md`):**
+  - Codified that a harvest unit is never an isolated commit — it is a cohesive subsystem bundle comprising the base `feat/*` and all downstream `fix/*`, test, and doc commits touching that subsystem on fork `main`. Harvesting a feature folds all subsequent fixes on fork into that single upstream PR.
+- **Dependency & Soak Inheritance (`fleet-directives.md` & `editor-upstream-pr.md`):**
+  - Codified that any `fix/*` modifying, depending on, or assuming an unharvested or soaking `feat/*` inherits the full 24-hour soak window of that base feature. It cannot be cherry-picked as a zero-hold fix if upstream lacks the underlying feature code or if the fix mutates unharvested subsystem logic.
+- **In-Flight Lane Fence (`fleet-directives.md` & `editor-upstream-pr.md`):**
+  - Codified that if an active editor lane is currently modifying a subsystem (e.g. active claim/branch touching that module/flow), harvesting for that subsystem is held until the active lane finishes, hot-swaps, and lands.
+- **Deployment-Anchored Soak Clock (`fleet-directives.md` & `editor-upstream-pr.md`):**
+  - Codified that the 24-hour deployment soak clock for the bundle is anchored strictly to the live deployment timestamp (`deployed.ts` / swap journal) of the **youngest behavioral change** in the bundle, NOT from commit or filing timestamps.
+
 ## v0.4.186 (2026-09-15) — Duty 6 Ledger Cadence Stamp & 24h Soak Deployment Time Amendment
 
 - **Duty 6 Ledger Cadence Reset Stamp (`hq.md` Duty 6):**
