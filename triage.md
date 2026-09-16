@@ -68,12 +68,14 @@ per that section. Owner veto overrides retroactively, as with rulings.
   `./tools/oc-upstream-delta` and post the tiered backlog census (Tier-1/2/3
   candidates + counter line: fork-only commit count + open upstream PR count)
   to board topic 30220 — one line even on zero-change days (heartbeat).
-  **Operator-Command Only (owner order 2026-09-12):** The patrol reports census
-  status ONLY. Batch harvest execution, probe commissioning, and upstream PR filing
-  are triggered **ONLY by explicit operator command** (e.g. `/goal harvest ...`).
-  Zero autonomous harvest triggers from census thresholds. When ordered by the operator,
-  port WORK is commissioned to editor lanes per PORT-WORK OWNERSHIP; all PRs require
-  strict 4-leg smoke pass recorded in `smoke-verdicts.log` prior to filing.
+  **Autonomous Harvest Dispatch via PHOP (owner order 2026-09-16):** The previous
+  operator-command-only restriction is RETIRED. The patrol identifies fully-soaked
+  (≥24h post-swap for features anchored to youngest behavioral change; immediate for
+  standalone fixes) candidates and autonomously dispatches eligible harvest work orders
+  to idle editor lanes via PHOP (`oc-harvest-dispatch vet` & `dispatch`) on all T4 cycles
+  without holding for manual operator commands. Port WORK is commissioned to editor
+  lanes per PORT-WORK OWNERSHIP; all PRs require strict 4-leg smoke pass recorded
+  in `smoke-verdicts.log` prior to filing.
 - **Upstream PR-state patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** on each harvest census,
   re-verify the state of every OPEN upstream PR of ours

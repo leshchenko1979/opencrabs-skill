@@ -30,7 +30,12 @@ import tempfile
 import fcntl
 import signal
 
-TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
+if '__file__' in globals():
+    TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
+elif sys.argv and sys.argv[0] and os.path.exists(sys.argv[0]):
+    TOOL_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+else:
+    TOOL_DIR = os.path.expanduser("~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools")
 DEFAULT_REPO = os.path.expanduser("~/opencrabs")
 DEFAULT_LEDGER = os.environ.get(
     "OC_DEV_STATE",

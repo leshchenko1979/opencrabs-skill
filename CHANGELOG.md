@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.189 (2026-09-16) — Autonomous Harvest Dispatch Restored
+
+- **Autonomous Harvest Dispatch Restored (Owner Order 2026-09-16 10:43 UTC, `fleet-directives.md` & `triage.md`):**
+  - Removed the previous "OPERATOR COMMAND ONLY" restriction from `fleet-directives.md §Upstream-merge cadence · HARVEST LAW · NO-HOLD` and `triage.md §Duty T4 Upstream Delta & Backlog Census`.
+  - Restored autonomous harvest dispatching via PHOP (`tools/oc-harvest-dispatch vet` & `dispatch`) for fully-soaked (≥24h post-swap for features anchored to youngest behavioral change; immediate for standalone fixes), smoke-verified (v0.4.104 4-leg rubric), novel feature bundles and standalone fix candidates on all T4 patrol cycles without holding for manual operator trigger commands.
+
 ## v0.4.188 (2026-09-16) — Stalled Claim Nudge Amendment & Cycle 20260916-c19 Codifications
 
 - **Stalled Claim Nudge Permission (Owner Order 2026-09-16 08:54 UTC, `triage.md` & `fleet-directives.md`):**

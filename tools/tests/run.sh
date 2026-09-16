@@ -704,6 +704,7 @@ if tool oc-roster; then
   "$TOOLS_DIR/oc-roster" --no-such-arg >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2" || bad "unknown arg -> expected 2"
 fi
 
+# ---- 18. oc-ship-chain (5→swapped orchestrator, owner GO 16:16Z) -----------
 section "oc-ship-chain (5→swapped orchestrator, owner GO 16:16Z)"
 run_selftest oc-ship-chain
 if tool oc-ship-chain; then
