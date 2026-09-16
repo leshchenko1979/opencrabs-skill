@@ -73,12 +73,10 @@ per that section. Owner veto overrides retroactively, as with rulings.
   to board topic 30220 — one line even on zero-change days (heartbeat).
   **Autonomous Harvest Dispatch via PHOP (owner order 2026-09-16):** The previous
   operator-command-only restriction is RETIRED. The patrol identifies fully-soaked
-  (≥24h post-swap for features anchored to youngest behavioral change; immediate for
+  (≥24h post-swap for features anchored to latest swap timestamp across relationship graph — parent, sub-issues, and blockers; immediate for
   standalone fixes) candidates and autonomously dispatches eligible harvest work orders
   to idle editor lanes via PHOP (`oc-harvest-dispatch vet` & `dispatch`) on all T4 cycles
   without holding for manual operator commands. Port WORK is commissioned to editor
-  lanes per PORT-WORK OWNERSHIP; all PRs require strict 4-leg smoke pass recorded
-  in `smoke-verdicts.log` prior to filing.
 - **Upstream PR-state patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** on each harvest census,
   re-verify the state of every OPEN upstream PR of ours

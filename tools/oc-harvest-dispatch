@@ -204,7 +204,7 @@ def get_fork_issue_hierarchy(issue_num, repo_path=None, mock_hierarchy=None):
                 return data.get(str(issue_num)) or data.get(issue_num)
         except Exception:
             pass
-    cmd = ['gh', 'issue', 'view', str(issue_num), '--repo', 'leshchenko1979/opencrabs', '--json', 'number,title,state,parent,blockedBy']
+    cmd = ['gh', 'issue', 'view', str(issue_num), '--repo', 'leshchenko1979/opencrabs', '--json', 'number,title,state,parent,blockedBy,subIssues']
     rc, out, _ = run_cmd(cmd)
     if rc != 0 or not out.strip():
         return None
@@ -399,13 +399,15 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                 'exit_code': 1
             }
 
-    # Gate 2b: 24h feature soak gate (Finding C-1 / J-2 / J-3 / J-4, Owner 2026-09-15)
+    # Gate 2b: 24h feature soak gate across entire relationship graph (Owner 2026-09-15 / 2026-09-16)
     now_ts = int(os.environ.get('OC_HARVEST_NOW_TS') or time.time())
     st_dir = os.environ.get('STATE_DIR', '')
     if not st_dir:
         home_dir = os.environ.get('HOME', '/root')
         st_dir = os.path.join(home_dir, '.opencrabs/profiles/ops/opencrabs-dev')
     swaps = load_swap_history(st_dir)
+    
+    # Check candidate commits for feat soak
     for c in commits:
         rc, out, _ = run_cmd(['git', '-C', repo_path, 'log', '-n', '1', '--format=%s%x09%ct', c])
         if rc == 0 and out.strip():
@@ -429,6 +431,52 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                         'commits': commits,
                         'exit_code': 1
                     }
+
+    # Graph-wide 24h soak check on child/blocker/parent issues
+    if issue_num:
+        hier = get_fork_issue_hierarchy(issue_num, repo_path=repo_path)
+        if hier:
+            related_issue_nums = []
+            parent = hier.get('parent')
+            if parent and isinstance(parent, dict) and parent.get('number'):
+                related_issue_nums.append((parent.get('number'), 'parent'))
+            
+            sub_issues = hier.get('subIssues')
+            sub_nodes = sub_issues.get('nodes', []) if isinstance(sub_issues, dict) else (sub_issues if isinstance(sub_issues, list) else [])
+            for s in sub_nodes:
+                s_num = s.get('number') if isinstance(s, dict) else s
+                if s_num:
+                    related_issue_nums.append((s_num, 'sub-issue'))
+
+            blocked_by = hier.get('blockedBy')
+            b_nodes = blocked_by.get('nodes', []) if isinstance(blocked_by, dict) else (blocked_by if isinstance(blocked_by, list) else [])
+            for b in b_nodes:
+                b_num = b.get('number') if isinstance(b, dict) else b
+                if b_num:
+                    related_issue_nums.append((b_num, 'blocker'))
+
+            for rel_num, rel_type in related_issue_nums:
+                rel_commits = resolve_issue_commits(rel_num, repo_path)
+                for rc_sha in rel_commits:
+                    rc_code, rc_out, _ = run_cmd(['git', '-C', repo_path, 'log', '-n', '1', '--format=%s%x09%ct', rc_sha])
+                    if rc_code == 0 and rc_out.strip():
+                        r_parts = rc_out.strip().split('\t')
+                        r_ts = int(r_parts[1]) if len(r_parts) > 1 and r_parts[1].isdigit() else 0
+                        r_d_ts = get_commit_deploy_ts(rc_sha, repo_path, swaps)
+                        if not r_d_ts and not swaps and not os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS'):
+                            r_d_ts = r_ts
+                        if r_d_ts > 0:
+                            rel_age_hours = (now_ts - r_d_ts) / 3600.0
+                        else:
+                            rel_age_hours = 0.0
+                        if rel_age_hours < 24.0:
+                            return {
+                                'status': 'REJECTED',
+                                'verdict': f'HELD_DEPENDENT_SOAK: Linked {rel_type} #{rel_num} commit {rc_sha[:8]} is within 24h soak window (age: {max(0.0, rel_age_hours):.1f}h < 24h)',
+                                'issue': issue_num,
+                                'commits': commits,
+                                'exit_code': 1
+                            }
 
     if not commits and issue_num:
         return {

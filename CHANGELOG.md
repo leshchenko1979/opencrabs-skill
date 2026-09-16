@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.192 (2026-09-16) — Graph-Wide 24h Feature Soak Anchor Law
+
+- **Graph-Wide 24h Feature Soak Anchor Law (Owner Order 2026-09-16, `fleet-directives.md`, `editor-upstream-pr.md`, `triage.md`, `tools/oc-harvest-dispatch`):**
+  - Codified that the 24-hour maturation soak clock for any feature bundle or subsystem is anchored strictly to the **latest live deployment timestamp (`deployed.ts`) among ALL related nodes in its dependency graph** (the issue itself, its parent feature, all child sub-issues linked via `--parent`, and all blocker/blocked dependencies linked via `--add-blocked-by`).
+  - When evaluating harvest eligibility, if any linked child fix or blocker dependency has been swapped more recently than the parent feature, the 24h timer for harvesting the subsystem/bundle resets to the swap timestamp of that youngest change.
+  - Updated `tools/oc-harvest-dispatch` to inspect relationship graph hierarchy (`subIssues`, `blockedBy`, `parent`) and enforce `HELD_DEPENDENT_SOAK` if any linked node is <24h post-swap.
+
 ## v0.4.191 (2026-09-16) — Continuous Issue Relationship Linking Mandate
 
 - **Continuous Issue Relationship Linking Across Lifecycle (Owner Order 2026-09-16, `SKILL.md`, `fleet-directives.md`, `editor.md`, `triage.md`):**

@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.191
+version: 0.4.192
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -257,6 +257,17 @@ BEHAVIORAL probe of the corrected path actually executing (a live call, a
 forced trigger, an observed output through the new code). If only presence
 evidence exists, the verdict is `UNPROVEN (presence-only)` — never GREEN, and
 the lane's ledger append must carry that label.
+
+**Live verification stamp required for live-testable UX features (owner order 2026-09-16):**
+For any UX, UI, card rendering, button interaction, or user-facing feature that is
+live-testable on the running binary, static binary string probes or symbol searches alone
+are STRICTLY FORBIDDEN as proof of a smoke PASS. Binary strings prove only compilation
+presence, not runtime UI correctness or execution. A smoke PASS for live-testable UX
+features requires an explicit live behavioral execution receipt stamped into the stamp system
+(`smoke-verdicts.log` / `workers-ledger.json`). If behavioral verification cannot be fully
+automated and requires the owner's visual inspection, the lane MUST record `PARKED-OWNER-EYE`
+naming the exact owner action and packaging sha — never substitute a binary string probe for a
+live UX verification.
 
 **Bookkeeping legs ≠ smoke PASS (owner order 2026-09-08 12:16Z):** lineage
 (is-ancestor), identity (artifact==exe sha) and CI gate evidence are
