@@ -117,7 +117,10 @@ below needs a regular cadence to be worth anything.
      must conclude with: `Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed.`
      Triage verifies delivery by polling `workers-ledger.json` (`oc-ledger events --kind claim`),
      NEVER by expecting, requesting, or processing `session_notify` conversational acks.
-5. Already-claimed issues: no action; the owning editor's chain owns them.
+5. Already-claimed issues:
+   - Normal progression: no action; the owning editor's chain owns them.
+   - **Stalled progression nudge (owner order 2026-09-16 08:54 UTC)**: If an editor holding an active claim has stalled (no CI/gate/ship progress or silence extending beyond the patrol window), Triage MAY nudge the lane via `session_notify` (`delivery.mode="turn-end"`) to request a status check or unblock.
+
 
 **Autonomous closure — limited disposal authority (owner option 2, ruling
 2026-09-08 20:0xZ, v0.4.112):** the Never-clause above is now BOUNDED. On
@@ -194,9 +197,9 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
    mermaid diagrams per decision, ONE decision per message presented 1 by 1,
    designs/special cases owner-gated.
 - **Checkable Completion Formula**: `DONE = Rollcall broadcast delivered to holding lanes + coverage verified + completion stamp recorded in workers-ledger.json note.`
-   starts implementing its own recommendation gets one targeted correction —
-   to the lane, not a board complaint.
+6. Enforcement: A lane that starts implementing an unapproved design/recommendation gets one targeted correction via session_notify.
 7. **Topic-scoped decision ownership**: Decisions are published directly by each worker lane in its own forum topic. Triage maintains the coverage report (which lanes posted, which are silent-by-zero) and stamps progress in the ledger. Centralized decision aggregation is superseded by direct topic posting.
+
 
 ## Escalation to HQ
 
@@ -211,8 +214,7 @@ session_notify to HQ session).
 
 - **Duty T1 (Idea box intake)**: Retired v0.4.176 per direct process-owner routing. Ideas route directly to HQ (skill/governance), Toolsmith (CLI tools), or Editors (code features).
 - **Duty T2 (Quirk intake & relay)**: Retired v0.4.176 per Direct Dispatch Law. Tool anomalies route directly to Toolsmith; daemon faults route directly to GitHub fork issues.
-one concept, one home, lens A-L7 v0.4.116). Receipts, ACKs, and ROUTED
-stamps NEVER escalate; they live in the ledger.
+
 
 WHAT comes back: HQ's rulings and version batches absorb here the
 same way they absorb everywhere — disk absorption (§Glossary, SKILL.md),

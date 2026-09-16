@@ -144,8 +144,11 @@ Rules:
   into the feature work. Every harvested commit carries an `Issue-Ref: #N` trailer matching EXACTLY the single
   issue the PR claims; no commit without one, no PR claiming more than one. A PR
   whose diff mixes fixed and unfixed concerns forces a binary status on a mixed bag
-  and mislabels both. Gate with `./tools/oc-pr-atomicity <pr>` (trailer scan + body
-  claim cross-check) BEFORE closing the issue. PR LIFECYCLE: one PR = one atomic change; a bug found in review is fixed
+  and mislabels both. Gate with `./tools/oc-prchecks <branch>` and atomicity check BEFORE closing the issue.
+- **PR LIFECYCLE:** One PR = one atomic change; a bug found in review is fixed
+  FORWARD on the same PR or the PR is closed — no draft limbo. A MERGED PR is
+  closed forever: follow-up work = new branch + new PR, NEVER extend a merged
+  branch.
 - **UPSTREAM CODING & TEST STANDARDS (CONTRIBUTING.md & Adolfo DM 2026-09-13):**
   - **Test isolation:** ALL tests MUST live under `src/tests/*_test.rs` registered in `src/tests/mod.rs`. Absolutely **NO inline `#[cfg(test)] mod tests`** blocks inside source files in `src/`. If an existing inline test block is found while editing a file, move it to `src/tests/` as part of the change.
   - **`mod.rs` declarations only:** Zero function definitions (`fn`) inside any `mod.rs`. Only doc comments, `mod`/`pub mod` statements, and `pub use` re-exports. Functions belong in cohesive child modules.
@@ -153,9 +156,7 @@ Rules:
   - **Real tests over mocks:** Hit real structs and SQLite; tests must fail without the fix and pass with it.
   - **Zero error / warning suppression:** No `#[allow(dead_code)]` or `#[allow(unused)]` duct tape. Unused code must be deleted.
   - **`ONTOLOGY.md` synchronization:** If a change introduces, renames, or retires a concept, update `src/docs/reference/ONTOLOGY.md` in the same PR.
-  FORWARD on the same PR or the PR is closed — no draft limbo. A MERGED PR is
-  closed forever: follow-up work = new branch + new PR, NEVER extend a merged
-  branch.
+
 - **BUILD TRIGGERS = exactly TWO, no exceptions:** Canonical law lives in `SKILL.md §Hard rules` (`oc-deploy ship` or owner word; CI gate = `oc-prchecks`).
 - **PR-BASE-PRE-OPEN (v0.4.71, Duty-4 P6):** an upstream PR head is a harvest
   branch off `adolfousier/main` — NEVER a fork-main-based branch; base +

@@ -75,7 +75,8 @@ Hard discipline for every change:
   receipts do not cover doc/behavior skew. Skill markdown (SKILL.md,
   CHANGELOG.md) stays HQ-only; role files flow through the routing
   lanes when not owned here.
-- **Checkable Completion Formula**: `DONE = tool code edited under tools/ + tools/tests/run.sh battery PASS (194/194) + tools/RC-CONTRACT.md updated (if rc changed) + dual-pushed.`
+- **Checkable Completion Formula**: `DONE = tool code edited under tools/ + tools/tests/run.sh battery PASS (all tests pass) + tools/RC-CONTRACT.md updated (if rc changed) + dual-pushed.`
+
 
 ## Duty TM2 — Battery stewardship
 

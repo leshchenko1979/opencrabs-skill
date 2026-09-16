@@ -1,6 +1,22 @@
 # Changelog
 
+## v0.4.188 (2026-09-16) — Stalled Claim Nudge Amendment & Cycle 20260916-c19 Codifications
+
+- **Stalled Claim Nudge Permission (Owner Order 2026-09-16 08:54 UTC, `triage.md` & `fleet-directives.md`):**
+  - Codified in `triage.md` Duty T5 and `fleet-directives.md §Zero-Ack & Dispatch Discipline` that Triage and patrol watchers MAY send a progress nudge via `session_notify` (`delivery.mode="turn-end"`) to an active claim holder if expected deliverables have not arrived or progress has stalled beyond the patrol window.
+- **Docs Family Codification (Cycle 20260916-c19, Findings A-6, B-3, G-1, A-9, A-10, G-4, A-2, A-11):**
+  - **`editor-upstream-pr.md`**: Repaired text splice splitting PR lifecycle sentence.
+  - **`editor.md`**: Mandated imperative `memory_search scope="external"` exploration & DRY check before bugfixing in Phase 6-Fix loop; pruned manual plumbing commands.
+  - **`triage.md`**: Fixed severed list item 6, mislocated `DONE = ...` formula in Duty T7, and dangling orphaned sentence in Retired Duties.
+  - **`upstream-merge-runbook.md`**: Codified checkable `DONE = ...` formulas for Steps 2–7.
+  - **`toolsmith.md`**: Updated test battery completion formula to reflect dynamic test pass count.
+  - **`SKILL.md`**: Aligned Upstream Delta Watch owner in Upstream Relations table to Triage (`triage.md §Duty T4`).
+- **Brain Scrub & State Hygiene (Cycle 20260916-c19, Findings BS-1, D-1):**
+  - Pruned historical war story incident markers, stale hex numbers, and specific post-mortem row logs in `AGENTS.md`.
+  - Cleaned stale `fanout.*.lock` files from the state root.
+
 ## v0.4.187 (2026-09-16) — Harvest Law: Subsystem Cohesion & Dependency Inheritance
+
 
 - **Atomic Subsystem Bundling (`fleet-directives.md` & `editor-upstream-pr.md`):**
   - Codified that a harvest unit is never an isolated commit — it is a cohesive subsystem bundle comprising the base `feat/*` and all downstream `fix/*`, test, and doc commits touching that subsystem on fork `main`. Harvesting a feature folds all subsequent fixes on fork into that single upstream PR.

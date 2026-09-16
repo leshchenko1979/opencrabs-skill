@@ -540,6 +540,9 @@ Your answer is always the SAME sequence:
 0. GATE — the bug must already HAVE an issue; the red-run hand-off names
    it. Missing? File it first (Phase 1 procedure). Fixing before filing
    violates the issue-first hard rule (SKILL.md).
+1. **MANDATORY EXPLORATION & DRY GATE**: Before editing any files to apply a fix, you MUST run
+   `memory_search scope="external"` over `/root/opencrabs/src/**/*.rs` to map callers,
+   symbol definitions, and ensure no DRY abstractions are violated.
 
 ```bash
 # 1. fresh worktree at the relevant sha (worktree lifecycle, Phase 2)
@@ -547,19 +550,16 @@ tools/oc-wt add <task> <branch>
 # 2. reproduce → fix → SIGNED commit (E1, v0.4.78)
 tools/oc-commit -m "<msg>"   # gated wrapper: Session-Id from ambient session ID, Issue-Ref
 #    derived from your latest ledger claim, implementation comment folded in
-#    (oc-issue-log leg). RAW FALLBACK — rebase/cherry-pick/harvest contexts only:
-#    git -C ~/oc-wt-<task> commit --trailer "Session-Id: <full session uuid>" --trailer "Issue-Ref: #<issue-n>"
-#    (Session-Id = you; Issue-Ref = the ONE issue this change fixes — atomicity,
-#     v0.4.15: every commit links to exactly one issue, matching the PR that will carry it)
 # 3. push branch, then re-run oc-ship-chain (Leg 1 CI gate -> Leg 2 comment -> Leg 3 ff-merge -> Leg 4 carrier build -> Leg 5 swap)
 git -C ~/oc-wt-<task> push origin <branch>
 tools/oc-ship-chain --sha <NEW-head-sha> --branch <branch> [--issue <issue-n>]
-# 4. on exit 0 SWAPPED, remove the worktree — job done
+# 4. on exit 0 SWAPPED, remove the worktree — proceed to Phase 6 smoke re-test
 tools/oc-wt remove <task>
 ```
 
 **Per-commit laws live in their phases:** branch-attached HEAD + signing → §Phase 4; worktree-writer exclusivity → §Phase 2. They bind EVERY commit in ANY phase — read them there.
-- **Checkable Completion Formula**: `DONE = Bug reproduced + fix committed with trailers + tools/oc-ship-chain exits 0 (SWAPPED) + worktree removed.`
+- **Checkable Completion Formula**: `DONE = Bug reproduced + memory_search caller check performed + fix committed with trailers + tools/oc-ship-chain exits 0 (SWAPPED) + worktree removed.`
+
 
 ## Phase 7 + 7b — upstream PR → `editor-upstream-pr.md`
 

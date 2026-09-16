@@ -60,14 +60,17 @@ per-commit at replay time.
      role resolution at it breaks dispatch fleet-wide.
    - **`DONE = tools/oc-roster classify | grep '^ACTIVE' | wc -l` returns 0 and pre-sync rollback SHA is recorded in ledger.**
 2. Branch `sync/upstream-YYYYMMDD` off `origin/main`.
+   - **`DONE = sync/upstream-YYYYMMDD branch created off origin/main.`**
 3. `git rebase adolfousier/main` — **rebase, not merge.** Commits upstream has
    already accepted drop out of the replay automatically; that is the point of
    the model. Do not hand-drop them.
+   - **`DONE = git rebase adolfousier/main executed on sync branch.`**
 4. **Replay conflicts: resolve per the Seam-resolution shape, canonical in
    `fleet-directives.md`** (upstream's code ships byte-exact; our delta adapts
    on top — never overwrite his code). Conflicts arise only while replaying OUR
    still-pending commits, so resolution is per-commit. Shared TEST files union
    both sides' cases — expect the worst overlap in tests, not source.
+   - **`DONE = All replay conflict seams resolved adapting fork delta cleanly on top of upstream base.`**
 5. **Database migrations — dedicated pass, never drive-by.** Both sides may sit
    at the SAME `MIGRATION_COUNT` with DIFFERENT sets (2026-09-02: fork #37
    `20260828_pending_requests_origin` vs upstream #37
@@ -75,11 +78,14 @@ per-commit at replay time.
    prod's `user_version` as the reference point, and provide a healing path
    for the already-migrated prod DB. Two migrations claiming one version is a
    hard defect.
+   - **`DONE = Migration version numbers unioned with distinct sequential IDs and SQLite schema verified.`**
 6. **Semantic triage** — every double-implementation pair gets a recorded
    decision: adopt upstream (default), keep fork, or reconcile. Auto-keep with
    no decision: commits adolfo merged from our own harvest PRs. **[GATE]** for
    any keep-ours.
+   - **`DONE = Semantic triage table recorded in ledger/report with adopt/keep/reconcile decisions for every overlap.`**
 7. **Migrate lane branches onto the new base** — for each roster entry.
+
    **Measure pending work against the TARGET base, never against the old fork
    main.** After the cutover the old shas are gone from the new history, so a
    range measured from old main counts commits the new base ALREADY HAS: on
