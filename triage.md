@@ -124,6 +124,7 @@ below needs a regular cadence to be worth anything.
      NEVER by expecting, requesting, or processing `session_notify` conversational acks.
 5. Already-claimed issues:
    - Normal progression: no action; the owning editor's chain owns them.
+   - **Continuous Relationship Linking Mandate (owner order 2026-09-16)**: During triage sweeps, if Triage discovers open issues that depend on in-flight features or unharvested subsystems, Triage MUST establish native links in the same turn via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
    - **Stalled progression nudge (owner order 2026-09-16 08:54 UTC)**: If an editor holding an active claim has stalled (no CI/gate/ship progress or silence extending beyond the patrol window), Triage MAY nudge the lane via `session_notify` (`delivery.mode="turn-end"`) to request a status check or unblock.
 
 

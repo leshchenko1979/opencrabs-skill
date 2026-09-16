@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.190
+version: 0.4.191
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -544,6 +544,11 @@ links; development-time upstream contact is PR-comments only (supersedes the
   2026-08-27). Covers
   task starts (`editor.md` Phase 1) AND mid-loop finds: red-build bugs, failed
   smoke tests, defects in another editor's feature.
+- Continuous Issue Relationship Linking (owner order 2026-09-16): whenever a parent
+  subsystem relationship, blocker dependency, or child sub-issue is established or discovered
+  at ANY point in the lifecycle (creation, triage intake, editor in-flight discovery, decomposition,
+  or upstream PR staging), the lane identifying it MUST establish native links in the same turn
+  via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
 - Restart scope: **`opencrabs-ops` ONLY.** The `family` and default-profile daemons
   require Alexey's explicit approval EVERY time. Exception (v0.4.71, lens B2 #3;
   sanctioned v0.4.59 #47): HQ may mechanically restart the

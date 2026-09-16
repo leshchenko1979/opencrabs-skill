@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.191 (2026-09-16) — Continuous Issue Relationship Linking Mandate
+
+- **Continuous Issue Relationship Linking Across Lifecycle (Owner Order 2026-09-16, `SKILL.md`, `fleet-directives.md`, `editor.md`, `triage.md`):**
+  - Expanded the native issue linking mandate from harvest/creation to the entire issue lifecycle: whenever parent subsystem relationships, blocker dependencies, or child sub-issues are established, split, or discovered at ANY point in the lifecycle (issue creation, triage intake sweeps, in-flight editor implementation, task decomposition, or upstream PR staging), the lane identifying it MUST establish native links in the same turn via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
+  - Codified into `SKILL.md §Issue-first`, `editor.md §Phase 1 step 2`, `triage.md §Duty T5 step 5`, and `fleet-directives.md §Upstream-merge cadence`.
+
 ## v0.4.190 (2026-09-16) — GitHub Native Harvest Protection Mandates
 
 - **Native Sub-Issues Mandate (Owner Order 2026-09-16, `fleet-directives.md` & `triage.md`):**
