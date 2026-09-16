@@ -75,7 +75,7 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   # 1. happy path -> 0, branch created, worktree landed, claim stamped
   : > "$D/calls.log"
   R 123 --branch feat/thing-one >/dev/null 2>&1; RC=$?
-  if [ "$RC" -eq 0 ] && [ -d "$HOME/oc-wt-thing-one" ] \
+  if [ "$RC" -eq 0 ] && [ -d "$HOME/opencrabs-wt/thing-one" ] \
      && git -C "$D/repo" rev-parse --verify --quiet "refs/heads/feat/thing-one" >/dev/null \
      && grep -q "123" "$D/calls.log" 2>/dev/null; then
     t_ok "happy: claim+branch+worktree"
@@ -102,7 +102,7 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   else t_bad "existing branch (rc=$RC)"; fi
   # 7. explicit --task names the worktree dir
   R 127 --branch feat/other --task custom-t >/dev/null 2>&1; RC=$?
-  [ "$RC" -eq 0 ] && [ -d "$HOME/oc-wt-custom-t" ] \
+  [ "$RC" -eq 0 ] && [ -d "$HOME/opencrabs-wt/custom-t" ] \
     && t_ok "explicit task dir" || t_bad "explicit task (rc=$RC)"
 
   echo "selftest: $pass passed, $fail failed"
@@ -171,7 +171,11 @@ if ! "$WT_BIN" add "$TASK" "$BRANCH" --repo "$REPO" 2>&1; then
   exit 5
 fi
 
-WT="$HOME/oc-wt-$TASK"
+WT_BASE="${OC_WT_BASE:-$HOME/opencrabs-wt}"
+WT="$WT_BASE/$TASK"
+if [ ! -d "$WT" ] && [ -d "$HOME/oc-wt-$TASK" ]; then
+  WT="$HOME/oc-wt-$TASK"
+fi
 echo "STARTED issue=#$ISSUE branch=$BRANCH worktree=$WT"
 echo "  next: edit in $WT, commit via oc-commit, then ship:"
 echo "  oc-ship-chain --sha <head-sha> --branch $BRANCH --issue $ISSUE"

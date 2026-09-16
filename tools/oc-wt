@@ -77,7 +77,7 @@ do_selftest() {
 
   # 1. add happy -> 0, tree created
   env OC_TOOLS_NOLOG=1 "$SELF" add t1 feat-x --repo "$D/repo" >/dev/null 2>&1; RC=$?
-  if [ "$RC" -eq 0 ] && [ -d "$HOME/oc-wt-t1" ]; then
+  if [ "$RC" -eq 0 ] && [ -d "$HOME/opencrabs-wt/t1" ]; then
     t_ok "add happy: tree created"
   else t_bad "add happy (rc=$RC)"; fi
   # 2. add twice -> 3
@@ -100,7 +100,7 @@ do_selftest() {
   # 7. add fresh branch -> 0
   git -C "$D/repo" branch feat-y feat-x
   OUT="$(env OC_TOOLS_NOLOG=1 "$SELF" add t4 feat-y --repo "$D/repo" 2>&1)"; RC=$?
-  if [ "$RC" -eq 0 ] && [ -d "$HOME/oc-wt-t4" ]; then
+  if [ "$RC" -eq 0 ] && [ -d "$HOME/opencrabs-wt/t4" ]; then
     t_ok "add fresh branch -> 0"
   else t_bad "add fresh branch (rc=$RC)"; fi
   # 7b. list (C10) -> 3 rows: task/path/branch/dirty, t1 clean
@@ -111,9 +111,9 @@ do_selftest() {
   else t_bad "list (rc=$RC rows=$(printf '%s\n' "$LIST_OUT" | grep -c .))"; fi
   # 8. remove clean -> 0 + gone
   env OC_TOOLS_NOLOG=1 "$SELF" remove t3 --repo "$D/repo" >/dev/null 2>&1; RC=$?
-  [ "$RC" -eq 0 ] && [ ! -d "$HOME/oc-wt-t3" ] && t_ok "remove clean -> 0, dir gone" || t_bad "remove clean (rc=$RC)"
+  [ "$RC" -eq 0 ] && [ ! -d "$HOME/opencrabs-wt/t3" ] && t_ok "remove clean -> 0, dir gone" || t_bad "remove clean (rc=$RC)"
   # 9. remove dirty -> 3 + listing on stderr
-  echo dirty >> "$HOME/oc-wt-t1/untracked.txt"
+  echo dirty >> "$HOME/opencrabs-wt/t1/untracked.txt"
   OUT="$(env OC_TOOLS_NOLOG=1 "$SELF" remove t1 --repo "$D/repo" 2>&1)"; RC=$?
   if [ "$RC" -eq 3 ] && case "$OUT" in *"untracked.txt"*) true ;; *) false ;; esac; then
     t_ok "remove dirty -> 3 with porcelain listing"
@@ -137,7 +137,7 @@ do_selftest() {
 
   # 13. E8: --create escape hatch — branch created from --from, then normal add
   env OC_TOOLS_NOLOG=1 "$SELF" add t8 up/feat-new --create --from main --repo "$D/repo" >/dev/null 2>&1; RC=$?
-  if [ "$RC" -eq 0 ] && git -C "$D/repo" rev-parse --verify -q refs/heads/up/feat-new >/dev/null && [ -d "$HOME/oc-wt-t8" ]; then
+  if [ "$RC" -eq 0 ] && git -C "$D/repo" rev-parse --verify -q refs/heads/up/feat-new >/dev/null && [ -d "$HOME/opencrabs-wt/t8" ]; then
     t_ok "--create: branch created from --from + tree added"
   else t_bad "--create happy (rc=$RC)"; fi
   # 13b. --create refuses existing branch -> 5
@@ -202,7 +202,13 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$REPO" in "~"|"~/"*) REPO="${HOME}${REPO#\~}" ;; esac
-WT="$HOME/oc-wt-$TASK"
+WT_BASE="${OC_WT_BASE:-$HOME/opencrabs-wt}"
+mkdir -p "$WT_BASE" 2>/dev/null || true
+WT="$WT_BASE/$TASK"
+# Backward-compatibility fallback for existing worktrees at legacy location
+if [ ! -d "$WT" ] && [ -d "$HOME/oc-wt-$TASK" ]; then
+  WT="$HOME/oc-wt-$TASK"
+fi
 oc_log_extra "verb" "$VERB"; [ -n "$TASK" ] && oc_log_extra "task" "$TASK"
 [ -d "$REPO" ] && "$GIT_BIN" -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || {
   echo "$PROG: repo not found: $REPO" >&2; exit 5; }
@@ -212,7 +218,7 @@ if [ "$VERB" = "list" ]; then
   "$GIT_BIN" -C "$REPO" worktree list --porcelain | awk '
     /^worktree /  { wt=substr($0,10) }
     /^branch /    { br=substr($0,8)
-                    if (wt ~ /\/oc-wt-/) { print wt "\t" br; wt=""; br="" } }' | while IFS="$(printf '\t')" read -r wpath wbranch; do
+                    if (wt ~ /\/oc-wt-/ || wt ~ /\/opencrabs-wt\//) { print wt "\t" br; wt=""; br="" } }' | while IFS="$(printf '\t')" read -r wpath wbranch; do
     task="$(basename "$wpath")"; task="${task#oc-wt-}"
     dirty="$("$GIT_BIN" -C "$wpath" status --porcelain 2>/dev/null | wc -l)"
     printf '%s\t%s\t%s\t%s\n' "$task" "$wpath" "${wbranch#refs/heads/}" "$dirty"
