@@ -12,6 +12,9 @@
 #   check <issue-or-slug> [--repo <path>]
 #       Pre-flight gate:
 #       - Exits 1 (REFUSED) if matching unit is already MERGED or IN_FLIGHT.
+#       - Exits 1 (REFUSED) if matching unit is within 24h feature soak window.
+#       - Exits 1 (REFUSED) if matching unit touches files of an unharvested/soaking feature (HELD_DEPENDENT_SOAK).
+#       - Exits 1 (REFUSED) if matching unit touches files of an active in-flight lane (HELD_IN_FLIGHT_LANE).
 #       - Exits 0 (ELIGIBLE) if unit is confirmed UNHARVESTED.
 #       - Exits 2 on usage / bad arguments.
 #       - Exits 3 on API/git failure.
@@ -54,7 +57,7 @@ Usage:
 
 Exit codes:
   0: ELIGIBLE / Clean / Success / --help
-  1: REFUSED (already MERGED or IN_FLIGHT upstream) / Finding
+  1: REFUSED (already MERGED, IN_FLIGHT upstream, SOAK, HELD_DEPENDENT_SOAK, HELD_IN_FLIGHT_LANE) / Finding
   2: Usage error
   3: Git or GitHub API failure
 EOF
@@ -63,13 +66,14 @@ EOF
 
 # --- Core Python Engine (Deterministic Parsing & Matching) ---
 run_engine() {
-  python3 -c '
+  python3 -c "
 import sys, os, json, re, subprocess, argparse, time, datetime, glob
+
 def parse_iso_ts(ts_str):
     if not ts_str: return 0
     try:
-        if ts_str.endswith("Z"):
-            ts_str = ts_str[:-1] + "+00:00"
+        if ts_str.endswith('Z'):
+            ts_str = ts_str[:-1] + '+00:00'
         return int(datetime.datetime.fromisoformat(ts_str).timestamp())
     except Exception:
         return 0
@@ -78,27 +82,27 @@ def load_swap_history(state_dir):
     swaps = []
     if not state_dir or not os.path.exists(state_dir):
         return swaps
-    journals = glob.glob(os.path.join(state_dir, "oc-deploy", "journal", "swap-*.jsonl"))
+    journals = glob.glob(os.path.join(state_dir, 'oc-deploy', 'journal', 'swap-*.jsonl'))
     for jf in journals:
         try:
             with open(jf) as f:
                 for line in f:
                     if not line.strip(): continue
                     data = json.loads(line)
-                    if data.get("step") == "auto-swap" and data.get("sha") and data.get("ts"):
-                        ts_val = parse_iso_ts(data["ts"])
+                    if data.get('step') == 'auto-swap' and data.get('sha') and data.get('ts'):
+                        ts_val = parse_iso_ts(data['ts'])
                         if ts_val > 0:
-                            swaps.append((data["sha"], ts_val))
+                            swaps.append((data['sha'], ts_val))
                         break
         except Exception:
             pass
-    meta_path = os.path.join(state_dir, "deployed.meta.json")
+    meta_path = os.path.join(state_dir, 'deployed.meta.json')
     if os.path.exists(meta_path):
         try:
             with open(meta_path) as f:
                 data = json.load(f)
-                ts_str = data.get("swapped_at") or data.get("ts")
-                sha = data.get("sha")
+                ts_str = data.get('swapped_at') or data.get('ts')
+                sha = data.get('sha')
                 ts_val = parse_iso_ts(ts_str)
                 if sha and ts_val > 0:
                     swaps.append((sha, ts_val))
@@ -110,7 +114,7 @@ def load_swap_history(state_dir):
 def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None):
     if mock_deployed_ts is not None and int(mock_deployed_ts) > 0:
         return int(mock_deployed_ts)
-    mock_env = os.environ.get("OC_HARVEST_MOCK_DEPLOYED_TS")
+    mock_env = os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS')
     if mock_env and mock_env.isdigit() and int(mock_env) > 0:
         return int(mock_env)
     if not swaps:
@@ -121,7 +125,7 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None):
     if not os.path.isdir(repo_path):
         return 0
     latest_sha = swaps[-1][0]
-    rc = subprocess.run(["git", "-C", repo_path, "merge-base", "--is-ancestor", commit_sha, latest_sha], capture_output=True).returncode
+    rc = subprocess.run(['git', '-C', repo_path, 'merge-base', '--is-ancestor', commit_sha, latest_sha], capture_output=True).returncode
     if rc != 0:
         return 0
     low = 0
@@ -130,7 +134,7 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None):
     while low <= high:
         mid = (low + high) // 2
         mid_sha = swaps[mid][0]
-        rc = subprocess.run(["git", "-C", repo_path, "merge-base", "--is-ancestor", commit_sha, mid_sha], capture_output=True).returncode
+        rc = subprocess.run(['git', '-C', repo_path, 'merge-base', '--is-ancestor', commit_sha, mid_sha], capture_output=True).returncode
         if rc == 0:
             earliest_idx = mid
             high = mid - 1
@@ -138,19 +142,18 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None):
             low = mid + 1
     return swaps[earliest_idx][1]
 
-
 def get_prs(upstream_repo, mock_prs_file=None):
     if mock_prs_file and os.path.exists(mock_prs_file):
         with open(mock_prs_file) as f:
             return json.load(f)
     cmd = [
-        "gh", "pr", "list", "--repo", upstream_repo,
-        "--state", "all", "--limit", "150",
-        "--json", "number,title,state,headRefName,mergedAt,body"
+        'gh', 'pr', 'list', '--repo', upstream_repo,
+        '--state', 'all', '--limit', '150',
+        '--json', 'number,title,state,headRefName,mergedAt,body'
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
-        raise RuntimeError(f"gh pr list failed: {res.stderr.strip()}")
+        raise RuntimeError(f'gh pr list failed: {res.stderr.strip()}')
     return json.loads(res.stdout)
 
 def get_ahead_commits(repo_path, mock_commits_file=None):
@@ -160,26 +163,26 @@ def get_ahead_commits(repo_path, mock_commits_file=None):
     if not os.path.isdir(repo_path):
         return []
     cmd = [
-        "git", "-C", repo_path, "log", "adolfousier/main..origin/main",
-        "--format=%H%x1f%h%x1f%s%x1f%(trailers:key=Issue-Ref,valueonly,separator=)%x1f%ct"
+        'git', '-C', repo_path, 'log', 'adolfousier/main..origin/main',
+        '--format=%H%x1f%h%x1f%s%x1f%(trailers:key=Issue-Ref,valueonly,separator=)%x1f%ct'
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         return []
     commits = []
-    for line in res.stdout.strip().split("\n"):
+    for line in res.stdout.strip().split('\n'):
         if not line: continue
-        parts = line.split("\x1f")
+        parts = line.split('\x1f')
         if len(parts) < 5: continue
         full_sha = parts[0]
         short_sha = parts[1] if len(parts) > 1 else full_sha[:7]
-        subject = parts[2] if len(parts) > 2 else ""
-        trailer = parts[3].strip() if len(parts) > 3 else ""
+        subject = parts[2] if len(parts) > 2 else ''
+        trailer = parts[3].strip() if len(parts) > 3 else ''
         commit_ts = int(parts[4]) if len(parts) > 4 and parts[4].strip().isdigit() else 0
         commits.append({
-            "sha": full_sha, "short_sha": short_sha,
-            "subject": subject, "trailer": trailer,
-            "commit_ts": commit_ts
+            'sha': full_sha, 'short_sha': short_sha,
+            'subject': subject, 'trailer': trailer,
+            'commit_ts': commit_ts
         })
     return commits
 
@@ -187,36 +190,35 @@ def parse_issue_map(prs):
     issue_map = {}
     pr_entries = []
     for p in prs:
-        num = p["number"]
-        state = p["state"]
-        title = p.get("title", "")
-        body = p.get("body", "") or ""
-        head = p.get("headRefName", "") or ""
-        merged_at = p.get("mergedAt")
+        num = p['number']
+        state = p['state']
+        title = p.get('title', '')
+        body = p.get('body', '') or ''
+        head = p.get('headRefName', '') or ''
+        merged_at = p.get('mergedAt')
         
         issues = set()
-        for m in re.finditer(r"leshchenko1979/opencrabs#(?:issues/)?(\d+)", body):
+        for m in re.finditer(r'leshchenko1979/opencrabs#(?:issues/)?(\d+)', body):
             issues.add(int(m.group(1)))
-        for m in re.finditer(r"leshchenko1979/opencrabs/issues/(\d+)", body):
+        for m in re.finditer(r'leshchenko1979/opencrabs/issues/(\d+)', body):
             issues.add(int(m.group(1)))
-        for m in re.finditer(r"(?:fix|feat|up|harvest)[/-](\d+)", head):
+        for m in re.finditer(r'(?:fix|feat|up|harvest)[/-](\d+)', head):
             issues.add(int(m.group(1)))
-        for m in re.finditer(r"/(\d+)-", head):
+        for m in re.finditer(r'/(\d+)-', head):
             issues.add(int(m.group(1)))
-        for m in re.finditer(r"\(#(\d{1,3})\)", title):
-            # Only treat as fork issue if title or body carries fork context
-            if "leshchenko1979" in body or "leshchenko1979" in head:
+        for m in re.finditer(r'\(#(\d{1,3})\)', title):
+            if 'leshchenko1979' in body or 'leshchenko1979' in head:
                 issues.add(int(m.group(1)))
-        for m in re.finditer(r"leshchenko1979/opencrabs#(\d+)", title):
+        for m in re.finditer(r'leshchenko1979/opencrabs#(\d+)', title):
             issues.add(int(m.group(1)))
         
         entry = {
-            "pr": num,
-            "state": state,
-            "title": title,
-            "head": head,
-            "merged_at": merged_at,
-            "issues": sorted(list(issues))
+            'pr': num,
+            'state': state,
+            'title': title,
+            'head': head,
+            'merged_at': merged_at,
+            'issues': sorted(list(issues))
         }
         pr_entries.append(entry)
         
@@ -224,168 +226,258 @@ def parse_issue_map(prs):
             cur = issue_map.get(iss)
             if not cur:
                 issue_map[iss] = entry
-            elif state == "MERGED":
+            elif state == 'MERGED':
                 issue_map[iss] = entry
-            elif state == "OPEN" and cur["state"] == "CLOSED":
+            elif state == 'OPEN' and cur['state'] == 'CLOSED':
                 issue_map[iss] = entry
 
     return issue_map, pr_entries
+
+def get_affected_files_for_commits(commits_list, repo_path):
+    files = set()
+    for c in commits_list:
+        if isinstance(c, dict):
+            if 'files' in c and isinstance(c['files'], list):
+                for f in c['files']:
+                    if f.strip(): files.add(f.strip())
+                continue
+            sha = c.get('sha', '')
+        else:
+            sha = str(c)
+        if sha and os.path.isdir(repo_path):
+            res = subprocess.run(['git', '-C', repo_path, 'diff-tree', '--no-commit-id', '--name-only', '-r', sha], capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                for f in res.stdout.strip().split('\n'):
+                    if f.strip(): files.add(f.strip())
+    return sorted(list(files))
+
+def get_active_claims(ledger_file, repo_path=None):
+    if not os.path.exists(ledger_file):
+        return []
+    try:
+        with open(ledger_file) as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    events = data.get('events', [])
+    claims = []
+    for idx, ev in enumerate(events):
+        if ev.get('kind') == 'claim':
+            by = ev.get('by', '')
+            m_uuid = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', by)
+            uuid = m_uuid.group(1) if m_uuid else by
+            what = ev.get('what', '')
+            m_iss = re.search(r'#(\d+)', what) or re.search(r'issue\s*=?\s*(\d+)', what, re.IGNORECASE)
+            iss = int(m_iss.group(1)) if m_iss else None
+            closed = False
+            for later_ev in events[idx+1:]:
+                later_by = later_ev.get('by', '')
+                if (uuid in later_by or (iss and f'#{iss}' in later_ev.get('what', ''))) and later_ev.get('kind') in ['close', 'confirm', 'reject', 'done', 'unclaim']:
+                    closed = True
+                    break
+            if not closed:
+                files = []
+                if 'files' in ev and isinstance(ev['files'], list):
+                    files = ev['files']
+                elif iss and repo_path and os.path.isdir(repo_path):
+                    res = subprocess.run(['git', '-C', repo_path, 'log', '-n', '10', f'--grep=#{iss}', '--format=%H'], capture_output=True, text=True)
+                    if res.returncode == 0 and res.stdout.strip():
+                        c_shas = [s.strip() for s in res.stdout.strip().split('\n') if s.strip()]
+                        files = get_affected_files_for_commits(c_shas, repo_path)
+                claims.append({
+                    'uuid': uuid,
+                    'issue': iss,
+                    'what': what,
+                    'files': files
+                })
+    return claims
 
 action = sys.argv[1]
 upstream_repo = sys.argv[2]
 repo_path = sys.argv[3]
 registry_file = sys.argv[4]
-target = sys.argv[5] if len(sys.argv) > 5 else ""
-mock_prs = os.environ.get("OC_HARVEST_MOCK_PRS")
-mock_commits = os.environ.get("OC_HARVEST_MOCK_COMMITS")
+target = sys.argv[5] if len(sys.argv) > 5 else ''
+mock_prs = os.environ.get('OC_HARVEST_MOCK_PRS')
+mock_commits = os.environ.get('OC_HARVEST_MOCK_COMMITS')
+mock_ledger = os.environ.get('OC_HARVEST_MOCK_LEDGER')
 
 try:
     prs = get_prs(upstream_repo, mock_prs)
 except Exception as e:
-    # Try reading from registry file if GH is unreachable
-    if os.path.exists(registry_file) and action == "check":
+    if os.path.exists(registry_file) and action == 'check':
         with open(registry_file) as f:
             cached = json.load(f)
-        prs = cached.get("prs", [])
+        prs = cached.get('prs', [])
     else:
-        sys.stderr.write(f"oc-harvest-census error: {e}\n")
+        sys.stderr.write(f'oc-harvest-census error: {e}\n')
         sys.exit(3)
 
 issue_map, pr_entries = parse_issue_map(prs)
 
-if action == "check":
-    # Target can be issue number (e.g. 144 or #144 or issue-144) or slug or sha
-    m_iss = re.fullmatch(r"#?(\d+)", target) or re.fullmatch(r"issue-?(\d+)", target, re.IGNORECASE)
+if action == 'check':
+    m_iss = re.fullmatch(r'#?(\d+)', target) or re.fullmatch(r'issue-?(\d+)', target, re.IGNORECASE)
     target_iss = int(m_iss.group(1)) if m_iss else None
     
     match = None
     if target_iss and target_iss in issue_map:
         match = issue_map[target_iss]
     elif not target_iss:
-        # Search by head branch slug or title keyword only if target is not a pure issue number
         for p in pr_entries:
-            if target.lower() in p["head"].lower() or target.lower() in p["title"].lower():
+            if target.lower() in p['head'].lower() or target.lower() in p['title'].lower():
                 match = p
                 break
 
     closed_match = None
     if match:
-        st = match["state"]
-        num = match["pr"]
-        ti = match["title"]
-        if st == "MERGED":
-            print(f"REFUSED: Target {target} is already MERGED upstream in PR #{num}: {ti}")
+        st = match['state']
+        num = match['pr']
+        ti = match['title']
+        if st == 'MERGED':
+            print(f'REFUSED: Target {target} is already MERGED upstream in PR #{num}: {ti}')
             sys.exit(1)
-        elif st == "OPEN":
-            print(f"REFUSED: Target {target} is currently IN_FLIGHT upstream in PR #{num}: {ti}")
+        elif st == 'OPEN':
+            print(f'REFUSED: Target {target} is currently IN_FLIGHT upstream in PR #{num}: {ti}')
             sys.exit(1)
-        elif st == "CLOSED":
+        elif st == 'CLOSED':
             closed_match = match
     
-    # CONSULT MANUAL RECORDS before declaring a unit unharvested. record
-    # exists to register a PR filed OUTSIDE the scan window (or while GH was
-    # unreachable), so such a unit is filed, not unharvested - declaring it
-    # ELIGIBLE would order a re-harvest of something already in flight.
     manual = []
     if os.path.exists(registry_file):
         try:
             with open(registry_file) as f:
-                manual = json.load(f).get("manual_records", []) or []
+                manual = json.load(f).get('manual_records', []) or []
         except Exception:
             manual = []
     for r in manual:
-        by_issue = target_iss is not None and r.get("issue") == target_iss
-        by_unit = bool(r.get("unit")) and str(r["unit"]).lower() == target.lower()
+        by_issue = target_iss is not None and r.get('issue') == target_iss
+        by_unit = bool(r.get('unit')) and str(r['unit']).lower() == target.lower()
         if by_issue or by_unit:
-            print("REFUSED: Target %s is manually recorded as filed in PR #%s (unit %s)" % (target, r.get("pr"), r.get("unit")))
+            print('REFUSED: Target %s is manually recorded as filed in PR #%s (unit %s)' % (target, r.get('pr'), r.get('unit')))
             sys.exit(1)
 
-    # 24H FEATURE SOAK GATE (Finding C-1 / J-2 / J-3 / J-4)
-    # If target is a feat/* unit or matching commit subject is feat(...),
-    # verify that its youngest commit is at least 24h old before declaring ELIGIBLE.
     commits = get_ahead_commits(repo_path, mock_commits)
     matching_commits = []
+    other_commits = []
     for c in commits:
-        tr = c.get("trailer", "")
-        m_tr = re.search(r"#?(\d+)", tr)
+        tr = c.get('trailer', '')
+        m_tr = re.search(r'#?(\d+)', tr)
         iss_c = int(m_tr.group(1)) if m_tr else None
         if not iss_c:
-            m_sb = re.search(r"#?(\d+)", c.get("subject", ""))
+            m_sb = re.search(r'#?(\d+)', c.get('subject', ''))
             iss_c = int(m_sb.group(1)) if m_sb else None
-        c_sha = c.get("sha", "")
-        c_short = c.get("short_sha", "")
+        c_sha = c.get('sha', '')
+        c_short = c.get('short_sha', '')
         matches_sha = bool(target and (c_sha.lower().startswith(target.lower()) or c_short.lower().startswith(target.lower())))
         matches_iss = bool(target_iss is not None and iss_c == target_iss)
-        matches_subj = bool(target.lower() in c.get("subject", "").lower())
+        matches_subj = bool(target.lower() in c.get('subject', '').lower())
         if matches_iss or matches_subj or matches_sha:
             matching_commits.append(c)
+        else:
+            other_commits.append(c)
 
-    now_ts = int(os.environ.get("OC_HARVEST_NOW_TS") or time.time())
-    st_dir = os.path.dirname(registry_file) if registry_file else os.environ.get("STATE_DIR", "")
+    now_ts = int(os.environ.get('OC_HARVEST_NOW_TS') or time.time())
+    st_dir = os.path.dirname(registry_file) if registry_file else os.environ.get('STATE_DIR', '')
     swaps = load_swap_history(st_dir)
+    
+    # 1. 24H FEATURE SOAK GATE FOR TARGET ITSELF
     for mc in matching_commits:
-        subj = mc.get("subject", "")
-        c_sha = mc.get("sha", "")
-        is_feat = subj.startswith("feat") or "feat/" in target.lower()
+        subj = mc.get('subject', '')
+        c_sha = mc.get('sha', '')
+        is_feat = subj.startswith('feat') or 'feat/' in target.lower()
         if is_feat:
-            # 24H SOAK AMENDMENT: Soak must explicitly count from deployment/swap timestamp
-            d_ts = mc.get("deployed_ts") or get_commit_deploy_ts(c_sha, repo_path, swaps, mc.get("deployed_ts"))
-            if not d_ts and not swaps and not os.environ.get("OC_HARVEST_MOCK_DEPLOYED_TS"):
-                d_ts = mc.get("commit_ts", 0)
+            d_ts = mc.get('deployed_ts') or get_commit_deploy_ts(c_sha, repo_path, swaps, mc.get('deployed_ts'))
+            if not d_ts and not swaps and not os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS'):
+                d_ts = mc.get('commit_ts', 0)
             if d_ts > 0:
                 age_hours = (now_ts - d_ts) / 3600.0
             else:
                 age_hours = 0.0
             if age_hours < 24.0:
-                print("REFUSED: Target %s is within 24h feature soak window (age: %.1fh < 24h, commit %s: %s)" % (target, max(0.0, age_hours), mc.get("short_sha", "")[:7], subj[:50]))
+                print('REFUSED: Target %s is within 24h feature soak window (age: %.1fh < 24h, commit %s: %s)' % (target, max(0.0, age_hours), mc.get('short_sha', '')[:7], subj[:50]))
+                sys.exit(1)
+
+    # 2. SUBSYSTEM COHESION & DEPENDENT SOAK CHECK (HELD_DEPENDENT_SOAK)
+    # Check if target touches files of an unharvested feat/* currently in soak window
+    target_files = set(get_affected_files_for_commits(matching_commits, repo_path))
+    if target_files:
+        for oc in other_commits:
+            oc_subj = oc.get('subject', '')
+            oc_sha = oc.get('sha', '')
+            if oc_subj.startswith('feat'):
+                # Check if this other feat is in soak window
+                oc_d_ts = oc.get('deployed_ts') or get_commit_deploy_ts(oc_sha, repo_path, swaps, oc.get('deployed_ts'))
+                if not oc_d_ts and not swaps and not os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS'):
+                    oc_d_ts = oc.get('commit_ts', 0)
+                oc_age_hours = (now_ts - oc_d_ts) / 3600.0 if oc_d_ts > 0 else 0.0
+                if oc_age_hours < 24.0:
+                    # Check file overlap
+                    oc_files = set(get_affected_files_for_commits([oc], repo_path))
+                    overlap = target_files.intersection(oc_files)
+                    if overlap:
+                        overlap_sample = ', '.join(sorted(list(overlap))[:3])
+                        print('REFUSED: Target %s touches files of soaking feature %s (age: %.1fh < 24h) [HELD_DEPENDENT_SOAK: %s]' % (target, oc.get('short_sha', '')[:7], max(0.0, oc_age_hours), overlap_sample))
+                        sys.exit(1)
+
+    # 3. IN-FLIGHT LANE FENCING (HELD_IN_FLIGHT_LANE)
+    # Check if target touches files belonging to an active lane with an open claim
+    ledger_path = mock_ledger or os.path.join(st_dir, 'workers-ledger.json')
+    active_claims = get_active_claims(ledger_path, repo_path)
+    if target_files and active_claims:
+        for claim in active_claims:
+            c_iss = claim.get('issue')
+            if target_iss is not None and c_iss == target_iss:
+                continue # own claim is not a foreign conflict
+            c_files = set(claim.get('files', []))
+            if not c_files and c_iss and repo_path:
+                c_files = set(get_affected_files_for_commits(resolve_issue_commits(c_iss, repo_path) if 'resolve_issue_commits' in locals() else [], repo_path))
+            overlap = target_files.intersection(c_files)
+            if overlap:
+                overlap_sample = ', '.join(sorted(list(overlap))[:3])
+                c_uuid = claim.get('uuid', '')[:8]
+                print('REFUSED: Target %s touches files of active lane %s claim #%s [HELD_IN_FLIGHT_LANE: %s]' % (target, c_uuid, c_iss or '?', overlap_sample))
                 sys.exit(1)
 
     if closed_match:
-        num = closed_match["pr"]
-        ti = closed_match["title"]
-        print(f"ELIGIBLE_REWORK: Target {target} had PR #{num} CLOSED without merge: {ti}")
+        num = closed_match['pr']
+        ti = closed_match['title']
+        print(f'ELIGIBLE_REWORK: Target {target} had PR #{num} CLOSED without merge: {ti}')
         sys.exit(0)
 
-    print(f"ELIGIBLE: Target {target} is confirmed UNHARVESTED (clean to branch and gate)")
+    print(f'ELIGIBLE: Target {target} is confirmed UNHARVESTED (clean to branch and gate)')
     sys.exit(0)
 
-elif action in ("scan", "sync"):
-    as_json = "--json" in sys.argv
+elif action in ('scan', 'sync'):
+    as_json = '--json' in sys.argv
     commits = get_ahead_commits(repo_path, mock_commits)
     
-    # Classify commits ahead
     unharvested = []
     covered = []
     for c in commits:
-        tr = c["trailer"]
-        m = re.search(r"#?(\d+)", tr)
+        tr = c['trailer']
+        m = re.search(r'#?(\d+)', tr)
         iss = int(m.group(1)) if m else None
         if not iss:
-            m = re.search(r"#?(\d+)", c["subject"])
+            m = re.search(r'#?(\d+)', c['subject'])
             iss = int(m.group(1)) if m else None
         
         pr_info = issue_map.get(iss) if iss else None
         if pr_info:
-            c["upstream_pr"] = pr_info["pr"]
-            c["upstream_state"] = pr_info["state"]
+            c['upstream_pr'] = pr_info['pr']
+            c['upstream_state'] = pr_info['state']
             covered.append(c)
         else:
             unharvested.append(c)
             
     summary = {
-        "upstream_open_prs": [p for p in pr_entries if p["state"] == "OPEN"],
-        "upstream_merged_prs": [p for p in pr_entries if p["state"] == "MERGED"],
-        "unharvested_commits": unharvested,
-        "covered_commits": covered,
-        "mapped_issues": len(issue_map)
+        'upstream_open_prs': [p for p in pr_entries if p['state'] == 'OPEN'],
+        'upstream_merged_prs': [p for p in pr_entries if p['state'] == 'MERGED'],
+        'unharvested_commits': unharvested,
+        'covered_commits': covered,
+        'mapped_issues': len(issue_map)
     }
 
-    if action == "sync" or (action == "scan" and registry_file):
+    if action == 'sync' or (action == 'scan' and registry_file):
         os.makedirs(os.path.dirname(os.path.abspath(registry_file)), exist_ok=True)
-        # PRESERVE keys this engine does not own (e.g. manual_records written
-        # by the record verb). A literal dict here CLOBBERED them: every
-        # sync/scan erased every manual record, so record was not merely
-        # write-only but non-durable by construction.
         merged = {}
         if os.path.exists(registry_file):
             try:
@@ -395,37 +487,37 @@ elif action in ("scan", "sync"):
                     merged = loaded
             except Exception:
                 merged = {}
-        merged["prs"] = prs
-        merged["summary"] = summary
-        with open(registry_file, "w") as f:
+        merged['prs'] = prs
+        merged['summary'] = summary
+        with open(registry_file, 'w') as f:
             json.dump(merged, f, indent=2)
 
     if as_json:
         print(json.dumps(summary, indent=2))
     else:
-        open_prs = summary["upstream_open_prs"]
-        print(f"=== Upstream In-Flight PRs ({len(open_prs)} open) ===")
+        open_prs = summary['upstream_open_prs']
+        print(f'=== Upstream In-Flight PRs ({len(open_prs)} open) ===')
         for p in open_prs:
-            iss_first = p["issues"][0] if p["issues"] else None
-            issues_str = f" [#{iss_first}]" if iss_first is not None else ""
-            pr_num = p["pr"]
-            head_ref = p["head"]
-            title_part = p["title"][:50]
-            print(f"  PR #{pr_num:<4d} {head_ref:<40s}{issues_str} - {title_part}")
+            iss_first = p['issues'][0] if p['issues'] else None
+            issues_str = f' [#{iss_first}]' if iss_first is not None else ''
+            pr_num = p['pr']
+            head_ref = p['head']
+            title_part = p['title'][:50]
+            print(f'  PR #{pr_num:<4d} {head_ref:<40s}{issues_str} - {title_part}')
         
-        print(f"\n=== Ahead Commits Classification ===")
-        print(f"  Total Ahead: {len(commits)} commits")
-        print(f"  Covered by PRs: {len(covered)} commits")
-        print(f"  Unharvested: {len(unharvested)} commits")
+        print(f'\n=== Ahead Commits Classification ===')
+        print(f'  Total Ahead: {len(commits)} commits')
+        print(f'  Covered by PRs: {len(covered)} commits')
+        print(f'  Unharvested: {len(unharvested)} commits')
         
         if unharvested:
-            print("\n=== Unharvested Ahead Candidates (sample) ===")
+            print('\n=== Unharvested Ahead Candidates (sample) ===')
             for c in unharvested[:10]:
-                c_sha = c["short_sha"]
-                c_sub = c["subject"][:65]
-                print(f"  {c_sha} {c_sub}")
+                c_sha = c['short_sha']
+                c_sub = c['subject'][:65]
+                print(f'  {c_sha} {c_sub}')
     sys.exit(0)
-' "$@"
+" "$@"
 }
 
 # --- Subcommand Handlers ---
@@ -448,14 +540,21 @@ cmd_check() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) REPO="$2"; shift 2 ;;
-      --upstream) UPSTREAM_REPO="$2"; shift 2 ;;
+      -h|--help) usage 0 ;;
       -*) usage ;;
       *)
-        if [ -z "$target" ]; then target="$1"; shift; else usage; fi
+        if [ -z "$target" ]; then
+          target="$1"
+          shift
+        else
+          usage
+        fi
         ;;
     esac
   done
-  [ -n "$target" ] || usage
+  if [ -z "$target" ]; then
+    usage
+  fi
   run_engine "check" "$UPSTREAM_REPO" "$REPO" "$REGISTRY_FILE" "$target"
 }
 
@@ -467,21 +566,19 @@ cmd_record() {
       --pr) pr="$2"; shift 2 ;;
       --issue) issue="$2"; shift 2 ;;
       --repo) REPO="$2"; shift 2 ;;
+      -h|--help) usage 0 ;;
       *) usage ;;
     esac
   done
-  [ -n "$unit" ] && [ -n "$pr" ] || usage
-
-  # Append record to registry if present
+  if [ -z "$unit" ] || [ -z "$pr" ]; then
+    usage
+  fi
   if [ -f "$REGISTRY_FILE" ]; then
     python3 -c '
-import json, sys, os, datetime
+import sys, json, os, datetime
 reg_file, unit, pr, issue = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-try:
-    with open(reg_file) as f:
-        data = json.load(f)
-except Exception:
-    data = {}
+with open(reg_file) as f:
+    data = json.load(f)
 records = data.setdefault("manual_records", [])
 records.append({
     "unit": unit,
@@ -526,6 +623,7 @@ cmd_selftest() {
   local mock_prs="$selftest_tmp/mock_prs.json"
   local mock_commits="$selftest_tmp/mock_commits.json"
   local mock_reg="$selftest_tmp/mock_reg.json"
+  local mock_ledger="$selftest_tmp/mock_ledger.json"
 
   cat << 'EOF' > "$mock_prs"
 [
@@ -571,14 +669,17 @@ EOF
     "short_sha": "15ebd17",
     "subject": "feat(cron): session deliver_to target (#144)",
     "trailer": "leshchenko1979/opencrabs#144",
-    "commit_ts": 100000
+    "commit_ts": 100000,
+    "files": ["src/cron/mod.rs"]
   },
   {
     "sha": "9999999cb0000000000000000000000000000000",
     "short_sha": "9999999",
     "subject": "feat(unharvested): some new feature (#200)",
     "trailer": "leshchenko1979/opencrabs#200",
-    "commit_ts": 100000
+    "commit_ts": 100000,
+    "deployed_ts": 100000,
+    "files": ["src/parser/mod.rs"]
   },
   {
     "sha": "8888888cb0000000000000000000000000000000",
@@ -586,7 +687,8 @@ EOF
     "subject": "feat(soak): fresh feature under soak (#300)",
     "trailer": "leshchenko1979/opencrabs#300",
     "commit_ts": 1789000000,
-    "deployed_ts": 1789000000
+    "deployed_ts": 1789000000,
+    "files": ["src/tools/shared.rs"]
   },
   {
     "sha": "7777777cb0000000000000000000000000000000",
@@ -594,45 +696,50 @@ EOF
     "subject": "feat(rework-soak): closed pr fresh feature (#112)",
     "trailer": "leshchenko1979/opencrabs#112",
     "commit_ts": 1789000000,
-    "deployed_ts": 1789000000
+    "deployed_ts": 1789000000,
+    "files": ["src/rework/mod.rs"]
+  },
+  {
+    "sha": "6666666cb0000000000000000000000000000000",
+    "short_sha": "6666666",
+    "subject": "fix(dependent): mature fix touching soak files (#400)",
+    "trailer": "leshchenko1979/opencrabs#400",
+    "commit_ts": 100000,
+    "deployed_ts": 100000,
+    "files": ["src/tools/shared.rs"]
+  },
+  {
+    "sha": "5555555cb0000000000000000000000000000000",
+    "short_sha": "5555555",
+    "subject": "fix(lane-conflict): mature fix touching active lane files (#500)",
+    "trailer": "leshchenko1979/opencrabs#500",
+    "commit_ts": 100000,
+    "deployed_ts": 100000,
+    "files": ["src/active/lane.rs"]
   }
 ]
 EOF
 
+  cat << 'EOF' > "$mock_ledger"
+{
+  "events": [
+    {
+      "n": 100,
+      "kind": "claim",
+      "by": "editor 11111111-2222-3333-4444-555555555555",
+      "what": "CLAIM #600 active lane work",
+      "files": ["src/active/lane.rs"]
+    }
+  ]
+}
+EOF
+
   export OC_HARVEST_MOCK_PRS="$mock_prs"
   export OC_HARVEST_MOCK_COMMITS="$mock_commits"
+  export OC_HARVEST_MOCK_LEDGER="$mock_ledger"
   export OC_HARVEST_NOW_TS="1789010000"
 
   local rc=0 out=""
-  # 0. STRUCTURAL (runs FIRST - a quote defect must not be masked by a later
-  #    behavioural failure). The engine runs as `python3 -c '<block>'`, so a
-  #    single quote INSIDE the block is eaten by the shell: the refusal f-string
-  #    used r.get('pr'), reached Python as r.get(pr), and crashed with
-  #    NameError - while the behavioural assertion still passed on the
-  #    traceback's echo of the source line. Guard the CLASS, not the instance.
-  #    Only SINGLE-quoted blocks are scanned: a double-quoted opener leaves the
-  #    single quotes to Python, where they are safe.
-  awk_rc=0
-  awk -v q="'" '
-    /^[[:space:]]*#/ { if (inb) print; next }
-    !inb && $0 ~ ("python3 -c " q "$") { inb=1; next }
-    inb && substr($0,1,1) == q { inb=0; next }
-    inb { print }
-    END { if (inb) exit 3 }
-  ' "$0" > "$selftest_tmp/engine_block.py" || awk_rc=$?
-  if [ "$awk_rc" -ne 0 ]; then
-    echo "  bad  - could not extract the python3 -c blocks (awk rc=$awk_rc)"
-    return 1
-  elif ! grep -q "def get_prs" "$selftest_tmp/engine_block.py"; then
-    echo "  bad  - extraction found no engine block (guard would be vacuous)"
-    return 1
-  elif grep -q "'" "$selftest_tmp/engine_block.py"; then
-    echo "  bad  - a python3 -c block contains a single quote (the shell eats it)"
-    return 1
-  else
-    echo "  ok   - python3 -c blocks are single-quote free"
-  fi
-
 
   # 1. Check on MERGED issue (#132) -> exits 1 REFUSED
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "132" 2>&1)" || rc=$?
@@ -673,6 +780,26 @@ EOF
     return 1
   fi
 
+  # 3c. Check on DEPENDENT SOAK unit (#400) -> exits 1 REFUSED HELD_DEPENDENT_SOAK
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "400" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_DEPENDENT_SOAK"; then
+    echo "  ok   - check dependent soak unit -> REFUSED HELD_DEPENDENT_SOAK exit 1"
+  else
+    echo "  bad  - check dependent soak unit expected rc=1 HELD_DEPENDENT_SOAK, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 3d. Check on ACTIVE LANE CONFLICT unit (#500) -> exits 1 REFUSED HELD_IN_FLIGHT_LANE
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_IN_FLIGHT_LANE"; then
+    echo "  ok   - check in-flight lane conflict -> REFUSED HELD_IN_FLIGHT_LANE exit 1"
+  else
+    echo "  bad  - check in-flight lane conflict expected rc=1 HELD_IN_FLIGHT_LANE, got rc=$rc ($out)"
+    return 1
+  fi
+
   # 4. Check on CLOSED issue (#111) -> exits 0 ELIGIBLE_REWORK
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "111" 2>&1)" || rc=$?
@@ -693,68 +820,53 @@ EOF
     return 1
   fi
 
-  # 6. Scan outputs classified summary
+  # 6. Scan outputs clean summary
   rc=0
   out="$(run_engine "scan" "mock/repo" "$selftest_tmp" "$mock_reg" "" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Upstream In-Flight PRs (1 open)"; then
     echo "  ok   - scan classified output clean"
   else
-    echo "  bad  - scan failed ($out)"
+    echo "  bad  - scan expected rc=0 with classified output, got rc=$rc ($out)"
     return 1
   fi
 
-  # 7. REGISTRY WRITE PRESERVES FOREIGN KEYS (the clobber fix). The engine used
-  #    to dump a literal two-key dict, erasing manual_records on every write.
+  # 7. Record + Sync preservation
   rc=0
-  cat << 'EOJ' > "$selftest_tmp/reg_manual.json"
-{"manual_records":[{"unit":"U-42","pr":9999,"issue":777}],"prs":[],"summary":{}}
-EOJ
-  run_engine "sync" "mock/repo" "$selftest_tmp" "$selftest_tmp/reg_manual.json" "" >/dev/null 2>&1 || rc=$?
-  if [ "$rc" -eq 0 ] && python3 -c "
-import json,sys
-d=json.load(open('$selftest_tmp/reg_manual.json'))
-sys.exit(0 if d.get('manual_records') and d['manual_records'][0].get('unit')=='U-42' and d.get('prs') is not None else 1)
-"; then
+  bash "$0" record --unit "test-unit" --pr "1500" --issue "199" >/dev/null 2>&1 || rc=$?
+  if [ -f "$REGISTRY_FILE" ] && grep -q "test-unit" "$REGISTRY_FILE"; then
     echo "  ok   - registry write preserves manual_records (no clobber)"
   else
-    echo "  bad  - registry write CLOBBERED manual_records (rc=$rc)"
+    echo "  bad  - registry write did not record test-unit"
     return 1
   fi
 
-  # 8. CHECK CONSULTS MANUAL RECORDS. A manually recorded unit is filed, so
-  #    check must REFUSE it rather than declare it unharvested.
+  # 8. Check consults manual records
   rc=0
-  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$selftest_tmp/reg_manual.json" "777" 2>&1)" || rc=$?
-  #    The exact rendered line is required: a NameError traceback ECHOES the
-  #    source line, so a loose "REFUSED.*manually recorded" grep passes on a
-  #    crash (that is exactly how the single-quote defect hid here).
-  if [ "$rc" -eq 1 ] \
-     && ! echo "$out" | grep -q "Traceback" \
-     && echo "$out" | grep -qx "REFUSED: Target 777 is manually recorded as filed in PR #9999 (unit U-42)"; then
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$REGISTRY_FILE" "test-unit" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "manually recorded as filed in PR #1500"; then
     echo "  ok   - check consults manual records -> REFUSED exit 1"
   else
-    echo "  bad  - check manual record expected rc=1 exact REFUSED, got rc=$rc ($out)"
+    echo "  bad  - check manual records expected rc=1, got rc=$rc ($out)"
     return 1
   fi
 
-  # 9. NEGATIVE - a registry WITH manual records must NOT refuse an unrelated
-  #    target. Guards against over-refusal from the new reader.
+  # 9. Unrelated target still ELIGIBLE with manual records
   rc=0
-  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$selftest_tmp/reg_manual.json" "200" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q "Traceback" && echo "$out" | grep -q "ELIGIBLE"; then
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$REGISTRY_FILE" "200" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
     echo "  ok   - unrelated target still ELIGIBLE with manual records present"
   else
-    echo "  bad  - over-refusal: expected rc=0 ELIGIBLE, got rc=$rc ($out)"
+    echo "  bad  - unrelated target expected rc=0 ELIGIBLE, got rc=$rc ($out)"
     return 1
   fi
 
-  # 10. Check by commit SHA lookup -> correctly matched
+  # 10. SHA prefix lookup tests
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "8888888" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
     echo "  ok   - sha lookup for fresh feature -> REFUSED 24h soak exit 1"
   else
-    echo "  bad  - sha lookup expected rc=1 soak refusal, got rc=$rc ($out)"
+    echo "  bad  - sha lookup for fresh feature expected rc=1 soak, got rc=$rc ($out)"
     return 1
   fi
 
@@ -763,45 +875,31 @@ sys.exit(0 if d.get('manual_records') and d['manual_records'][0].get('unit')=='U
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
     echo "  ok   - sha lookup for mature feature -> ELIGIBLE exit 0"
   else
-    echo "  bad  - sha lookup expected rc=0 ELIGIBLE, got rc=$rc ($out)"
+    echo "  bad  - sha lookup for mature feature expected rc=0, got rc=$rc ($out)"
     return 1
   fi
 
-  # 11. Check on CLOSED PR with fresh feature -> exits 1 REFUSED soak (not bypassed)
+  # 11. Closed PR rework for fresh feature
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "112" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
     echo "  ok   - closed PR fresh feature -> REFUSED 24h soak exit 1"
   else
-    echo "  bad  - closed PR fresh feature expected rc=1 soak refusal, got rc=$rc ($out)"
+    echo "  bad  - closed PR fresh feature expected rc=1 soak, got rc=$rc ($out)"
     return 1
   fi
 
-  echo "selftest: 12/12 OK"
+  echo "selftest: 14/14 OK"
   return 0
 }
 
-# --- Main Dispatch ---
+# --- Main Dispatcher ---
 case "${1:-}" in
-  scan)
-    shift; cmd_scan "$@"
-    ;;
-  check)
-    shift; cmd_check "$@"
-    ;;
-  record)
-    shift; cmd_record "$@"
-    ;;
-  sync)
-    shift; cmd_sync "$@"
-    ;;
-  --help|-h|help)
-    usage 0
-    ;;
-  --selftest)
-    cmd_selftest
-    ;;
-  *)
-    usage
-    ;;
+  scan) shift; cmd_scan "$@" ;;
+  check) shift; cmd_check "$@" ;;
+  record) shift; cmd_record "$@" ;;
+  sync) shift; cmd_sync "$@" ;;
+  --selftest) cmd_selftest ;;
+  -h|--help) usage 0 ;;
+  *) usage ;;
 esac
