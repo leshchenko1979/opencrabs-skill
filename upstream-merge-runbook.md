@@ -37,8 +37,7 @@ per-commit at replay time.
 | **Owner** | semantic-pair overrides |
 
 ## Process
-
-1. **Step 0 — ROSTER GATE (blocking; nothing else starts first)**.
+1. **Step 0 — FREEZE & ROSTER GATE (blocking; nothing else starts first)**.
    **The freeze list IS the roster.** Derive it with a tool; never assemble it by
    hand from a stale registry.
    - `tools/oc-roster live` — the DERIVED in-progress roster, joining four
@@ -49,16 +48,18 @@ per-commit at replay time.
    - A claim author whose uuid the session DB has never seen is reported as a
      **PHANTOM** and excluded from the roster — a hand-assembled id can never
      enter a freeze list.
-   - Any **ACTIVE** lane whose work is in flight is paused and its branch migrated
-     (Process step 7), or the sync is a roster defect and returns here.
-   - **Checkable criterion:** `tools/oc-roster classify | grep '^ACTIVE' | wc -l` reports 0
-     active unpaused workers before proceeding to Step 2. Record the pre-sync sha in the
-     ledger BEFORE any force-push; it is the rollback point.
+   - **Carrier chain check**: Ensure no carrier build, deploy chain, or `oc-ship-chain` is
+     actively running (`oc-deploy status`, no `SHIP-LOCK`).
+   - **Fork-main push freeze**: Enforce the freeze on pushing/fast-forwarding to fork `main`.
+     Active editor lanes continue in their worktrees, but fork `main` merges are paused
+     until sync cutover (Step 7 migrates any pending lane branches).
+   - **Pre-sync snapshot**: Record the pre-sync fork `main` SHA in the ledger BEFORE any
+     force-push; it is the rollback point.
    - **Role resolution is NOT `oc-roster`.** Use
      `oc-ledger roster --live --role <role>`. `oc-roster`'s `--role` flag is
      accepted and silently ignored (rc 0, no stderr, unfiltered output) — pointing
      role resolution at it breaks dispatch fleet-wide.
-   - **`DONE = tools/oc-roster classify | grep '^ACTIVE' | wc -l` returns 0 and pre-sync rollback SHA is recorded in ledger.**
+   - **`DONE = Carrier deploy chain is idle, fork main push freeze is active, and pre-sync rollback SHA is recorded in ledger.`**
 2. Branch `sync/upstream-YYYYMMDD` off `origin/main`.
    - **`DONE = sync/upstream-YYYYMMDD branch created off origin/main.`**
 3. `git rebase adolfousier/main` — **rebase, not merge.** Commits upstream has
@@ -92,20 +93,19 @@ per-commit at replay time.
    three real branches that read 121 / 105 / 120 where the true pending counts
    were 2 / 0 / 1. **Test the target range first:**
    ```bash
-   # 0. is ANY of this branch's work genuinely pending? patch-id, NOT ancestry
-   git cherry origin/main <lane-branch> | grep -c '^+'   # 0 -> absorbed, SKIP (pointer move)
+   # 0. is ANY of this branch's unique work genuinely pending? Check the lane's own commits above its base:
+   LANE_COMMITS="$(git log --oneline <old-base>..<lane-branch> | awk '{print $1}')"
+   # If LANE_COMMITS is empty -> 0 unique commits, SKIP (pointer move only)
+   # If non-empty, check per-commit cherry markers against the target base:
+   git cherry origin/main <lane-branch> | grep -Ff <(echo "$LANE_COMMITS") | grep -c '^+' # 0 -> absorbed, SKIP
    # 1. how much of this branch is NOT already in the new base?
    git rev-list --count origin/main..<lane-branch>     # 0 -> absorbed, see below
    # 2. cut at the PARENT of the oldest of THAT range
    CUT="$(git rev-list --reverse origin/main..<lane-branch> | head -1)^"
    git rebase --onto origin/main "$CUT" <lane-branch>
    ```
-   **Zero-pending case — the patch-id test (step 0) comes FIRST, and it is not optional (proposal n=4067, v0.4.170).**
-   Do not rely solely on `git rev-list --count`: a branch sitting on an older synthesized base will report a non-zero count even when all commits are already absorbed. Always test `git cherry origin/main <lane-branch> | grep -c '^+'`. If `+` count is 0, the branch is fully absorbed post-synthesis — skip rebase and fast-forward/move pointer directly. Furthermore, `rev-list --reverse … | head -1` on an EMPTY range yields nothing, so `CUT`
-   becomes the bare `^`, and `git rev-parse "^"` is **rc 128** (`fatal: ambiguous
-   argument '^'`). A count of 0 means the branch is already fully contained in
-   the new base: there is nothing to replay, so **skip the rebase** (or move the
-   pointer) rather than deriving a cut. Lane `2fbfb2f8` (2026-09-11, #132) hit
+   **Zero-pending case — the semantic patch-id test (step 0) comes FIRST, and it is not optional (proposal n=4067, v0.4.170).**
+   Do not rely on an aggregate `git cherry ... | grep -c '^+'` without scoping to the lane's unique commits: after an interactive rebase with conflict resolutions, divergence in common ancestor history shifts patch-ids and produces aggregate false-positives. Always test the lane's specific commits against the new base. If `+` count for the lane's own commits is 0, the branch is fully absorbed post-synthesis — skip rebase and fast-forward/move pointer directly. Furthermore, `rev-list --reverse … | head -1` on an EMPTY range yields nothing, so `CUT`
    this: `299d1c72` had 0 pending, the derivation yielded `^`, and the old-sha
    fallback did not apply either.
    **Second skip case — a STALE POINTER on a re-synthesized base (step 0's

@@ -1,5 +1,11 @@
 # Changelog — opencrabs-dev
 
+## v0.4.194 (2026-09-17)
+
+### Upstream Merge Runbook Step 0 & Step 7 Fixes
+- **Freeze & Roster Gate Invariant (`upstream-merge-runbook.md §Process Step 0`)**: Replaced unsatisfiable `0 ACTIVE` session criterion with the true operational invariants: carrier deploy chain is idle (`oc-deploy status`, no `SHIP-LOCK`), fork-main push freeze is active, and pre-sync rollback SHA is recorded in the ledger. Active editor lanes continue in their worktrees while fork-main merges are held until cutover.
+- **Semantic Cherry Check Formula (`upstream-merge-runbook.md §Process Step 7`)**: Fixed Step 7 cherry-marker check formula to inspect the lane's specific commits above its base (`git log --oneline <old-base>..<lane-branch>`) before running `git cherry`, preventing aggregate false positives caused by common ancestor patch-id divergence after multi-commit conflict resolutions.
+
 ## v0.4.193 (2026-09-17)
 
 ### Duty 4+6 Review Cycle 20260916-c20 Master Codification
