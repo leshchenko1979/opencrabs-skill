@@ -1,5 +1,12 @@
 # Changelog — opencrabs-dev
 
+## v0.4.199 (2026-09-17)
+
+### Automatic Claim Closure on Smoke PASS (oc-smoke -> oc-ledger done)
+- **Automatic Ledger Closure on Smoke PASS (Owner Order 2026-09-17, Toolsmith commit 2dedf9e1, `fleet-directives.md`, `editor.md`, `SKILL.md`, `tools/RC-CONTRACT.md`)**:
+  - Codified the automatic ledger closure mechanism in `tools/oc-smoke`: upon recording a verdict of `PASS` (lineage, identity, CI gate, and behavioral execution verified), `oc-smoke` automatically executes `oc-ledger stamp done "smoke PASS verified for issue #<issue>"` (unless suppressed via `--no-ledger`).
+  - Mechanically closes the worker's in-flight claim in `workers-ledger.json`, eliminating claim drift and immediately unblocking `oc-harvest-census` and Triage intake without requiring a manual trailing stamp from the editor lane.
+
 ## v0.4.198 (2026-09-17)
 
 ### Upstream Harvest Quality Gates, Narrative Verification & Cross-Boundary Tests

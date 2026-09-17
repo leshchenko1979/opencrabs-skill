@@ -484,7 +484,10 @@ right here (`opencrabs-ops` user unit).
    DONE = Mechanical proof demonstrating target feature execution against the running binary (command output, log line with PID/timestamp match, or API receipt); confirmed via `tools/oc-smoke` (exit 0) and recorded in `smoke-verdicts.log`.
 4. PASS → reply to the sender (`session_notify`, `target_session` = the `from`
    header): feature OK + one line of evidence + the oc-smoke
-   IDENTITY-MATCH receipt. If the feature is COMPLETE,
+   IDENTITY-MATCH receipt. Running `oc-smoke <issue-N>` on PASS automatically
+   executes `oc-ledger stamp done` (suppressible via `--no-ledger`), mechanically
+   closing the worker's in-flight claim in `workers-ledger.json` and unblocking
+   `oc-harvest-census` and Triage intake. If the feature is COMPLETE,
    this same evidence goes to your forum topic as the filing notification —
    under the PR SHIPMENT law (SKILL.md §ISSUE ROUTING, PR SHIPMENT row) smoke PASS
    proceeds to upstream PR preparation; no owner wait.
