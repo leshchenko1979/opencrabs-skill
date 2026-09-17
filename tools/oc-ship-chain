@@ -514,7 +514,13 @@ FORK_REMOTE="$(git -C "$FORK_REPO" remote get-url origin 2>/dev/null || true)"
 [ -n "$FORK_REMOTE" ] || die "fork checkout has no 'origin' remote — cannot verify branch '$BRANCH' is pushed" 3
 git -C "$FORK_REPO" ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1 \
   || die "branch '$BRANCH' not on the fork remote ($FORK_REMOTE) — push it before chaining (LEG1's gate needs it there)" 3
-journal "pre-flight ok: branch $BRANCH present on fork remote"
+
+# Verify that $SHA exists in the local checkout or fork remote before proceeding
+git -C "$FORK_REPO" rev-parse --verify -q "$SHA^{commit}" >/dev/null 2>&1 \
+  || git -C "$FORK_REPO" ls-remote --exit-code origin "$SHA" >/dev/null 2>&1 \
+  || die "sha '$SHA' not found in $FORK_REPO or on fork remote ($FORK_REMOTE) — refusing to dispatch" 2
+
+journal "pre-flight ok: branch $BRANCH and sha $SHA present"
 journal "START sha=$SHA branch=$BRANCH"
 
 if [ "$DRY" = "1" ]; then
@@ -575,7 +581,14 @@ elif [ -n "$GATED_RUN" ]; then
       ;;
     *)
       journal "LEG1 gate resume rejected: run $GATED_RUN status is '$RUN_INFO'"
-      die "gated-run verification failed: run status '$RUN_INFO' != 'completed success success'" 4
+      case "$RUN_INFO" in
+        *"no-job"*)
+          die "gated-run verification failed: run $GATED_RUN has no job matching sha $SHA (run may be for a different sha, or sha is invalid)" 4
+          ;;
+        *)
+          die "gated-run verification failed: run status '$RUN_INFO' != 'completed success success'" 4
+          ;;
+      esac
       ;;
   esac
 elif [ -n "$GATED_SHA" ]; then

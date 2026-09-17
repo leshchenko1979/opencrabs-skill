@@ -360,6 +360,46 @@ def get_affected_files(commits, repo_path):
                     files.add(f.strip())
     return sorted(list(files))
 
+def get_affected_file_actions(commits, repo_path):
+    # Returns a dict of file -> set of git diff-tree actions (e.g. {'D'}, {'A'}, {'M'})
+    file_actions = {}
+    for c in commits:
+        rc, out, _ = run_cmd(['git', '-C', repo_path, 'diff-tree', '--no-commit-id', '--name-status', '-r', c])
+        if rc == 0 and out.strip():
+            for line in out.strip().split('\n'):
+                if not line.strip(): continue
+                parts = line.split('\t')
+                action = parts[0][0] if parts[0] else 'M'
+                f_path = parts[-1].strip()
+                if f_path:
+                    file_actions.setdefault(f_path, set()).add(action)
+    return file_actions
+
+def check_upstream_file_existence(path, base_ref, repo_path):
+    rc, _, _ = run_cmd(['git', '-C', repo_path, 'cat-file', '-e', f'{base_ref}:{path}'])
+    return rc == 0
+
+def check_fork_path_provenance(path, repo_path):
+    # Checks whether path was introduced by an unharvested fork commit in adolfousier/main..origin/main (or HEAD)
+    range_arg = 'adolfousier/main..origin/main'
+    rc_rev, _, _ = run_cmd(['git', '-C', repo_path, 'rev-parse', '--verify', 'origin/main'])
+    if rc_rev != 0:
+        range_arg = 'adolfousier/main..HEAD'
+    rc, out, _ = run_cmd([
+        'git', '-C', repo_path, 'log', '--diff-filter=A',
+        '--format=%H%x09%s%x09%(trailers:key=Issue-Ref,valueonly)',
+        '-1', range_arg, '--', path
+    ])
+    if rc == 0 and out.strip():
+        parts = out.strip().split('\t')
+        intro_sha = parts[0]
+        intro_subj = parts[1] if len(parts) > 1 else ''
+        intro_tr = parts[2] if len(parts) > 2 else ''
+        m = re.search(r'#(\d+)', intro_tr) or re.search(r'#(\d+)', intro_subj)
+        intro_iss = int(m.group(1)) if m else None
+        return intro_sha, intro_iss, intro_subj
+    return None, None, None
+
 def check_upstream_pr(issue_num, upstream_repo, mock_prs=None):
     if mock_prs is not None:
         prs = mock_prs
@@ -729,6 +769,36 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                     'files': affected_files,
                     'exit_code': 1
                 }
+
+    # Gate 2g: Upstream File Existence & Fork Provenance Gate (UPSTREAM-VOID / HELD_PARENT_UNHARVESTED)
+    if affected_files and repo_path and os.path.isdir(repo_path):
+        file_actions = get_affected_file_actions(commits, repo_path)
+        for f_path, actions in file_actions.items():
+            # If commit modifies or deletes a file (not purely added), check if it exists upstream
+            if any(a in ('D', 'M') for a in actions):
+                exists_upstream = check_upstream_file_existence(f_path, base_ref, repo_path)
+                if not exists_upstream:
+                    # File does not exist upstream! Check provenance in fork history
+                    intro_sha, intro_iss, intro_subj = check_fork_path_provenance(f_path, repo_path)
+                    if intro_iss and intro_iss != issue_num:
+                        intro_harvested = is_issue_harvested_upstream(intro_iss, upstream_repo, repo_path, base_ref, swaps=swaps, mock_prs=mock_prs)
+                        if not intro_harvested:
+                            return {
+                                'status': 'REJECTED',
+                                'verdict': f'HELD_PARENT_UNHARVESTED: Path {f_path} was introduced by unharvested fork issue #{intro_iss} ({intro_sha[:8]}) and does not exist in {base_ref}',
+                                'issue': issue_num,
+                                'commits': commits,
+                                'files': affected_files,
+                                'exit_code': 1
+                            }
+                    return {
+                        'status': 'REJECTED',
+                        'verdict': f'UPSTREAM_VOID: Path {f_path} does not exist in {base_ref} (deleted or modified by candidate, but absent upstream)',
+                        'issue': issue_num,
+                        'commits': commits,
+                        'files': affected_files,
+                        'exit_code': 1
+                    }
 
     # Gate 3: Empty tree-diff check on affected files
     if affected_files:
@@ -1455,6 +1525,25 @@ EOF
     echo "  ok 8e - dispatch with --draft -> envelope carries Draft: true exit 0"
   else
     echo "  bad 8e - dispatch with --draft expected Draft: true in envelope, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 8f. Test deletion/modification of path absent upstream (UPSTREAM_VOID / provenance gate)
+  # Create a commit that deletes an upstream-void path introduced on fork
+  echo "temp-void" > "$mock_repo/void-script.sh"
+  git -C "$mock_repo" add void-script.sh
+  GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" git -C "$mock_repo" commit -q -m "feat(infra): introduce void script (#126)"
+  git -C "$mock_repo" rm -q void-script.sh
+  GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" git -C "$mock_repo" commit -q -m "fix(infra): remove void script (#188)"
+  local commit_188
+  commit_188="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  rc=0
+  out="$(run_engine "vet" "$commit_188" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+    echo "  ok 8f - vet #188 (deleting path introduced by unharvested fork commit #126) -> REJECTED HELD_PARENT_UNHARVESTED exit 1"
+  else
+    echo "  bad 8f - vet #188 expected rc=1 HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
     return 1
   fi
 

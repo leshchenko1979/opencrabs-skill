@@ -83,6 +83,22 @@ else
   echo -e "empty-diff\tOK (branch carries a diff vs $BASE)"
 fi
 
+# Leg U — upstream path existence & provenance sweep
+# For every path modified or deleted on the branch vs base, verify it exists in $BASE
+BRANCH_DIFF_FILES="$(git -C "$REPO" diff --name-status "$BASE..$BRANCH" 2>/dev/null || true)"
+if [ -n "$BRANCH_DIFF_FILES" ]; then
+  while IFS=$'\t' read -r status fpath extra; do
+    [ -n "$fpath" ] || continue
+    act="${status:0:1}"
+    if [ "$act" = "D" ] || [ "$act" = "M" ]; then
+      if ! git -C "$REPO" cat-file -e "$BASE:$fpath" 2>/dev/null; then
+        echo -e "upstream-void\tFINDING: path $fpath is modified/deleted by $BRANCH but does not exist in $BASE"
+        rc=1
+      fi
+    fi
+  done <<< "$BRANCH_DIFF_FILES"
+fi
+
 # Leg P — patch-id verification of ported shas
 if [ -n "$PORT" ]; then
   # Per-commit patch-ids (lesson n=1543, template tools/oc-upstream-delta

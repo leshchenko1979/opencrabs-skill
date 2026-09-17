@@ -375,6 +375,46 @@ def get_affected_files_for_commits(commits_list, repo_path):
                     if f.strip(): files.add(f.strip())
     return sorted(list(files))
 
+def get_affected_file_actions_for_commits(commits_list, repo_path):
+    file_actions = {}
+    for c in commits_list:
+        sha = c.get('sha', '') if isinstance(c, dict) else str(c)
+        if sha and os.path.isdir(repo_path):
+            res = subprocess.run(['git', '-C', repo_path, 'diff-tree', '--no-commit-id', '--name-status', '-r', sha], capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                for line in res.stdout.strip().split('\n'):
+                    if not line.strip(): continue
+                    parts = line.split('\t')
+                    action = parts[0][0] if parts[0] else 'M'
+                    f_path = parts[-1].strip()
+                    if f_path:
+                        file_actions.setdefault(f_path, set()).add(action)
+    return file_actions
+
+def check_upstream_file_existence(path, base_ref, repo_path):
+    res = subprocess.run(['git', '-C', repo_path, 'cat-file', '-e', f'{base_ref}:{path}'], capture_output=True, text=True)
+    return res.returncode == 0
+
+def check_fork_path_provenance(path, repo_path):
+    range_arg = 'adolfousier/main..origin/main'
+    rc_rev = subprocess.run(['git', '-C', repo_path, 'rev-parse', '--verify', 'origin/main'], capture_output=True).returncode
+    if rc_rev != 0:
+        range_arg = 'adolfousier/main..HEAD'
+    res = subprocess.run([
+        'git', '-C', repo_path, 'log', '--diff-filter=A',
+        '--format=%H%x09%s%x09%(trailers:key=Issue-Ref,valueonly)',
+        '-1', range_arg, '--', path
+    ], capture_output=True, text=True)
+    if res.returncode == 0 and res.stdout.strip():
+        parts = res.stdout.strip().split('\t')
+        intro_sha = parts[0]
+        intro_subj = parts[1] if len(parts) > 1 else ''
+        intro_tr = parts[2] if len(parts) > 2 else ''
+        m = re.search(r'#(\d+)', intro_tr) or re.search(r'#(\d+)', intro_subj)
+        intro_iss = int(m.group(1)) if m else None
+        return intro_sha, intro_iss, intro_subj
+    return None, None, None
+
 def get_active_claims(ledger_file, repo_path=None):
     if not os.path.exists(ledger_file):
         return []
@@ -569,6 +609,21 @@ if action == 'check':
                 c_uuid = claim.get('uuid', '')[:8]
                 print('REFUSED: Target %s touches files of active lane %s claim #%s [HELD_IN_FLIGHT_LANE: %s]' % (target, c_uuid, c_iss or '?', overlap_sample))
                 sys.exit(1)
+
+    # 4. UPSTREAM FILE EXISTENCE & FORK PROVENANCE (UPSTREAM-VOID / HELD_PARENT_UNHARVESTED)
+    if target_files and repo_path and os.path.isdir(repo_path):
+        base_ref = 'adolfousier/main'
+        file_actions = get_affected_file_actions_for_commits(matching_commits, repo_path)
+        for f_path, actions in file_actions.items():
+            if any(a in ('D', 'M') for a in actions):
+                exists_upstream = check_upstream_file_existence(f_path, base_ref, repo_path)
+                if not exists_upstream:
+                    intro_sha, intro_iss, intro_subj = check_fork_path_provenance(f_path, repo_path)
+                    if intro_iss and target_iss is not None and intro_iss != target_iss:
+                        print('REFUSED: Target %s path %s was introduced by unharvested fork issue #%s (%s) and does not exist in %s [HELD_PARENT_UNHARVESTED]' % (target, f_path, intro_iss, intro_sha[:8] if intro_sha else '?', base_ref))
+                        sys.exit(1)
+                    print('REFUSED: Target %s path %s does not exist in %s [UPSTREAM_VOID]' % (target, f_path, base_ref))
+                    sys.exit(1)
 
     if closed_match:
         num = closed_match['pr']
