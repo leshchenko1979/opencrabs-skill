@@ -1,5 +1,13 @@
 # Changelog — opencrabs-dev
 
+## v0.4.195 (2026-09-17)
+
+### Designated Domain Affinity & Topic Context Focus Law
+- **Designated Domain Affinity & Context Focus Law (Owner Order 2026-09-17, `fleet-directives.md`, `triage.md`, `tools/oc-issue-dispatch`)**:
+  - Mandated that automated issue triage and patrol dispatches MUST route strictly to idle editor lanes whose designated feature or topic domain matches the issue domain (e.g. Telegram/UI, Mermaid/Diagrams, DB/Persistence, Bash/Subshell, Cron/Scheduler, Memory/Search).
+  - Prohibited random or arbitrary fallbacks that mix topic history for the human operator and waste existing in-context focus.
+  - Specialized feature lanes receive a severe negative affinity penalty (-50) and refuse mismatched fallbacks unless explicitly overridden via `--force`.
+
 ## v0.4.194 (2026-09-17)
 
 ### Upstream Merge Runbook Step 0 & Step 7 Fixes

@@ -116,6 +116,7 @@ below needs a regular cadence to be worth anything.
    none is obvious, surface the unclaimed set to HQ for
    dispatch — do NOT let it sit silent (the v0.4.91 gap: "claimed when
    someone claims it" is not assignment).
+   - **Designated Domain Affinity Mandate (owner order 2026-09-17)**: Dispatches MUST match the target lane's designated topic/feature domain via `tools/oc-issue-dispatch`. Never dispatch to a random idle lane or specialized lane with negative domain affinity (e.g. dumping persistence/db issues onto Mermaid/photo lanes). If no affinity match is idle, leave queued or commission a domain-appropriate lane.
    - **Wire Envelope Law (owner order 2026-09-13)**: Every dispatch wire envelope
      must conclude with: `Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed.`
      Triage verifies delivery by polling `workers-ledger.json` (`oc-ledger events --kind claim`),
