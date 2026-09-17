@@ -190,7 +190,73 @@ def twin_deploy_ts(commit_sha, repo_path, swaps, before_idx):
             return pid_ts[target]
     return pid_ts.get(target, 0)
 
-def get_commit_deploy_ts(commit_sha, repo_path, swaps):
+def get_issue_from_commit(commit_sha, repo_path):
+    rc, out, _ = run_cmd(['git', '-C', repo_path, 'log', '-1', '--format=%s%x09%(trailers:key=Issue-Ref,valueonly)%x09%(trailers:key=Session-Id,valueonly)', commit_sha])
+    if rc != 0 or not out.strip():
+        return None
+    parts = out.strip().split('\t')
+    subject = parts[0]
+    issue_ref = parts[1] if len(parts) > 1 else ''
+    m = re.search(r'#?(\d+)', issue_ref)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'#(\d+)', subject)
+    if m:
+        return int(m.group(1))
+    return None
+
+def get_issue_smoke_pass_ts(issue_num, state_dir=None):
+    if not issue_num:
+        return 0
+    smoke_file = None
+    if state_dir:
+        cand = os.path.join(state_dir, 'smoke-verdicts.log')
+        if os.path.isfile(cand):
+            smoke_file = cand
+    if not smoke_file:
+        cands = [
+            os.path.expanduser('~/.opencrabs/profiles/ops/opencrabs-dev/smoke-verdicts.log'),
+            '/root/.opencrabs/profiles/ops/opencrabs-dev/smoke-verdicts.log',
+        ]
+        for c in cands:
+            if os.path.isfile(c):
+                smoke_file = c
+                break
+    if not smoke_file:
+        return 0
+
+    earliest_ts = 0
+    target_pattern = re.compile(rf'(?:issue=#?|#|\bissue\s+){issue_num}\b', re.IGNORECASE)
+    pattern_ts = re.compile(r'^\[?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?Z)\]?')
+    try:
+        with open(smoke_file, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                if 'PASS' not in line_str and 'PARKED-OWNER-EYE' not in line_str:
+                    continue
+                prefix = line_str.split('evidence=')[0] if 'evidence=' in line_str else line_str
+                if any(k in prefix for k in ('FAIL', 'DOWNGRADED', 'SUPERSEDED', 'CORRECTION', 'RETRACTED')):
+                    continue
+                parts = line_str.split('\t')
+                matched = False
+                if len(parts) >= 2 and (parts[1] == str(issue_num) or (len(parts) >= 3 and parts[2] == str(issue_num))):
+                    matched = True
+                elif target_pattern.search(line_str):
+                    matched = True
+                if not matched:
+                    continue
+                m = pattern_ts.match(line_str)
+                if m:
+                    ts = parse_iso_ts(m.group(1))
+                    if ts > 0 and (earliest_ts == 0 or ts < earliest_ts):
+                        earliest_ts = ts
+    except Exception:
+        pass
+    return earliest_ts
+
+def get_commit_deploy_ts(commit_sha, repo_path, swaps, state_dir=None):
     mock_env = os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS')
     if mock_env and mock_env.isdigit() and int(mock_env) > 0:
         return int(mock_env)
@@ -223,7 +289,15 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps):
     if suffix_start > 0:
         twin_ts = twin_deploy_ts(commit_sha, repo_path, swaps, suffix_start)
         if twin_ts and (ts == 0 or twin_ts < ts):
-            return twin_ts
+            ts = twin_ts
+    # #292: minor context shifts during conflict resolution change the patch-id,
+    # defeating twin searches. Fall back to smoke-verdicts.log issue-ref anchoring.
+    st_dir_use = state_dir or os.environ.get('STATE_DIR', '')
+    iss_num = get_issue_from_commit(commit_sha, repo_path)
+    if iss_num:
+        smoke_ts = get_issue_smoke_pass_ts(iss_num, st_dir_use)
+        if smoke_ts and (ts == 0 or smoke_ts < ts):
+            ts = smoke_ts
     return ts
 
 def run_cmd(cmd, cwd=None):
@@ -1340,6 +1414,27 @@ EOF
     echo "  bad 4d - vet new post-rebase feat expected rc=1 SOAK_GATE_VIOLATION (no twin), got rc=$rc ($out)"
     return 1
   fi
+
+  # 4e. Rebase-resilience via smoke-verdicts.log (#292):
+  # A rebased feature whose patch-id changed (e.g. modified context or lines) so patch-id twin fails,
+  # but has a verified PASS entry in smoke-verdicts.log for its issue number (#403).
+  echo "shifted content line 1" > "$rebase_repo/shifted.txt"
+  git -C "$rebase_repo" add shifted.txt
+  git -C "$rebase_repo" commit -q -m "feat(cron): trigger-gated pipeline (#403)"
+  local shifted_sha
+  shifted_sha="$(git -C "$rebase_repo" rev-parse HEAD)"
+
+  # Append a historical PASS in smoke-verdicts.log with timestamp 2026-09-10T00:00:00Z (>24h mature)
+  printf '2026-09-10T00:00:00Z\tPASS\tissue=#403\tsha=oldsha123\trun=12345\ttarget=live-ops\tevidence="smoke pass"\n' >> "$rebase_state/smoke-verdicts.log"
+
+  rc=0
+  out="$(run_engine "vet" "$shifted_sha" "$rebase_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED"; then
+    echo "  ok 4e - vet rebased feat with changed patch-id -> APPROVED via smoke-verdicts.log issue-ref anchor (#292)"
+  else
+    echo "  bad 4e - vet rebased feat with changed patch-id expected rc=0 APPROVED via smoke-verdicts.log (#292), got rc=$rc ($out)"
+    return 1
+  fi
   unset OC_HARVEST_NOW_TS
   unset STATE_DIR
 
@@ -1570,7 +1665,7 @@ EOF
     return 1
   fi
 
-  echo "selftest: 18/18 OK"
+  echo "selftest: 19/19 OK"
   return 0
 }
 

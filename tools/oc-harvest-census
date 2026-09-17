@@ -180,7 +180,74 @@ def twin_deploy_ts(commit_sha, repo_path, swaps, before_idx):
             return pid_ts[target]
     return pid_ts.get(target, 0)
 
-def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None):
+def get_issue_from_commit(commit_sha, repo_path):
+    cmd = ['git', '-C', repo_path, 'log', '-1', '--format=%s%x09%(trailers:key=Issue-Ref,valueonly)%x09%(trailers:key=Session-Id,valueonly)', commit_sha]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0 or not res.stdout.strip():
+        return None
+    parts = res.stdout.strip().split('\t')
+    subject = parts[0]
+    issue_ref = parts[1] if len(parts) > 1 else ''
+    m = re.search(r'#?(\d+)', issue_ref)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'#(\d+)', subject)
+    if m:
+        return int(m.group(1))
+    return None
+
+def get_issue_smoke_pass_ts(issue_num, state_dir=None):
+    if not issue_num:
+        return 0
+    smoke_file = None
+    if state_dir:
+        cand = os.path.join(state_dir, 'smoke-verdicts.log')
+        if os.path.isfile(cand):
+            smoke_file = cand
+    if not smoke_file:
+        cands = [
+            os.path.expanduser('~/.opencrabs/profiles/ops/opencrabs-dev/smoke-verdicts.log'),
+            '/root/.opencrabs/profiles/ops/opencrabs-dev/smoke-verdicts.log',
+        ]
+        for c in cands:
+            if os.path.isfile(c):
+                smoke_file = c
+                break
+    if not smoke_file:
+        return 0
+
+    earliest_ts = 0
+    target_pattern = re.compile(rf'(?:issue=#?|#|\bissue\s+){issue_num}\b', re.IGNORECASE)
+    pattern_ts = re.compile(r'^\[?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?Z)\]?')
+    try:
+        with open(smoke_file, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                if 'PASS' not in line_str and 'PARKED-OWNER-EYE' not in line_str:
+                    continue
+                prefix = line_str.split('evidence=')[0] if 'evidence=' in line_str else line_str
+                if any(k in prefix for k in ('FAIL', 'DOWNGRADED', 'SUPERSEDED', 'CORRECTION', 'RETRACTED')):
+                    continue
+                parts = line_str.split('\t')
+                matched = False
+                if len(parts) >= 2 and (parts[1] == str(issue_num) or (len(parts) >= 3 and parts[2] == str(issue_num))):
+                    matched = True
+                elif target_pattern.search(line_str):
+                    matched = True
+                if not matched:
+                    continue
+                m = pattern_ts.match(line_str)
+                if m:
+                    ts = parse_iso_ts(m.group(1))
+                    if ts > 0 and (earliest_ts == 0 or ts < earliest_ts):
+                        earliest_ts = ts
+    except Exception:
+        pass
+    return earliest_ts
+
+def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None, state_dir=None):
     if mock_deployed_ts is not None and int(mock_deployed_ts) > 0:
         return int(mock_deployed_ts)
     mock_env = os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS')
@@ -212,7 +279,15 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None):
     if suffix_start > 0:
         twin_ts = twin_deploy_ts(commit_sha, repo_path, swaps, suffix_start)
         if twin_ts and (ts == 0 or twin_ts < ts):
-            return twin_ts
+            ts = twin_ts
+    # #292: minor context shifts during conflict resolution change the patch-id,
+    # defeating twin searches. Fall back to smoke-verdicts.log issue-ref anchoring.
+    st_dir_use = state_dir or os.environ.get('STATE_DIR', '')
+    iss_num = get_issue_from_commit(commit_sha, repo_path)
+    if iss_num:
+        smoke_ts = get_issue_smoke_pass_ts(iss_num, st_dir_use)
+        if smoke_ts and (ts == 0 or smoke_ts < ts):
+            ts = smoke_ts
     return ts
 
 def get_prs(upstream_repo, mock_prs_file=None):
