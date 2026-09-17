@@ -56,6 +56,19 @@ No single role "owns ports" alone — the law names the chain explicitly (owner 
 
 **Upstream PR law** (owner 2026-08-27, tightened 2026-08-26) — canonical text: SKILL.md §Upstream relations + §Hard rules rows ("Upstream receives PRs ONLY", "PR SHIPMENT LAW"). Core: PRs-only upstream, never `Closes #N`, fork-issue link at body end, autonomous filing on smoke PASS (v0.4.104 4-leg rubric; PR SHIPMENT law — SKILL.md §ISSUE ROUTING, no owner pre-wait), no ad-hoc PRs, branch namespace `leshchenko1979/<slug>` (SKILL.md §Upstream relations item 7). **Kept here (unique) — #1255 exception (owner 2026-08-28 13:59Z):** the compaction-stall / gateway-timeout class is owner-sanctioned for direct upstream REPORTING — adolfo is actively working that area (#1247, fix `a0954b63` on `fix/session-routing-and-fallback-chain`); field report filed as adolfousier/opencrabs#1255 (ledger 1280); follow-ups on that thread may continue upstream. Nightly cron pulls repo only — never pushes brain changes.
 
+## Deep Core Advance Heads-Up Gate (Core vs Integration Rule, Owner Order 2026-09-17)
+
+Maintainer coordination protocol between Alexey (`@leshchenko1979`) and Adolfo (`@adolfodev`):
+1. **Scope Classification**:
+   - **Deep Core:** Runtime scheduler, context compaction algorithms, provider routing/fallbacks, subagent orchestration, and tool execution loop (`src/brain/`, `src/agent/`, `src/scheduler/`).
+   - **Surface Integrations:** Telegram channel handler, rich cards, MTProto/MCP bridge (`src/channels/telegram/`).
+2. **The Advance Heads-Up Protocol (Venues: `OC Dev` Group Chat — `-1003627148483` / `3627148483`, or `Opencrabs Dev Factory` tagging `@adolfodev`):**
+   - For any architectural change, behavior shift, or non-trivial fix touching **Deep Core**, post a concise technical 1-liner heads-up to either the **`OC Dev`** Telegram group chat or the **`Opencrabs Dev Factory`** group chat (tagging `@adolfodev`) *before* or *simultaneously with* opening the upstream PR:
+     > `Core heads-up: <observed symptom/issue> → proposed fix in <subsystem> (PR #<N>)`
+   - This ensures early alignment on core abstractions before or during maintainer review.
+3. **Surface Integrations Autonomy:**
+   - Changes to Telegram, rich card rendering, formatting, and local developer tooling remain under our autonomous maintainer authority; they ship directly to upstream PRs with verified 4-leg smoke receipts without requiring advance group chat discussion.
+
 ## Dependent Upstream PRs Law (Maintainer Consensus, 2026-09-14; Draft Mandate 2026-09-16)
 
 When PR B depends on PR A (which is not yet merged upstream):

@@ -1,5 +1,17 @@
 # Changelog — opencrabs-dev
 
+## v0.4.197 (2026-09-17)
+
+### Deep Core Advance Heads-Up Gate
+- **Deep Core Advance Heads-Up Gate (Maintainer Alignment, Owner Order 2026-09-17, `fleet-directives.md`, `editor-upstream-pr.md`, `SKILL.md`)**:
+  - Codified the maintainer coordination protocol between Alexey (`@leshchenko1979`) and Adolfo (`@adolfodev`).
+  - **Scope Distinction**:
+    - **Deep Core**: Runtime scheduler, context compaction algorithms, provider routing/fallbacks, subagent orchestration, and tool execution loop (`src/brain/`, `src/agent/`, `src/scheduler/`).
+    - **Surface Integrations**: Telegram channel handler, rich cards, MTProto/MCP bridge (`src/channels/telegram/`).
+  - **The Protocol**: For any architectural change, behavior shift, or non-trivial fix touching **Deep Core**, post a concise technical 1-liner heads-up to either the **`OC Dev`** Telegram group chat (`-1003627148483` / `3627148483`) or the **`Opencrabs Dev Factory`** group chat (tagging `@adolfodev`) before or simultaneously with opening the upstream PR:
+    `Core heads-up: <observed symptom/issue> → proposed fix in <subsystem> (PR #<N>)`
+  - **Surface Autonomy**: Surface integrations (Telegram channel handler, cards, formatting) remain under autonomous maintainer authority; they ship directly to upstream PRs with verified 4-leg smoke receipts without requiring advance group chat discussion.
+
 ## v0.4.196 (2026-09-17)
 
 ### Context-Manifest Curation & Section 10 Compaction Preservation

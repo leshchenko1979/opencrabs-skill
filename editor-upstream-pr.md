@@ -140,6 +140,7 @@ Rules:
   for UPSTREAM-local references. Incident + rationale:
   §Phase 7 Reference Rules below.
 - One feature = one PR; never bundle two features to save a PR.
+- **DEEP CORE ADVANCE HEADS-UP GATE (owner order 2026-09-17):** If the PR touches **Deep Core** (`src/brain/`, `src/agent/`, `src/scheduler/` — runtime scheduler, compaction algorithms, provider routing/fallbacks, subagent orchestration, tool loop), post a concise 1-liner heads-up to either the **`OC Dev`** Telegram group chat (`-1003627148483`) or the **`Opencrabs Dev Factory`** group chat (tagging `@adolfodev`) before or simultaneously with opening the upstream PR: `Core heads-up: <symptom> → proposed fix in <subsystem> (PR #<N>)`. Surface integrations (Telegram channel handler, cards, formatting) remain under autonomous maintainer authority and ship with 4-leg smoke receipts without advance group chat posting. Canon: `fleet-directives.md §Deep Core Advance Heads-Up Gate`.
 - **ATOMICITY & ZERO BUNDLING (owner order 2026-09-13; lane 1a63f103 proposal):** issues, PRs and commits are atomic —
   one problem per issue, one logical change per commit, one issue per PR. **1 Intent = 1 Unit.**
   Never mix features and bug fixes in the same issue, branch, or PR: a feature PR must carry exclusively

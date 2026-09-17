@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.196
+version: 0.4.197
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -462,7 +462,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
 | **2. Sync Model (REBASE)** | Triage | `upstream-merge-runbook.md` | `fleet-directives.md §Remotes & sync` |
 | **3. Absorption & Dropping** | Triage / HQ | Auto-classify DROPPABLE patch-ids | `upstream-merge-runbook.md` |
 | **4. Upstream PR Lifecycle** | Editor | Phase 7b / Phase 7c (`oc-harvest-dispatch`) | `editor-upstream-pr.md` |
-| **5. Maintainer Interaction** | HQ / Alexey | Track PR comments via gh API | `fleet-directives.md §Upstream repo etiquette` |
+| **5. Maintainer Interaction** | HQ / Alexey | Track PR comments via gh API & OC Dev chat heads-up | `fleet-directives.md §Deep Core Advance Heads-Up Gate` |
 | **6. Fork-local CI (`ci/*`)** | HQ | Carrier namespace `ci/quick-build-linux` | `hq.md §Parity` |
 | **7. Fork Branch Lifecycle** | Triage | `./tools/oc-branch-sweep` (archive before delete) | `triage.md §Duty T4` |
 
