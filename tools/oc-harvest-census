@@ -596,7 +596,13 @@ if action == 'check':
         except Exception:
             manual = []
     for r in manual:
-        by_issue = target_iss is not None and r.get('issue') == target_iss
+        r_issues = set()
+        if r.get('issue'):
+            r_issues.add(r.get('issue'))
+        if r.get('issues') and isinstance(r.get('issues'), list):
+            for i_item in r.get('issues'):
+                r_issues.add(i_item)
+        by_issue = target_iss is not None and (target_iss in r_issues)
         by_unit = bool(r.get('unit')) and str(r['unit']).lower() == target.lower()
         if by_issue or by_unit:
             print('REFUSED: Target %s is manually recorded as filed in PR #%s (unit %s)' % (target, r.get('pr'), r.get('unit')))
@@ -822,12 +828,13 @@ cmd_check() {
 }
 
 cmd_record() {
-  local unit="" pr="" issue=""
+  local unit="" pr="" issue="" issues_str=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --unit) unit="$2"; shift 2 ;;
       --pr) pr="$2"; shift 2 ;;
       --issue) issue="$2"; shift 2 ;;
+      --issues) issues_str="$2"; shift 2 ;;
       --repo) REPO="$2"; shift 2 ;;
       -h|--help) usage 0 ;;
       *) usage ;;
@@ -838,21 +845,30 @@ cmd_record() {
   fi
   if [ -f "$REGISTRY_FILE" ]; then
     python3 -c '
-import sys, json, os, datetime
-reg_file, unit, pr, issue = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+import sys, json, os, datetime, re
+reg_file, unit, pr, issue, issues_str = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 with open(reg_file) as f:
     data = json.load(f)
 records = data.setdefault("manual_records", [])
-records.append({
+all_issues = set()
+if issue:
+    all_issues.add(int(issue))
+if issues_str:
+    for m in re.finditer(r"\d+", issues_str):
+        all_issues.add(int(m.group(0)))
+
+record_entry = {
     "unit": unit,
     "pr": int(pr),
-    "issue": int(issue) if issue else None,
+    "issue": int(issue) if issue else (sorted(list(all_issues))[0] if all_issues else None),
+    "issues": sorted(list(all_issues)),
     "recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
-})
+}
+records.append(record_entry)
 with open(reg_file, "w") as f:
     json.dump(data, f, indent=2)
-print(f"Recorded Unit {unit} -> PR #{pr} in {reg_file}")
-' "$REGISTRY_FILE" "$unit" "$pr" "$issue"
+print(f"Recorded Unit {unit} -> PR #{pr} (issues: {sorted(list(all_issues))}) in {reg_file}")
+' "$REGISTRY_FILE" "$unit" "$pr" "$issue" "$issues_str"
   else
     echo "Recorded Unit $unit -> PR #$pr (registry uninitialized)"
   fi
