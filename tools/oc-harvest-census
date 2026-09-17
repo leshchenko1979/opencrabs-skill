@@ -229,6 +229,41 @@ def get_prs(upstream_repo, mock_prs_file=None):
         raise RuntimeError(f'gh pr list failed: {res.stderr.strip()}')
     return json.loads(res.stdout)
 
+def get_squashed_upstream_prs(repo_path, mock_squashed_file=None):
+    if mock_squashed_file and os.path.exists(mock_squashed_file):
+        try:
+            with open(mock_squashed_file) as f:
+                loaded = json.load(f)
+                return {int(k): v for k, v in loaded.items()}
+        except Exception:
+            return {}
+    if not os.path.isdir(repo_path):
+        return {}
+    cmd = ['git', '-C', repo_path, 'rev-parse', '--verify', 'adolfousier/main']
+    ref = 'adolfousier/main' if subprocess.run(cmd, capture_output=True).returncode == 0 else 'HEAD'
+    cmd = [
+        'git', '-C', repo_path, 'log', '-n', '1000',
+        '--format=%H%x1f%h%x1f%s%x1f%b%x1e', ref
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        return {}
+    squashed = {}
+    for r in res.stdout.split('\x1e'):
+        if not r.strip(): continue
+        parts = r.split('\x1f')
+        if len(parts) < 4: continue
+        full_sha, short_sha, subj, body = parts[0].strip(), parts[1].strip(), parts[2].strip(), parts[3]
+        for m in re.finditer(r'(?:Squashed from PR|Closes)\s+#(\d+)', body, re.IGNORECASE):
+            pr_num = int(m.group(1))
+            if pr_num not in squashed:
+                squashed[pr_num] = {
+                    'sha': full_sha,
+                    'short_sha': short_sha,
+                    'subject': subj
+                }
+    return squashed
+
 def get_ahead_commits(repo_path, mock_commits_file=None):
     if mock_commits_file and os.path.exists(mock_commits_file):
         with open(mock_commits_file) as f:
@@ -389,6 +424,7 @@ target = sys.argv[5] if len(sys.argv) > 5 else ''
 mock_prs = os.environ.get('OC_HARVEST_MOCK_PRS')
 mock_commits = os.environ.get('OC_HARVEST_MOCK_COMMITS')
 mock_ledger = os.environ.get('OC_HARVEST_MOCK_LEDGER')
+mock_squashed = os.environ.get('OC_HARVEST_MOCK_SQUASHED')
 
 try:
     prs = get_prs(upstream_repo, mock_prs)
@@ -400,6 +436,13 @@ except Exception as e:
     else:
         sys.stderr.write(f'oc-harvest-census error: {e}\n')
         sys.exit(3)
+
+squashed_prs = get_squashed_upstream_prs(repo_path, mock_squashed)
+for p in prs:
+    num = p.get('number')
+    if p.get('state') == 'CLOSED' and num in squashed_prs:
+        p['state'] = 'MERGED'
+        p['squashed_commit'] = squashed_prs[num]
 
 issue_map, pr_entries = parse_issue_map(prs)
 
@@ -714,6 +757,7 @@ cmd_selftest() {
   local mock_commits="$selftest_tmp/mock_commits.json"
   local mock_reg="$selftest_tmp/mock_reg.json"
   local mock_ledger="$selftest_tmp/mock_ledger.json"
+  local mock_squashed="$selftest_tmp/mock_squashed.json"
 
   cat << 'EOF' > "$mock_prs"
 [
@@ -748,6 +792,14 @@ cmd_selftest() {
     "headRefName": "port/112-rework-fresh",
     "mergedAt": null,
     "body": "Fixes #112"
+  },
+  {
+    "number": 1556,
+    "title": "feat(telegram): dedup group history (#133)",
+    "state": "CLOSED",
+    "headRefName": "port/133-dedup-history",
+    "mergedAt": null,
+    "body": "Fixes #133"
   }
 ]
 EOF
@@ -824,9 +876,20 @@ EOF
 }
 EOF
 
+  cat << 'EOF' > "$mock_squashed"
+{
+  "1556": {
+    "sha": "4881e82c8428f964d6a3736762eea1dbe5d2c3cb",
+    "short_sha": "4881e82c8",
+    "subject": "feat(telegram): dedup group history and prune reply quotes against live context (#133)"
+  }
+}
+EOF
+
   export OC_HARVEST_MOCK_PRS="$mock_prs"
   export OC_HARVEST_MOCK_COMMITS="$mock_commits"
   export OC_HARVEST_MOCK_LEDGER="$mock_ledger"
+  export OC_HARVEST_MOCK_SQUASHED="$mock_squashed"
   export OC_HARVEST_NOW_TS="1789010000"
 
   local rc=0 out=""
@@ -979,7 +1042,17 @@ EOF
     return 1
   fi
 
-  echo "selftest: 14/14 OK"
+  # 12. Closed PR that was squash-merged into upstream main (#133 / PR #1556) -> REFUSED MERGED exit 1
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "133" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "REFUSED: Target 133 is already MERGED upstream in PR #1556"; then
+    echo "  ok   - closed PR squash-merged upstream -> REFUSED MERGED exit 1"
+  else
+    echo "  bad  - closed PR squash-merged upstream expected rc=1 REFUSED MERGED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  echo "selftest: 15/15 OK"
   return 0
 }
 
