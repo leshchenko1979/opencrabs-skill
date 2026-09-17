@@ -8,7 +8,8 @@
 #
 # Usage: oc-smoke <issue> [--verdict PASS|FAIL] [--probe <cmd>]
 #                         [--markers m1,m2] [--evidence <text>]
-#                         [--target <name>] [--unit <unit>] [--selftest]
+#                         [--target <name>] [--unit <unit>]
+#                         [--no-ledger] [--selftest]
 #
 # Exit codes:
 #   0 Smoke PASS (identity match + probe pass + verdict row recorded)
@@ -28,6 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATE_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"
 CANON_LOG="$STATE_DIR/smoke-verdicts.log"
 EVIDENCE_TOOL="$SCRIPT_DIR/oc-smoke-evidence"
+LEDGER_TOOL="$SCRIPT_DIR/oc-ledger"
 
 . "$SCRIPT_DIR/lib/oc-log.sh" 2>/dev/null || true
 oc_log_init "oc-smoke" "$@"
@@ -40,6 +42,7 @@ MARKERS=""
 EVIDENCE_TEXT=""
 TARGET=""
 UNIT="opencrabs-ops"
+NO_LEDGER=0
 SELFTEST=0
 
 usage() {
@@ -49,7 +52,7 @@ usage() {
   cat <<EOF >&$fd
 usage: $PROG <issue> [--verdict PASS|FAIL] [--probe <cmd>]
                  [--markers m1,m2] [--evidence <text>]
-                 [--target <name>] [--unit <unit>] | --selftest
+                 [--target <name>] [--unit <unit>] [--no-ledger] | --selftest
 
 Options:
   <issue>             Issue number or slug (e.g. 235 or #235)
@@ -59,6 +62,7 @@ Options:
   --evidence <text>   Prose summary of verification evidence
   --target <name>     Feature name or target slug (default: derived from issue)
   --unit <unit>       Systemd user unit to check (default: opencrabs-ops)
+  --no-ledger         Skip automatic done stamp in workers-ledger.json on PASS
   --selftest          Run internal test battery
 
 Exit codes:
@@ -163,6 +167,49 @@ EOF
   fields="$(printf '%s' "$row" | awk -F'\t' '{print NF}')"
   [ "$fields" -ge 7 ] && t_ok "verdict row has >=7 tab-separated fields" || t_bad "verdict row fields ($fields != >=7)"
 
+  # Test 6: Auto-stamp ledger done on PASS
+  cat > "$d/fake-ledger" <<'EOF'
+#!/usr/bin/env bash
+echo "$@" >> "$OC_DEPLOY_STATE_DIR/fake-ledger.calls"
+exit 0
+EOF
+  chmod +x "$d/fake-ledger"
+  touch "$d/state/workers-ledger.json"
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OC_LEDGER_BIN="$d/fake-ledger" OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 238 --probe "echo probe-ok" --evidence "ledger auto-stamp test" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && grep -q "stamp done" "$d/state/fake-ledger.calls" && grep -q "#238" "$d/state/fake-ledger.calls"; then
+    t_ok "PASS automatically stamps ledger done -> 0"
+  else
+    t_bad "auto-stamp ledger (rc=$rc out=$out)"
+  fi
+
+  # Test 7: --no-ledger skips ledger stamping on PASS
+  rm -f "$d/state/fake-ledger.calls"
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OC_LEDGER_BIN="$d/fake-ledger" OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 239 --probe "echo probe-ok" --no-ledger 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -f "$d/state/fake-ledger.calls" ]; then
+    t_ok "--no-ledger suppresses ledger stamp -> 0"
+  else
+    t_bad "--no-ledger flag (rc=$rc out=$out)"
+  fi
+
+  # Test 8: FAIL verdict does not stamp ledger done
+  rm -f "$d/state/fake-ledger.calls"
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OC_LEDGER_BIN="$d/fake-ledger" OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 240 --probe "exit 1" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && [ ! -f "$d/state/fake-ledger.calls" ]; then
+    t_ok "FAIL verdict does not stamp ledger done -> 1"
+  else
+    t_bad "FAIL verdict ledger stamp (rc=$rc out=$out)"
+  fi
+
   echo "selftest: $pass passed, $fail failed"
   [ "$fail" -eq 0 ] && exit 0 || exit 1
 }
@@ -212,6 +259,10 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || die 2 "--unit requires a systemd user unit name"
       UNIT="$2"
       shift 2
+      ;;
+    --no-ledger)
+      NO_LEDGER=1
+      shift
       ;;
     --issue)
       [ $# -ge 2 ] || die 2 "--issue requires an issue number"
@@ -317,6 +368,23 @@ ROW="${TS}${TAB}${VERDICT}${TAB}issue=#${ISSUE}${TAB}sha=${DEPLOYED_SHA}${TAB}ru
 
 append_log_safe "$CANON_LOG" "$ROW"
 echo "$PROG: recorded verdict row ($VERDICT) for #$ISSUE in $CANON_LOG"
+
+# 5. On PASS: optionally stamp workers-ledger.json done
+if [ "$VERDICT" = "PASS" ] && [ "$NO_LEDGER" -eq 0 ]; then
+  ACTUAL_LEDGER_BIN="${OC_LEDGER_BIN:-$LEDGER_TOOL}"
+  if [ -x "$ACTUAL_LEDGER_BIN" ] && [ -f "$STATE_DIR/workers-ledger.json" ]; then
+    echo "$PROG: stamping workers-ledger.json done for issue #$ISSUE..."
+    set +e
+    LEDGER_OUT="$(OC_DEPLOY_STATE_DIR="$STATE_DIR" "$ACTUAL_LEDGER_BIN" stamp done "smoke PASS verified for issue #${ISSUE}" 2>&1)"
+    LEDGER_RC=$?
+    set -e
+    if [ "$LEDGER_RC" -eq 0 ]; then
+      echo "$PROG: $LEDGER_OUT"
+    else
+      echo "$PROG: WARNING: oc-ledger stamp done exited $LEDGER_RC: $LEDGER_OUT" >&2
+    fi
+  fi
+fi
 
 if [ "$VERDICT" = "PASS" ]; then
   oc_log_finish 0
