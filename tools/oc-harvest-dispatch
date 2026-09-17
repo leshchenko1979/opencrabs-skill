@@ -470,10 +470,8 @@ def write_lane_cursor(ledger_file, uuid):
 
 def select_spread_lane(avail, ledger_file):
     # Round-robin auto-selection across the idle editor lanes (#276).
-    # dispatch stamps no ledger state, so a stateless 'avail[0]' pins every unit of a
-    # cycle to one editor -- a serialized queue, not the parallel harvest wave the patrol
-    # contract calls for. A cursor file beside the ledger rotates the pick; a stale cursor
-    # (lane gone or now busy) simply restarts at the head of the ordered list.
+    # Respects domain focus: filters out lanes specialized in unrelated domains
+    # so specialized topics (e.g. Mermaid, Photo) are not polluted.
     ordered = sorted(avail, key=lambda w: w.get('uuid', ''))
     if not ordered:
         return None

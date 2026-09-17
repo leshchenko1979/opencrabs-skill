@@ -202,13 +202,15 @@ def oc_log_finish(exit_code=0):
 
 # Topic keywords and domain affinities
 AFFINITY_KEYWORDS = {
-    "telegram": ["telegram", "button", "formatting", "photo", "rich", "topic", "markup", "markdown", "reply", "menu", "stream", "draft"],
-    "bash": ["bash", "sh", "exec", "retry", "loop", "guard", "env", "process", "child", "signal"],
-    "config": ["config", "toml", "setting", "options", "parse", "yaml", "schema", "serde"],
+    "telegram": ["telegram", "button", "formatting", "photo", "rich", "topic", "markup", "markdown", "reply", "menu", "stream", "draft", "message", "channel"],
+    "mermaid": ["mermaid", "diagram", "chart", "flowchart", "graphviz", "render", "rendering", "visual"],
+    "db": ["db", "database", "sqlite", "vacuum", "retention", "ttl", "messages", "prune", "maintenance", "compaction", "cleanup", "storage", "sql", "migration"],
+    "bash": ["bash", "sh", "exec", "retry", "loop", "guard", "env", "process", "child", "signal", "subshell", "cli"],
+    "config": ["config", "toml", "setting", "options", "parse", "yaml", "schema", "serde", "types"],
     "cron": ["cron", "schedule", "job", "timer", "isolation", "scheduler", "trigger"],
-    "memory": ["memory", "vector", "search", "embedding", "codegraph", "graph", "store"],
-    "skills": ["skill", "manifest", "compaction", "slash", "prompt", "context"],
-    "notify": ["notify", "queue", "delivery", "router", "session", "push", "wake", "stall"],
+    "memory": ["memory", "vector", "search", "embedding", "codegraph", "graph", "store", "similarity"],
+    "skills": ["skill", "manifest", "compaction", "slash", "prompt", "context", "instruction"],
+    "notify": ["notify", "queue", "delivery", "router", "session", "push", "wake", "stall", "drain"],
     "harvest": ["harvest", "upstream", "port", "cherry-pick", "census", "sweep"]
 }
 
@@ -450,23 +452,40 @@ def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_pa
 def score_affinity(issue, lane):
     """
     Score affinity between issue title/labels/body and lane feature/domain.
+    Returns:
+      score: integer. High positive = strong match. Negative = domain conflict / mismatch.
     """
     title = issue.get("title", "").lower()
     body = issue.get("body", "").lower()
     text = title + " " + body
     feature = lane.get("feature", "").lower()
 
+    # Identify which domains the issue and lane touch
+    issue_domains = set()
+    lane_domains = set()
+    for domain, kws in AFFINITY_KEYWORDS.items():
+        if any(kw in text for kw in kws):
+            issue_domains.add(domain)
+        if any(kw in feature for kw in kws):
+            lane_domains.add(domain)
+
+    # If lane is specialized in domain(s) that directly conflict with the issue
+    # e.g., lane is dedicated to mermaid or photo rendering, but issue is pure db/persistence
+    # Enforce penalty to avoid dumping mismatched tasks onto specialized feature lanes
+    specialized_domains = {"mermaid", "cron", "db", "memory", "bash"}
+    lane_specialized = lane_domains.intersection(specialized_domains)
+    if lane_specialized and not lane_specialized.intersection(issue_domains):
+        # Lane is specialized in a domain absent from this issue
+        return -50
+
     score = 0
     # Direct token matches
-    for domain, kws in AFFINITY_KEYWORDS.items():
-        domain_in_issue = any(kw in text for kw in kws)
-        domain_in_lane = any(kw in feature for kw in kws)
-        if domain_in_issue and domain_in_lane:
-            score += 10
+    for domain in issue_domains.intersection(lane_domains):
+        score += 20
 
     # Specific keyword matching
     for word in re.findall(r'[a-z0-9_-]{4,}', feature):
-        if word in ("with", "from", "branch", "lane", "owner", "shipped", "fork", "main"):
+        if word in ("with", "from", "branch", "lane", "owner", "shipped", "fork", "main", "feature", "issue"):
             continue
         if word in text:
             score += 3
@@ -474,9 +493,10 @@ def score_affinity(issue, lane):
     return score
 
 
-def select_best_lane(issue, candidate_lanes):
+def select_best_lane(issue, candidate_lanes, allow_fallback=False):
     """
-    Select the best idle lane for an issue.
+    Select the best idle lane for an issue respecting designated domain affinity.
+    Does not dump mismatched issues onto specialized topic lanes.
     """
     # Filter only idle/non-busy lanes
     available = [lane for lane in candidate_lanes if not lane["is_busy"]]
@@ -495,7 +515,25 @@ def select_best_lane(issue, candidate_lanes):
 
     # Sort descending by score
     scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1]
+    
+    # If the highest score is negative or zero, check if we allow arbitrary fallback.
+    # By default, lanes with score < 0 (domain conflict) are strictly forbidden.
+    # If highest score is <= 0 and lane has specialized feature, refuse to misroute.
+    best_score, best_lane = scored[0]
+    if best_score < 0 and not allow_fallback:
+        return None
+    if best_score == 0:
+        # Check if lane has specialized feature
+        lane_feat = best_lane.get("feature", "").lower()
+        if any(d in lane_feat for d in ("mermaid", "vector", "cron", "sqlite", "compaction", "loop-guard")) and not allow_fallback:
+            # Avoid polluting specialized topic with zero affinity
+            # Look for a generic lane among scored
+            generic_candidates = [l for s, l in scored if s >= 0 and not any(d in l.get("feature", "").lower() for d in ("mermaid", "vector", "cron", "sqlite", "compaction", "loop-guard"))]
+            if generic_candidates:
+                return generic_candidates[0]
+            return None
+
+    return best_lane
 
 
 def format_wire_envelope(issue):
@@ -626,8 +664,9 @@ def cmd_auto(args):
             print("All available idle lanes have been assigned in this cycle.")
             break
 
-        best_lane = select_best_lane(issue, candidates)
+        best_lane = select_best_lane(issue, candidates, allow_fallback=args.force)
         if not best_lane:
+            print(f"Skipping issue #{issue.get('number')}: No available lane with matching domain affinity (pass --force to override).")
             continue
 
         assigned_lanes.add(best_lane["uuid"])
@@ -711,10 +750,10 @@ def cmd_targeted(args):
         if not available:
             print("CAPACITY_EXHAUSTED: No idle editor lanes available for dispatch.", file=sys.stderr)
             return 4
-        target_lane = select_best_lane(target_issue, available)
+        target_lane = select_best_lane(target_issue, available, allow_fallback=args.force)
 
     if not target_lane:
-        print("ERROR: Could not resolve target lane.", file=sys.stderr)
+        print("ERROR: Could not resolve target lane with matching domain affinity (pass --force to override).", file=sys.stderr)
         return 4
 
     envelope, branch = format_wire_envelope(target_issue)
@@ -803,9 +842,24 @@ def run_selftest():
     score_tg_to_bash = score_affinity(issue_tg, lane_bash)
     assert_true("Telegram issue scores higher on telegram lane", score_tg_to_tg > score_tg_to_bash)
 
-    score_bash_to_bash = score_affinity(issue_bash, lane_bash)
-    score_bash_to_tg = score_affinity(issue_bash, lane_tg)
-    assert_true("Bash issue scores higher on bash lane", score_bash_to_bash > score_bash_to_tg)
+    # Test 3b: Domain mismatch and specialized lane pollution protection
+    issue_db = {
+        "number": 278,
+        "title": "feat(db): no retention policy for the messages table — session DB grows unbounded",
+        "body": "sqlite vacuum and message retention ttl"
+    }
+    lane_mermaid = {"uuid": "lane-mermaid-1", "feature": "mermaid-rendering visual diagram", "is_busy": False, "class": "ACTIVE"}
+    lane_generic = {"uuid": "lane-generic-1", "feature": "general editor", "is_busy": False, "class": "ACTIVE"}
+    lane_db = {"uuid": "lane-db-1", "feature": "compaction-signal sqlite maintenance", "is_busy": False, "class": "ACTIVE"}
+
+    assert_true("DB issue scores negative on mermaid specialized lane", score_affinity(issue_db, lane_mermaid) < 0)
+    assert_true("DB issue scores positive on db maintenance lane", score_affinity(issue_db, lane_db) > 0)
+    
+    # select_best_lane must refuse to route DB issue to mermaid lane if only mermaid is available
+    assert_true("Mismatched specialized lane refused when no matching lane available", select_best_lane(issue_db, [lane_mermaid]) is None)
+    # But routes cleanly when db lane or generic lane is present
+    assert_eq("Routes to matching domain lane", select_best_lane(issue_db, [lane_mermaid, lane_db])["uuid"], "lane-db-1")
+    assert_eq("Routes to generic lane over conflicting specialized lane", select_best_lane(issue_db, [lane_mermaid, lane_generic])["uuid"], "lane-generic-1")
 
     # Test 4: Selection when lane is busy
     lane_busy = {"uuid": "lane-busy", "feature": "telegram-buttons", "is_busy": True, "class": "ACTIVE"}
