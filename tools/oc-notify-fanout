@@ -722,6 +722,14 @@ SEOF
     chk 0 cap-env-wins
   fi
 
+  # (6) Unknown flag ergonomically lists candidates and --body/--body-file alias works
+  unrec_out="$(OC_FANOUT_SELF="$L1" "$SELF" --bogus-flag 2>&1 || true)"
+  if echo "$unrec_out" | grep -q "valid flags: --title, --text/--body"; then
+    chk 0 unknown-flag-ergonomics
+  else
+    chk 1 "unknown-flag-ergonomics (out=$unrec_out)"
+  fi
+
   echo "oc-notify-fanout selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
   exit $?
@@ -734,8 +742,8 @@ mode="quiet"
 forum_chat="${OC_FANOUT_FORUM_CHAT:--1003936827469}"
 while [ $# -gt 0 ]; do case "$1" in
   --title) title="${2:-}"; shift 2 ;;
-  --text) text="${2:-}"; shift 2 ;;
-  --text-file) text_file="${2:-}"; shift 2 ;;
+  --text|--body) text="${2:-}"; shift 2 ;;
+  --text-file|--body-file) text_file="${2:-}"; shift 2 ;;
   --roles) roles="${2:-}"; shift 2 ;;
   --exclude) excludes="${2:-}"; shift 2 ;;
   --forum-chat) forum_chat="${2:-}"; shift 2 ;;
@@ -746,7 +754,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --verify) verify_id="${2:-}"; shift 2 ;;
   --mode) mode="${2:-}"; shift 2 ;;
   --help|-h) sed -n '2,40p' "$0"; exit 0 ;;
-  *) die "unknown flag '$1' (see --help)" ;;
+  *) die "unknown flag '$1' (valid flags: --title, --text/--body, --text-file/--body-file, --roles, --exclude, --mode, --forum-chat, --self, --dry-run, --no-stamp, --include-self, --verify, --help; see --help for usage details)" 2 ;;
 esac; done
 
 # LAW 5: the mode must be one the CLI accepts. Validate BEFORE any send — an
