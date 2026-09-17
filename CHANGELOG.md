@@ -1,5 +1,14 @@
 # Changelog — opencrabs-dev
 
+## v0.4.196 (2026-09-17)
+
+### Context-Manifest Curation & Section 10 Compaction Preservation
+- **Section 10 Compaction Manifest Curation (`SKILL.md`, `fleet-directives.md`, `editor.md`, `hq.md`, `triage.md`, `toolsmith.md`)**:
+  - Codified the context-manifest curation law (Section 10 of compaction prompt) across all role files.
+  - Mandated that when context compaction occurs, the compactor MUST explicitly retain `opencrabs-dev`, `opencrabs-dev/fleet-directives.md`, and the active role file (`editor.md`, `hq.md`, `triage.md`, or `toolsmith.md`) in `active_skills`, and discard only non-active role files.
+  - Mandated pre-activation retention for core operational tools (`session_notify`, `session_search`, `bash`, `read_file`, `telegram_send`).
+  - Backed by empirical evidence from 778 production compactions showing >93% retention when guided (and 0% contradictory aux retention when root discarded), eliminating the need for binary runtime modification (#283 closed).
+
 ## v0.4.195 (2026-09-17)
 
 ### Designated Domain Affinity & Topic Context Focus Law

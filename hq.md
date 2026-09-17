@@ -1,6 +1,6 @@
 # HQ — skill maintenance & worker coordination
 
-**RELOAD LAW:** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload` (re-read `SKILL.md` + `hq.md` + `fleet-directives.md` IN FULL on compaction/spawn).
+**RELOAD LAW & MANIFEST CURATION (Section 10):** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload & context manifest curation` (keep `opencrabs-dev`, `hq.md`, `fleet-directives.md` in `active_skills`; re-read IN FULL on compaction/spawn).
 
 **Load only after SKILL.md confirmed the role is HQ.** This is HQ
 session's standing role. Interrupt-shaped duties (idea-box / QUIRK intake,

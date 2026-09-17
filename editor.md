@@ -2,7 +2,7 @@
 
 **Load only after SKILL.md confirmed the role is EDITOR.**
 
-> **RELOAD LAW:** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload` (re-read `SKILL.md` + `editor.md` + `fleet-directives.md` on compaction/spawn).
+> **RELOAD LAW & MANIFEST CURATION (Section 10):** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload & context manifest curation` (keep `opencrabs-dev`, `editor.md`, `fleet-directives.md` in `active_skills`; re-read on compaction/spawn).
 
 Scope: work from an issue filed on the FORK (`leshchenko1979/opencrabs` — the issues home;
 upstream receives PRs only), fix the code in a

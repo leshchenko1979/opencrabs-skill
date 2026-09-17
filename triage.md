@@ -1,6 +1,6 @@
 # TRIAGE — interrupt lane: idea/quirk intake, fix routing, enforcement
 
-**RELOAD LAW:** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload` (re-read `SKILL.md` + `triage.md` + `fleet-directives.md` on compaction/spawn).
+**RELOAD LAW & MANIFEST CURATION (Section 10):** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload & context manifest curation` (keep `opencrabs-dev`, `triage.md`, `fleet-directives.md` in `active_skills`; re-read on compaction/spawn).
 
 **Load only after SKILL.md confirmed the role is TRIAGE.** This is the OC DEV
 TRIAGE session's standing role — carved out of the HQ lane at v0.4.86

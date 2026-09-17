@@ -1,6 +1,6 @@
 # TOOLSMITH — CLI tool lane: makes and fixes the tools every other role uses
 
-**RELOAD LAW:** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload` (re-read `SKILL.md` + `toolsmith.md` + `fleet-directives.md` on compaction/spawn).
+**RELOAD LAW & MANIFEST CURATION (Section 10):** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload & context manifest curation` (keep `opencrabs-dev`, `toolsmith.md`, `fleet-directives.md` in `active_skills`; re-read on compaction/spawn).
 
 **Load only after SKILL.md confirmed the role is TOOLSMITH.** This is the OC DEV
 TOOLSMITH session's standing role — carved out at v0.4.87 (owner word "Go
