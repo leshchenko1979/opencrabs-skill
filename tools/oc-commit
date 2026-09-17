@@ -122,7 +122,7 @@ $G diff --cached --quiet 2>/dev/null \
   && { echo "gate-fail: nothing staged — stage your paths first (stage-only-your-paths rule)" >&2; exit 3; }
 
 # derive Issue-Ref from the actor's latest claim (mirrors oc-ledger cmd_confirm)
-LEDGER="${OC_LEDGER:-/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
+LEDGER="${OC_LEDGER:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/workers-ledger.json}"
 if [ -z "$ISSUE" ]; then
   ISSUE="$("$(cd "$(dirname "$0")" && pwd)/oc-ledger" claim-ref "$OC_ACTOR" 2>/dev/null || true)"
 fi

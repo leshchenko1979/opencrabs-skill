@@ -1,4 +1,14 @@
-# Changelog
+# Changelog — opencrabs-dev
+
+## v0.4.193 (2026-09-17)
+
+### Duty 4+6 Review Cycle 20260916-c20 Master Codification
+- **Changelog Ordering & Direction SSOT**: Reconciled all documentation (`README.md`, `SKILL.md`, `hq.md`) to reflect the true newest-first prepended convention and updated sync policy references to the REBASE sync model.
+- **Portability & Path Sanitization**: Replaced hardcoded `/root/` path fallbacks with `${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}` and dynamic `$HOME` paths across 16 CLI tools (`oc-attrib`, `oc-commit`, `oc-deploy`, `oc-drift-check`, `oc-health`, `oc-ledger`, `oc-order-validate`, `oc-ping-proof`, `oc-prchecks`, `oc-seal-state`, `oc-shadow-rotate`, `oc-ship-audit`, `oc-ship-chain`, `oc-smoke`, `oc-smoke-evidence`, `oc-tg-audit`).
+- **Battery Test Parallel Optimization**: Defaulted `tools/tests/run.sh` to parallel chunk execution (`JOBS=$(nproc 2>/dev/null || echo 4)`), cutting suite execution time.
+- **Smoke Schema Standardization**: Standardized `oc-smoke` verdict rows to use canonical keyed schema tokens (`issue=`, `sha=`, `run=`, `target=`, `actor=`, `evidence=`) matching `RC-CONTRACT.md`.
+- **Branch Rollback on Failure**: Added cleanup rollback to `oc-start` to remove orphaned branches when worktree creation fails.
+- **State Root Hygiene**: Purged dead-PID fanout locks and checkpoint files in `opencrabs-dev/` and ran git repository garbage collection.
 
 ## v0.4.192 (2026-09-16) — Graph-Wide 24h Feature Soak Anchor Law
 

@@ -18,7 +18,7 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `review-lenses.md` | Full Duty-6 lens briefs (A–J) — split from hq.md v0.4.78 |
 | `war-stories.md` | Incident histories behind the hard rules (disclosed from SKILL.md, v0.4.80) |
 | `fleet-directives.md` | Binding owner directives (sync policy, PR law, builds, gates, triage) — re-homed from ops AGENTS.md/MEMORY.md, 2026-09-02 |
-| `upstream-merge-runbook.md` | Procedure for the merge-on-arrival policy: gates, roles, conflict classes, migration-union rule |
+| `upstream-merge-runbook.md` | Procedure for the REBASE sync model: gates, roles, conflict classes, migration-union rule |
 | `s2-swap-journal-spec.md` | Journal vocabulary spec for the oc-deploy swap leg |
 | `CHANGELOG.md` | Version history, **newest entry FIRST** |
 | `tools/` | The `oc-*` tool fleet |
@@ -60,7 +60,7 @@ Highlights:
 
 1. Edit → verify → commit (one logical change per commit, `Issue-Ref:` trailer).
 2. Battery GREEN: `bash tools/tests/run.sh` → receipt reads `PASS`.
-3. `CHANGELOG.md` gets a `## vX.Y.Z` entry (appended at the END).
+3. `CHANGELOG.md` gets a `## vX.Y.Z` entry (prepended at the top, newest-first).
 4. Bump `version:` in `SKILL.md`, commit, tag `vX.Y.Z`.
 5. `tools/oc-ledger sync --version X.Y.Z --why "..."` (gates on the battery receipt + changelog entry).
 6. Push skill mirror (main + tag); state mirror parity sweep.
@@ -68,7 +68,7 @@ Highlights:
 ## Conventions
 
 - **Bare `#N` is fork-issue space.** On any upstream surface, qualify: `leshchenko1979/opencrabs#N`.
-- **CHANGELOG is newest-LAST.**
+- **CHANGELOG is newest-FIRST.**
 - **Every tool journals.** State changes write timestamped lines to `tools.log` via `oc-log.sh` before the next step; a run unreconstructable from durable state is not done.
 - `battery-last.json` is committed on purpose — it is the durable ship receipt.
 

@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.192
+version: 0.4.193
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -22,7 +22,7 @@ metadata:
     - https://github.com/adolfousier/opencrabs (upstream — PRs only; new issues NEVER filed here)
     - https://github.com/leshchenko1979/opencrabs (fork — push target + ISSUES HOME)
   provenance:
-    - "Full release history moved out of the load path at v0.4.43 (B6, Duty-6 run-2) — every v0.4.31+ bump entry lives in CHANGELOG.md (git-tracked, appended newest-last). This pointer replaces the inline list (~3k tokens loaded on every role-file claim). Current version: see CHANGELOG.md."
+    - "Full release history moved out of the load path at v0.4.43 (B6, Duty-6 run-2) — every v0.4.31+ bump entry lives in CHANGELOG.md (git-tracked, prepended newest-first). This pointer replaces the inline list (~3k tokens loaded on every role-file claim). Current version: see CHANGELOG.md."
 ---
 
 # opencrabs-dev — OpenCrabs source procedure

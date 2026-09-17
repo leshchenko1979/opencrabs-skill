@@ -130,7 +130,7 @@ if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-ledger" "$@"; else
 trap 'oc_log_finish $?' EXIT
 
 SKILL_DIR="${OC_SKILL_DIR:-$(cd "$_OC_DIR/.." && pwd)}"
-STATE_DIR_DEFAULT="/root/.opencrabs/profiles/ops/opencrabs-dev"
+STATE_DIR_DEFAULT="${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}"
 LEDGER=""
 SELFTEST=0
 # confirm + swap-result: tool-written mechanical kinds (cmd_confirm, oc-deploy

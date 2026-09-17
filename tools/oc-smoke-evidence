@@ -65,7 +65,7 @@ append_log() { # newline-safe append (defect #13): a log left unterminated by a
   printf '%s\n' "$c" >> "$f"
 }
 
-STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"
 CANON_LOG="$STATE_DIR/smoke-verdicts.log"   # M2-2: the ONLY sanctioned target
 UNIT="opencrabs-ops"; MARKERS=""; NEGCTRL=""; APPEND_LOG=""
 LATE_MODE=""; LATE_SHA=""; LATE_RUN=""; LATE_ACTOR=""; LATE_ISSUE=""

@@ -17,7 +17,7 @@
 #       here so the Session-Id extraction lives in ONE place (E2 finding 5).
 #   ./tools/oc-attrib --repo <path> --deployed [--ledger workers-ledger.json] [--json]
 #       --deployed composes <prev_sha>..<deployed_sha> from deployed markers
-#       (deployed.sha + deployed.meta.json) in $OC_DEPLOY_STATE_DIR (default /root/.opencrabs/profiles/ops/opencrabs-dev — post-v0.4.60 state split)
+#       (deployed.sha + deployed.meta.json) in $OC_DEPLOY_STATE_DIR (default ${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev} — post-v0.4.60 state split)
 #   ./tools/oc-attrib --selftest
 #
 # Exit codes: 0 ok · 2 usage / bad range syntax · 3 git failure · 4 empty range
@@ -112,7 +112,7 @@ fi
 # C2 (KERNEL 2026-08-28): --deployed composes prev_sha..deployed from markers.
 if [ "$DEPLOYED" -eq 1 ]; then
   [ -z "$RANGE" ] || usage   # --range and --deployed are alternatives
-  SD="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"   # v0.4.60: state dir (owner 06:03Z migration)
+  SD="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"   # v0.4.60: state dir (owner 06:03Z migration)
   TO_REPO="$(head -1 "$SD/deployed.sha" 2>/dev/null)"
   FROM_REPO="$(jq -r '.prev_sha // empty' "$SD/deployed.meta.json" 2>/dev/null)"
   [ -n "$TO_REPO" ] && [ -n "$FROM_REPO" ] || { echo "deployed markers missing in: $SD" >&2; exit 5; }

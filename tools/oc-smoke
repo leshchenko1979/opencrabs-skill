@@ -25,7 +25,7 @@ set -o pipefail
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"
 CANON_LOG="$STATE_DIR/smoke-verdicts.log"
 EVIDENCE_TOOL="$SCRIPT_DIR/oc-smoke-evidence"
 
@@ -128,7 +128,7 @@ EOF
   out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
     OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
     "$0" 235 --probe "echo probe-ok" --evidence "tested feature" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && grep -q "PASS" "$d/state/smoke-verdicts.log" && grep -q "probe-ok" "$d/state/smoke-verdicts.log"; then
+  if [ "$rc" -eq 0 ] && grep -q "PASS" "$d/state/smoke-verdicts.log" && grep -q "probe-ok" "$d/state/smoke-verdicts.log" && grep -q "sha=" "$d/state/smoke-verdicts.log"; then
     t_ok "happy path PASS with probe -> 0 and verdict row written"
   else
     t_bad "happy path (rc=$rc out=$out)"
@@ -313,7 +313,7 @@ fi
 # 4. Append canonical 4-leg smoke verdict row
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TAB=$'\t'
-ROW="${TS}${TAB}${VERDICT}${TAB}${ISSUE}${TAB}${DEPLOYED_SHA}${TAB}${RUN_ID}${TAB}${TARGET}${TAB}${ACTOR}${TAB}${FULL_EVIDENCE}"
+ROW="${TS}${TAB}${VERDICT}${TAB}issue=#${ISSUE}${TAB}sha=${DEPLOYED_SHA}${TAB}run=${RUN_ID}${TAB}target=${TARGET}${TAB}actor=${ACTOR}${TAB}evidence=\"${FULL_EVIDENCE}\""
 
 append_log_safe "$CANON_LOG" "$ROW"
 echo "$PROG: recorded verdict row ($VERDICT) for #$ISSUE in $CANON_LOG"

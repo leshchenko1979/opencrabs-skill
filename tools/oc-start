@@ -167,7 +167,9 @@ fi
 # ---- step 3: worktree -------------------------------------------------------
 if ! "$WT_BIN" add "$TASK" "$BRANCH" --repo "$REPO" 2>&1; then
   echo "$PROG: WORKTREE FAILED (see oc-wt line above — behind-base gate etc.)." >&2
-  echo "  resume: oc-wt add $TASK $BRANCH --repo $REPO   (claim n + branch $BRANCH already landed)" >&2
+  echo "  Rolling back branch $BRANCH..." >&2
+  "$GIT_BIN" -C "$REPO" branch -D "$BRANCH" >/dev/null 2>&1 || true
+  echo "  resume: oc-start $ISSUE --branch $BRANCH --task $TASK --repo $REPO" >&2
   exit 5
 fi
 

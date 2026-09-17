@@ -40,9 +40,9 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-seal-state" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
-BASE="${OC_BASELINE:-/root/.opencrabs/profiles/ops/opencrabs-dev/baseline.json}"
-ORDERS="${OC_ORDERS:-/root/.opencrabs/profiles/ops/opencrabs-dev/orders.json}"
-GIT="${OC_GIT:-/root/opencrabs}"
+BASE="${OC_BASELINE:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/baseline.json}"
+ORDERS="${OC_ORDERS:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/orders.json}"
+GIT="${OC_GIT:-${OC_GIT_ROOT:-$HOME/opencrabs}}"
 SHA="" RUN_ID="" BIN_SHA="" FEATURES="" MARKER="" FOUND="" EVIDENCE="" NOTE="" CYCLE=""
 CONTRIB_FROM="" CONTRIB_TO=""
 ADD_ORDER="" ADD_ORDER_FEAT="" MARK_ORDER="" WITH_RUN="" MARK_STATUS="" ORDER_EVIDENCE="" PURGE_ORDER=""

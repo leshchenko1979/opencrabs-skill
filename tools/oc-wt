@@ -12,7 +12,7 @@
 # per the /opencrabs-dev skill) — EXCEPT via the EXPLICIT --create flag (E8
 # v0.4.78 escape hatch: PR-head branches off a foreign base; the lane still
 # names the branch, oc-wt only executes creation).
-# Worktree paths stay frozen at ~/oc-wt-<task>.
+# Worktree paths stay located at $HOME/opencrabs-wt/<task>.
 #
 # Usage:
 #   oc-wt add <task> <branch> [--base origin/main] [--create [--from REF]] [--force] [--repo P] [--no-log]

@@ -116,7 +116,7 @@
 #   - Plan-only UNLESS --execute. Every planned action prints as "PLAN: ...".
 #     NEVER bare exit 0 — plan mode always prints its full delta.
 #   - Kill file aborts EVERY invocation first (exit 9), selftest included.
-#     Either $STATE_DIR/oc-deploy.kill or /root/oc-work/oc-deploy.disabled.
+#     Either $STATE_DIR/oc-deploy.kill or ${HOME:-/root}/oc-work/oc-deploy.disabled.
 #   - Swap actions (poll execute + swap-execute) require stage >= S2.
 #   - Consent gate RETIRED 2026-08-28 (owner order): GREEN run -> auto-swap.
 #   - Shadow journal $STATE_DIR/oc-deploy-shadow.log records every run.
@@ -146,7 +146,7 @@ trap 'oc_log_finish $?' EXIT
 # oc-deploy/journal, shadow log) default to the STATE dir — the skill repo
 # holds code only. Migration shipped same bump; OC_DEPLOY_STATE_DIR override
 # unchanged (selftest fixtures + test isolation rely on it).
-STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"
 # Ledger resolution (v0.4.38, owner-approved 2026-08-29 "Go"): live runs MUST
 # hit the CANONICAL ledger. The old $STATE_DIR default kept a second ledger in
 # the skill dir — live swap stamps + fanout reads used it while HQ
@@ -154,7 +154,7 @@ STATE_DIR="${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}"
 # paths pointing at an empty dir, cycle counter reset 25->1 (incident
 # 2026-08-29). OC_LEDGER overrides everything; an explicit OC_DEPLOY_STATE_DIR
 # keeps selftest/battery fixtures isolated on their own ledger file.
-CANONICAL_LEDGER="/root/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json"
+CANONICAL_LEDGER="${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/workers-ledger.json"
 if [ -n "${OC_LEDGER:-}" ]; then
   LEDGER="$OC_LEDGER"
 elif [ -n "${OC_DEPLOY_STATE_DIR:-}" ]; then
@@ -164,7 +164,7 @@ else
 fi
 [ -f "$LEDGER" ] && LEDGER="$(readlink -f "$LEDGER")"  # canonical path: never write through a symlink (mv replaces links -> split-brain; drill incident 2026-08-28)
 KILL_FILE="$STATE_DIR/oc-deploy.kill"
-KILL_FILE2="${OC_DEPLOY_KILL_FILE:-/root/oc-work/oc-deploy.disabled}"
+KILL_FILE2="${OC_DEPLOY_KILL_FILE:-${HOME:-/root}/oc-work/oc-deploy.disabled}"
 SHADOW="$STATE_DIR/oc-deploy-shadow.log"
 DEPLOYED="$STATE_DIR/deployed.sha"
 DEPLOYED_META="$STATE_DIR/deployed.meta.json"
@@ -184,7 +184,7 @@ SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 
 # Phase B swap-target overrides (sandbox/selftest point these elsewhere)
 SWAP_TARGET="${OC_SWAP_TARGET:-/usr/local/bin/opencrabs}"
-BACKUP_DIR="${OC_SWAP_BACKUP_DIR:-/root/opencrabs-binary-backups}"
+BACKUP_DIR="${OC_SWAP_BACKUP_DIR:-${HOME:-/root}/opencrabs-binary-backups}"
 RESTART_CMD="${OC_SWAP_RESTART_CMD:-systemctl --user restart opencrabs-ops.service}"
 ACTIVE_CMD="${OC_SWAP_ACTIVE_CMD:-systemctl --user is-active opencrabs-ops.service}"
 PID_CMD="${OC_SWAP_PID_CMD:-systemctl --user show -p MainPID --value opencrabs-ops.service}"
@@ -286,7 +286,7 @@ swap_ensure_detached() { # re-exec outside the bounce cgroup (argv from ORIG_ARG
 }
 
 lineage_check_run() { # [--prev P] [--sha S] [--repo R] [--json]
-  local repo="${OC_DEPLOY_REPO:-/root/opencrabs}" prev="" sha="" json=0
+  local repo="${OC_DEPLOY_REPO:-${HOME:-/root}/opencrabs}" prev="" sha="" json=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --prev) prev="${2:-}"; shift ;;
@@ -2181,7 +2181,7 @@ swap_execute() {
   # (reported 2026-09-12). An orphaned deployed commit whose PATCH CONTENT survives in the incoming
   # lineage is now accepted as equivalent; only a genuinely absent change is refused.
   if [ "$PREV_SHA" != "none" ] && [ -n "$PREV_SHA" ] && [ "$DRILL" != "1" ]; then
-    LV_REPO="${OC_DEPLOY_REPO:-/root/opencrabs}"
+    LV_REPO="${OC_DEPLOY_REPO:-${HOME:-/root}/opencrabs}"
     LV_OUT="$(lineage_verdict "$LV_REPO" "$PREV_SHA" "$SHA")"
     LV_KIND="${LV_OUT%% *}"; LV_TWIN="${LV_OUT#* }"
     case "$LV_KIND" in
@@ -2839,7 +2839,7 @@ case "$MODE" in
             # OR a descendant commit containing our SHA (coalesced carrier run).
             if [ "$CAND_SHA" = "$SHA" ]; then
               : # exact match
-            elif [ -n "$CAND_SHA" ] && git -C "${OC_DEPLOY_REPO:-/root/opencrabs}" merge-base --is-ancestor "$SHA" "$CAND_SHA" 2>/dev/null; then
+            elif [ -n "$CAND_SHA" ] && git -C "${OC_DEPLOY_REPO:-${HOME:-/root}/opencrabs}" merge-base --is-ancestor "$SHA" "$CAND_SHA" 2>/dev/null; then
               echo "oc-deploy ship-wait: candidate run $CANDID built descendant $CAND_SHA (contains our sha $SHA — coalesced run)" >&2
             else
               continue

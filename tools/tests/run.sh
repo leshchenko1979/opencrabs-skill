@@ -64,7 +64,7 @@ if [ "${1:-}" = "--chunk" ] && [ -n "${2:-}" ] && [ -z "${BATTERY_IN_CHUNK:-}" ]
   source "$C"; rm -f "$C"
   exit $(( FAIL > 0 ? 1 : 0 ))
 fi
-JOBS="${OC_BATTERY_JOBS:-1}"
+JOBS="${OC_BATTERY_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 if [ "${1:-}" = "--jobs" ] && [ -n "${2:-}" ]; then JOBS="$2"; shift 2; fi
 case "${1:-}" in --jobs=*) JOBS="${1#--jobs=}"; shift ;; esac
 emit_summary() {
@@ -79,20 +79,21 @@ emit_summary() {
   [ "$FAIL" -eq 0 ] || note "tests FAILED (nonzero exit below)"
   return $(( FAIL > 0 ? 1 : 0 ))
 }
-if [ "$JOBS" -gt 1 ]; then
+if [ "${BATTERY_IN_CHUNK:-0}" = "0" ] && [ "$JOBS" -gt 1 ]; then
   BATTERY_MODE="parallel jobs=$JOBS"
   NCH="$(grep -cE '^# ---- [0-9]' "$0")"
   PT="$(mktemp -d -t oc-battery-pt.XXXXXX)"
+  RUN_SCRIPT="$(readlink -f "$0" 2>/dev/null || echo "$0")"
   for k in $(seq 1 "$NCH"); do
-    ( bash "$0" --chunk "$k" > "$PT/$k.log" 2>&1 ) &
-    while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; done
+    ( bash "$RUN_SCRIPT" --chunk "$k" > "$PT/$k.log" 2>&1 ) &
+    while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do sleep 0.05; done
   done
   wait
   PASS=0; FAIL=0
   for k in $(seq 1 "$NCH"); do
-    cat "$PT/$k.log"
-    o="$(grep -c '^  ok ' "$PT/$k.log" || true)"; f="$(grep -c '^  FAIL ' "$PT/$k.log" || true)"
-    PASS=$((PASS + o)); FAIL=$((FAIL + f))
+    [ -f "$PT/$k.log" ] && cat "$PT/$k.log"
+    o="$(grep -c '^  ok ' "$PT/$k.log" 2>/dev/null || true)"; f="$(grep -c '^  FAIL ' "$PT/$k.log" 2>/dev/null || true)"
+    PASS=$((PASS + ${o:-0})); FAIL=$((FAIL + ${f:-0}))
   done
   rm -rf "$PT"
   emit_summary

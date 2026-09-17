@@ -72,9 +72,9 @@ EOF
 fi
 
 HOURS=24; GRACE=120; SUPERSEDE_HOURS=12
-LOG="${OC_TOOLS_LOG:-/root/.opencrabs/profiles/ops/opencrabs-dev/tools.log}"
-JDIR="/root/.opencrabs/profiles/ops/opencrabs-dev/oc-deploy/journal"
-OCDEV_DIR="/root/.opencrabs/profiles/ops/opencrabs-dev"
+LOG="${OC_TOOLS_LOG:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/tools.log}"
+JDIR="${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/oc-deploy/journal"
+OCDEV_DIR="${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}"
 DEPLOYED_META="$OCDEV_DIR/deployed.meta.json"
 while [ $# -gt 0 ]; do
   case "$1" in

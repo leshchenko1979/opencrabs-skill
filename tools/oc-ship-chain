@@ -271,7 +271,7 @@ fi
 # selftest/no-args/unknown-arg). Freeze enforcement was never weakened.
 # OC_SHIPCHAIN_FREEZE_FILE keeps the guard hermetically testable (selftest
 # points it at a temp file); production always uses the canonical path.
-FREEZE_FILE="${OC_SHIPCHAIN_FREEZE_FILE:-/root/.opencrabs/profiles/ops/opencrabs-dev/.fork-freeze}"
+FREEZE_FILE="${OC_SHIPCHAIN_FREEZE_FILE:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/.fork-freeze}"
 if [ -f "$FREEZE_FILE" ] && [ "${OC_SHIPCHAIN_FREEZE_OVERRIDE:-0}" != "1" ]; then
   die "FREEZE — fork rebase window is open (plan step 3); new chains are blocked. Remove $FREEZE_FILE at unfreeze, or set OC_SHIPCHAIN_FREEZE_OVERRIDE=1 for an HQ-sanctioned exception." 3
 fi
