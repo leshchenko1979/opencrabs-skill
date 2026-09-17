@@ -233,6 +233,22 @@ def parse_issue_map(prs):
 
     return issue_map, pr_entries
 
+SHARED_DECLARATION_REGISTRIES = {
+    'src/tests/mod.rs',
+    'src/brain/tools/mod.rs',
+    'src/channels/telegram/mod.rs',
+    'src/channels/telegram/rich/mod.rs',
+    'src/db/repository/mod.rs',
+    'src/memory/mod.rs',
+    'src/services/mod.rs',
+    'src/utils/mod.rs',
+    'src/brain/mod.rs',
+    'src/cron/mod.rs',
+}
+
+def filter_substantive_overlap(overlap_set):
+    return {f for f in overlap_set if f not in SHARED_DECLARATION_REGISTRIES}
+
 def get_affected_files_for_commits(commits_list, repo_path):
     files = set()
     for c in commits_list:
@@ -413,8 +429,9 @@ if action == 'check':
                     # Check file overlap
                     oc_files = set(get_affected_files_for_commits([oc], repo_path))
                     overlap = target_files.intersection(oc_files)
-                    if overlap:
-                        overlap_sample = ', '.join(sorted(list(overlap))[:3])
+                    substantive_overlap = filter_substantive_overlap(overlap)
+                    if substantive_overlap:
+                        overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
                         print('REFUSED: Target %s touches files of soaking feature %s (age: %.1fh < 24h) [HELD_DEPENDENT_SOAK: %s]' % (target, oc.get('short_sha', '')[:7], max(0.0, oc_age_hours), overlap_sample))
                         sys.exit(1)
 

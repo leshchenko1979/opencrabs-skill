@@ -249,6 +249,22 @@ def is_issue_harvested_upstream(issue_num, upstream_repo, repo_path, base_ref, s
                 return True
     return False
 
+SHARED_DECLARATION_REGISTRIES = {
+    'src/tests/mod.rs',
+    'src/brain/tools/mod.rs',
+    'src/channels/telegram/mod.rs',
+    'src/channels/telegram/rich/mod.rs',
+    'src/db/repository/mod.rs',
+    'src/memory/mod.rs',
+    'src/services/mod.rs',
+    'src/utils/mod.rs',
+    'src/brain/mod.rs',
+    'src/cron/mod.rs',
+}
+
+def filter_substantive_overlap(overlap_set):
+    return {f for f in overlap_set if f not in SHARED_DECLARATION_REGISTRIES}
+
 def get_affected_files(commits, repo_path):
     files = set()
     for c in commits:
@@ -514,8 +530,9 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                     if other_age_hours < 24.0:
                         other_files = set(get_affected_files([other_sha], repo_path))
                         overlap = target_files_set.intersection(other_files)
-                        if overlap:
-                            overlap_sample = ', '.join(sorted(list(overlap))[:3])
+                        substantive_overlap = filter_substantive_overlap(overlap)
+                        if substantive_overlap:
+                            overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
                             return {
                                 'status': 'REJECTED',
                                 'verdict': f'HELD_DEPENDENT_SOAK: Candidate touches files of soaking feature {other_sha[:8]} (age: {max(0.0, other_age_hours):.1f}h < 24h, overlap: {overlap_sample})',
@@ -916,14 +933,17 @@ cmd_selftest() {
 
   # Commit with novel diff (#83) - old timestamp to pass soak
   echo "Config guard additions" >> "$mock_repo/config.rs"
-  git -C "$mock_repo" add config.rs
+  mkdir -p "$mock_repo/src/tests"
+  echo "pub mod old_test;" > "$mock_repo/src/tests/mod.rs"
+  git -C "$mock_repo" add config.rs src/tests/mod.rs
   GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" git -C "$mock_repo" commit -q -m "fix(config): serde_ignored write guard (#83)"
   local commit_83
   commit_83="$(git -C "$mock_repo" rev-parse HEAD)"
 
-  # Fresh feat commit under 24h soak (#300)
+  # Fresh feat commit under 24h soak (#300) - also touches shared src/tests/mod.rs
   echo "Fresh feature" >> "$mock_repo/feat.rs"
-  git -C "$mock_repo" add feat.rs
+  echo "pub mod feat_test;" >> "$mock_repo/src/tests/mod.rs"
+  git -C "$mock_repo" add feat.rs src/tests/mod.rs
   GIT_COMMITTER_DATE="2026-09-14T10:00:00Z" GIT_AUTHOR_DATE="2026-09-14T10:00:00Z" git -C "$mock_repo" commit -q -m "feat(new): fresh feature under soak (#300)"
   local commit_300
   commit_300="$(git -C "$mock_repo" rev-parse HEAD)"
