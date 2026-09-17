@@ -1447,6 +1447,36 @@ AMBEOF
   [ -s "$T/lessons-ir.out" ] && bad "lessons-invalidregex-empty" || ok
   bash "$ME" lessons --class "GATE-BYPASS" > "$T/lessons-ci.out" 2>/dev/null
   grep -q "LESSON-FIXTURE" "$T/lessons-ci.out" && ok || bad "lessons-case-insensitive"
+  # 54b (#272, toolsmith 2fae1230): sweep-closed-claims token extraction & multi-ref
+  # Verifies that dates, GitHub handles, UUID prefixes, and multi-ref strings are parsed
+  # by issue tokens rather than naive digit runs (#?(\d+)), and that mock gh closed detection works.
+  jq -n '{workers:[], events:[
+      {n:1, t:"2026-09-12T00:00:00Z", by:"editor 11111111-1111-1111-1111-111111111111", kind:"claim", what:"Claimed compaction-signal feature 2026-08-27 #29 #1256"},
+      {n:2, t:"2026-09-12T00:00:00Z", by:"editor 22222222-2222-2222-2222-222222222222", kind:"claim", what:"claim leshchenko1979/opencrabs#52 row-budget share #49"},
+      {n:3, t:"2026-09-12T00:00:00Z", by:"unrostered-actor 6630dc9a-0eeb-46c2-95b8-000000000000", kind:"claim", what:"CLAIM #126 session 6630dc9a-0eeb"},
+      {n:4, t:"2026-09-12T00:00:00Z", by:"editor 33333333-3333-3333-3333-333333333333", kind:"claim", what:"CLAIM #38, #80 — bg-resume multi-ref"},
+      {n:5, t:"2026-09-12T00:01:00Z", by:"editor 33333333-3333-3333-3333-333333333333", kind:"close", what:"CLOSE #38 — half closed"}]}' > "$UAT/sweep_fixture.json"
+  
+  # Create a mock gh script to return known closed issues (29, 49, 126, 80)
+  mkdir -p "$T/mock_bin"
+  cat << 'EOF' > "$T/mock_bin/gh"
+#!/bin/sh
+if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+  echo '[{"number":29,"title":"compaction"},{"number":49,"title":"cap"},{"number":126,"title":"ontology"},{"number":80,"title":"bg-resume"}]'
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$T/mock_bin/gh"
+  
+  PATH="$T/mock_bin:$PATH" OC_LEDGER="$UAT/sweep_fixture.json" bash "$ME" sweep-closed-claims > "$T/sweep.out" 2>/dev/null; chk "sweep-closed-claims-rc" 0 $?
+  grep -q "Issue #29 (CLOSED: compaction)" "$T/sweep.out" && ok || bad "sweep-date-prefix-token-extracted"
+  grep -q "Issue #49 (CLOSED: cap)" "$T/sweep.out" && ok || bad "sweep-gh-handle-token-extracted"
+  grep -q "Issue #126 (CLOSED: ontology)" "$T/sweep.out" && ok || bad "sweep-uuid-prefix-token-extracted"
+  grep -q "Issue #80 (CLOSED: bg-resume)" "$T/sweep.out" && ok || bad "sweep-multi-ref-token-extracted"
+  # #38 was closed in event 5, so it should NOT be flagged
+  grep -q "Issue #38 " "$T/sweep.out" && bad "sweep-closed-half-multi-ref-flagged" || ok
+
   # 55 (v0.4.131, WAVE-GROUP-B B3): notify-fanout kind acceptance — wave
   # completions stamp natively, ending the note-row workaround.
   OC_ACTOR="$W4" bash "$ME" stamp notify-fanout "fanout 'T': sent=1 skipped=0 failed=0 ids: 99999999" >/dev/null 2>&1
@@ -1894,6 +1924,18 @@ import sys, os, json, subprocess, re
 ledger_file = sys.argv[1]
 dry_run = sys.argv[2] == "1"
 
+def issue_ref_tokens(text):
+    if not text:
+        return []
+    matches = re.findall(r"(?:#[0-9]+|issue[ \t=#]*[0-9]+)", text, re.IGNORECASE)
+    res = []
+    for m in matches:
+        for num in re.findall(r"[0-9]+", m):
+            n = int(num)
+            if n not in res:
+                res.append(n)
+    return res
+
 try:
     with open(ledger_file) as f:
         data = json.load(f)
@@ -1902,32 +1944,48 @@ except Exception as e:
     sys.exit(3)
 
 events = data.get("events", [])
+parsed = []
+for idx, e in enumerate(events):
+    parsed.append({
+        "idx": idx,
+        "by": e.get("by") or "",
+        "kind": e.get("kind") or "",
+        "t": e.get("t") or "",
+        "what": e.get("what") or "",
+        "tokens": issue_ref_tokens(e.get("what") or "")
+    })
+
+close_kinds = {"close", "confirm", "reject", "done", "unclaim"}
 open_claims = []
 
-for idx, ev in enumerate(events):
-    if ev.get("kind") != "claim":
+for c in parsed:
+    if c["kind"] != "claim":
         continue
-    by = ev.get("by", "")
-    what = ev.get("what", "")
-    t = ev.get("t", "")
-    
-    # Extract issue number
-    m = re.search(r"#?(\d+)", what)
-    if not m:
+    if not c["tokens"]:
         continue
-    iss_num = int(m.group(1))
+    c_by = c["by"]
+    unattr = 1 if ("(unattributed" in c_by or "unrostered-actor" in c_by) else 0
+    c_idx = c["idx"]
 
-    # Check if closed later
-    closed = False
-    for later_ev in events[idx+1:]:
-        l_kind = later_ev.get("kind", "")
-        l_what = later_ev.get("what", "")
-        if l_kind in ["close", "confirm", "reject", "done", "unclaim"] and f"#{iss_num}" in l_what:
-            closed = True
-            break
-    if not closed:
+    unclosed_tokens = []
+    for tok in c["tokens"]:
+        closed = False
+        for e in parsed[c_idx + 1:]:
+            if e["kind"] in close_kinds:
+                if unattr == 1 or (c_by and c_by in e["by"]):
+                    if tok in e["tokens"]:
+                        closed = True
+                        break
+        if not closed:
+            unclosed_tokens.append(tok)
+
+    if unclosed_tokens:
         open_claims.append({
-            "idx": idx, "by": by, "what": what, "t": t, "issue": iss_num
+            "idx": c_idx,
+            "by": c_by,
+            "what": c["what"],
+            "t": c["t"],
+            "tokens": unclosed_tokens
         })
 
 if not open_claims:
@@ -1948,17 +2006,16 @@ if res.returncode == 0:
 
 stale = []
 for oc in open_claims:
-    iss = oc["issue"]
-    if iss in closed_map:
-        stale.append((oc, closed_map[iss]))
+    stale_tokens = [tok for tok in oc["tokens"] if tok in closed_map]
+    for st in stale_tokens:
+        stale.append((oc, st, closed_map[st]))
 
 if not stale:
     print("All open claims map to OPEN issues.")
     sys.exit(0)
 
 print(f"Found {len(stale)} open claim(s) for CLOSED issues:")
-for oc, title in stale:
-    iss_n = oc["issue"]
+for oc, iss_n, title in stale:
     claimed_by = oc["by"]
     print(f"  Issue #{iss_n} (CLOSED: {title[:50]}) claimed by {claimed_by}")
 
