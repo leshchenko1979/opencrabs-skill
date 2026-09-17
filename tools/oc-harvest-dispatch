@@ -113,7 +113,84 @@ def load_swap_history(state_dir):
         except Exception:
             pass
     swaps.sort(key=lambda x: x[1])
-    return swaps
+    # One entry per sha, earliest ts wins (#276). deployed.meta.json re-records the newest
+    # journal swap, so the same sha arrives twice ~seconds apart; the duplicate makes
+    # swaps[-2] == swaps[-1], and 'is swaps[-2] an ancestor of newest' then answers TRUE
+    # (a commit is its own ancestor), which reads as an intact lineage and silently
+    # disables the twin fallback.
+    dedup = {}
+    for s_sha, s_ts in swaps:
+        if s_sha not in dedup or s_ts < dedup[s_sha]:
+            dedup[s_sha] = s_ts
+    return sorted(dedup.items(), key=lambda x: x[1])
+
+_SWAP_LINEAGE_CACHE = {}
+_TWIN_SCAN_CACHE = {}
+
+def _swap_suffix_start(repo_path, swaps):
+    # Index of the earliest swap in the contiguous sha lineage ending at the newest swap.
+    # A fork rebase replays every commit under a NEW sha, orphaning all pre-rebase swap
+    # shas: no pre-rebase swap is an ancestor of any current commit. The ancestor-walk
+    # binary search is only sound over the contiguous suffix, so anything older is a
+    # rewrite boundary and must be resolved by patch-id twin instead (#276).
+    # Returns 0 when the chain is intact (the whole history is one lineage).
+    if len(swaps) < 2:
+        return 0
+    newest = swaps[-1][0]
+    if check_ancestor(swaps[-2][0], newest, repo_path):
+        return 0
+    i = len(swaps) - 1
+    while i > 0 and check_ancestor(swaps[i - 1][0], newest, repo_path):
+        i -= 1
+    return i
+
+def swap_suffix_start_cached(repo_path, swaps):
+    key = (repo_path, tuple(s for s, _ in swaps))
+    if key not in _SWAP_LINEAGE_CACHE:
+        _SWAP_LINEAGE_CACHE[key] = _swap_suffix_start(repo_path, swaps)
+    return _SWAP_LINEAGE_CACHE[key]
+
+def range_patch_ids(repo_path, base_sha, tip_sha):
+    # Yield (patch_id, commit_sha) for every non-merge commit introduced by base..tip.
+    # Same primitive shape oc-deploy's rebase-aware swap guard uses to pair a rewritten
+    # commit with its twin.
+    rng = f'{base_sha}..{tip_sha}' if base_sha else tip_sha
+    res = subprocess.run(['git', '-C', repo_path, 'log', '-p', '--no-merges',
+                          '--format=commit %H', rng], capture_output=True, text=True)
+    if res.returncode != 0 or not res.stdout:
+        return
+    pid = subprocess.run(['git', 'patch-id', '--stable'], input=res.stdout,
+                         capture_output=True, text=True)
+    for line in pid.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            yield parts[0], parts[1]
+
+def twin_deploy_ts(commit_sha, repo_path, swaps, before_idx):
+    # Earliest swap ts whose introduced range carries a commit with the same patch-id.
+    # Rebase twin resolution (#276): after a history rewrite the commit's own sha is
+    # unknown to the pre-rebase swaps, but the identical patch was already deployed
+    # under the old sha. Ranges are scanned oldest -> newest so the FIRST match is the
+    # earliest deploy; results are cached across calls (one history walk per run).
+    if before_idx <= 0:
+        return 0
+    target = get_patch_id(commit_sha, repo_path)
+    if not target:
+        return 0
+    key = (repo_path, tuple(s for s, _ in swaps))
+    state = _TWIN_SCAN_CACHE.setdefault(key, {'next_idx': 0, 'pid_ts': {}})
+    pid_ts = state['pid_ts']
+    if target in pid_ts:
+        return pid_ts[target]
+    while state['next_idx'] < before_idx:
+        i = state['next_idx']
+        state['next_idx'] += 1
+        base = swaps[i - 1][0] if i > 0 else None
+        for pid, _sha in range_patch_ids(repo_path, base, swaps[i][0]):
+            pid_ts.setdefault(pid, swaps[i][1])
+        if target in pid_ts:
+            return pid_ts[target]
+    return pid_ts.get(target, 0)
 
 def get_commit_deploy_ts(commit_sha, repo_path, swaps):
     mock_env = os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS')
@@ -127,22 +204,29 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps):
     if not os.path.isdir(repo_path):
         return 0
     latest_sha = swaps[-1][0]
-    rc = subprocess.run(['git', '-C', repo_path, 'merge-base', '--is-ancestor', commit_sha, latest_sha], capture_output=True).returncode
-    if rc != 0:
-        return 0
-    low = 0
-    high = len(swaps) - 1
-    earliest_idx = high
-    while low <= high:
-        mid = (low + high) // 2
-        mid_sha = swaps[mid][0]
-        rc = subprocess.run(['git', '-C', repo_path, 'merge-base', '--is-ancestor', commit_sha, mid_sha], capture_output=True).returncode
-        if rc == 0:
-            earliest_idx = mid
-            high = mid - 1
-        else:
-            low = mid + 1
-    return swaps[earliest_idx][1]
+    suffix_start = swap_suffix_start_cached(repo_path, swaps)
+    ts = 0
+    if check_ancestor(commit_sha, latest_sha, repo_path):
+        # Bounded to the contiguous lineage suffix: below it the predicate is not monotone.
+        low = suffix_start
+        high = len(swaps) - 1
+        earliest_idx = high
+        while low <= high:
+            mid = (low + high) // 2
+            if check_ancestor(commit_sha, swaps[mid][0], repo_path):
+                earliest_idx = mid
+                high = mid - 1
+            else:
+                low = mid + 1
+        ts = swaps[earliest_idx][1]
+    # #276: a rewritten lineage orphans the pre-rebase swaps, so the sha walk above can
+    # only ever reach the newest swap. Fall back to the patch-id twin so a days-old
+    # change anchors on the swap that first deployed its content, not on the rebase.
+    if suffix_start > 0:
+        twin_ts = twin_deploy_ts(commit_sha, repo_path, swaps, suffix_start)
+        if twin_ts and (ts == 0 or twin_ts < ts):
+            return twin_ts
+    return ts
 
 def run_cmd(cmd, cwd=None):
     res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
@@ -152,7 +236,10 @@ def get_patch_id(commit, repo_path):
     rc, out, _ = run_cmd(['git', '-C', repo_path, 'show', commit])
     if rc != 0:
         return None
-    p = subprocess.run(['git', 'patch-id'], input=out, text=True, capture_output=True)
+    # --stable is REQUIRED: the default (unstable) hash is sensitive to file order, so on
+    # any multi-file diff it disagrees with the --stable ids range_patch_ids() produces and
+    # every twin lookup silently misses (#276). Same mode oc-deploy's rebase guard uses.
+    p = subprocess.run(['git', 'patch-id', '--stable'], input=out, text=True, capture_output=True)
     if p.returncode == 0 and p.stdout:
         return p.stdout.strip().split()[0]
     return None
@@ -363,6 +450,39 @@ def get_available_editors(ledger_file, target_uuid=None):
         if u not in busy_uuids:
             available.append(w)
     return available
+
+def lane_cursor_path(ledger_file):
+    return os.path.join(os.path.dirname(os.path.abspath(ledger_file)), '.oc-harvest-dispatch-lane-cursor')
+
+def read_lane_cursor(ledger_file):
+    try:
+        with open(lane_cursor_path(ledger_file)) as f:
+            return f.read().strip()
+    except Exception:
+        return ''
+
+def write_lane_cursor(ledger_file, uuid):
+    try:
+        with open(lane_cursor_path(ledger_file), 'w') as f:
+            f.write((uuid or '') + '\n')
+    except Exception:
+        pass
+
+def select_spread_lane(avail, ledger_file):
+    # Round-robin auto-selection across the idle editor lanes (#276).
+    # dispatch stamps no ledger state, so a stateless 'avail[0]' pins every unit of a
+    # cycle to one editor -- a serialized queue, not the parallel harvest wave the patrol
+    # contract calls for. A cursor file beside the ledger rotates the pick; a stale cursor
+    # (lane gone or now busy) simply restarts at the head of the ordered list.
+    ordered = sorted(avail, key=lambda w: w.get('uuid', ''))
+    if not ordered:
+        return None
+    cursor = read_lane_cursor(ledger_file)
+    if cursor:
+        for pos, w in enumerate(ordered):
+            if w.get('uuid') == cursor:
+                return ordered[(pos + 1) % len(ordered)]
+    return ordered[0]
 
 def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=None, mock_inventory=None, mock_ledger=None):
     issue_num = None
@@ -749,7 +869,10 @@ elif action == 'dispatch':
         if not avail:
             print('CAPACITY_EXHAUSTED: All registered editor lanes currently have active claims.', file=sys.stderr)
             sys.exit(4)
-        selected_worker = avail[0]
+        selected_worker = select_spread_lane(avail, ledger_file)
+        if not selected_worker:
+            print('CAPACITY_EXHAUSTED: All registered editor lanes currently have active claims.', file=sys.stderr)
+            sys.exit(4)
 
     # Step 3: Format wire envelope
     iss_num = v.get('issue')
@@ -827,6 +950,9 @@ Target Branch: {branch_name}
         print(f'NOTIFICATION_FAILED: lib/oc-notify.sh exited {rc}: {err.strip()}', file=sys.stderr)
         sys.exit(3)
 
+    # Advance the spread cursor only on a delivered unit, so the next auto-selection
+    # in this cycle picks a different idle lane (#276).
+    write_lane_cursor(ledger_file, w_uuid)
     print(f'SUCCESS: Harvest package dispatched to editor {w_uuid}.')
     sys.exit(0)
 " "$@"
@@ -1046,6 +1172,103 @@ EOF
   fi
   unset OC_HARVEST_MOCK_DEPLOYED_TS
 
+  # 4c/4d. Rebase twin resolution (#276): after a history rewrite, the soak clock must
+  # anchor on the swap that first deployed the change's CONTENT (patch-id twin), never
+  # collapse every commit onto the newest swap.
+  # The fixture deliberately reproduces BOTH live defects, each of which silently
+  # disabled the fallback while every assertion still passed:
+  #   (a) the twin commit touches TWO files -- with a single-file diff git's default
+  #       (unstable) patch-id coincides with --stable, so a mode mismatch stays invisible;
+  #       multi-file is where the two disagree and the twin lookup misses.
+  #   (b) deployed.meta.json re-records the newest swap a few seconds after the journal
+  #       row -- without de-duplication swaps[-2] == swaps[-1], and "is swaps[-2] an
+  #       ancestor of newest" answers TRUE for a commit vs itself, so the suffix looks
+  #       intact and the twin fallback never runs.
+  local rebase_repo="$st_dir/rebase-repo"
+  mkdir -p "$rebase_repo"
+  git -C "$rebase_repo" init -q -b main
+  git -C "$rebase_repo" config user.email "test@example.com"
+  git -C "$rebase_repo" config user.name "Test Runner"
+  echo "base" > "$rebase_repo/base.txt"
+  git -C "$rebase_repo" add .
+  git -C "$rebase_repo" commit -q -m "base commit"
+  git -C "$rebase_repo" branch adolfousier/main
+
+  # Pre-rebase fork lineage: the feature lands here and is the old swap's tip.
+  # TWO files on purpose -- see (a) above.
+  echo "twin one" > "$rebase_repo/twin-a.txt"
+  echo "twin two" > "$rebase_repo/twin-b.txt"
+  git -C "$rebase_repo" add twin-a.txt twin-b.txt
+  git -C "$rebase_repo" commit -q -m "feat(twin): original feature (#401)"
+  local pre_swap_sha
+  pre_swap_sha="$(git -C "$rebase_repo" rev-parse HEAD)"
+
+  # Upstream must ADVANCE after the fork commit, otherwise the replay lands on the same
+  # parent and git reproduces the byte-identical commit -- the fixture would then model no
+  # rewrite at all (pre_swap_sha == new_twin_sha), the pre-rebase swap stays an ancestor of
+  # the newest one, and the twin fallback is legitimately never reached. The self-check
+  # below refuses that degenerate fixture.
+  git -C "$rebase_repo" checkout -q adolfousier/main
+  echo "upstream" > "$rebase_repo/upstream.txt"
+  git -C "$rebase_repo" add upstream.txt
+  git -C "$rebase_repo" commit -q -m "chore(upstream): advance base"
+
+  # Simulated rebase: the SAME patch replayed onto the upstream base under a NEW sha
+  git -C "$rebase_repo" checkout -q -B rebased adolfousier/main
+  git -C "$rebase_repo" cherry-pick "$pre_swap_sha" >/dev/null 2>&1
+  local new_twin_sha
+  new_twin_sha="$(git -C "$rebase_repo" rev-parse HEAD)"
+
+  if [ "$pre_swap_sha" = "$new_twin_sha" ]; then
+    echo "  bad 4c - fixture broken: the simulated rebase did not rewrite the sha, so this test would model no rewrite"
+    return 1
+  fi
+
+  # A genuinely new post-rebase feature (no pre-rebase twin anywhere)
+  echo "fresh content" > "$rebase_repo/fresh.txt"
+  git -C "$rebase_repo" add fresh.txt
+  git -C "$rebase_repo" commit -q -m "feat(fresh): brand new feature (#402)"
+  local new_fresh_sha
+  new_fresh_sha="$(git -C "$rebase_repo" rev-parse HEAD)"
+
+  # Post-rebase swap marker (so the newest swap sha is not the candidate itself)
+  echo "marker" > "$rebase_repo/.swap-marker"
+  git -C "$rebase_repo" add .swap-marker
+  git -C "$rebase_repo" commit -q -m "release: swap marker for rebased tree"
+  local post_swap_sha
+  post_swap_sha="$(git -C "$rebase_repo" rev-parse HEAD)"
+
+  # Isolated state dir so these fixtures never leak into the other assertions.
+  local rebase_state="$st_dir/rebase-state"
+  mkdir -p "$rebase_state/oc-deploy/journal"
+  printf '{"step":"auto-swap","sha":"%s","ts":"2026-09-10T00:00:00Z"}\n' "$pre_swap_sha" > "$rebase_state/oc-deploy/journal/swap-100.jsonl"
+  printf '{"step":"auto-swap","sha":"%s","ts":"2026-09-17T07:31:10Z"}\n' "$post_swap_sha" > "$rebase_state/oc-deploy/journal/swap-200.jsonl"
+  # (b) the duplicate: deployed.meta.json re-recording the newest swap seconds later.
+  printf '{"sha":"%s","swapped_at":"2026-09-17T07:31:21Z"}\n' "$post_swap_sha" > "$rebase_state/deployed.meta.json"
+
+  export STATE_DIR="$rebase_state"
+  export OC_HARVEST_NOW_TS="1789633800"
+
+  rc=0
+  out="$(run_engine "vet" "$new_twin_sha" "$rebase_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED"; then
+    echo "  ok 4c - vet rebased twin -> APPROVED on pre-rebase swap (guards --stable patch-id mode + duplicate-sha dedup)"
+  else
+    echo "  bad 4c - vet rebased twin expected rc=0 APPROVED via twin fallback (guards patch-id --stable mode AND duplicate-sha dedup), got rc=$rc ($out)"
+    return 1
+  fi
+
+  rc=0
+  out="$(run_engine "vet" "$new_fresh_sha" "$rebase_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "SOAK_GATE_VIOLATION"; then
+    echo "  ok 4d - vet genuinely new post-rebase feat -> SOAK_GATE_VIOLATION exit 1"
+  else
+    echo "  bad 4d - vet new post-rebase feat expected rc=1 SOAK_GATE_VIOLATION (no twin), got rc=$rc ($out)"
+    return 1
+  fi
+  unset OC_HARVEST_NOW_TS
+  unset STATE_DIR
+
   # 5. Dispatch to busy lane -> CAPACITY_EXHAUSTED (rc 4)
   rc=0
   out="$(run_engine "dispatch" "83" "$commit_83" "11111111-1111-1111-1111-111111111111" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "false" "true" 2>&1)" || rc=$?
@@ -1066,6 +1289,43 @@ EOF
     echo "  bad 6 - dispatch auto-selects idle lane expected rc=0 with idle editor, got rc=$rc ($out)"
     return 1
   fi
+  unset OC_HARVEST_MOCK_DEPLOYED_TS
+
+  # 6b. Lane spread (#276): auto-selection rotates across idle lanes instead of pinning
+  # every unit of a cycle onto the first available editor.
+  local spread_ledger="$st_dir/ledger-spread.json"
+  cat << 'EOF' > "$spread_ledger"
+{
+  "workers": [
+    { "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "role": "editor", "topic_id": 201 },
+    { "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "role": "editor", "topic_id": 202 }
+  ],
+  "events": []
+}
+EOF
+  local cursor_file="$st_dir/.oc-harvest-dispatch-lane-cursor"
+  rm -f "$cursor_file"
+  export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
+  out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$spread_ledger" "false" "true" 2>&1)"
+  if ! echo "$out" | grep -q "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"; then
+    echo "  bad 6b - lane spread: no cursor should pick the first ordered lane, got: $out"
+    return 1
+  fi
+  printf 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\n' > "$cursor_file"
+  out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$spread_ledger" "false" "true" 2>&1)"
+  if ! echo "$out" | grep -q "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"; then
+    echo "  bad 6b - lane spread: cursor on aaaa should rotate to bbbb, got: $out"
+    return 1
+  fi
+  printf 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\n' > "$cursor_file"
+  out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$spread_ledger" "false" "true" 2>&1)"
+  if echo "$out" | grep -q "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"; then
+    echo "  ok 6b - lane spread rotates across idle lanes (head -> bbbb -> wrap to aaaa)"
+  else
+    echo "  bad 6b - lane spread: cursor on bbbb should wrap to aaaa, got: $out"
+    return 1
+  fi
+  rm -f "$cursor_file"
   unset OC_HARVEST_MOCK_DEPLOYED_TS
 
   # 7. Mock PR regex checks
@@ -1217,7 +1477,7 @@ EOF
     return 1
   fi
 
-  echo "selftest: 10/10 OK"
+  echo "selftest: 18/18 OK"
   return 0
 }
 
