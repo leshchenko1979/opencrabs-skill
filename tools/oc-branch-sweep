@@ -47,6 +47,16 @@ git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die 2 "not a git repo: $re
   [ -n "$base" ] || base="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" || base="main"
   git -C "$repo" rev-parse --verify "$base" >/dev/null 2>&1 || die 3 "base branch '$base' not resolvable in $repo"
   local deleted=0
+  declare -A wt_branches=()
+  while IFS= read -r line; do
+    case "$line" in
+      branch\ refs/heads/*)
+        ref="${line#branch refs/heads/}"
+        wt_branches["$ref"]=1
+        ;;
+    esac
+  done < <(git -C "$repo" worktree list --porcelain 2>/dev/null)
+
   printf 'branch\tclass\ttip\taction\n'
   while IFS= read -r b; do
     b="${b##* }"  # strip leading '* ' markers
@@ -56,10 +66,23 @@ git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die 2 "not a git repo: $re
       cls="PROTECTED"; action="keep"
     elif git -C "$repo" merge-base --is-ancestor "$b" "$base" 2>/dev/null; then
       cls="MERGED"
-      if [ "$dry" = "1" ]; then action="would-delete"; else
-        git -C "$repo" branch -D "$b" >/dev/null 2>&1 && action="deleted(tip=$tip archived)" || action="delete-failed"
-        # F10 (lens F, v0.4.72): tip sha must survive in the journal, not only in stdout TSV
-        case "$action" in deleted*) oc_log_extra branch-delete "$b@$tip" ;; esac
+      if [ -n "${wt_branches[$b]:-}" ]; then
+        action="held-by-worktree"
+      elif [ "$dry" = "1" ]; then
+        action="would-delete"
+      else
+        local err_out
+        if err_out="$(git -C "$repo" branch -D "$b" 2>&1)"; then
+          action="deleted(tip=$tip archived)"
+          # F10 (lens F, v0.4.72): tip sha must survive in the journal, not only in stdout TSV
+          oc_log_extra branch-delete "$b@$tip"
+        else
+          if echo "$err_out" | grep -qiE "used by worktree|checked out at"; then
+            action="held-by-worktree"
+          else
+            action="delete-failed"
+          fi
+        fi
       fi
       printf '%s\t%s\t%s\t%s\n' "$b" "$cls" "$tip" "$action"
       case "$action" in deleted*|would-delete*) deleted=$((deleted+1)) ;; esac
@@ -107,6 +130,19 @@ cmd_selftest() {
   [ -n "$(git -C "$T/r" branch --list main master)" ]; chk "base-protected" 0 $?
   # clean sweep (nothing left to delete) -> rc 0
   bash "$ME" --repo "$T/r" >/dev/null 2>&1; chk "clean-rc0" 0 $?
+  # worktree-held merged branch -> held-by-worktree in both dry-run and real sweep
+  git -C "$T/r" checkout -qb wt-merged
+  echo c > "$T/r/f"; git -C "$T/r" add f; git -C "$T/r" commit -q -m "m2"
+  git -C "$T/r" checkout -q master 2>/dev/null || git -C "$T/r" checkout -q main
+  git -C "$T/r" merge -q --no-ff -m "merge wt" wt-merged
+  git -C "$T/r" worktree add -q "$T/wt" wt-merged
+  bash "$ME" --repo "$T/r" --dry-run > "$T/out-wt-dry.tsv" 2>/dev/null; chk "wt-dry-rc0" 0 $?
+  grep -q "^wt-merged	MERGED.*held-by-worktree" "$T/out-wt-dry.tsv" && ok || bad "wt-dry-held-by-worktree"
+  bash "$ME" --repo "$T/r" > "$T/out-wt-real.tsv" 2>/dev/null; chk "wt-real-rc0" 0 $?
+  grep -q "^wt-merged	MERGED.*held-by-worktree" "$T/out-wt-real.tsv" && ok || bad "wt-real-held-by-worktree"
+  ! grep -q "delete-failed" "$T/out-wt-real.tsv" && ok || bad "wt-no-delete-failed"
+  [ -n "$(git -C "$T/r" branch --list wt-merged)" ]; chk "wt-branch-survives" 0 $?
+  git -C "$T/r" worktree remove -f "$T/wt" 2>/dev/null
   # Duty-6 lens F task 8: invalid --keep regex -> rc 2 up front, NOTHING deleted
   git -C "$T/r" checkout -qb doomed
   bash "$ME" --repo "$T/r" --keep '[' >/dev/null 2>&1; chk "bad-keep-rc2" 2 $?
