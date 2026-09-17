@@ -1,5 +1,10 @@
 # Changelog — opencrabs-dev
 
+## v0.4.200 (2026-09-17)
+
+- **Atomic Subsystem Bundling & Fix Squashing Law (Owner Order 2026-09-17)**: Upstream PR branches must squash follow-up bugfixes, clippy cleanups, formatting touches, and dependent child issue commits directly into the coherent parent feature commit before CI gating and filing upstream (`git reset --soft` / `git commit --amend` to consolidate into one clean commit). Maintainer Adolfo squashes multi-commit PRs into a single commit on upstream `main` anyway; shipping clean, all-in-one atomic commits eliminates upstream review noise and intermediate cherry-pick breakage.
+- **Sync Template CODE.md**: Synchronized `src/docs/reference/templates/CODE.md` with universal coding and testing standards.
+
 ## v0.4.199 (2026-09-17)
 
 ### Automatic Claim Closure on Smoke PASS (oc-smoke -> oc-ledger done)
