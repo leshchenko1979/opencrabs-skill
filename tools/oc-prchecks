@@ -32,6 +32,13 @@
 # kills the re-dispatch/concurrency-cancel loop, 2026-09-08 study),
 # OC_DEPLOY_STATE_DIR (lock home), OC_PRCHECKS_LOCK_WAIT (tests/ops).
 #
+# Dispatch inputs: always `-f ref=<resolved sha>`; `-f fast=true` in --fast mode;
+# `-f no_cancel=true` when the INPUT ref is a full 40-hex sha — an immutable
+# cutover/swap-mode gate ref, where a same-sha re-dispatch must NOT SIGTERM the
+# in-flight run (owner GO 2026-09-17 22:59Z; closes run 35279942039). Branch
+# refs omit it: a moved PR-lane head genuinely invalidates the old verdict, so
+# supersede-on-cancel stays correct there.
+#
 # Exit: 0 GREEN (terminal, run conclusion success, zero FAILED steps/jobs)
 #       2 usage / sha-shape / unknown ref / repo-path-no-origin
 #       3 RED (run conclusion failure/timed_out/startup_failure,
@@ -216,13 +223,52 @@ case "\$*" in
     printf '%s\n' "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
   *"api repos/"*"contents/"*)
     [ "\$S" = "yml_missing" ] && exit 1
-    printf '{"name":"pr-checks.yml"}\n' ;;
+    # Raw yml body (Accept: application/vnd.github.raw) — the tool greps it for
+    # the no_cancel input, so the fixture IS the live contract under test.
+    # Default = the POST-HQ shape (input declared). yml_no_nocancel = the
+    # 2026-09-17 live shape (tip 43fddde3d): NO such input, bare
+    # cancel-in-progress — the tool must omit the flag, not 422.
+    if [ "\$S" = "yml_no_nocancel" ]; then
+      cat <<'YEOF'
+name: PR-lane gates
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        type: string
+concurrency:
+  group: prchecks-live
+  cancel-in-progress: true
+YEOF
+    else
+      cat <<'YEOF'
+name: PR-lane gates
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        type: string
+      no_cancel:
+        type: boolean
+concurrency:
+  group: prchecks-live
+  cancel-in-progress: \${{ !inputs.no_cancel }}
+YEOF
+    fi ;;
   *"api repos/"*"git/ref/heads/"*)
     [ "\$S" = "carrier_unresolvable" ] && exit 1
     # emulate gh api --jq: the tool asks for '.object.sha', gh returns ONLY the sha
     printf '%s\n' 'ffffffffffffffffffffffffffffffffffffffff' ;;
   *"workflow run"*)
     [ "\$S" = "dispatch_fail" ] && exit 1
+    # Race-guard fixture: rejects ONLY the no_cancel-carrying dispatch, with the
+    # real 422 body, so the retry-without-flag path is exercised end to end.
+    case "\$S" in
+      dispatch_reject_nocancel)
+        case "\$*" in
+          *no_cancel=true*) echo 'could not create workflow dispatch event: HTTP 422: Unexpected inputs provided: ["no_cancel"]' >&2; exit 1 ;;
+        esac ;;
+    esac
     echo "dispatched \$*" >> "${GHDISPATCH_LOG:-/dev/null}"
     exit 0 ;;
   *"run list"*)
@@ -570,6 +616,72 @@ do_selftest() {
     t_bad "in-flight checkpoint (valid=$cp_valid preserved=$cp_preserved cleaned=$cp_cleaned neg_absent=$cp_neg_absent)"
   fi
 
+  # Immutable-ref no-cancel (owner GO 2026-09-17 22:59Z; incident run 35279942039):
+  # a full-40-hex INPUT ref is an immutable cutover / swap-mode gate ref — its
+  # dispatch MUST carry -f no_cancel=true so pr-checks.yml's
+  # `cancel-in-progress: ${{ !inputs.no_cancel }}` cannot SIGTERM an in-flight
+  # run on that same sha. A BRANCH ref must NOT carry it (a moved PR-lane head
+  # genuinely invalidates the old verdict, so supersede-on-cancel stays right).
+  # NB: BOTH legs dispatch the SAME sha aaaa… (the shim resolves any branch to
+  # it) — the discriminator under test is the INPUT FORM alone, not the sha.
+  NCL_LOG="$D/gh-dispatch.log"
+  export GHDISPATCH_LOG="$NCL_LOG"
+  ncl_leg() { # $1=ref arg -> rc in ncl_rc, dispatch log line(s) in ncl_hits
+    : > "$NCL_LOG"
+    mk_shim "$D/gh" green
+    OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+      OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+      OC_TOOLS_NOLOG=1 "$SELF" "$1" >/dev/null 2>&1 && ncl_rc=0 || ncl_rc=$?
+    ncl_hits="$(cat "$NCL_LOG" 2>/dev/null)"
+  }
+  ncl_sha_flag=0; ncl_sha_ref=0; ncl_sha_rc=-1
+  ncl_leg "$SHA"
+  ncl_sha_rc="$ncl_rc"
+  case "$ncl_hits" in *"no_cancel=true"*) ncl_sha_flag=1 ;; esac
+  case "$ncl_hits" in *"-f ref=$SHA"*)   ncl_sha_ref=1 ;; esac
+  ncl_br_flag=0; ncl_br_disp=0; ncl_br_rc=-1
+  ncl_leg some-branch
+  ncl_br_rc="$ncl_rc"
+  case "$ncl_hits" in *"no_cancel=true"*) ncl_br_flag=1 ;; esac
+  case "$ncl_hits" in *"workflow run"*)   ncl_br_disp=1 ;; esac
+  if [ "$ncl_sha_rc" -eq 0 ] && [ "$ncl_sha_flag" -eq 1 ] && [ "$ncl_sha_ref" -eq 1 ]; then
+    t_ok "no_cancel: full-sha ref dispatch carries -f ref=<sha> -f no_cancel=true (immutable cutover)"
+  else t_bad "no_cancel full-sha (rc=$ncl_sha_rc flag=$ncl_sha_flag ref=$ncl_sha_ref hits=$ncl_hits)"; fi
+  if [ "$ncl_br_disp" -eq 1 ] && [ "$ncl_br_flag" -eq 0 ]; then
+    t_ok "no_cancel: branch ref dispatch omits no_cancel (supersede-on-moved-head preserved)"
+  else t_bad "no_cancel branch (disp=$ncl_br_disp flag=$ncl_br_flag rc=$ncl_br_rc hits=$ncl_hits)"; fi
+  # INPUT-CONTRACT probe (Triage QUIRK 2026-09-17 23:03Z): the flag is a WORKFLOW
+  # INPUT, so it may only be sent when the carrier yml declares it. Live shape at
+  # the report (tip 43fddde3d) declares NO no_cancel and still 422s any dispatch
+  # that carries it — every full-sha gate died rc 4. The tool must read the yml,
+  # not assume: yml_no_nocancel fixture -> flag omitted, dispatch still proceeds.
+  ncl_leg_nosha() { # $1=shim scenario -> rc in ncl_rc, dispatch log in ncl_hits, stdout+stderr in ncl_out
+    : > "$NCL_LOG"
+    mk_shim "$D/gh" "$1"
+    ncl_out="$(OC_GH="$D/gh" OC_DEPLOY_STATE_DIR="$D/state" OC_PRCHECKS_LOCK_WAIT=5 \
+      OC_PRCHECKS_RESOLVE_WAIT=2 OC_PRCHECKS_RESOLVE_POLL=1 OC_PRCHECKS_POLL=1 \
+      OC_TOOLS_NOLOG=1 "$SELF" "$SHA" 2>&1)" && ncl_rc=0 || ncl_rc=$?
+    ncl_hits="$(cat "$NCL_LOG" 2>/dev/null)"
+  }
+  ncl_leg_nosha yml_no_nocancel
+  if [ "$ncl_rc" -eq 0 ] && case "$ncl_hits" in *"no_cancel=true"*) false ;; *) true ;; esac \
+     && case "$ncl_hits" in *"-f ref=$SHA"*) true ;; *) false ;; esac; then
+    t_ok "no_cancel: yml WITHOUT the input -> flag omitted, full-sha dispatch still succeeds (no 422)"
+  else t_bad "no_cancel contract probe (rc=$ncl_rc hits=$ncl_hits)"; fi
+  # RACE GUARD: probe saw the input but the dispatch 422s on it anyway (yml
+  # reverted between the two calls) -> retry WITHOUT the flag, gate survives.
+  # The shim writes a dispatch line ONLY on success, so exactly one line (the
+  # retry, flag-free) plus the retry notice is the proof of the two-attempt path.
+  ncl_leg_nosha dispatch_reject_nocancel
+  ncl_tries="$(grep -c 'dispatched' "$NCL_LOG" 2>/dev/null || echo 0)"
+  if [ "$ncl_rc" -eq 0 ] && [ "$ncl_tries" -eq 1 ] \
+     && case "$ncl_out" in *"retrying without it"*) true ;; *) false ;; esac \
+     && case "$ncl_hits" in *"no_cancel=true"*) false ;; *) true ;; esac \
+     && case "$ncl_hits" in *"-f ref=$SHA"*) true ;; *) false ;; esac; then
+    t_ok "no_cancel: 422 on the flag -> auto-retry without it, gate survives (race guard)"
+  else t_bad "no_cancel race guard (rc=$ncl_rc tries=$ncl_tries hits=$ncl_hits out=$ncl_out)"; fi
+  unset GHDISPATCH_LOG
+
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
@@ -592,6 +704,13 @@ FAULT_PR=""
 RESUME_MODE=0
 WAIT_SUBCOMMAND=0
 FAST_MODE=0
+# Immutable-input flag (owner GO 2026-09-17 22:59Z, incident run 35279942039):
+# a full 40-hex sha as the INPUT ref is an immutable cutover/gate ref — a
+# re-dispatch on it must NOT SIGTERM an in-flight run on the same sha, so the
+# dispatch passes -f no_cancel=true (pr-checks.yml cancel-in-progress gate).
+# A BRANCH ref keeps today's supersede semantics: a moved head genuinely
+# invalidates the old verdict. Set in the shape gate below.
+REF_IS_SHA=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --wait)    shift; WAIT_SECS="${1:-}"; case "$WAIT_SECS" in ''|*[!0-9]*) usage "--wait needs an integer (got '$WAIT_SECS')" ;; esac ;;
@@ -681,20 +800,36 @@ if [ "${#SHA}" -ne 40 ] || case "$SHA" in *[!0-9a-f]*) true ;; *) false ;; esac;
     echo "$PROG: unknown ref '$REF' on $REPO" >&2; exit 2; }
   [ -n "$SHA" ] || { echo "$PROG: empty sha for '$REF'" >&2; exit 2; }
 else
-  # full sha -> verify it exists
+  # full sha -> verify it exists. Immutable INPUT ref: the dispatch carries
+  # -f no_cancel=true so a same-sha re-dispatch cannot cancel the live run.
+  REF_IS_SHA=1
   "$GH_BIN" api "repos/$REPO/commits/$SHA" --jq '.sha' >/dev/null 2>&1 || {
     echo "$PROG: sha $SHA not found on $REPO" >&2; exit 2; }
 fi
 oc_log_extra "sha" "$SHA"
 oc_log_extra "ref" "$REF"   # Duty-6 lens F task 7: structured ref for the C-F2 witness matcher (was substring-guessed from args)
+oc_log_extra "ref_is_sha" "$REF_IS_SHA"
 
-# ---------- step 2: LOUD yml-on-carrier check ---------------------------------
-"$GH_BIN" api "repos/$REPO/contents/.github/workflows/pr-checks.yml?ref=$CARRIER" >/dev/null 2>&1 || {
+# ---------- step 2: LOUD yml-on-carrier check + input-contract probe ----------
+# The content is fetched ONCE and used for both: existence (loud no-op guard)
+# and the no_cancel INPUT-CONTRACT probe. Contract probe is mandatory (Triage
+# QUIRK 2026-09-17 23:03Z, rc-4 fleet-wide): the tool passed -f no_cancel=true
+# while the carrier yml (tip 43fddde3d) declared NO such input and still had a
+# bare `cancel-in-progress: true` — GitHub rejects an undeclared input with
+# HTTP 422 `Unexpected inputs provided: ["no_cancel"]`, so EVERY full-sha
+# dispatch died rc 4. A tool flag is not a workflow input: the yml is the
+# contract, so it is probed, never assumed. Ordering-immune: the flag
+# self-activates the moment HQ lands the input on the carrier, no tool change.
+YML_RAW="$("$GH_BIN" api "repos/$REPO/contents/.github/workflows/pr-checks.yml?ref=$CARRIER" -H "Accept: application/vnd.github.raw" 2>/dev/null)" || YML_RAW=""
+if [ -z "$YML_RAW" ]; then
   echo "$PROG: pr-checks.yml NOT FOUND on carrier '$CARRIER' — dispatch would silently no-op" >&2
   oc_log_extra "yml_check" "missing"
   exit 4
-}
+fi
 oc_log_extra "yml_check" "ok"
+YML_HAS_NO_CANCEL=0
+case "$YML_RAW" in *no_cancel*) YML_HAS_NO_CANCEL=1 ;; esac
+oc_log_extra "yml_no_cancel_input" "$YML_HAS_NO_CANCEL"
 
 # ---------- step 3: dispatch + adoption under the dispatch lock ---------------
 # The lock serializes dispatch->adoption across concurrent editor lanes: with
@@ -768,13 +903,51 @@ fi
 if [ "${OC_PR_SKIPPED_DISPATCH:-0}" != 1 ]; then
 DISPATCH_ARGS=(-f "ref=$SHA")
 [ "$FAST_MODE" -eq 1 ] && DISPATCH_ARGS+=(-f "fast=true")
-"$GH_BIN" workflow run pr-checks.yml --repo "$REPO" --ref "$CARRIER" "${DISPATCH_ARGS[@]}" >/dev/null 2>&1 || {
-  echo "$PROG: dispatch failed (repo=$REPO carrier=$CARRIER)" >&2
+# Immutable-ref no-cancel (owner GO 2026-09-17 22:59Z): full-sha input refs
+# (merge/sync cutover, swap-mode gate) are immutable — pass no_cancel=true so
+# pr-checks.yml's `cancel-in-progress: ${{ !inputs.no_cancel }}` cannot SIGTERM
+# an in-flight run on the SAME sha. Branch refs keep cancel-in-progress=true
+# (a moved PR-lane head genuinely invalidates the old verdict). Closes run
+# 35279942039: `Run tests` cancelled by our own same-sha re-dispatch of 48c6f14b.
+#
+# GATED ON THE LIVE YML CONTRACT (Triage QUIRK 2026-09-17 23:03Z): the flag is
+# passed ONLY when the carrier yml actually declares the input (step 2 probe).
+# Until HQ lands it, full-sha dispatch keeps working exactly as before — the
+# tool is correct against BOTH yml versions and needs no coordinated ordering.
+NO_CANCEL_SENT=0
+if [ "$REF_IS_SHA" -eq 1 ] && [ "$YML_HAS_NO_CANCEL" -eq 1 ]; then
+  DISPATCH_ARGS+=(-f "no_cancel=true")
+  NO_CANCEL_SENT=1
+fi
+# stderr captured (stdout to /dev/null): the 422 body names the offending input,
+# which is the diagnostic a lane needs. `set -e` survival via explicit rc.
+set +e
+DISPATCH_ERR="$("$GH_BIN" workflow run pr-checks.yml --repo "$REPO" --ref "$CARRIER" "${DISPATCH_ARGS[@]}" 2>&1 >/dev/null)"
+DISPATCH_RC=$?
+set -e
+if [ "$DISPATCH_RC" -ne 0 ] && [ "$NO_CANCEL_SENT" -eq 1 ]; then
+  # Race guard: the probe saw the input but the dispatch 422s on it anyway (yml
+  # reverted/rolled between the two calls). Retry WITHOUT the flag rather than
+  # failing a full-sha gate over an optimisation — the no_cancel benefit is lost
+  # for this dispatch, never the gate itself.
+  echo "$PROG: dispatch with no_cancel=true rejected (rc=$DISPATCH_RC) — retrying without it: ${DISPATCH_ERR:-no stderr}" >&2
+  oc_log_extra "no_cancel_retry" "1"
+  DISPATCH_ARGS=(-f "ref=$SHA")
+  [ "$FAST_MODE" -eq 1 ] && DISPATCH_ARGS+=(-f "fast=true")
+  NO_CANCEL_SENT=0
+  set +e
+  DISPATCH_ERR="$("$GH_BIN" workflow run pr-checks.yml --repo "$REPO" --ref "$CARRIER" "${DISPATCH_ARGS[@]}" 2>&1 >/dev/null)"
+  DISPATCH_RC=$?
+  set -e
+fi
+if [ "$DISPATCH_RC" -ne 0 ]; then
+  echo "$PROG: dispatch failed (repo=$REPO carrier=$CARRIER)${DISPATCH_ERR:+ — $DISPATCH_ERR}" >&2
   oc_log_extra "dispatch" "failed"
   flock -u 8
   exit 4
-}
+fi
 oc_log_extra "dispatch" "ok"
+oc_log_extra "no_cancel_sent" "$NO_CANCEL_SENT"
 oc_log_extra "dispatch_ts" "$DISPATCH_TS"
 
 RUN_ID=""
