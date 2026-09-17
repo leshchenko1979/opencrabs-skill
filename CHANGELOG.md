@@ -1,5 +1,18 @@
 # Changelog — opencrabs-dev
 
+## v0.4.198 (2026-09-17)
+
+### Upstream Harvest Quality Gates, Narrative Verification & Cross-Boundary Tests
+- **Upstream PR Harvest Baseline & Narrative Verification (Owner Order 2026-09-17, findings from PR #1615 review, `fleet-directives.md`, `editor-upstream-pr.md`, `triage.md`)**:
+  - Mandated that when staging a fork bugfix or feature for upstream PR harvest (`adolfousier/opencrabs`), the staging lane MUST verify against live upstream `main` (`git diff origin/main...adolfousier/main` or inspecting the live upstream code path) whether upstream already resolved the underlying issue or changed the code path.
+  - If already addressed or clean in upstream `main`, the PR narrative must be framed accurately as a clean helper extraction, refactoring, or hardening improvement rather than asserting an upstream regression or non-existent bug.
+- **Cross-Boundary Unit Test Integrity Requirement (Owner Order 2026-09-17, `fleet-directives.md`, `editor-upstream-pr.md`)**:
+  - Codified standard #8 under Upstream Coding & Testing Standards: Unit tests asserting file paths, contracts, or serialized data formats in upstream PRs must test real cross-boundary interaction (e.g. writing through a real file writer and reading back via the target reader in a `tempfile` directory) rather than asserting helper equality against its own internal delegate function.
+  - Strictly prohibited tautological unit tests where a function merely tests its own internal implementation helper.
+- **Native Sub-Issue / Child Harvest Pre-Flight Gate (Issue #188 unharvested parent refusal, `fleet-directives.md`, `editor-upstream-pr.md`, `triage.md`)**:
+  - Reinforced that a child issue, cleanup, or derivative task (such as deleting a script that exists only on fork or referencing unmerged documentation/subsystems) must NEVER be harvested in isolation from its parent subsystem.
+  - If the parent subsystem is unharvested or unmerged upstream, child work is strictly blocked from harvest staging until the parent lands upstream.
+
 ## v0.4.197 (2026-09-17)
 
 ### Deep Core Advance Heads-Up Gate
