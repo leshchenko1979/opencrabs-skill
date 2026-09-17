@@ -785,6 +785,7 @@ selftest_impl() {
   set -u
   T="$(mktemp -d)"
   trap 'rm -rf "$T"' EXIT
+  export OC_SHIPCHAIN_LOG="$T/detach-default.log"
   PASS=0; FAIL=0
   # The owning session the fixture commits declare via a Session-Id trailer —
   # the same trailer every editor commit carries (SKILL.md §Session-notify
@@ -1489,6 +1490,7 @@ rm -f "$J" "$D"
 setsid env \
   OC_SHIPCHAIN_IMPL=0 OC_SHIPCHAIN_IN_UNIT_CGROUP="$HOOK" \
   OC_SHIPCHAIN_DETACH_CMD="$T/fake-detach" FAKE_DETACH_LOG="$D" \
+  OC_SHIPCHAIN_LOG="$T/detach-surv-stdio.log" \
   FAKE_SLOW_GATE=3 \
   OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
   OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" \
@@ -1514,6 +1516,8 @@ DRIVER
   git -C "$T/clone" checkout -q main; git -C "$T/clone" reset -q --hard origin/main
   SURV="$(bash "$T/survive-driver.sh" "$T" "$SELF" "$DSHA" 1 2>/dev/null | tail -1)"
   [ "$SURV" = "SURVIVED" ] && ok "detach-survives-group-kill" || bad "detach-survives-group-kill (got '$SURV')"
+  grep -q "FAKE-DETACH-STDIO-BOUND" "$T/detach-surv-stdio.log" \
+    && ok "detach-surv-stdio-bound-to-fixture" || bad "detach-surv-stdio-bound-to-fixture"
   git -C "$T/clone" checkout -q main; git -C "$T/clone" reset -q --hard origin/main
   TRUNC="$(bash "$T/survive-driver.sh" "$T" "$SELF" "$DSHA" 0 2>/dev/null | tail -1)"
   [ "$TRUNC" = "TRUNCATED" ] && ok "no-detach-truncates-on-kill" || bad "no-detach-truncates-on-kill (got '$TRUNC')"
