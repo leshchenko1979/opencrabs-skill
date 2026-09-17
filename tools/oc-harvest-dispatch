@@ -137,8 +137,6 @@ def _swap_suffix_start(repo_path, swaps):
     if len(swaps) < 2:
         return 0
     newest = swaps[-1][0]
-    if check_ancestor(swaps[-2][0], newest, repo_path):
-        return 0
     i = len(swaps) - 1
     while i > 0 and check_ancestor(swaps[i - 1][0], newest, repo_path):
         i -= 1
@@ -1236,13 +1234,21 @@ EOF
   local post_swap_sha
   post_swap_sha="$(git -C "$rebase_repo" rev-parse HEAD)"
 
+  # Post-rebase swap marker 2 (tests multiple post-rebase swaps where swaps[-2] is an ancestor of newest)
+  echo "marker2" > "$rebase_repo/.swap-marker2"
+  git -C "$rebase_repo" add .swap-marker2
+  git -C "$rebase_repo" commit -q -m "release: second swap marker for rebased tree"
+  local post_swap_sha2
+  post_swap_sha2="$(git -C "$rebase_repo" rev-parse HEAD)"
+
   # Isolated state dir so these fixtures never leak into the other assertions.
   local rebase_state="$st_dir/rebase-state"
   mkdir -p "$rebase_state/oc-deploy/journal"
   printf '{"step":"auto-swap","sha":"%s","ts":"2026-09-10T00:00:00Z"}\n' "$pre_swap_sha" > "$rebase_state/oc-deploy/journal/swap-100.jsonl"
   printf '{"step":"auto-swap","sha":"%s","ts":"2026-09-17T07:31:10Z"}\n' "$post_swap_sha" > "$rebase_state/oc-deploy/journal/swap-200.jsonl"
+  printf '{"step":"auto-swap","sha":"%s","ts":"2026-09-17T08:00:00Z"}\n' "$post_swap_sha2" > "$rebase_state/oc-deploy/journal/swap-201.jsonl"
   # (b) the duplicate: deployed.meta.json re-recording the newest swap seconds later.
-  printf '{"sha":"%s","swapped_at":"2026-09-17T07:31:21Z"}\n' "$post_swap_sha" > "$rebase_state/deployed.meta.json"
+  printf '{"sha":"%s","swapped_at":"2026-09-17T08:00:10Z"}\n' "$post_swap_sha2" > "$rebase_state/deployed.meta.json"
 
   export STATE_DIR="$rebase_state"
   export OC_HARVEST_NOW_TS="1789633800"

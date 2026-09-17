@@ -109,7 +109,76 @@ def load_swap_history(state_dir):
         except Exception:
             pass
     swaps.sort(key=lambda x: x[1])
-    return swaps
+    dedup = {}
+    for s_sha, s_ts in swaps:
+        if s_sha not in dedup or s_ts < dedup[s_sha]:
+            dedup[s_sha] = s_ts
+    return sorted(dedup.items(), key=lambda x: x[1])
+
+_SWAP_LINEAGE_CACHE = {}
+_TWIN_SCAN_CACHE = {}
+
+def check_ancestor(commit, base_ref, repo_path):
+    rc = subprocess.run(['git', '-C', repo_path, 'merge-base', '--is-ancestor', commit, base_ref], capture_output=True).returncode
+    return rc == 0
+
+def _swap_suffix_start(repo_path, swaps):
+    if len(swaps) < 2:
+        return 0
+    newest = swaps[-1][0]
+    i = len(swaps) - 1
+    while i > 0 and check_ancestor(swaps[i - 1][0], newest, repo_path):
+        i -= 1
+    return i
+
+def swap_suffix_start_cached(repo_path, swaps):
+    key = (repo_path, tuple(s for s, _ in swaps))
+    if key not in _SWAP_LINEAGE_CACHE:
+        _SWAP_LINEAGE_CACHE[key] = _swap_suffix_start(repo_path, swaps)
+    return _SWAP_LINEAGE_CACHE[key]
+
+def get_patch_id(commit, repo_path):
+    res = subprocess.run(['git', '-C', repo_path, 'show', commit], capture_output=True, text=True)
+    if res.returncode != 0:
+        return None
+    p = subprocess.run(['git', 'patch-id', '--stable'], input=res.stdout, text=True, capture_output=True)
+    if p.returncode == 0 and p.stdout:
+        return p.stdout.strip().split()[0]
+    return None
+
+def range_patch_ids(repo_path, base_sha, tip_sha):
+    rng = f'{base_sha}..{tip_sha}' if base_sha else tip_sha
+    res = subprocess.run(['git', '-C', repo_path, 'log', '-p', '--no-merges',
+                          '--format=commit %H', rng], capture_output=True, text=True)
+    if res.returncode != 0 or not res.stdout:
+        return
+    pid = subprocess.run(['git', 'patch-id', '--stable'], input=res.stdout,
+                         capture_output=True, text=True)
+    for line in pid.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            yield parts[0], parts[1]
+
+def twin_deploy_ts(commit_sha, repo_path, swaps, before_idx):
+    if before_idx <= 0:
+        return 0
+    target = get_patch_id(commit_sha, repo_path)
+    if not target:
+        return 0
+    key = (repo_path, tuple(s for s, _ in swaps))
+    state = _TWIN_SCAN_CACHE.setdefault(key, {'next_idx': 0, 'pid_ts': {}})
+    pid_ts = state['pid_ts']
+    if target in pid_ts:
+        return pid_ts[target]
+    while state['next_idx'] < before_idx:
+        i = state['next_idx']
+        state['next_idx'] += 1
+        base = swaps[i - 1][0] if i > 0 else None
+        for pid, _sha in range_patch_ids(repo_path, base, swaps[i][0]):
+            pid_ts.setdefault(pid, swaps[i][1])
+        if target in pid_ts:
+            return pid_ts[target]
+    return pid_ts.get(target, 0)
 
 def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None):
     if mock_deployed_ts is not None and int(mock_deployed_ts) > 0:
@@ -125,22 +194,26 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None):
     if not os.path.isdir(repo_path):
         return 0
     latest_sha = swaps[-1][0]
-    rc = subprocess.run(['git', '-C', repo_path, 'merge-base', '--is-ancestor', commit_sha, latest_sha], capture_output=True).returncode
-    if rc != 0:
-        return 0
-    low = 0
-    high = len(swaps) - 1
-    earliest_idx = high
-    while low <= high:
-        mid = (low + high) // 2
-        mid_sha = swaps[mid][0]
-        rc = subprocess.run(['git', '-C', repo_path, 'merge-base', '--is-ancestor', commit_sha, mid_sha], capture_output=True).returncode
-        if rc == 0:
-            earliest_idx = mid
-            high = mid - 1
-        else:
-            low = mid + 1
-    return swaps[earliest_idx][1]
+    suffix_start = swap_suffix_start_cached(repo_path, swaps)
+    ts = 0
+    if check_ancestor(commit_sha, latest_sha, repo_path):
+        low = suffix_start
+        high = len(swaps) - 1
+        earliest_idx = high
+        while low <= high:
+            mid = (low + high) // 2
+            mid_sha = swaps[mid][0]
+            if check_ancestor(commit_sha, mid_sha, repo_path):
+                earliest_idx = mid
+                high = mid - 1
+            else:
+                low = mid + 1
+        ts = swaps[earliest_idx][1]
+    if suffix_start > 0:
+        twin_ts = twin_deploy_ts(commit_sha, repo_path, swaps, suffix_start)
+        if twin_ts and (ts == 0 or twin_ts < ts):
+            return twin_ts
+    return ts
 
 def get_prs(upstream_repo, mock_prs_file=None):
     if mock_prs_file and os.path.exists(mock_prs_file):
