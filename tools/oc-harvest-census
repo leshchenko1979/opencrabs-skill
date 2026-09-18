@@ -18,8 +18,12 @@
 #       - Exits 0 (ELIGIBLE) if unit is confirmed UNHARVESTED.
 #       - Exits 2 on usage / bad arguments.
 #       - Exits 3 on API/git failure.
-#   record --unit <slug> --pr <number> [--issue <N>] [--repo <path>]
-#       Records a newly filed PR in the harvest registry.
+#   record --unit <slug> --pr <number> [--issue <N>] [--repo <path>] [--state-file <path>]
+#       Records a newly filed PR in the harvest registry. Idempotent: re-recording
+#       the same (unit, pr, issue) triple updates the entry instead of duplicating it.
+#   purge --unit <slug> [--pr <N>] [--issue <N>] [--state-file <path>] [--dry-run]
+#       Removes matching manual_records entries from the harvest registry.
+#       --unit is required; --pr/--issue narrow the match. --dry-run lists only.
 #   sync [--repo <path>] [--state-file <path>]
 #       Fetches live upstream PRs, resolves against git DAG, updates harvest-registry.json.
 #   --help | -h
@@ -50,7 +54,8 @@ usage() {
 Usage:
   $PROG scan [--repo <path>] [--upstream <owner/repo>] [--json]
   $PROG check <issue-number-or-slug> [--repo <path>]
-  $PROG record --unit <slug> --pr <number> [--issue <N>]
+  $PROG record --unit <slug> --pr <number> [--issue <N>] [--state-file <path>]
+  $PROG purge --unit <slug> [--pr <N>] [--issue <N>] [--state-file <path>] [--dry-run]
   $PROG sync [--repo <path>] [--state-file <path>]
   $PROG --help | -h
   $PROG --selftest
@@ -862,6 +867,7 @@ cmd_record() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --unit) unit="$2"; shift 2 ;;
+      --state-file) REGISTRY_FILE="$2"; shift 2 ;;
       --pr) pr="$2"; shift 2 ;;
       --issue) issue="$2"; shift 2 ;;
       --issues) issues_str="$2"; shift 2 ;;
@@ -894,10 +900,21 @@ record_entry = {
     "issues": sorted(list(all_issues)),
     "recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
 }
-records.append(record_entry)
+# Idempotent upsert keyed on (unit, pr, issue): re-recording the same unit
+# updates the existing entry instead of appending a duplicate (#325).
+key = (record_entry["unit"], record_entry["pr"], record_entry["issue"])
+replaced = 0
+for i, existing in enumerate(records):
+    if (existing.get("unit"), existing.get("pr"), existing.get("issue")) == key:
+        records[i] = record_entry
+        replaced = 1
+        break
+if not replaced:
+    records.append(record_entry)
 with open(reg_file, "w") as f:
     json.dump(data, f, indent=2)
-print(f"Recorded Unit {unit} -> PR #{pr} (issues: {sorted(list(all_issues))}) in {reg_file}")
+verb = "Updated" if replaced else "Recorded"
+print(f"{verb} Unit {unit} -> PR #{pr} (issues: {sorted(list(all_issues))}) in {reg_file}")
 ' "$REGISTRY_FILE" "$unit" "$pr" "$issue" "$issues_str"
   else
     echo "Recorded Unit $unit -> PR #$pr (registry uninitialized)"
@@ -915,6 +932,61 @@ cmd_sync() {
     esac
   done
   run_engine "sync" "$UPSTREAM_REPO" "$REPO" "$REGISTRY_FILE" ""
+}
+
+cmd_purge() {
+  local unit="" pr="" issue="" dry_run=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --unit) unit="$2"; shift 2 ;;
+      --pr) pr="$2"; shift 2 ;;
+      --issue) issue="$2"; shift 2 ;;
+      --state-file) REGISTRY_FILE="$2"; shift 2 ;;
+      --dry-run) dry_run=1; shift ;;
+      -h|--help) usage 0 ;;
+      *) usage ;;
+    esac
+  done
+  if [ -z "$unit" ]; then
+    usage
+  fi
+  if [ ! -f "$REGISTRY_FILE" ]; then
+    echo "Purge: registry uninitialized ($REGISTRY_FILE) - nothing to purge"
+    exit 0
+  fi
+  python3 - "$REGISTRY_FILE" "$unit" "$pr" "$issue" "$dry_run" <<'OCPY'
+import sys, json
+reg_file, unit, pr_s, issue_s, dry_s = sys.argv[1:6]
+with open(reg_file) as f:
+    data = json.load(f)
+records = data.get("manual_records", [])
+pr = int(pr_s) if pr_s else None
+issue = int(issue_s) if issue_s else None
+
+def matches(r):
+    if r.get("unit") != unit:
+        return False
+    if pr is not None and r.get("pr") != pr:
+        return False
+    if issue is not None and r.get("issue") != issue and issue not in (r.get("issues") or []):
+        return False
+    return True
+
+kept, removed = [], []
+for r in records:
+    (removed if matches(r) else kept).append(r)
+
+for r in removed:
+    print("  - unit=%s pr=%s issue=%s recorded_at=%s" % (r.get("unit"), r.get("pr"), r.get("issue"), r.get("recorded_at")))
+if dry_s == "1":
+    print("DRY-RUN: %d of %d manual_records would be purged (unit=%s)" % (len(removed), len(records), unit))
+    sys.exit(0)
+data["manual_records"] = kept
+with open(reg_file, "w") as f:
+    json.dump(data, f, indent=2)
+print("Purged %d of %d manual_records (unit=%s) in %s" % (len(removed), len(records), unit, reg_file))
+OCPY
+  exit 0
 }
 
 # --- Offline Selftest ---
@@ -937,6 +1009,10 @@ cmd_selftest() {
   local mock_prs="$selftest_tmp/mock_prs.json"
   local mock_commits="$selftest_tmp/mock_commits.json"
   local mock_reg="$selftest_tmp/mock_reg.json"
+  # Sandbox registry for the record/check cases. cmd_record writes only when the
+  # target file EXISTS (it is guarded by `[ -f "$REGISTRY_FILE" ]`), so without
+  # this the record case silently no-ops.
+  printf '{"manual_records": []}\n' > "$mock_reg"
   local mock_ledger="$selftest_tmp/mock_ledger.json"
   local mock_squashed="$selftest_tmp/mock_squashed.json"
 
@@ -1204,10 +1280,15 @@ EOF
     return 1
   fi
 
-  # 7. Record + Sync preservation
+  # 7. Record + Sync preservation. Hermetic: the record case MUST target the
+  # sandbox registry. It previously ran the CLI wrapper with no --state-file, so
+  # it wrote a fixture row into the LIVE production registry on every battery run
+  # (#325): 189 of 239 manual_records were this fixture. The fixture also now uses
+  # a non-existent sentinel PR/issue — the old values (PR 1500 MERGED, fork issue
+  # 199) collided with real artifacts, so a leak would shadow them.
   rc=0
-  bash "$0" record --unit "test-unit" --pr "1500" --issue "199" >/dev/null 2>&1 || rc=$?
-  if [ -f "$REGISTRY_FILE" ] && grep -q "test-unit" "$REGISTRY_FILE"; then
+  bash "$0" record --unit "test-unit" --pr "999999" --issue "999999" --state-file "$mock_reg" >/dev/null 2>&1 || rc=$?
+  if [ -f "$mock_reg" ] && grep -q "test-unit" "$mock_reg"; then
     ok "registry write preserves manual_records (no clobber)"
   else
     echo "  bad  - registry write did not record test-unit"
@@ -1216,8 +1297,8 @@ EOF
 
   # 8. Check consults manual records
   rc=0
-  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$REGISTRY_FILE" "test-unit" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "manually recorded as filed in PR #1500"; then
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "test-unit" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "manually recorded as filed in PR #999999"; then
     ok "check consults manual records -> REFUSED exit 1"
   else
     echo "  bad  - check manual records expected rc=1, got rc=$rc ($out)"
@@ -1226,7 +1307,7 @@ EOF
 
   # 9. Unrelated target still ELIGIBLE with manual records
   rc=0
-  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$REGISTRY_FILE" "200" 2>&1)" || rc=$?
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "200" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
     ok "unrelated target still ELIGIBLE with manual records present"
   else
@@ -1335,6 +1416,45 @@ EOF
     return 1
   fi
 
+  # 22. purge --dry-run lists the fixture row but leaves the registry intact
+  rc=0
+  out="$(bash "$0" purge --unit "test-unit" --state-file "$mock_reg" --dry-run 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "DRY-RUN: 1 of 1" && grep -q "test-unit" "$mock_reg"; then
+    ok "purge --dry-run reports without removing"
+  else
+    echo "  bad  - purge --dry-run expected rc=0 + intact registry, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 23. purge removes the row; the manual-records gate stops refusing
+  rc=0
+  out="$(bash "$0" purge --unit "test-unit" --state-file "$mock_reg" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Purged 1 of 1"; then
+    ok "purge removes matching manual_records row"
+  else
+    echo "  bad  - purge expected rc=0 with 1 removed, got rc=$rc ($out)"
+    return 1
+  fi
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "test-unit" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ok "purged row no longer refuses the target"
+  else
+    echo "  bad  - after purge expected rc=0, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 24. record is idempotent: re-recording the same triple does not duplicate
+  bash "$0" record --unit "dup-unit" --pr "424242" --issue "424242" --state-file "$mock_reg" >/dev/null 2>&1 || true
+  bash "$0" record --unit "dup-unit" --pr "424242" --issue "424242" --state-file "$mock_reg" >/dev/null 2>&1 || true
+  n="$(python3 -c 'import json,sys; print(sum(1 for r in json.load(open(sys.argv[1])).get("manual_records",[]) if r.get("unit")=="dup-unit"))' "$mock_reg" 2>/dev/null || echo 0)"
+  if [ "$n" = "1" ]; then
+    ok "record is idempotent (re-record updates, no duplicate)"
+  else
+    echo "  bad  - record idempotency expected 1 dup-unit row, got $n"
+    return 1
+  fi
+
   echo "selftest: ${ok_n}/${ok_n} OK"
   return 0
 }
@@ -1344,6 +1464,7 @@ case "${1:-}" in
   scan) shift; cmd_scan "$@" ;;
   check) shift; cmd_check "$@" ;;
   record) shift; cmd_record "$@" ;;
+  purge) shift; cmd_purge "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   --selftest) cmd_selftest ;;
   -h|--help) usage 0 ;;
