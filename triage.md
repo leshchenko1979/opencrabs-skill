@@ -89,7 +89,7 @@ per that section. Owner veto overrides retroactively, as with rulings.
   against (Triage lesson, ledger n=2083).
 - **Cron liveness patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** verify the law-carrying
-  crons are enabled and have recent last-run rows (e.g. harvest-watch-4h —
+  crons are enabled and have recent last-run rows (e.g. oc-harvest-dispatch-4h —
   via the cron tool, fresh receipt); a dead patrol cron posts no census and
   trips no alarm, so the liveness check IS the heartbeat for the heartbeat.
 
