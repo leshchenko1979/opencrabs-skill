@@ -1402,6 +1402,40 @@ AMBEOF
   OC_ACTOR="$W7" bash "$ME" stamp claim "issue 6060 claimed: no hash form; a passing mention of the #7070 hook" >/dev/null 2>&1
   chk "claim-ref-nohash-rc" 0 $?
   chk "claim-ref-nohash-value" "6060" "$(bash "$ME" claim-ref "$W7" 2>/dev/null)"
+  # #335 (Toolsmith, 2026-09-18): an explicit `--issue` must WIN over a prose
+  # mention. The old prefix check was a SUBSTRING search over the whole prose
+  # (`case *"#$issue"*`), so a lane claiming #299 while narrating "fixed #294"
+  # had its prefix suppressed and the row anchored on the LEADING cluster —
+  # #294 — i.e. the claim landed on the WRONG issue, and oc-commit derived
+  # Issue-Ref #294 from it and posted a comment onto a finished issue.
+  local W8="88888888-3333-4444-5555-666666666666"
+  OC_ACTOR="$W8" bash "$ME" claim --issue 299 --what "fixed #294 (superseded), now claiming #299" >/dev/null 2>&1
+  chk "claim-issue-flag-wins-rc" 0 $?
+  chk "claim-issue-flag-wins-target" "[299]" "$(jq -c --arg u "$W8" '[.events[] | select((.by // "") | contains($u))][-1].issues // null' "$OC_LEDGER")"
+  chk "claim-issue-flag-wins-prose" "299" "$(bash "$ME" claim-ref "$W8" 2>/dev/null)"
+  # `--issue #N` must normalise: a stray '#' used to build "CLAIM ##N", which
+  # both looked wrong AND dodged the membership test.
+  OC_ACTOR="$W8" bash "$ME" claim --issue '#298' --what "second fixture" >/dev/null 2>&1
+  chk "claim-issue-hash-normalised" "true" "$(jq -r --arg u "$W8" '[.events[] | select((.by // "") | contains($u)) | select(.what | contains("second fixture"))][0].what | startswith("CLAIM #298 — ") and (contains("##") | not)' "$OC_LEDGER")"
+  # ...and a prose that ALREADY leads with the claim cluster is kept verbatim
+  # (the suppression is still correct in the one case it was written for).
+  OC_ACTOR="$W8" bash "$ME" claim --issue 297 --what "CLAIM #297 — already led" >/dev/null 2>&1
+  chk "claim-issue-leading-cluster-verbatim" "CLAIM #297 — already led" "$(jq -r --arg u "$W8" '[.events[] | select((.by // "") | contains($u)) | select(.what | contains("already led"))][0].what' "$OC_LEDGER")"
+  # #335: `claim-ref --open` — the ref a consumer may safely ACT on. W2's #999
+  # claim is CLOSED by this point (the confirm verb above appended a closing
+  # event), so the plain form still answers while --open must refuse.
+  bash "$ME" claim-ref "$W2" --open >/dev/null 2>&1; chk "claim-ref-open-closed-rc3" 3 $?
+  bash "$ME" claim-ref "$W2" --open --open >/dev/null 2>&1; chk "claim-ref-open-repeat-rc3" 3 $?
+  bash "$ME" claim-ref --open "$W2" >/dev/null 2>&1; chk "claim-ref-open-before-uuid-rc3" 3 $?
+  bash "$ME" claim-ref "$W2" --bogus >/dev/null 2>&1; chk "claim-ref-unknown-flag-rc2" 2 $?
+  bash "$ME" claim-ref --open >/dev/null 2>&1; chk "claim-ref-open-no-uuid-rc2" 2 $?
+  local WC="cccccccc-3333-4444-5555-666666666666"
+  OC_ACTOR="$WC" bash "$ME" claim --issue 5555 --what "fixture open for --open" >/dev/null 2>&1
+  chk "claim-ref-open-live-rc" 0 $?
+  chk "claim-ref-open-live-value" "5555" "$(bash "$ME" claim-ref "$WC" --open 2>/dev/null)"
+  OC_ACTOR="$WC" bash "$ME" stamp done "done #5555 — fixture release" >/dev/null 2>&1
+  bash "$ME" claim-ref "$WC" --open >/dev/null 2>&1; chk "claim-ref-open-released-rc3" 3 $?
+  chk "claim-ref-plain-ignores-closure" "5555" "$(bash "$ME" claim-ref "$WC" 2>/dev/null)"
   # 46-50 (v0.4.97, #129 family): claims <N> — open claim-refs by issue.
   # Fixture: W2 claimed #999 above; W3's claim has no #N. Claim #777 as W4,
   # verify OPEN, close it via a later close event, verify GONE.
@@ -1850,6 +1884,59 @@ _latest_claim_issue() { # $1=uuid -> stdout: issue number (rc 0) or failure
   echo "$issue"
 }
 
+_latest_open_claim_issue() { # $1=uuid -> stdout: the lane's latest claim issue
+  # that is STILL OPEN (rc 0), else a diagnostic (rc 3).
+  #
+  # #335: the write-side counterpart of _latest_claim_issue, for callers that
+  # must not ACT on a released claim. oc-commit derives Issue-Ref from here:
+  # deriving it from a claim whose issue already carries a `done` row posts an
+  # implementation comment onto a FINISHED issue (the cross-post the defect
+  # report caught).
+  #
+  # Row selection mirrors _latest_claim_issue EXACTLY (last claim row whose
+  # `by` contains the uuid) so the two verbs can never disagree about WHICH
+  # claim is the lane's latest. The only difference is the closure filter, and
+  # that predicate is the canonical one (oc_claims.claim_is_closed) — never
+  # re-inlined here: four inlined copies of it had already drifted apart (#305).
+  python3 -c '
+import sys, os, json
+
+sys.dont_write_bytecode = True   # keep the shared checkout byte-identical
+sys.path.insert(0, os.path.join(sys.argv[2], "lib"))
+import oc_claims as oc
+
+try:
+    with open(sys.argv[1]) as f:
+        events = json.load(f).get("events", [])
+except Exception as e:
+    sys.stderr.write("failed to read ledger: %s\n" % e)
+    sys.exit(3)
+
+uuid = sys.argv[3]
+rows = oc.parse_events(events)
+idx = None
+for i, row in enumerate(rows):
+    if row["kind"] == "claim" and uuid in row["by"]:
+        idx = i
+if idx is None:
+    sys.stderr.write("no claim event by %s\n" % uuid)
+    sys.exit(3)
+row = rows[idx]
+if not row["targets"]:
+    sys.stderr.write("latest claim by %s carries no numeric issue ref: %s\n"
+                     % (uuid, row["what"]))
+    sys.exit(3)
+for tok in row["targets"]:
+    if not oc.claim_is_closed(rows, idx, row["by"], tok):
+        sys.stdout.write("%d\n" % tok)
+        sys.exit(0)
+sys.stderr.write(
+    "latest claim by %s is CLOSED (#%s — a done/close row for it follows): %s\n"
+    % (uuid, ", #".join(str(t) for t in row["targets"]), row["what"]))
+sys.exit(3)
+' "$LEDGER" "$_OC_DIR" "$1"
+}
+
 cmd_claim() { # oc-ledger claim [<uuid>] <issue-number|#N> [text...] | oc-ledger claim --issue <N> [--what <text>]
   case "${1:-}" in -h|--help) echo "usage: oc-ledger claim [<uuid>] <issue-number|#N> [text...] | oc-ledger claim --issue <N> [--what <text>]"; exit 0 ;; esac
   local by="" issue="" what=""
@@ -1874,12 +1961,24 @@ cmd_claim() { # oc-ledger claim [<uuid>] <issue-number|#N> [text...] | oc-ledger
     esac
   done
   [ -n "$issue" ] || die 2 "usage: oc-ledger claim [<uuid>] <issue-number|#N> [text...] (numeric issue ref required)"
+  # Defect #335: the prefix test must BE the consumer's predicate, not a
+  # substring search. The old `case *"#$issue"*` fired on a mention ANYWHERE in
+  # the prose, so `claim --issue 299 --what "fixed #294 ... (#299)"` suppressed
+  # the prefix and the row's LEADING cluster (#294) became the claim's target —
+  # the explicit flag lost to a passing mention, and oc-commit then derived
+  # Issue-Ref #294 from that row and cross-posted onto a done issue. Suppress
+  # the prefix ONLY when the prose already LEADS with a cluster naming $issue,
+  # tested with the single owner (oc_claims.primary_issue_tokens) that every
+  # consumer reads the row with. Accept `--issue #N` too: a stray '#' would
+  # otherwise build "CLAIM ##N" and dodge the membership test.
+  issue="${issue#\#}"
   local full_what
   if [ -n "$what" ]; then
-    case "$what" in
-      *"#$issue"*|*"issue $issue"*|*"issue=$issue"*) full_what="$what" ;;
-      *) full_what="CLAIM #$issue — $what" ;;
-    esac
+    if _primary_issue_tokens "$what" | grep -qx "$issue"; then
+      full_what="$what"
+    else
+      full_what="CLAIM #$issue — $what"
+    fi
   else
     full_what="CLAIM #$issue"
   fi
@@ -1888,15 +1987,30 @@ cmd_claim() { # oc-ledger claim [<uuid>] <issue-number|#N> [text...] | oc-ledger
   cmd_stamp "${stamp_args[@]}"
 }
 
-cmd_claim_ref() { # oc-ledger claim-ref <uuid> — print the #N from the worker's
-  # latest claim event (E2 finding 4, v0.4.72; derivation shared with
+cmd_claim_ref() { # oc-ledger claim-ref <uuid> [--open] — print the #N from the
+  # worker's latest claim event (E2 finding 4, v0.4.72; derivation shared with
   # cmd_confirm via _latest_claim_issue since v0.4.77).
+  # --open (#335): require that claim to still be OPEN — the only ref a consumer
+  # may safely ACT on (oc-commit's Issue-Ref + its post-commit comment). Without
+  # it the verb answers with the latest claim row whether open or closed.
   # Pure read: no existence check, no ledger mutation. rc 0 + "#N" | rc 3.
-  case "${1:-}" in -h|--help) echo "usage: oc-ledger claim-ref <uuid>"; exit 0 ;; esac
-  [ "${1:-}" != "" ] || die 2 "usage: oc-ledger claim-ref <uuid>"
-  local uuid="$1" out
+  local open=0 uuid=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --open) open=1; shift ;;
+      -h|--help) echo "usage: oc-ledger claim-ref <uuid> [--open]"; exit 0 ;;
+      --*) die 2 "claim-ref: unknown flag '$1'" ;;
+      *) [ -z "$uuid" ] || die 2 "claim-ref: unexpected extra argument '$1'"; uuid="$1"; shift ;;
+    esac
+  done
+  [ -n "$uuid" ] || die 2 "usage: oc-ledger claim-ref <uuid> [--open]"
+  local out
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
-  out="$(_latest_claim_issue "$uuid")" || die 3 "claim-ref: $out"
+  if [ "$open" = 1 ]; then
+    out="$(_latest_open_claim_issue "$uuid")" || die 3 "claim-ref --open: $out"
+  else
+    out="$(_latest_claim_issue "$uuid")" || die 3 "claim-ref: $out"
+  fi
   echo "$out"
 }
 

@@ -88,6 +88,20 @@ exit 3
 JSON
   ( cd "$R" && echo v > j && git add j && OC_LEDGER="$d/wl2.json" OC_ACTOR=u-fix "$OC" -m test --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: no-issue-derivable != 3" >&2; exit 1; }
+  # 6b. (#335) claim CLOSED by a later done row -> 3, and NO comment is posted
+  #     onto the finished issue; an explicit --issue still commits, because that
+  #     is the lane taking the decision on the record.
+  cat > "$d/wl3.json" <<'JSON'
+{"workers":[{"uuid":"u-fix","role":"editor"}],"events":[
+ {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor u-fix","what":"CLAIM #149 — finished work"},
+ {"t":"2026-08-31T11:00:00Z","kind":"done","by":"editor u-fix","what":"done #149 — shipped and released"}]}
+JSON
+  ( cd "$R" && echo t > t1 && git add t1 && OC_LEDGER="$d/wl3.json" OC_ACTOR=u-fix "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: closed-claim derivation != 3" >&2; exit 1; }
+  ( cd "$R" && echo t > t2 && git add t2 && OC_LEDGER="$d/wl3.json" OC_ACTOR=u-fix "$OC" -m "chore: explicit" --issue 42 --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: closed-claim + --issue override != 0" >&2; exit 1; }
+  git -C "$R" log -1 --format=%B | grep -q "Issue-Ref: #42" \
+    || { echo "selftest: closed-claim --issue override trailer missing" >&2; exit 1; }
   # 7. usage
   OC_ACTOR=u-fix "$OC" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: no args != 2" >&2; exit 1; }
   echo "selftest OK"; exit 0
@@ -121,16 +135,27 @@ OC_ACTOR="${OC_ACTOR:-${OPENCRABS_SESSION_ID:-}}"
 $G diff --cached --quiet 2>/dev/null \
   && { echo "gate-fail: nothing staged — stage your paths first (stage-only-your-paths rule)" >&2; exit 3; }
 
-# derive Issue-Ref from the actor's latest claim (mirrors oc-ledger cmd_confirm)
+# derive Issue-Ref from the actor's latest OPEN claim (#335).
+# `--open` is load-bearing: a claim whose issue already carries a done/close row
+# is RELEASED, and deriving the ref from it (the old behaviour) posted the
+# post-commit implementation comment onto a FINISHED issue. An explicit --issue
+# still overrides — that is the lane taking the decision on the record.
 LEDGER="${OC_LEDGER:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/workers-ledger.json}"
+DERIVE_ERR=""
 if [ -z "$ISSUE" ]; then
-  ISSUE="$("$(cd "$(dirname "$0")" && pwd)/oc-ledger" claim-ref "$OC_ACTOR" 2>/dev/null || true)"
+  OC_LEDGER_BIN="$(cd "$(dirname "$0")" && pwd)/oc-ledger"
+  if ! ISSUE="$("$OC_LEDGER_BIN" claim-ref "$OC_ACTOR" --open 2>/dev/null)"; then
+    ISSUE=""
+    # second call only on the failure path, to surface the verb's diagnostic
+    DERIVE_ERR="$("$OC_LEDGER_BIN" claim-ref "$OC_ACTOR" --open 2>&1 >/dev/null || true)"
+  fi
 fi
 if [ -n "$ISSUE" ]; then
   printf '%s' "$ISSUE" | grep -Eq '^[0-9]+$' || { echo "gate-fail: bad --issue '$ISSUE'" >&2; exit 3; }
   echo "issue-ref: #$ISSUE (from ${OC_LEDGER:+override ledger}${OC_LEDGER:-canonical ledger})" >&2
 else
-  echo "gate-fail: no Issue-Ref derivable — no claim with #N by $OC_ACTOR and no --issue passed" >&2
+  echo "gate-fail: no OPEN claim with #N by $OC_ACTOR and no --issue passed${DERIVE_ERR:+ — $DERIVE_ERR}" >&2
+  echo "          claim the issue first, or pass --issue <N> to commit against it explicitly" >&2
   exit 3
 fi
 
