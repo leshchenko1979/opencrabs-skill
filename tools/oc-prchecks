@@ -375,6 +375,17 @@ do_selftest() {
   if [ "$T_RC" -eq 6 ] && case "$T_OUT" in *"VERDICT CANCELLED"*"superseded"*) true ;; *) false ;; esac; then
     t_ok "run conclusion cancelled -> 6 CANCELLED superseded (P4: churn is not gate failure)"
   else t_bad "cancelled (rc=$T_RC out=$T_OUT)"; fi
+  # #333: the resume path performs NO dispatch, so SHA is UNSET there — and the
+  # CANCELLED handler interpolated a bare $SHA, so `set -u` aborted it BEFORE
+  # `exit 6`: a resumed cancelled run returned rc 1 with no hint at all (the
+  # reporter hit `SHA: unbound variable` on two independent invocations).
+  run_t cancelled resume 222
+  if [ "$T_RC" -eq 6 ] && case "$T_OUT" in *"VERDICT CANCELLED"*"superseding run:"*) true ;; *) false ;; esac; then
+    case "$T_OUT" in
+      *"unbound variable"*) t_bad "resume cancelled: aborted on unbound SHA (#333)" ;;
+      *) t_ok "resume cancelled -> 6 with recovery hint, no set -u abort (#333)" ;;
+    esac
+  else t_bad "resume cancelled (rc=$T_RC out=$T_OUT)"; fi
   run_t run_failed "$SHA"
   if [ "$T_RC" -eq 3 ] && case "$T_OUT" in *"run-failure"*) true ;; *) false ;; esac; then
     t_ok "run conclusion failure -> 3 RED reason run-failure"
@@ -780,6 +791,14 @@ if [ "$RESUME_MODE" -eq 1 ]; then
     exit 4
   }
   RUN_ID="$REF"
+  # #333: this path performs NO dispatch, so there is no -f input and therefore
+  # no SHA. A pr-checks job name is `PR-lane gates (<40-hex>)` — a bare sha with
+  # NO features list — which lib/oc-embed.sh deliberately does not decode (it
+  # requires the build-job "(<sha>, <features>)" shape), so recovering the sha
+  # here would mean a SECOND parser. Leave it unset: the CANCELLED handler's
+  # hint then degrades to the resume form, which is the correct recovery for a
+  # superseded run anyway (re-arming would re-dispatch a sha the superseding run
+  # is already gating).
   echo "$PROG: resumed run=$RUN_ID head_branch=$(printf '%s' "$RV" | jq -r '.headBranch // empty') head_sha=$(printf '%s' "$RV" | jq -r '.headSha // empty') (headSha is the carrier head, not the dispatch input)" >&2
   oc_log_extra "run_id" "$RUN_ID"
   oc_log_extra "resumed_head" "$(printf '%s' "$RV" | jq -r '.headSha // empty')"
@@ -1082,7 +1101,19 @@ case "$CONCLUSION" in
     oc_log_extra "verdict" "CANCELLED"
     oc_log_extra "verdict_reason" "superseded${SUP:+; superseding=$SUP}"
     echo "VERDICT CANCELLED (run $RUN_ID was concurrency-cancelled — superseded, not failed)"
-    echo "  superseding run: ${SUP:-unknown}${SUP:+ — https://github.com/$REPO/actions/runs/$SUP} (re-arm: oc-prchecks $SHA --wait $WAIT_SECS${SUP:+ — or resume superseding run: oc-prchecks resume $SUP --wait $WAIT_SECS})"
+    # #333: never interpolate a possibly-unset sha into the hint — on the resume
+    # path SHA is unset by construction, and the bare `$SHA` aborted the handler
+    # under `set -u` BEFORE `exit 6`, returning rc 1 where RC-CONTRACT documents
+    # rc 6 and losing the recovery hint entirely. The handler must always reach
+    # exit 6 with whatever hint it can build.
+    if [ -n "${SHA:-}" ]; then
+      REARM_HINT=" (re-arm: oc-prchecks $SHA --wait $WAIT_SECS${SUP:+ — or resume superseding run: oc-prchecks resume $SUP --wait $WAIT_SECS})"
+    elif [ -n "$SUP" ]; then
+      REARM_HINT=" (re-arm: oc-prchecks resume $SUP --wait $WAIT_SECS)"
+    else
+      REARM_HINT=""
+    fi
+    echo "  superseding run: ${SUP:-unknown}${SUP:+ — https://github.com/$REPO/actions/runs/$SUP}${REARM_HINT}"
     echo "RUN $RUN_URL"
     exit 6
     ;;
