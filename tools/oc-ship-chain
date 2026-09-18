@@ -30,7 +30,12 @@
 #   --fast           Default gate mode (passes fast=true to oc-prchecks).
 #   --full|--no-fast Opt-in full test suite gate (~30 min).
 #
-# --wait <sec>       LEG4 ship/swap budget (default 900).
+# --wait <sec>       LEG4 ship/swap budget (default 2700 = 45 min; the 10 most
+#                    recent successful carrier builds on this box ALL ran
+#                    942-1344 s (15.7-22.4 min), so the old 900 s default
+#                    expired on every one of them and surfaced as an INFRA
+#                    failure — defect #336).
+#                    Env: OC_SHIPCHAIN_SHIP_WAIT.
 # --gate-wait <sec>  LEG1 CI-gate budget (default 2700 = 45 min; the PR-lane
 #                    gate runs ~30 min here, and oc-prchecks' own default is
 #                    600 s, which is SHORTER than the gate — see Exit 5/7).
@@ -51,7 +56,10 @@
 #         via oc-rebase-safety and re-runs) · 5 TIP-MOVED (the branch tip no
 #         longer equals --sha: a rebase/force-push happened while the gate
 #         ran, so LEG3 must not land an ungated tip — re-gate and relaunch)
-#         via oc-rebase-safety, then re-runs the chain)
+#         · 5 REBASE-GATE (oc-deploy ship's own in-tool auto-rebase refused
+#         the push: OC_DEPLOY_GATE=rebase-conflict / rebase-audit-failed.
+#         Same lane fix as NON-FF — rebase via oc-rebase-safety, then
+#         re-run the chain)
 #       6 dispatch/poll infra failure (prchecks rc 4/7/8, ship rc other).
 #         A lineage-guard refusal surfaces here too (oc-deploy swap rc 2).
 #         The guard is REBASE-AWARE since v0.4.151: a deployed sha orphaned by
@@ -73,6 +81,13 @@
 #         non-terminal). The run id is printed — do NOT re-dispatch (that
 #         concurrency-cancels the live run); wait for it and re-run with
 #         --gated-run <id>, which pre-verifies and skips dispatch.
+#       8 SHIP-WAIT-TIMEOUT — the carrier build did not reach a terminal
+#         state within the LEG4 --wait budget (oc-deploy ship rc 5, with no
+#         rebase-gate token). The run is still BUILDING — do NOT re-dispatch
+#         it; wait for it and resume with
+#         `oc-deploy poll --sha <sha> --execute --wait <sec>`, or re-run the
+#         chain with a larger --wait. Distinct from 6 (INFRA) so "the build
+#         is slow" and "the build is broken" stop sharing an exit code.
 #
 # Chain-id: every leg stamps the ledger under one id (kind=shipchain)
 #   CHAIN-<shortsha>-<UTCstamp>  →  retrieve the whole run with
@@ -154,13 +169,27 @@ GH_BIN="${OC_GH:-gh}"
 usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$SELF"; exit 0; }
 die() { printf 'oc-ship-chain: %s\n' "$1" >&2; exit "${2:-2}"; }
 
-SHA=""; BRANCH=""; ISSUE=""; REPO=""; WAIT="900"; DRY=0; NOLEDGER=0; GATED_SHA=""; GATED_RUN=""
+SHA=""; BRANCH=""; ISSUE=""; REPO=""; DRY=0; NOLEDGER=0; GATED_SHA=""; GATED_RUN=""
 FAST=0
 # LEG1 gate budget (defect fix 2026-09-11, lane 4b4463d5). The PR-lane gate on
 # this box takes ~30 min end-to-end; oc-prchecks' own --wait default is 600 s,
 # so a fresh chain ALWAYS timed out mid-build and died on a non-terminal code.
 GATE_WAIT="${OC_SHIPCHAIN_GATE_WAIT:-2700}"        # 45 min — one gate, comfortably
 GATE_RESUMES="${OC_SHIPCHAIN_GATE_RESUMES:-2}"     # max rc-5 resume-polls before an honest give-up
+# LEG4 ship/swap budget (defect fix 2026-09-18, issue #336). The budget must
+# outlast the carrier build it waits on. Predicate: `gh run list --repo
+# leshchenko1979/opencrabs --workflow quick-build-linux.yml --limit 40`,
+# COMPLETED runs with conclusion=success, duration = updatedAt - createdAt
+# (queue + build — what this flag actually waits on). Of the 37 such runs
+# read on 2026-09-18, the 10 most recent ALL exceeded the old 900 s default:
+# 942-1344 s (15.7-22.4 min), median 1062 s (17.7 min), the boundary run
+# starting 2026-09-17T23:47Z. The 27 before them ran 394-651 s (6.6-10.8 min)
+# apart from one 963 s outlier — so a 900 s budget that held comfortably
+# stopped holding entirely (11 of 37 successes now exceed 900 s), and every
+# expiry surfaced as the generic INFRA branch (rc 6), indistinguishable from
+# a genuinely broken carrier. 2700 s mirrors GATE_WAIT and leaves 22.6 min of
+# headroom over the worst observed (1344 s).
+WAIT="${OC_SHIPCHAIN_SHIP_WAIT:-2700}"             # 45 min — one carrier build, comfortably
 [ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 OC_SHIPCHAIN_SELFTEST=1 exec bash "$SELF"
 [ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
 
@@ -770,9 +799,37 @@ SHIP_OUT="$(cd "$FORK_REPO" && OC_TOOLS_NOLOG=1 NOTIFY_SESSION= "$DEPLOY_BIN" sh
 SHIP_RC=$?
 set -e
 echo "$SHIP_OUT" | tail -5
+# rc mapping follows tools/RC-CONTRACT.md (the sole rc register), read live
+# 2026-09-18: `oc-deploy ship --execute --wait` exits 0 GREEN / 5 non-terminal
+# / 6 terminal-RED. Two defects fixed here (#336):
+#  (a) the old arm mapped rc 3 -> "carrier RED". oc-deploy does NOT exit 3
+#      from the ship verb at all (its only `die 3` calls live in `fanout`; the
+#      ship verb body exits 0/2/5/6 only), so that arm was DEAD CODE whose
+#      label was a lie — a REAL carrier RED (rc 6) fell through to the INFRA
+#      branch, making a broken build and a broken network the same exit code.
+#  (b) rc 5 was folded into INFRA as well, but rc 5 is the WAIT-TIMEOUT: the
+#      run is still building and the lane's next move is to WAIT, not to go
+#      hunting for an infra fault.
+# rc 5 is NOT exclusively a timeout: oc-deploy ship also dies 5 when its own
+# in-tool auto-rebase refuses the push (OC_DEPLOY_GATE=rebase-conflict /
+# rebase-audit-failed). That is a LANE fix of the same class as NON-FF, so it
+# keeps rc 5 — only a genuine budget expiry gets rc 8.
 case "$SHIP_RC" in
   0) journal "LEG4 ship GREEN" ;;
-  3) journal "LEG4 carrier RED"; die "CARRIER-RED" 4 ;;
+  6) journal "LEG4 carrier RED"
+     die "CARRIER-RED: the carrier build concluded RED — read the failure log (gh run view <id> --log-failed), fix, push, re-run the chain" 4 ;;
+  5)
+    REBASE_CAUSE=""
+    case "$SHIP_OUT" in
+      *OC_DEPLOY_GATE=rebase-conflict*)     REBASE_CAUSE="rebase-conflict" ;;
+      *OC_DEPLOY_GATE=rebase-audit-failed*) REBASE_CAUSE="rebase-audit-failed" ;;
+    esac
+    if [ -n "$REBASE_CAUSE" ]; then
+      journal "LEG4 ship REBASE-GATE $REBASE_CAUSE"
+      die "REBASE-GATE ($REBASE_CAUSE): oc-deploy's in-tool auto-rebase refused the push — rebase $BRANCH onto fork main (verify with oc-rebase-safety audit), then re-run: oc-ship-chain --sha $SHA --branch $BRANCH" 5
+    fi
+    journal "LEG4 ship WAIT-TIMEOUT (${WAIT}s budget exhausted)"
+    die "SHIP-WAIT-TIMEOUT: the carrier build did not reach a terminal state within the LEG4 --wait budget (${WAIT}s). The run is still BUILDING — do NOT re-dispatch it. Wait for it, then resume with: oc-deploy poll --sha $SHA --execute --wait <sec>  (or re-run the chain with a larger --wait)" 8 ;;
   *) journal "LEG4 ship INFRA rc=$SHIP_RC"; die "ship infra rc=$SHIP_RC" 6 ;;
 esac
 
@@ -822,7 +879,8 @@ exit 0
 # ---- selftest --------------------------------------------------------------
 # Fixture-based: fake prchecks/deploy/issuelog + fixture fork repo (bare origin
 # + clone). Covers: full GREEN chain exit 0, gate RED exit 4, carrier RED exit
-# 4, NON-FF exit 5, gated-sha/gated-run pre-verification, and (2026-09-11)
+# 4, ship WAIT-TIMEOUT exit 8, ship rebase-gate exit 5, NON-FF exit 5,
+# gated-sha/gated-run pre-verification, and (2026-09-11)
 # journal-write failure = loud + non-fatal, working ledger path = quiet.
 # Selftests never touch real CI or the real fork checkout.
 selftest_impl() {
@@ -898,7 +956,20 @@ EOF
   cat > "$T/fake-deploy" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-  ship) [ "${FAKE_CARRIER:-green}" = "red" ] && exit 3
+  ship) [ -n "${FAKE_SHIP_LOG:-}" ] && echo "$*" >> "$FAKE_SHIP_LOG"
+        # Contract-faithful rc (defect #336): the real `oc-deploy ship
+        # --execute --wait` exits 6 on a terminal-RED carrier build and 5 on
+        # a wait-timeout / rebase-gate refusal — it NEVER exits 3 from the
+        # ship verb. The old fixture returned 3, which the chain's dead
+        # rc-3 arm translated into "carrier RED", so the fixture kept a
+        # wrong mapping green. FAKE_SHIP_RC forces any ship rc; the
+        # FAKE_SHIP_STDERR hook carries the OC_DEPLOY_GATE=<cause> token
+        # the real tool writes on stderr.
+        if [ -n "${FAKE_SHIP_RC:-}" ]; then
+          [ -n "${FAKE_SHIP_STDERR:-}" ] && echo "$FAKE_SHIP_STDERR" >&2
+          exit "$FAKE_SHIP_RC"
+        fi
+        [ "${FAKE_CARRIER:-green}" = "red" ] && exit 6
         # record WHAT was shipped and RESET the poll counter: the marker is
         # written by the SWAP, not by the ship call (real oc-deploy writes it
         # during the Phase B bounce, after the handoff).
@@ -979,9 +1050,53 @@ EOF
   git -C "$T/clone" merge-base --is-ancestor "$FSHA" main 2>/dev/null \
     && bad "gate-red-no-merge" || ok "gate-red-no-merge"
 
-  # 3. carrier RED → exit 4
+  # 3. carrier RED -> exit 4. ship rc 6 IS the real carrier-RED signal; the
+  #    fixture used to return rc 3, a code no oc-deploy ship path emits, and
+  #    the chain's dead rc-3 arm translated it into "carrier RED" (#336).
+  rm -f "$T/journal.log"
   RC=0; OUT="$(FAKE_CARRIER=red run_chain --sha "$FSHA" --branch feat 2>&1)" || RC=$?
   check_rc "carrier-red" "$RC" 4
+  grep -q "LEG4 carrier RED" "$T/journal.log" && ok "journal-carrier-red" || bad "journal-carrier-red"
+
+  # 3b. LEG4 WAIT-TIMEOUT (ship rc 5, no rebase-gate token) -> rc 8, its own
+  #     journal line, and NOT the INFRA branch: "the build is slow" and "the
+  #     build is broken" must not share an exit code (#336).
+  rm -f "$T/journal.log"
+  RC=0; OUT="$(FAKE_SHIP_RC=5 run_chain --sha "$FSHA" --branch feat 2>&1)" || RC=$?
+  check_rc "ship-wait-timeout" "$RC" 8
+  grep -q "LEG4 ship WAIT-TIMEOUT" "$T/journal.log" && ok "journal-ship-wait-timeout" || bad "journal-ship-wait-timeout"
+  case "$OUT" in *SHIP-WAIT-TIMEOUT*) ok "ship-wait-timeout-msg" ;; *) bad "ship-wait-timeout-msg: $OUT" ;; esac
+  grep -q "LEG4 ship INFRA" "$T/journal.log" && bad "ship-wait-timeout-not-infra" || ok "ship-wait-timeout-not-infra"
+
+  # 3c. ship rc 5 WITH a rebase-gate token is the OTHER rc-5 cause: a lane
+  #     rebase problem, not a timeout. It must keep rc 5 (NON-FF class) and
+  #     must NOT be reported as WAIT-TIMEOUT — the discrimination is the
+  #     OC_DEPLOY_GATE= token oc-deploy writes on stderr.
+  rm -f "$T/journal.log"
+  RC=0; OUT="$(FAKE_SHIP_RC=5 FAKE_SHIP_STDERR='OC_DEPLOY_GATE=rebase-conflict: manual conflict resolution required' run_chain --sha "$FSHA" --branch feat 2>&1)" || RC=$?
+  check_rc "ship-rebase-gate" "$RC" 5
+  grep -q "LEG4 ship REBASE-GATE rebase-conflict" "$T/journal.log" && ok "journal-ship-rebase-gate" || bad "journal-ship-rebase-gate"
+  case "$OUT" in *SHIP-WAIT-TIMEOUT*) bad "rebase-gate-not-timeout" ;; *) ok "rebase-gate-not-timeout" ;; esac
+
+  # 3d. an unexpected ship rc still lands in the INFRA branch (rc 6) — the
+  #     catch-all must stay reachable, or a future oc-deploy rc would be
+  #     silently swallowed as a success.
+  rm -f "$T/journal.log"
+  RC=0; OUT="$(FAKE_SHIP_RC=4 run_chain --sha "$FSHA" --branch feat 2>&1)" || RC=$?
+  check_rc "ship-infra-other-rc" "$RC" 6
+  grep -q "LEG4 ship INFRA rc=4" "$T/journal.log" && ok "journal-ship-infra" || bad "journal-ship-infra"
+
+  # 3e. the LEG4 --wait DEFAULT is the other half of the fix: with no --wait
+  #     flag the chain must hand ship a budget that outlasts a real carrier
+  #     build. The old 900 s default expired on every one of the 10 most
+  #     recent healthy builds and was reported as INFRA (#336). The fake ship
+  #     records its own argv, so this asserts the DEFAULT and not a flag the
+  #     test passed.
+  rm -f "$T/journal.log" "$T/ship-argv.log"
+  RC=0; OUT="$(FAKE_SHIP_LOG="$T/ship-argv.log" run_chain --sha "$FSHA" --branch feat 2>&1)" || RC=$?
+  check_rc "default-wait-green" "$RC" 0
+  grep -q -- "--wait 2700" "$T/ship-argv.log" 2>/dev/null \
+    && ok "default-ship-wait-2700" || bad "default-ship-wait-2700: $(cat "$T/ship-argv.log" 2>/dev/null)"
 
   # 4. NON-FF: create divergent main, branch can't ff
   rm -f "$T/journal.log"
