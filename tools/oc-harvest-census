@@ -66,7 +66,7 @@ EOF
 
 # --- Core Python Engine (Deterministic Parsing & Matching) ---
 run_engine() {
-  python3 -c "
+  python3 - "$@" <<'OCPY'
 import sys, os, json, re, subprocess, argparse, time, datetime, glob
 
 def parse_iso_ts(ts_str):
@@ -611,18 +611,48 @@ if action == 'check':
     commits = get_ahead_commits(repo_path, mock_commits)
     matching_commits = []
     other_commits = []
+    # #323 (defect report): an issue number is NOT a commit identity. A bare
+    # 3-digit target like 262 was read as a SHA PREFIX, so commit 262193f67 — a
+    # real issue-249 commit — matched a query for issue 262 and produced a bogus
+    # HELD_DEPENDENT_SOAK refusal. The discriminator is LENGTH, not "is this a
+    # number": a digits-only target is ambiguous (a 7-char all-hex string is
+    # both a legal issue number and a legal git abbreviation — the sha-lookup
+    # fixtures below are exactly that shape), so the sha path now requires at
+    # least 7 hex chars, git's own minimum abbreviation. Below that the target
+    # cannot be a sha, so the two spaces stop colliding. False matches here
+    # refuse rather than approve, so the residual ambiguity is the safe side.
+    sha_target = bool(re.fullmatch(r'[0-9a-fA-F]{7,40}', target))
     for c in commits:
         tr = c.get('trailer', '')
         m_tr = re.search(r'#?(\d+)', tr)
         iss_c = int(m_tr.group(1)) if m_tr else None
         if not iss_c:
-            m_sb = re.search(r'#?(\d+)', c.get('subject', ''))
+            # Subject fallback: only an EXPLICIT #<n> citation may be adopted
+            # as a commit's issue. The previous pattern took the FIRST number
+            # anywhere in the subject, so the repo's own swap-marker convention
+            # (a subject carrying an 8-hex fragment) attributed that commit to
+            # a two-digit issue, and a date stamp like sync/upstream-20260917-2
+            # to issue 20260917 — both feeding matches_iss, the path behind the
+            # manual-records gate and the 24h soak gate.
+            m_sb = re.search(r'#(\d+)', c.get('subject', ''))
             iss_c = int(m_sb.group(1)) if m_sb else None
         c_sha = c.get('sha', '')
         c_short = c.get('short_sha', '')
-        matches_sha = bool(target and (c_sha.lower().startswith(target.lower()) or c_short.lower().startswith(target.lower())))
+        matches_sha = bool(sha_target and (c_sha.lower().startswith(target.lower()) or c_short.lower().startswith(target.lower())))
         matches_iss = bool(target_iss is not None and iss_c == target_iss)
-        matches_subj = bool(target.lower() in c.get('subject', '').lower())
+        # Subject matching: an issue-number query requires an explicit #<n>
+        # citation, never an unanchored substring — the repo's swap-marker
+        # convention puts an 8-hex fragment into every lane's subject, so a bare
+        # substring test fires on sha fragments (target 192 matching a subject
+        # that embeds 24c192a5), on date stamps (20260917 matching 202/609/917)
+        # and on prose numerals (target 429 matching a global cooldown note).
+        # Measured by the reporter over 210 commits: 15 false positives across
+        # 9 commits for 3-digit targets, ~4.3% of the window. Non-issue targets
+        # (branch/slug) keep the substring test, which is their lookup.
+        if target_iss is not None:
+            matches_subj = bool(re.search(r'#' + str(target_iss) + r'(?!\d)', c.get('subject', '')))
+        else:
+            matches_subj = bool(target.lower() in c.get('subject', '').lower())
         if matches_iss or matches_subj or matches_sha:
             matching_commits.append(c)
         else:
@@ -786,7 +816,7 @@ elif action in ('scan', 'sync'):
                 c_sub = c['subject'][:65]
                 print(f'  {c_sha} {c_sub}')
     sys.exit(0)
-" "$@"
+OCPY
 }
 
 # --- Subcommand Handlers ---
@@ -1004,6 +1034,38 @@ EOF
     "commit_ts": 100000,
     "deployed_ts": 100000,
     "files": ["src/active/lane.rs"]
+  },
+  {
+    "sha": "262193f67cb0000000000000000000000000000",
+    "short_sha": "262193f",
+    "subject": "chore(attribution): sign tip for #249 deploy",
+    "trailer": "leshchenko1979/opencrabs#249",
+    "commit_ts": 100000,
+    "files": ["src/tools/shared.rs"]
+  },
+  {
+    "sha": "24c192a5cb0000000000000000000000000000",
+    "short_sha": "24c192a5",
+    "subject": "release: swap marker for 24c192a5 tree",
+    "trailer": "",
+    "commit_ts": 100000,
+    "files": ["src/tools/shared.rs"]
+  },
+  {
+    "sha": "20260917cb0000000000000000000000000000",
+    "short_sha": "2026091",
+    "subject": "chore(sync): upstream sync upstream-20260917-2",
+    "trailer": "",
+    "commit_ts": 100000,
+    "files": ["src/tools/shared.rs"]
+  },
+  {
+    "sha": "271ace0cb0000000000000000000000000000000",
+    "short_sha": "271ace0",
+    "subject": "fix(parser): handle empty input (#271)",
+    "trailer": "",
+    "commit_ts": 100000,
+    "files": ["src/tools/shared.rs"]
   }
 ]
 EOF
@@ -1198,7 +1260,54 @@ EOF
     return 1
   fi
 
-  echo "selftest: 15/15 OK"
+  # 13. #323: an issue number is NOT a sha prefix. Commit 262193f carries a
+  # real issue-249 trailer; a query for issue 262 must not adopt it (the
+  # reported defect: a bogus HELD_DEPENDENT_SOAK for a 3-digit target).
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "262" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    echo "  ok   - #323 issue number is not a sha prefix -> ELIGIBLE exit 0"
+  else
+    echo "  bad  - #323 sha-prefix collision expected rc=0, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 14. #323: an issue number is NOT a subject substring. The repo's own
+  # swap-marker convention embeds an 8-hex fragment into the subject, so a bare
+  # substring test answered a query for issue 192 with a marker for 24c192a5.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "192" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    echo "  ok   - #323 issue number is not a subject substring -> ELIGIBLE exit 0"
+  else
+    echo "  bad  - #323 swap-marker subject collision expected rc=0, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 15. #323: a date stamp in the subject is not an issue reference.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "202" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    echo "  ok   - #323 date stamp is not an issue reference -> ELIGIBLE exit 0"
+  else
+    echo "  bad  - #323 date-stamp subject collision expected rc=0, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 16. POSITIVE CONTROL for 13-15: an EXPLICIT #<n> citation must still match,
+  # including the trailer-less fallback that adopted an arbitrary number before.
+  # Without this control the three cases above would pass equally if the matcher
+  # had simply been disabled.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "271" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_DEPENDENT_SOAK"; then
+    echo "  ok   - #323 explicit #n citation still matches -> HELD_DEPENDENT_SOAK exit 1"
+  else
+    echo "  bad  - positive control expected rc=1 HELD_DEPENDENT_SOAK, got rc=$rc ($out)"
+    return 1
+  fi
+
+  echo "selftest: 19/19 OK"
   return 0
 }
 
