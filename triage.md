@@ -122,6 +122,7 @@ below needs a regular cadence to be worth anything.
      must conclude with: `Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed.`
      Triage verifies delivery by polling `workers-ledger.json` (`oc-ledger events --kind claim`),
      NEVER by expecting, requesting, or processing `session_notify` conversational acks.
+   - **Smoke-ceiling label on wire (HQ ruling 2026-09-18, v0.4.202)**: before wiring an issue, read the live carrier set (`tools/oc-carrier-features`). When the deliverable's feature-gated modules are OUTSIDE that set, the wire MUST carry `SMOKE CEILING: UNPROVEN (structural N/A) — <feature> absent from carrier set`, and the issue MUST be linked `--add-blocked-by` the carrier-set-widening issue. Such issues ARE dispatchable (`DISPATCHABLE = unclaimed AND vetted`): the CI gate compiles `--all-features`, so the code is verifiable — only the HARVEST is blocked. Never park or block an out-of-feature-set issue for that reason alone. Canon: `fleet-directives.md §Out-of-Feature-Set Issues — Dispatchable, Ceiling Labeled`.
 5. Already-claimed issues:
    - Normal progression: no action; the owning editor's chain owns them.
    - **Continuous Relationship Linking Mandate (owner order 2026-09-16)**: During triage sweeps, if Triage discovers open issues that depend on in-flight features or unharvested subsystems, Triage MUST establish native links in the same turn via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
