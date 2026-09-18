@@ -95,6 +95,39 @@ import re
 #: The only event kinds that can close a claim (v1 vocabulary).
 CLOSING_KINDS = ("close", "confirm", "reject", "done", "unclaim")
 
+#: The kinds that are evidence the WORK LANDED. A strict subset of
+#: CLOSING_KINDS, and NOT interchangeable with it — "closes a claim" and "the
+#: fix shipped" are different questions (#337).
+#:
+#:   done   — the lane reported the work complete (smoke PASS verified)
+#:   close  — the issue was closed
+#:
+#: The other three close a claim WITHOUT the work landing, which is why using
+#: CLOSING_KINDS as a landing test starves real work:
+#:
+#:   confirm — `CONFIRM #N — claim verified live (workers[].confirmed=true)`:
+#:             a bookkeeping flag is flipped; nothing shipped.
+#:   unclaim — the claim is RELEASED (`#N — closed-issue stale claim sweep`,
+#:             `#N — stood down`): the issue returns to the pool, unbuilt.
+#:   reject  — the claim is REFUSED: no work was done at all.
+#:
+#: Measured over the live ledger 2026-09-18: CLOSING_KINDS reaches 228 issues,
+#: 125 of them ONLY via the three non-landing kinds. 77 of those 125 are landed
+#: work that a git-landed check catches independently; the other 48 are
+#: reachable by `unclaim` ALONE (a released claim: `#N — closed-issue stale
+#: claim sweep`), so a CLOSING_KINDS-based filter suppressed them purely because
+#: a claim had been RELEASED while the work was still unbuilt.
+#:
+#: On today's data all 48 are already closed on GitHub, so this narrowing
+#: changes NO dispatch outcome. It is a latent-correctness fix: the predicate
+#: now means what its name says, and the next released-but-unbuilt issue is no
+#: longer silently starved. (Do not claim a present-tense starvation without
+#: re-measuring the intersection with the live open set — the first version of
+#: this comment asserted three named issues were wrongly filtered and was wrong:
+#: #248/#253/#268 each carry a genuine git-landed commit, and were correctly
+#: skipped by the git arm, not by this one.)
+LANDED_KINDS = ("close", "done")
+
 # Accepted issue-reference forms: `#N`, `issue N`, `issue=N`, `issue#N`.
 _REF_RE = re.compile(r"(?:#[0-9]+|issue[ \t=#]*[0-9]+)", re.IGNORECASE)
 _DIGITS_RE = re.compile(r"[0-9]+")
