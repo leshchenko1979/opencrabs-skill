@@ -1,5 +1,13 @@
 # Changelog — opencrabs-dev
 
+## v0.4.201 (2026-09-18)
+
+- **Fork-only base-fault closure predicate (HQ ruling 2026-09-18; `triage.md §Autonomous closure — limited disposal authority`)**: Codified the mechanical closure predicate for fixes whose reconcile target may itself be fork-only. The operative question is **whether the fix's SUBJECT exists upstream** (`git grep -c "<S>" adolfousier/main`), not whether its target FILES do — the files test is exactly what made #253 look standalone.
+  - Subject **present** upstream → standalone `fix/*`, zero soak (HARVEST LAW), closes after **its own** upstream PR files.
+  - Subject **absent** upstream → the fix is a **CHILD** of the fork-only parent: linked natively, barred from standalone harvest by the Native Sub-Issue Pre-flight Gate (#188 refusal), stays **OPEN** until the PARENT's upstream PR files, then closes with it.
+  - **Corollary (both branches): landing is never the close trigger** — the trigger is the upstream PR filing.
+  - Clarifies the harvest-gated closure law; adds **no** fourth autonomous-close class. Receipts: #253 **reopened** (child of unharvested #246; `FlowEvent` fork-only — `git grep -c FlowEvent adolfousier/main -- src/` empty), #324 **reopen stands** (child of fork-only #286).
+
 ## v0.4.200 (2026-09-17)
 
 - **Atomic Subsystem Bundling & Fix Squashing Law (Owner Order 2026-09-17)**: Upstream PR branches must squash follow-up bugfixes, clippy cleanups, formatting touches, and dependent child issue commits directly into the coherent parent feature commit before CI gating and filing upstream (`git reset --soft` / `git commit --amend` to consolidate into one clean commit). Maintainer Adolfo squashes multi-commit PRs into a single commit on upstream `main` anyway; shipping clean, all-in-one atomic commits eliminates upstream review noise and intermediate cherry-pick breakage.

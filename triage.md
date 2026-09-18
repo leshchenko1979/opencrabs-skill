@@ -144,6 +144,37 @@ one ledger stamp per issue (`oc-ledger stamp note "T5 auto-close #N <test>"
 `), and the close comment names the test class (a)/(b)/(c). Reversible by
 owner word (reopen + note).
 
+**Closure predicate for fork-only base-fault fixes (HQ ruling 2026-09-18,
+v0.4.201).** When the candidate is a *fix* whose reconcile target may itself be
+fork-only, the operative question is **NOT** "do the fix's target FILES exist
+upstream" — that is exactly the test that made #253 look standalone — but
+**"does the fix's SUBJECT exist upstream"**. Mechanical form:
+
+```
+S = the feature symbol/behaviour the fix reconciles against
+git grep -c "<S>" adolfousier/main        # 0  =>  the subject is fork-only
+```
+
+- **Subject PRESENT upstream** → standalone `fix/*`; zero soak per HARVEST LAW
+  (`fleet-directives.md §Upstream-merge cadence · HARVEST LAW · NO-HOLD`); the
+  fork issue closes right after **ITS OWN** upstream PR files.
+- **Subject ABSENT upstream** → the fix is a **CHILD** of the fork-only parent:
+  link it (`gh issue edit <n> --parent <parent>`), it is barred from standalone
+  harvest by the Native Sub-Issue Pre-flight Gate (issue #188 refusal), and it
+  stays **OPEN** until the PARENT's upstream PR files, then closes WITH it — a
+  child has no own PR to wait on.
+- **Corollary, both branches: LANDING IS NEVER THE CLOSE TRIGGER.** Not for a
+  standalone fix either — the trigger is the upstream PR filing. A close stamped
+  on landing is a process breach, not a judgement call.
+
+This is a **clarification of the harvest-gated closure law**, not a fourth
+autonomous-close class: neither branch satisfies (a) superseded-by,
+(b) duplicate, or (c) owner-confirmed-withdrawn. Receipts for the ruling:
+#253 **reopened** (child of unharvested #246 — `FlowEvent` is fork-only:
+`git grep -c FlowEvent origin/main -- src/` → `src/channels/telegram/flow.rs:10`,
+`git grep -c FlowEvent adolfousier/main -- src/` → empty; no upstream PR carries
+#253's work) and #324 **reopen stands** (child of fork-only #286, OPEN).
+
 **Night-shift phase variant (v0.4.157):** inside the operator-initiated Night
 Shift window this duty is promoted from a patrol to the window's CLOSING
 PHASE — **Phase 3, Idle-Lane Issue Triage** (`fleet-directives.md`). Same
