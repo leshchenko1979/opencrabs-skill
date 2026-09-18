@@ -92,10 +92,16 @@
 #                                          any configured origin gets a mirror
 #                                          push tail step (v0.4.50, off-box
 #                                          durability — attach ruling)
-#   sweep-closed-claims [--dry-run]        inspects claims against closed issues on
-#                                          GitHub/fork and reports or marks stale open
-#                                          claims closed.
-#   --selftest                             fixture suite (311 cases)
+#   sweep-closed-claims [--dry-run]        releases OPEN claims whose issue is
+#                                          CLOSED on the fork: scans via the
+#                                          canonical predicate (tools/lib/
+#                                          oc_claims.py) and, unless --dry-run,
+#                                          stamps ONE addressed `unclaim` row
+#                                          per closed issue (deduped — an
+#                                          addressed row releases every lane's
+#                                          claim on that issue). A gh failure is
+#                                          rc 4, never a silent clean.
+#   --selftest                             fixture suite (332 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -322,7 +328,24 @@ derive_by() { # default stamp attribution (v0.4.58, Duty-4 IDEA from lane 7e1ebb
 # POSITIVE: contains("#76") matched a claim on "#760", so `claims 76` answered
 # for #760's claim. These two helpers are the single owner of ref extraction.
 _issue_ref_tokens() { # $1=text -> every issue ref in it as a bare number, one per line
-  printf '%s' "$1" | grep -oiE '(#[0-9]+|issue[[:space:]=#]*[0-9]+)' | grep -oE '[0-9]+'
+  # DELEGATES to the canonical tokenizer (tools/lib/oc_claims.py) instead of
+  # carrying its own copy of the pattern. This one is a WRITE-TIME gate, which
+  # makes agreement load-bearing in both directions: `claim-ref` derives the
+  # issue from the very text `claims` scans, so a tokenizer that drifts by one
+  # character makes the tool DERIVE an issue the scanner cannot see (or scan one
+  # the deriver never wrote) — the "the gate must not LIE" family, live as the
+  # #106/#107 false-clean and the c6b1a539 substring residual. The ~90ms
+  # interpreter spawn is paid only by `stamp claim` and `claim-ref`, not by
+  # every stamp.
+  [ -n "${1:-}" ] || return 0
+  python3 -c '
+import sys, os
+sys.dont_write_bytecode = True   # keep the shared checkout byte-identical
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import oc_claims as oc
+for tok in oc.issue_ref_tokens(sys.argv[2]):
+    sys.stdout.write("%d\n" % tok)
+' "$_OC_DIR" "$1"
 }
 _issue_ref_has() { # $1=text $2=issue number -> rc 0 when <text> references that issue
   local toks; toks="$(_issue_ref_tokens "$1" || true)"
@@ -1477,6 +1500,73 @@ EOF
   # #38 was closed in event 5, so it should NOT be flagged
   grep -q "Issue #38 " "$T/sweep.out" && bad "sweep-closed-half-multi-ref-flagged" || ok
 
+  # 54c (#314, toolsmith 2fae1230): sweep-closed-claims WRITE PATH. Before this
+  # fix the verb had NO write path — `--dry-run` was parsed, passed to the
+  # embedded scan, and the live branch printed the SAME scan and exited 0, so
+  # the flag changed nothing and the selftest above pinned that no-op as
+  # correct. Now the flag must be load-bearing in BOTH directions: --dry-run
+  # must not mutate (event count identical), and the live sweep must write
+  # exactly ONE addressed `unclaim` row per CLOSED issue — deduped across
+  # lanes, since one addressed row releases every lane's claim on it — and
+  # thereby actually CLOSE those claims while leaving open-issue claims alone.
+  jq -n '{workers:[], events:[
+      {n:1, t:"2026-09-18T00:00:00Z", by:"editor 11111111-1111-1111-1111-111111111111", kind:"claim", what:"CLAIM #61 — stale, lane A"},
+      {n:2, t:"2026-09-18T00:00:01Z", by:"editor 22222222-2222-2222-2222-222222222222", kind:"claim", what:"CLAIM #61 — stale, lane B"},
+      {n:3, t:"2026-09-18T00:00:02Z", by:"editor 33333333-3333-3333-3333-333333333333", kind:"claim", what:"CLAIM #62 — stale, lane C"},
+      {n:4, t:"2026-09-18T00:00:03Z", by:"editor 33333333-3333-3333-3333-333333333333", kind:"claim", what:"CLAIM #63 — claim on an OPEN issue"}]}' > "$UAT/sweep_write.json"
+  mkdir -p "$T/mock_bin2"
+  cat << 'EOF' > "$T/mock_bin2/gh"
+#!/bin/sh
+if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+  echo '[{"number":61,"title":"stale-a"},{"number":62,"title":"stale-b"}]'
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$T/mock_bin2/gh"
+  local SW="$UAT/sweep_write.json" SBEFORE SAFTER
+  SBEFORE="$(jq '.events | length' "$SW")"
+  PATH="$T/mock_bin2:$PATH" OC_LEDGER="$SW" bash "$ME" sweep-closed-claims --dry-run > "$T/sweep-dry.out" 2>/dev/null
+  chk "sweep-dry-run-rc" 0 $?
+  grep -q -- "--dry-run: no ledger rows written" "$T/sweep-dry.out" && ok || bad "sweep-dry-run-receipt"
+  SAFTER="$(jq '.events | length' "$SW")"
+  [ "$SBEFORE" = "$SAFTER" ] && ok || bad "sweep-dry-run-mutated-ledger ($SBEFORE -> $SAFTER)"
+  PATH="$T/mock_bin2:$PATH" OC_LEDGER="$SW" bash "$ME" sweep-closed-claims > "$T/sweep-live.out" 2>/dev/null
+  chk "sweep-live-rc" 0 $?
+  SAFTER="$(jq '.events | length' "$SW")"
+  [ "$SAFTER" = "$(( SBEFORE + 2 ))" ] && ok || bad "sweep-live-row-count (want $(( SBEFORE + 2 )) got $SAFTER)"
+  chk "sweep-live-two-unclaims" "2" \
+    "$(jq '[.events[] | select(.kind == "unclaim")] | length' "$SW")"
+  chk "sweep-live-addressed" "2" \
+    "$(jq '[.events[] | select(.kind == "unclaim")
+            | select((.what | startswith("#")) and (.what | contains("closed-issue stale claim sweep")))] | length' "$SW")"
+  chk "sweep-live-dedup-by-issue" "2" \
+    "$(jq '[.events[] | select(.kind == "unclaim") | .what[0:3]] | unique | length' "$SW")"
+  OC_LEDGER="$SW" bash "$ME" claims 61 > "$T/sweep-c61.out" 2>/dev/null; chk "sweep-claims-61-rc" 0 $?
+  [ -s "$T/sweep-c61.out" ] && bad "sweep-61-still-open" || ok
+  OC_LEDGER="$SW" bash "$ME" claims 62 > "$T/sweep-c62.out" 2>/dev/null
+  [ -s "$T/sweep-c62.out" ] && bad "sweep-62-still-open" || ok
+  OC_LEDGER="$SW" bash "$ME" claims 63 > "$T/sweep-c63.out" 2>/dev/null
+  grep -q "33333333" "$T/sweep-c63.out" && ok || bad "sweep-open-issue-claim-released"
+
+  # 54d (#313, toolsmith 2fae1230): CROSS-LANE STANDDOWN closure — canonical
+  # rule signal 2. `STANDDOWN #N (<uuid>) — …` is stamped by a DIFFERENT lane
+  # (Triage stands a claim down on the claimant's behalf), so an author test
+  # alone closed nothing: the claim stayed OPEN until its claimant hand-stamped
+  # a redundant row (live n=7803 / n=8055). An addressed row closes it. The
+  # NEGATIVE half is the #305 fence: a foreign row that merely MENTIONS `#N` in
+  # prose must NOT release another lane's claim — that is the whole point of
+  # anchoring the address at the start of `what`.
+  jq -n '{workers:[], events:[
+      {n:1, t:"2026-09-18T00:00:00Z", by:"editor 11111111-1111-1111-1111-111111111111", kind:"claim", what:"CLAIM #71 — stood down by another lane"},
+      {n:2, t:"2026-09-18T00:01:00Z", by:"triage 22222222-2222-2222-2222-222222222222", kind:"done", what:"STANDDOWN #71 (11111111) — shipped and verified, claim released"},
+      {n:3, t:"2026-09-18T00:02:00Z", by:"editor 11111111-1111-1111-1111-111111111111", kind:"claim", what:"CLAIM #72 — foreign prose mention must not release"},
+      {n:4, t:"2026-09-18T00:03:00Z", by:"triage 22222222-2222-2222-2222-222222222222", kind:"unclaim", what:"UNCLAIM #72 — stood down in favour of editor lane 11111111"}]}' > "$UAT/standdown.json"
+  OC_LEDGER="$UAT/standdown.json" bash "$ME" claims 71 > "$T/claims-71.out" 2>/dev/null; chk "claims-standdown-rc" 0 $?
+  [ -s "$T/claims-71.out" ] && bad "claims-standdown-did-not-close" || ok
+  OC_LEDGER="$UAT/standdown.json" bash "$ME" claims 72 > "$T/claims-72.out" 2>/dev/null
+  grep -q "11111111" "$T/claims-72.out" && ok || bad "claims-foreign-prose-released-claim"
+
   # 55 (v0.4.131, WAVE-GROUP-B B3): notify-fanout kind acceptance — wave
   # completions stamp natively, ending the note-row workaround.
   OC_ACTOR="$W4" bash "$ME" stamp notify-fanout "fanout 'T': sent=1 skipped=0 failed=0 ids: 99999999" >/dev/null 2>&1
@@ -1817,10 +1907,20 @@ cmd_lessons() { # oc-ledger lessons — H-2 (v0.4.116): extract lesson/incident 
 }
 
 cmd_claims() { # oc-ledger claims [<N>] — dispatch=verify-unclaimed backend (#129
-  # family, v0.4.97, optimized v0.4.182): print every OPEN claim-refs on issue #N (or ALL open claims if omitted)
-  # from the ledger events, one line per claim: "<uuid>\t<t>\t<what>". Empty output + rc 0 =
+  # family, v0.4.97, optimized v0.4.182; canonical predicate #313): print every
+  # OPEN claim-ref on issue #N (or ALL open claims if omitted) from the ledger
+  # events, one line per claim: "<uuid>\t<t>\t<what>". Empty output + rc 0 =
   # clean (unclaimed) — the grep-lane hand query, mechanized. rc 3 = ledger
   # unreadable. Read-only, no mutation, no lock.
+  #
+  # The closure predicate lives in tools/lib/oc_claims.py — THE single
+  # implementation, shared with oc-harvest-dispatch (#305), oc-issue-dispatch
+  # (#309), oc-roster and the sweep-closed-claims verb below (#314). Do NOT
+  # re-inline a predicate here: four inlined copies had drifted apart (two
+  # extracted issue tokens as ints, two as strings, so one copy's comparison
+  # was forever-False; only one asked WHO wrote the closing row, so a foreign
+  # lane's prose mention of `#N` released a live claim — #305) and disagreed
+  # about the same ledger.
   case "${1:-}" in -h|--help) echo "usage: oc-ledger claims [<issue-number|#N>]"; exit 0 ;; esac
   local target=""
   if [ -n "${1:-}" ]; then
@@ -1830,84 +1930,45 @@ cmd_claims() { # oc-ledger claims [<N>] — dispatch=verify-unclaimed backend (#
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
 
   python3 -c '
-import sys, json, re
+import sys, os, json
 
-ledger_file = sys.argv[1]
-target_issue = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
-
-def issue_ref_tokens(text):
-    if not text:
-        return []
-    matches = re.findall(r"(?:#[0-9]+|issue[ \t=#]*[0-9]+)", text, re.IGNORECASE)
-    res = []
-    for m in matches:
-        for num in re.findall(r"[0-9]+", m):
-            if num not in res:
-                res.append(num)
-    return res
+# No .pyc next to the module: the shared checkout must stay byte-identical, and
+# a stale __pycache__ entry for the file that governs claim closure is a hazard
+# not worth the import speedup (mtime granularity + equal size can serve it).
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(sys.argv[3], "lib"))
+import oc_claims as oc
 
 try:
-    with open(ledger_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    with open(sys.argv[1]) as f:
+        events = json.load(f).get("events", [])
 except Exception as e:
-    sys.stderr.write("claims: ledger unreadable: %s\n" % e)
+    sys.stderr.write("failed to read ledger: %s\n" % e)
     sys.exit(3)
 
-events = data.get("events", [])
-parsed = []
-for idx, e in enumerate(events):
-    parsed.append({
-        "idx": idx,
-        "by": e.get("by") or "",
-        "kind": e.get("kind") or "",
-        "t": e.get("t") or "",
-        "what": e.get("what") or "",
-        "tokens": issue_ref_tokens(e.get("what") or "")
-    })
-
-close_kinds = {"close", "confirm", "reject", "done", "unclaim"}
-open_claims = []
-
-for c in parsed:
-    if c["kind"] != "claim":
-        continue
-    if not c["tokens"]:
-        continue
-    if target_issue is not None and str(target_issue) not in c["tokens"]:
-        continue
-        
-    c_by = c["by"]
-    unattr = 1 if ("(unattributed" in c_by or "unrostered-actor" in c_by) else 0
-    c_idx = c["idx"]
-    
-    check_tokens = [str(target_issue)] if target_issue is not None else c["tokens"]
-    
-    is_open = False
-    for tok in check_tokens:
-        closed = False
-        for e in parsed[c_idx + 1:]:
-            if e["kind"] in close_kinds:
-                if unattr == 1 or (c_by and c_by in e["by"]):
-                    if tok in e["tokens"]:
-                        closed = True
-                        break
-        if not closed:
-            is_open = True
-            break
-    if is_open:
-        open_claims.append(c)
-
-for oc in open_claims:
-    by = oc["by"]
-    t = oc["t"]
-    what = oc["what"]
-    sys.stdout.write("%s\t%s\t%s\n" % (by, t, what))
-' "$LEDGER" "$target"
+for claim in oc.open_claims(events, sys.argv[2] or None):
+    sys.stdout.write("%s\t%s\t%s\n" % (claim["by"], claim["t"], claim["what"]))
+' "$LEDGER" "$target" "$_OC_DIR"
 }
-
 cmd_sweep_closed_claims() { # oc-ledger sweep-closed-claims [--dry-run]
-  # Finds open claim rows in the ledger, checks if the referenced issue is closed,
-  # and if so prints or closes them.
+  # Release OPEN claim rows whose issue is CLOSED on the fork.
+  #
+  # #314: this verb had NO WRITE PATH. `--dry-run` was parsed, passed to the
+  # embedded python, and the live branch printed the same scan and `exit 0` — so
+  # the flag changed nothing, `dry_run` was a dead variable, and the selftest
+  # pinned the no-op as correct behaviour. A claim on a shipped-and-closed issue
+  # therefore stayed OPEN until its claimant hand-stamped a redundant closure.
+  #
+  # Closure predicate = tools/lib/oc_claims.py (canonical, #313) — the same
+  # implementation `claims` above and every other consumer uses. A claim is
+  # released by ONE `unclaim` row ADDRESSED to the issue (`#N — closed-issue
+  # stale claim sweep`): signal 2 of the canonical rule, whose author is by
+  # design NOT the claimant. One row per CLOSED issue therefore releases every
+  # lane's claim on it, so the plan is DEDUPED by issue number.
+  #
+  # A `gh` failure is LOUD (rc 4), never a silent clean: an empty closed_map
+  # from a failed probe used to print "All open claims map to OPEN issues." —
+  # absence read as a verdict (see the probe-vs-silence rule in AGENTS.md).
   local dry_run=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1918,108 +1979,73 @@ cmd_sweep_closed_claims() { # oc-ledger sweep-closed-claims [--dry-run]
   done
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
 
-  python3 -c '
-import sys, os, json, subprocess, re
+  local pairs rc
+  pairs="$(python3 -c '
+import sys, os, json, subprocess
 
-ledger_file = sys.argv[1]
-dry_run = sys.argv[2] == "1"
-
-def issue_ref_tokens(text):
-    if not text:
-        return []
-    matches = re.findall(r"(?:#[0-9]+|issue[ \t=#]*[0-9]+)", text, re.IGNORECASE)
-    res = []
-    for m in matches:
-        for num in re.findall(r"[0-9]+", m):
-            n = int(num)
-            if n not in res:
-                res.append(n)
-    return res
+sys.dont_write_bytecode = True   # keep the shared checkout byte-identical (see cmd_claims)
+sys.path.insert(0, os.path.join(sys.argv[2], "lib"))
+import oc_claims as oc
 
 try:
-    with open(ledger_file) as f:
-        data = json.load(f)
+    with open(sys.argv[1]) as f:
+        events = json.load(f).get("events", [])
 except Exception as e:
-    sys.stderr.write(f"failed to read ledger: {e}\n")
+    sys.stderr.write("failed to read ledger: %s\n" % e)
     sys.exit(3)
 
-events = data.get("events", [])
-parsed = []
-for idx, e in enumerate(events):
-    parsed.append({
-        "idx": idx,
-        "by": e.get("by") or "",
-        "kind": e.get("kind") or "",
-        "t": e.get("t") or "",
-        "what": e.get("what") or "",
-        "tokens": issue_ref_tokens(e.get("what") or "")
-    })
-
-close_kinds = {"close", "confirm", "reject", "done", "unclaim"}
-open_claims = []
-
-for c in parsed:
-    if c["kind"] != "claim":
-        continue
-    if not c["tokens"]:
-        continue
-    c_by = c["by"]
-    unattr = 1 if ("(unattributed" in c_by or "unrostered-actor" in c_by) else 0
-    c_idx = c["idx"]
-
-    unclosed_tokens = []
-    for tok in c["tokens"]:
-        closed = False
-        for e in parsed[c_idx + 1:]:
-            if e["kind"] in close_kinds:
-                if unattr == 1 or (c_by and c_by in e["by"]):
-                    if tok in e["tokens"]:
-                        closed = True
-                        break
-        if not closed:
-            unclosed_tokens.append(tok)
-
-    if unclosed_tokens:
-        open_claims.append({
-            "idx": c_idx,
-            "by": c_by,
-            "what": c["what"],
-            "t": c["t"],
-            "tokens": unclosed_tokens
-        })
-
+open_claims = oc.open_claims(events)
 if not open_claims:
-    print("No open claims found.")
     sys.exit(0)
 
-print(f"Scanned {len(open_claims)} open claim(s). Checking status on GitHub...")
+res = subprocess.run(
+    ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs",
+     "--state", "closed", "--limit", "1000", "--json", "number,title"],
+    capture_output=True, text=True)
+if res.returncode != 0:
+    sys.stderr.write("gh issue list failed (rc %d): %s\n"
+                     % (res.returncode, (res.stderr or "").strip()[:200]))
+    sys.exit(4)
+try:
+    closed_map = {i["number"]: i.get("title", "") for i in json.loads(res.stdout)}
+except Exception as e:
+    sys.stderr.write("failed to parse closed issues: %s\n" % e)
+    sys.exit(4)
 
-cmd = ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs", "--state", "closed", "--limit", "1000", "--json", "number,title"]
-res = subprocess.run(cmd, capture_output=True, text=True)
-closed_map = {}
-if res.returncode == 0:
-    try:
-        for item in json.loads(res.stdout):
-            closed_map[item["number"]] = item.get("title", "")
-    except Exception as e:
-        sys.stderr.write(f"warning: failed to parse closed issues: {e}\n")
+for claim in open_claims:
+    for tok in claim["tokens"]:
+        if tok in closed_map:
+            sys.stdout.write("%d\t%s\t%s\n"
+                             % (tok, claim["by"], (closed_map[tok] or "")[:60]))
+' "$LEDGER" "$_OC_DIR")"
+  rc=$?
+  [ $rc -eq 0 ] || die 3 "sweep-closed-claims: scan failed (rc $rc) — ledger or GitHub probe"
 
-stale = []
-for oc in open_claims:
-    stale_tokens = [tok for tok in oc["tokens"] if tok in closed_map]
-    for st in stale_tokens:
-        stale.append((oc, st, closed_map[st]))
+  if [ -z "$pairs" ]; then
+    echo "All open claims map to OPEN issues."
+    exit 0
+  fi
 
-if not stale:
-    print("All open claims map to OPEN issues.")
-    sys.exit(0)
+  local issues n_claims n_issues
+  issues="$(printf '%s\n' "$pairs" | cut -f1 | sort -n -u)"
+  n_claims="$(printf '%s\n' "$pairs" | grep -c .)"
+  n_issues="$(printf '%s\n' "$issues" | grep -c .)"
+  echo "Found $n_claims open claim(s) across $n_issues CLOSED issue(s):"
+  printf '%s\n' "$pairs" | awk -F'\t' \
+    '{ printf "  Issue #%s (CLOSED: %s) claimed by %s\n", $1, $3, $2 }'
 
-print(f"Found {len(stale)} open claim(s) for CLOSED issues:")
-for oc, iss_n, title in stale:
-    claimed_by = oc["by"]
-    print(f"  Issue #{iss_n} (CLOSED: {title[:50]}) claimed by {claimed_by}")
+  if [ "$dry_run" = 1 ]; then
+    echo "--dry-run: no ledger rows written. Re-run without --dry-run to release these claims."
+    exit 0
+  fi
 
-' "$LEDGER" "$dry_run"
+  local iss released=0
+  for iss in $issues; do
+    cmd_stamp unclaim "#$iss — closed-issue stale claim sweep" \
+      || die 4 "sweep-closed-claims: unclaim stamp failed for #$iss"
+    released=$(( released + 1 ))
+  done
+  echo "Released $released closed issue(s) — one unclaim row addressed to each."
   exit 0
 }
 

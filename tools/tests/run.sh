@@ -227,6 +227,123 @@ else
   bad "lib/oc-embed.sh missing"
 fi
 
+# ---- 00c. lib/oc_claims.py (#313/#314, toolsmith 2fae1230): canonical claim
+# ---- predicate — direct unit coverage. Four inlined copies of this predicate
+# ---- had drifted apart (two extracted issue tokens as ints, two as strings;
+# ---- only one asked WHO authored the closing row), so the module is now the
+# ---- single implementation every consumer imports. These cases pin the exact
+# ---- properties the drift broke, plus the token-extraction traps (#272).
+section "lib/oc_claims.py (canonical claim-closure predicate)"
+if [ -f "$TOOLS_DIR/lib/oc_claims.py" ]; then
+  # ast.parse, NOT py_compile: py_compile writes a __pycache__ .pyc next to the
+  # module, and a synthetic battery run must leave the shared checkout
+  # byte-identical (same reason the suite sets OC_TOOLS_NOLOG above).
+  python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$TOOLS_DIR/lib/oc_claims.py" 2>/dev/null \
+    && ok "oc_claims-lib syntax (ast.parse)" || bad "oc_claims-lib syntax"
+  OCT="$(mktemp -d)"
+  cat > "$OCT/unit.py" << 'PYEOF'
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import oc_claims as oc
+
+fails = []
+def chk(desc, got, want):
+    if got != want:
+        fails.append("%s (got %r want %r)" % (desc, got, want))
+
+# --- issue_ref_tokens: TOKEN extraction, never a substring or digit run (#272)
+chk("ref #129", oc.issue_ref_tokens("CLAIM #129 — x"), [129])
+chk("ref date not an issue", oc.issue_ref_tokens("stamped 2026-09-15"), [])
+chk("ref owner handle not an issue", oc.issue_ref_tokens("leshchenko1979/opencrabs#52"), [52])
+chk("ref sha prefix not an issue", oc.issue_ref_tokens("commit 262193f67 landed"), [])
+chk("ref uuid prefix not an issue", oc.issue_ref_tokens("session 6630dc9a-0eeb"), [])
+chk("ref issue N form", oc.issue_ref_tokens("claims issue 94"), [94])
+chk("ref issue=N form", oc.issue_ref_tokens("issue=4242 task"), [4242])
+chk("ref issue#N form", oc.issue_ref_tokens("issue#77"), [77])
+chk("ref multi in first-seen order", oc.issue_ref_tokens("#38, #80 — multi"), [38, 80])
+chk("ref 760 is not 76", oc.references("#760", 76), False)
+chk("ref 760 matches 760", oc.references("#760", 760), True)
+
+# --- type uniformity: the drift bug (str tokens compared to int tokens)
+chk("ref tokens are INTEGERS",
+    all(isinstance(t, int) for t in oc.issue_ref_tokens("CLAIM #129, issue 94")), True)
+
+# --- actor_key / actor_match
+chk("actor full uuid", oc.actor_key("editor 1a63f103-1234-5678-9abc-def012345678"),
+    ("uuid", "1a63f103-1234-5678-9abc-def012345678"))
+chk("actor short uuid last token", oc.actor_key("toolsmith/2fae1230"), ("uuid", "2fae1230"))
+chk("actor label", oc.actor_key("lamp-lane"), ("label", "lamp-lane"))
+chk("actor role prefix stripped", oc.actor_key("editor-14"), ("label", "14"))
+chk("actor short==full uuid", oc.actor_match("editor 2fae1230",
+    "toolsmith 2fae1230-aaaa-bbbb-cccc-dddddddddddd"), True)
+chk("actor uuid never matches label", oc.actor_match("editor 2fae1230", "editor-14"), False)
+chk("actor different uuids", oc.actor_match("editor 11111111", "editor 22222222"), False)
+chk("actor empty label", oc.actor_match("editor-", "editor-"), False)
+
+# --- is_addressed: anchored at the START of what (the #305 fence)
+chk("addressed plain", oc.is_addressed("#71 — released", 71), True)
+chk("addressed STANDDOWN", oc.is_addressed("STANDDOWN #71 (11111111) — shipped", 71), True)
+chk("addressed sweep form", oc.is_addressed("#2 — closed-issue stale claim sweep", 2), True)
+# `UNCLAIM #N` is deliberately NOT an address: that ref is the AUTHOR's own
+# claim, and the prose after it often names ANOTHER lane — so treating it as an
+# address would let a lane's own standdown release a third lane's claim, which
+# is exactly the #305 defect. It closes the author's claim by signal 1 instead.
+chk("UNCLAIM #N is not an address (#305)", oc.is_addressed("UNCLAIM #72 — stood down in favour of editor lane X", 72), False)
+chk("addressed mid-sentence is NOT", oc.is_addressed("note: see #264 for detail", 264), False)
+chk("addressed 71 does not address 710", oc.is_addressed("#710 — x", 71), False)
+
+# --- is_unattributed sentinels
+chk("sentinel unattributed", oc.is_unattributed("(unattributed)"), True)
+chk("sentinel unrostered", oc.is_unattributed("unrostered-actor 6630dc9a"), True)
+chk("sentinel real actor", oc.is_unattributed("editor 11111111"), False)
+
+# --- open_claims: the canonical rule, all three signals.
+# NB the ledger `n` is the ROW number, not the issue: each case is annotated
+# with the issue it claims so the survivors below are readable.
+EV = [
+  {"n": 1, "t": "t1", "by": "editor 11111111", "kind": "claim", "what": "CLAIM #1 — same-author closure"},
+  {"n": 2, "t": "t2", "by": "editor 11111111", "kind": "done", "what": "DONE #1 — own row"},
+  {"n": 3, "t": "t3", "by": "editor 22222222", "kind": "claim", "what": "CLAIM #2 — addressed closure by another lane"},
+  {"n": 4, "t": "t4", "by": "triage 33333333", "kind": "unclaim", "what": "#2 — closed-issue stale claim sweep"},
+  {"n": 5, "t": "t5", "by": "editor 44444444", "kind": "claim", "what": "CLAIM #3 — foreign prose must NOT release"},
+  {"n": 6, "t": "t6", "by": "triage 33333333", "kind": "unclaim", "what": "UNCLAIM #99 — stood down in favour of editor lane 44444444"},
+  {"n": 7, "t": "t7", "by": "(unattributed)", "kind": "claim", "what": "CLAIM #4 — unattributed"},
+  {"n": 8, "t": "t8", "by": "editor 55555555", "kind": "confirm", "what": "CONFIRM #4 — any lane closes an unattributed claim"},
+  {"n": 9, "t": "t9", "by": "editor 66666666", "kind": "claim", "what": "CLAIM #5 — non-closing kind must not close"},
+  {"n":10, "t": "t10", "by": "editor 66666666", "kind": "note", "what": "NOTE #5 — not a closing kind"},
+]
+# rows 5 (#3, released only by a foreign prose mention) and 9 (#5, whose only
+# later row is a non-closing kind) survive; rows 1, 3, 7 are closed by signals
+# 1, 2 and 3 respectively.
+open_ns = sorted(c["n"] for c in oc.open_claims(EV))
+chk("open_claims survivors", open_ns, [5, 9])
+chk("open_claims target filter", sorted(c["n"] for c in oc.open_claims(EV, 3)), [5])
+chk("open_claims target filter closed", oc.open_claims(EV, 1), [])
+chk("open_claims tokens are ints",
+    all(isinstance(t, int) for c in oc.open_claims(EV) for t in c["tokens"]), True)
+chk("open_claims skips ref-less claim",
+    oc.open_claims([{"n": 1, "by": "editor 11111111", "kind": "claim", "what": "CLAIM without a ref"}]), [])
+
+# --- legacy schema fallback: rows carrying note/actor instead of what/by
+LEG = [{"n": 1, "actor": "editor 11111111", "type": "claim", "note": "CLAIM #7 — legacy keys"}]
+chk("legacy keys parsed", len(oc.open_claims(LEG)), 1)
+
+if fails:
+    for f in fails:
+        sys.stderr.write("  unit-fail: %s\n" % f)
+    sys.exit(1)
+PYEOF
+  if python3 "$OCT/unit.py" "$TOOLS_DIR/lib" 2>"$OCT/err"; then
+    ok "oc_claims predicate unit cases (tokens/actors/address/signals)"
+  else
+    bad "oc_claims predicate unit cases"; sed 's/^/    /' "$OCT/err" | head -20
+  fi
+  rm -rf "$OCT"
+else
+  bad "lib/oc_claims.py missing"
+fi
+
 # ---- 5. oc-post-receipts ----------------------------------------------------
 section "oc-post-receipts"
 if tool archive/oc-post-receipts; then
