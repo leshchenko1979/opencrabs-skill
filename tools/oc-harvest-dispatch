@@ -1254,6 +1254,13 @@ cmd_selftest() {
   ]
 }
 EOF
+  # issue #304: the vet legs of run_engine take no ledger argument, so without
+  # this export they fall through to the LIVE workers-ledger.json (engine
+  # resolution at :776) and the selftest turns red whenever any live lane holds
+  # a claim overlapping a fixture diff. Point the existing hook at the fixture;
+  # argv still wins, so the dispatch legs passing "$mock_ledger" /
+  # "$spread_ledger" explicitly are unaffected.
+  export OC_HARVEST_MOCK_LEDGER="$mock_ledger"
 
   local rc=0 out=""
 
