@@ -354,6 +354,23 @@ _issue_ref_has() { # $1=text $2=issue number -> rc 0 when <text> references that
   case " $(printf '%s' "$toks" | tr '\n' ' ') " in *" $2 "*) return 0 ;; esac
   return 1
 }
+_primary_issue_tokens() { # $1=text -> the issue(s) the text CLAIMS, one per line
+  # #329: the WRITE-time counterpart of the scan-time predicate. `stamp claim`
+  # persists this as the row's structured `issues` field, so a claim's target is
+  # recorded as a FACT instead of being re-inferred from prose on every read —
+  # the same "record it, don't re-derive it" shape the tools already use for
+  # `files`. Delegates to oc_claims.primary_issue_tokens so the writer and the
+  # scanner can never disagree about what a row claims.
+  [ -n "${1:-}" ] || return 0
+  python3 -c '
+import sys, os
+sys.dont_write_bytecode = True   # keep the shared checkout byte-identical
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import oc_claims as oc
+for tok in oc.primary_issue_tokens(sys.argv[2]):
+    sys.stdout.write("%d\n" % tok)
+' "$_OC_DIR" "$1"
+}
 
 cmd_stamp() {
   local kind="" what="" by="" allow_unattr=0 allow_noref=0
@@ -405,15 +422,38 @@ cmd_stamp() {
   fi
   _stamp_locked() {
     local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
+    # #329: a claim records its TARGETS as structured data. The prose is what a
+    # human reads; `issues` is what the scanner keys on, so the target is a fact
+    # recorded at write time rather than an inference re-made from the sentence
+    # on every read. Before this field the scanner had to guess which of the
+    # note's references was the claim — and a body citation (#323 mentioned while
+    # explaining #327) was read as a SECOND claim, producing 13 phantom open
+    # claims fleet-wide and a false dispatch refusal. null (field absent) is the
+    # correct shape for non-claims and for a deliberately ref-less claim.
+    local issues_json="null"
+    if [ "$kind" = "claim" ]; then
+      issues_json="$(_primary_issue_tokens "$what" \
+        | jq -Rsc 'split("\n") | map(select(length > 0) | tonumber) | if length == 0 then null else . end')"
+    fi
     atomic_jq --arg n "$n" --arg t "$t" --arg by "$by" --arg kind "$kind" --arg what "$what" \
-      '.events += [{n: ($n|tonumber), t: $t, by: $by, kind: $kind, what: $what}] | .updated_at = $t' || return $?
+      --argjson iss "$issues_json" \
+      '.events += [{n: ($n|tonumber), t: $t, by: $by, kind: $kind, what: $what}
+                    + (if $iss == null then {} else {issues: $iss} end)] | .updated_at = $t' || return $?
     # read-back self-verify (Duty-6 lens C2, 2026-08-31): never trust the write —
     # the n=1361/1372 glitched-argv stamps landed with what:"--what" and no check spoke
-    local r_kind r_what
+    local r_kind r_what r_iss
     r_kind="$(jq -r --argjson n "$n" '[.events[] | select(.n == $n)][0].kind // ""' "$LEDGER" 2>/dev/null)"
     r_what="$(jq -r --argjson n "$n" '[.events[] | select(.n == $n)][0].what // ""' "$LEDGER" 2>/dev/null)"
+    r_iss="$(jq -c --argjson n "$n" '[.events[] | select(.n == $n)][0].issues // null' "$LEDGER" 2>/dev/null)"
     if [ "$r_kind" != "$kind" ] || [ "$r_what" != "$what" ]; then
       die 4 "stamp READ-BACK MISMATCH: sent kind=$kind what=$what, disk has kind=$r_kind what=$r_what — ledger corruption; investigate before further stamps"
+    fi
+    # The structured field is verified too: it is what the scan keys on, so a
+    # silently-dropped `issues` array would reintroduce the prose inference this
+    # field exists to replace (and a stale one would pin a claim to a WRONG
+    # issue — the _latest_claim_issue 93-vs-94 class).
+    if [ "$kind" = "claim" ] && [ "$r_iss" != "$issues_json" ]; then
+      die 4 "stamp READ-BACK MISMATCH: sent issues=$issues_json, disk has issues=$r_iss — the claim's target is not what was written; investigate before further stamps"
     fi
     echo "stamped n=$n kind=$kind (read-back ok)"
     git_state_commit "ledger n=$n: $kind (oc-ledger stamp)"
@@ -1413,6 +1453,30 @@ AMBEOF
   grep -q "$W6" "$T/claims-76.out" && bad "claims-76-matched-760" || ok
   bash "$ME" claims 760 > "$T/claims-760.out" 2>/dev/null
   grep -q "$W6" "$T/claims-760.out" && ok || bad "claims-760-not-matched"
+  # (2c) #329 — a claim's TARGET is its ADDRESS, never every reference in the
+  # note. Before this, an issue MENTIONED while explaining another read as a
+  # second claim: 13 phantoms fleet-wide, one of which made sweep-closed-claims
+  # want to write a false unclaim row and made oc-issue-dispatch refuse an OPEN
+  # issue. The fixture text is live row n=8226 verbatim, and the write path now
+  # persists the target structurally so it is never re-inferred from prose.
+  local W9="editor 99999999-9999-9999-9999-999999999999"
+  OC_ACTOR="$W9" bash "$ME" stamp claim "filed fragility class issue (#327): one proven live break (#323)" >/dev/null 2>&1
+  chk "claims329-claim-rc" 0 $?
+  bash "$ME" claims 323 > "$T/claims-323-329.out" 2>/dev/null
+  grep -q "$W9" "$T/claims-323-329.out" && bad "claims329-phantom-on-mentioned-issue" || ok
+  bash "$ME" claims 327 > "$T/claims-327-329.out" 2>/dev/null
+  grep -q "$W9" "$T/claims-327-329.out" && ok || bad "claims329-addressed-issue-not-open"
+  local i329; i329="$(jq -c --arg u "$W9" '[.events[] | select((.by // "") | contains($u))][-1].issues // null' "$OC_LEDGER")"
+  [ "$i329" = "[327]" ] && ok || bad "claims329-structured-issues-field (got $i329)"
+  # a genuine dual claim keeps BOTH targets (live shape: n=4802 "CLAIM #193, #205")
+  OC_ACTOR="$W9" bash "$ME" stamp claim "CLAIM #193, #205 — fixture dual claim" >/dev/null 2>&1
+  i329="$(jq -c --arg u "$W9" '[.events[] | select((.by // "") | contains($u))][-1].issues // null' "$OC_LEDGER")"
+  [ "$i329" = "[193,205]" ] && ok || bad "claims329-dual-claim-issues-field (got $i329)"
+  # non-claim rows carry NO issues field (the array is a claim's target, not a
+  # general ref list — a note's references are not claims on anything)
+  OC_ACTOR="$W9" bash "$ME" stamp note "note referencing #323 and #327" >/dev/null 2>&1
+  i329="$(jq -c --arg u "$W9" '[.events[] | select((.by // "") | contains($u))][-1].issues // null' "$OC_LEDGER")"
+  [ "$i329" = "null" ] && ok || bad "claims329-note-carries-no-issues-field (got $i329)"
   # (3) UNCLOSABLE: a claim whose `by` is the unattributed sentinel could never
   # close — the linker is contains($by) and no real closure carries that
   # literal. The actor test is DROPPED for an unattributed claim, so a later
@@ -1470,9 +1534,16 @@ AMBEOF
   [ -s "$T/lessons-ir.out" ] && bad "lessons-invalidregex-empty" || ok
   bash "$ME" lessons --class "GATE-BYPASS" > "$T/lessons-ci.out" 2>/dev/null
   grep -q "LESSON-FIXTURE" "$T/lessons-ci.out" && ok || bad "lessons-case-insensitive"
-  # 54b (#272, toolsmith 2fae1230): sweep-closed-claims token extraction & multi-ref
-  # Verifies that dates, GitHub handles, UUID prefixes, and multi-ref strings are parsed
-  # by issue tokens rather than naive digit runs (#?(\d+)), and that mock gh closed detection works.
+  # 54b (#272, toolsmith 2fae1230; anchored by #329): sweep-closed-claims token
+  # extraction & multi-ref. Verifies that dates, GitHub handles, UUID prefixes,
+  # and multi-ref strings are parsed by issue tokens rather than naive digit
+  # runs (#?(\d+)), and that mock gh closed detection works.
+  # #329 UPDATE: the sweep now keys on a claim's ADDRESS (its leading reference
+  # cluster), not on every reference in the note. Row 2 therefore claims #52 and
+  # merely MENTIONS #49 — so #49 must NOT be swept. The old assertion demanded
+  # #49 be released, which is precisely the phantom-claim defect #329 removes;
+  # #52 is now in the mock's closed list so the row still proves the HANDLE form
+  # is extracted (its original intent) under the anchored rule.
   jq -n '{workers:[], events:[
       {n:1, t:"2026-09-12T00:00:00Z", by:"editor 11111111-1111-1111-1111-111111111111", kind:"claim", what:"Claimed compaction-signal feature 2026-08-27 #29 #1256"},
       {n:2, t:"2026-09-12T00:00:00Z", by:"editor 22222222-2222-2222-2222-222222222222", kind:"claim", what:"claim leshchenko1979/opencrabs#52 row-budget share #49"},
@@ -1485,7 +1556,7 @@ AMBEOF
   cat << 'EOF' > "$T/mock_bin/gh"
 #!/bin/sh
 if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
-  echo '[{"number":29,"title":"compaction"},{"number":49,"title":"cap"},{"number":126,"title":"ontology"},{"number":80,"title":"bg-resume"}]'
+  echo '[{"number":29,"title":"compaction"},{"number":49,"title":"cap"},{"number":52,"title":"row-budget"},{"number":126,"title":"ontology"},{"number":80,"title":"bg-resume"}]'
   exit 0
 fi
 exit 1
@@ -1494,7 +1565,9 @@ EOF
   
   PATH="$T/mock_bin:$PATH" OC_LEDGER="$UAT/sweep_fixture.json" bash "$ME" sweep-closed-claims > "$T/sweep.out" 2>/dev/null; chk "sweep-closed-claims-rc" 0 $?
   grep -q "Issue #29 (CLOSED: compaction)" "$T/sweep.out" && ok || bad "sweep-date-prefix-token-extracted"
-  grep -q "Issue #49 (CLOSED: cap)" "$T/sweep.out" && ok || bad "sweep-gh-handle-token-extracted"
+  grep -q "Issue #52 (CLOSED: row-budget)" "$T/sweep.out" && ok || bad "sweep-gh-handle-token-extracted"
+  # #329: row 2's note MENTIONS #49 but claims #52 — the mention must not become a claim.
+  grep -q "Issue #49" "$T/sweep.out" && bad "sweep-prose-mention-not-a-claim" || ok
   grep -q "Issue #126 (CLOSED: ontology)" "$T/sweep.out" && ok || bad "sweep-uuid-prefix-token-extracted"
   grep -q "Issue #80 (CLOSED: bg-resume)" "$T/sweep.out" && ok || bad "sweep-multi-ref-token-extracted"
   # #38 was closed in event 5, so it should NOT be flagged

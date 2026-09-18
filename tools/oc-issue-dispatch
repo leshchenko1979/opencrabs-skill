@@ -45,6 +45,24 @@ if not os.path.exists(DEFAULT_LEDGER):
     DEFAULT_LEDGER = os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")
 DEFAULT_LEDGER_FILE = os.path.join(DEFAULT_LEDGER, "workers-ledger.json")
 
+# The claim predicate is NOT local to this tool (#329). `tools/lib/oc_claims.py`
+# is its single implementation, shared with oc-ledger, oc-roster and
+# oc-harvest-dispatch — the module exists precisely because four inlined copies
+# had drifted apart. This file kept a fifth, and it was the one whose answer
+# REFUSES a lane its issue: an unanchored scan of the whole note read a body
+# citation as a claim, so `n=8034` (claiming #302, mentioning #290 in a
+# parenthetical) reported the OPEN issue #290 as taken. Importing the canonical
+# module also gets the structured `issues` field and the closure predicate, so a
+# claim that has since been closed no longer blocks dispatch forever.
+sys.path.insert(0, os.path.join(TOOL_DIR, "lib"))
+try:
+    import oc_claims
+except ImportError as _e:  # pragma: no cover — loud, never a silent fallback
+    sys.stderr.write(
+        "oc-issue-dispatch: cannot import tools/lib/oc_claims.py (%s) — the "
+        "canonical claim predicate is missing; refusing to guess claim state\n" % _e)
+    sys.exit(2)
+
 # Unified tools log (D0, 2026-08-28; parity with lib/oc-log.sh)
 _LOG_ENABLED = False
 _LOG_TOOL = "oc-issue-dispatch"
@@ -273,21 +291,22 @@ def run_cmd(cmd, cwd=None, env=None, timeout=60):
 
 def extract_claimed_issues(ledger_data):
     """
-    Extract issue numbers that have active claims in workers-ledger.json.
+    Issue numbers with a still-OPEN claim in workers-ledger.json.
+
+    Delegates to the canonical predicate (tools/lib/oc_claims.py, #329). The
+    previous inline copy differed from it in TWO ways, both of which made this
+    gate refuse work that no lane holds:
+
+      * it scanned the WHOLE `what` for references, so an issue merely MENTIONED
+        in a claim note read as claimed (#329's 13 phantoms);
+      * it returned EVERY claim row ever written, never applying the closure
+        predicate — so an issue whose claim had long since been closed stayed
+        "claimed" and was never dispatchable again.
+
+    Read-only; no ledger mutation.
     """
-    claimed = set()
-    events = ledger_data.get("events", [])
-    for e in events:
-        if e.get("kind") == "claim":
-            what = e.get("what", "")
-            # Match #123 or issue 123 or Issue-Ref: 123
-            matches = re.findall(r'(?:#|issue[ -]|issue-ref:?\s*)(\d+)', what, re.IGNORECASE)
-            for m in matches:
-                try:
-                    claimed.add(int(m))
-                except ValueError:
-                    pass
-    return claimed
+    return {tok for claim in oc_claims.open_claims(ledger_data.get("events", []))
+            for tok in claim["tokens"]}
 
 
 CLAIM_GATE_PATTERNS = [
@@ -822,20 +841,51 @@ def run_selftest():
     assert_true("Refusal affordance clause present", "reply with [REFUSE: <reason>]." in envelope)
     assert_true("Gate-blocked refusal affordance present", "gate-blocked" in envelope)
 
-    # Test 2: Extraction of claimed issues from ledger events
+    # Test 2: Extraction of claimed issues from ledger events.
+    # #329: the predicate is now the canonical one (tools/lib/oc_claims.py), so
+    # this fixture pins the properties the local copy got WRONG, not just the
+    # happy path. `Issue-Ref: 103` was dropped from the fixture deliberately: it
+    # is not one of the canonical reference forms (`#N`, `issue N`, `issue=N`,
+    # `issue#N`), and oc-ledger's write-time guard refuses a claim the scanner
+    # cannot see — so a row in that shape cannot exist in the live ledger.
     mock_ledger = {
         "events": [
             {"kind": "claim", "by": "editor 1111", "what": "CLAIM #101 — some feature"},
             {"kind": "claim", "by": "editor 2222", "what": "issue #102 fix"},
-            {"kind": "claim", "by": "editor 3333", "what": "Issue-Ref: 103"},
-            {"kind": "note", "by": "triage", "what": "not a claim for #104"}
+            {"kind": "claim", "by": "editor 3333", "what": "issue 103 claimed"},
+            {"kind": "note", "by": "triage", "what": "not a claim for #104"},
+            # THE #329 REGRESSION: a body citation is not a second claim. Live
+            # shape: n=8034 claimed #302 and mentioned #290 in a parenthetical,
+            # which made the OPEN issue #290 undispatchable.
+            {"kind": "claim", "by": "editor 44444444",
+             "what": "CLAIM #105 — filed while fixing #104"},
+            # The structured field wins over prose in both directions.
+            {"kind": "claim", "by": "editor 55555555",
+             "what": "CLAIM #106 — mentions #107 in the body", "issues": [106]},
+            {"kind": "claim", "by": "editor 55555555",
+             "what": "CLAIM #108, #109 — genuine dual claim", "issues": [108, 109]},
+            # The closure predicate applies: a CLOSED claim must not block
+            # dispatch forever (the old copy returned every claim ever written).
+            {"kind": "claim", "by": "editor 66666666", "what": "CLAIM #110 — shipped"},
+            {"kind": "done", "by": "editor 66666666", "what": "DONE #110 — merged"},
+            # ...and a FOREIGN lane's prose mention releases nothing (#305).
+            {"kind": "claim", "by": "editor 77777777", "what": "CLAIM #111 — held"},
+            {"kind": "unclaim", "by": "triage 88888888",
+             "what": "UNCLAIM #999 — stood down in favour of editor lane 77777777"},
         ]
     }
     claimed = extract_claimed_issues(mock_ledger)
     assert_true("#101 recognized as claimed", 101 in claimed)
     assert_true("#102 recognized as claimed", 102 in claimed)
-    assert_true("#103 recognized as claimed", 103 in claimed)
+    assert_true("#103 (issue-N form) recognized as claimed", 103 in claimed)
     assert_true("#104 (negative control) not recognized as claimed", 104 not in claimed)
+    assert_true("#105 claimed", 105 in claimed)
+    assert_true("#329: prose mention #104 is NOT claimed", 104 not in claimed)
+    assert_true("#329: structured issues honored (#106)", 106 in claimed)
+    assert_true("#329: prose mention #107 is NOT claimed", 107 not in claimed)
+    assert_true("#329: genuine dual claim keeps both", 108 in claimed and 109 in claimed)
+    assert_true("#329: closed claim releases its issue (#110)", 110 not in claimed)
+    assert_true("#305: foreign prose mention does not release (#111)", 111 in claimed)
 
     # Test 3: Topic affinity scoring
     issue_tg = {"number": 169, "title": "telegram_send re-poisons topic memory", "body": "stale-topic eviction"}

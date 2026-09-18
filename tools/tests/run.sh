@@ -265,6 +265,35 @@ chk("ref multi in first-seen order", oc.issue_ref_tokens("#38, #80 — multi"), 
 chk("ref 760 is not 76", oc.references("#760", 76), False)
 chk("ref 760 matches 760", oc.references("#760", 760), True)
 
+# --- primary_issue_tokens: what a claim CLAIMS (#329). The leading reference
+# --- cluster is the address; a reference in the body is a mention, not a claim.
+chk("primary single", oc.primary_issue_tokens("CLAIM #129 — x"), [129])
+chk("primary prose mention excluded",
+    oc.primary_issue_tokens("CLAIM #327 — filed, one live break (#323)"), [327])
+chk("primary live phantom n=8226 shape",
+    oc.primary_issue_tokens(
+        "filed fragility class issue (#327): 14 bodies, one proven live break (#323)"), [327])
+chk("primary genuine dual claim survives",
+    oc.primary_issue_tokens("CLAIM #193, #205 — harvest packaging"), [193, 205])
+chk("primary live dual n=4802", oc.primary_issue_tokens("CLAIM #193, #205"), [193, 205])
+chk("primary slash-joined list",
+    oc.primary_issue_tokens("CLAIM #1414/#1418 — pair"), [1414, 1418])
+chk("primary live n=8034 parenthetical excluded",
+    oc.primary_issue_tokens("CLAIM #302 — backfill (supersedes #290, #297)"), [302])
+chk("primary live n=1678 upstream mention excluded",
+    oc.primary_issue_tokens(
+        "md-plane wave lane claims n=1675 PATH-2 execution: upstream issue "
+        "adolfousier/opencrabs#1419 filed FIRST"), [1419])
+chk("primary non-leading ref is the anchor when no earlier ref exists",
+    oc.primary_issue_tokens("Claimed compaction-signal feature: Issue-Ref "
+                            "leshchenko1979/opencrabs#29 (mirror of #1256)"), [29])
+chk("primary of a ref-less note is empty", oc.primary_issue_tokens("no refs here"), [])
+chk("primary never empties a referencing note",
+    oc.primary_issue_tokens("x #5 y #6 z"), [5])
+chk("primary is a subset of every-ref tokens",
+    set(oc.primary_issue_tokens("CLAIM #12 — see #13 and #14"))
+    <= set(oc.issue_ref_tokens("CLAIM #12 — see #13 and #14")), True)
+
 # --- type uniformity: the drift bug (str tokens compared to int tokens)
 chk("ref tokens are INTEGERS",
     all(isinstance(t, int) for t in oc.issue_ref_tokens("CLAIM #129, issue 94")), True)
@@ -324,6 +353,29 @@ chk("open_claims tokens are ints",
     all(isinstance(t, int) for c in oc.open_claims(EV) for t in c["tokens"]), True)
 chk("open_claims skips ref-less claim",
     oc.open_claims([{"n": 1, "by": "editor 11111111", "kind": "claim", "what": "CLAIM without a ref"}]), [])
+
+# --- open_claims targets the ADDRESS, not every reference (#329).
+PHA = [{"n": 1, "by": "editor 11111111", "kind": "claim",
+        "what": "CLAIM #327 — filed, one proven live break (#323)"}]
+chk("#329: phantom claim on the mentioned issue does not exist",
+    oc.open_claims(PHA, 323), [])
+chk("#329: the addressed issue is still open", sorted(c["tokens"] for c in oc.open_claims(PHA)), [[327]])
+chk("#329: structured issues field wins over prose",
+    sorted(c["tokens"] for c in oc.open_claims(
+        [{"n": 1, "by": "editor 11111111", "kind": "claim",
+          "what": "CLAIM #5 — mentions #6", "issues": [5]}])), [[5]])
+chk("#329: structured field may carry a genuine dual claim",
+    sorted(c["tokens"] for c in oc.open_claims(
+        [{"n": 1, "by": "editor 11111111", "kind": "claim",
+          "what": "CLAIM #5, #6", "issues": [5, 6]}])), [[5, 6]])
+chk("#329: empty structured field falls back to the address",
+    sorted(c["tokens"] for c in oc.open_claims(
+        [{"n": 1, "by": "editor 11111111", "kind": "claim",
+          "what": "CLAIM #5 — x", "issues": []}])), [[5]])
+chk("#329: non-numeric structured entries are ignored, not crashed on",
+    sorted(c["tokens"] for c in oc.open_claims(
+        [{"n": 1, "by": "editor 11111111", "kind": "claim",
+          "what": "CLAIM #5 — x", "issues": ["5", None, "junk"]}])), [[5]])
 
 # --- legacy schema fallback: rows carrying note/actor instead of what/by
 LEG = [{"n": 1, "actor": "editor 11111111", "type": "claim", "note": "CLAIM #7 — legacy keys"}]
