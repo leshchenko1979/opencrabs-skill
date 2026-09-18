@@ -34,6 +34,9 @@ set -o pipefail
 
 _OC_TOOLS="$(cd "$(dirname "$0")" && pwd)"
 export SKILL_DIR="${SKILL_DIR:-$(cd "$_OC_TOOLS/.." && pwd)}"
+# The python engine runs as 'python3 -c', so sys.argv[0] is '-c' and cannot
+# locate this tool's own lib/ — hand it the tools dir explicitly (#307).
+export OC_TOOLS_DIR="$_OC_TOOLS"
 _OC_LIB="$_OC_TOOLS/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then
   source "$_OC_LIB"
@@ -69,9 +72,27 @@ EOF
 }
 
 # --- Core Python Engine ---
+# EDITING HAZARD: the engine below is a DOUBLE-QUOTED python3 -c string, so the
+# shell parses it before Python does. Inside it a backtick runs command
+# substitution, $( and $name expand, and a triple double-quote ends the string
+# early -- truncating the tool mid-file (cost: 1607 lines, 2026-09-18).
+# Document with # comments; quote strings with ''' or single quotes.
+# oc-harvest-census feeds the same engine via a <<'OCPY' heredoc and is immune.
 run_engine() {
   python3 -c "
 import sys, os, json, re, subprocess, argparse, time, datetime, glob
+
+# The claim-CLOSURE and claim-FOOTPRINT predicates are NOT local to this tool
+# (#307). tools/lib/oc_claims.py owns both; a copy here is a drift, and this
+# file carried an unanchored git-log -n 10 --grep=#N that read upstream commit
+# PROSE as fork work on an issue it never touched.
+_TOOLS_DIR = os.environ.get('OC_TOOLS_DIR') or os.path.dirname(os.path.abspath(sys.argv[0]))
+sys.path.insert(0, os.path.join(_TOOLS_DIR, 'lib'))
+try:
+    import oc_claims
+except ImportError as _oc_err:
+    sys.stderr.write('oc-harvest-dispatch: cannot import tools/lib/oc_claims.py (%s)\n' % _oc_err)
+    sys.exit(3)
 
 def parse_iso_ts(ts_str):
     if not ts_str: return 0
@@ -329,28 +350,29 @@ def check_files_diff(files, base_ref, repo_path):
         return True, ''
     return False, out
 
-def resolve_issue_commits(issue_num, repo_path):
-    pattern = f'#{issue_num}'
-    range_arg = 'adolfousier/main..origin/main'
-    rc_rev, _, _ = run_cmd(['git', '-C', repo_path, 'rev-parse', '--verify', 'origin/main'])
-    if rc_rev != 0:
-        range_arg = 'HEAD'
-    rc, out, _ = run_cmd([
-        'git', '-C', repo_path, 'log', '--reverse', range_arg,
-        '--format=%H%x09%h%x09%s%x09%(trailers:key=Issue-Ref,valueonly)'
-    ])
-    if rc != 0 or not out.strip():
+_ISSUE_REF_INDEX_CACHE = {}
+
+# Memoized oc_claims.issue_ref_index — one 'git log --all' pass per repo.
+# get_active_claims() runs several times per invocation (busy-set, lane
+# selection, dispatch), and each footprint resolution needs the same index.
+def _issue_ref_index(repo_path):
+    key = os.path.abspath(repo_path)
+    if key not in _ISSUE_REF_INDEX_CACHE:
+        _ISSUE_REF_INDEX_CACHE[key] = oc_claims.issue_ref_index(repo_path)
+    return _ISSUE_REF_INDEX_CACHE[key]
+
+# SHAs of commits that ANCHOR to fork issue 'issue_num'. Delegates to
+# tools/lib/oc_claims.py (#307). The body this replaced matched '#N' in a commit
+# SUBJECT as well as its trailer, over a fork-main-bounded range — so upstream
+# commit prose read as fork work and fenced an unrelated harvest. Anchoring is
+# the Issue-Ref trailer only, and the scan is --all so a lane's branch commits
+# stay visible until the ff-merge.
+def resolve_issue_commits(issue_num, repo_path, index=None):
+    if not repo_path or not os.path.isdir(repo_path):
         return []
-    commits = []
-    for line in out.strip().split('\n'):
-        parts = line.split('\t')
-        full_sha = parts[0]
-        short_sha = parts[1] if len(parts) > 1 else full_sha[:7]
-        subject = parts[2] if len(parts) > 2 else ''
-        trailer = parts[3] if len(parts) > 3 else ''
-        if pattern in subject or pattern in trailer:
-            commits.append(full_sha)
-    return commits
+    if index is None:
+        index = _issue_ref_index(repo_path)
+    return oc_claims.resolve_issue_commits(repo_path, issue_num, index=index)
 
 def get_fork_issue_hierarchy(issue_num, repo_path=None, mock_hierarchy=None):
     if mock_hierarchy is not None:
@@ -614,10 +636,12 @@ def get_active_claims(ledger_file, repo_path=None):
                 if 'files' in ev and isinstance(ev['files'], list):
                     files = ev['files']
                 elif iss and repo_path and os.path.isdir(repo_path):
-                    res_rc, res_out, _ = run_cmd(['git', '-C', repo_path, 'log', '-n', '10', f'--grep=#{iss}', '--format=%H'])
-                    if res_rc == 0 and res_out.strip():
-                        c_shas = [s.strip() for s in res_out.strip().split('\n') if s.strip()]
-                        files = get_affected_files(c_shas, repo_path)
+                    # #307: anchored footprint. This leg used to be an
+                    # unanchored git log -n 10 --grep=#N, so a commit that merely
+                    # MENTIONED the issue in prose contributed its files to the
+                    # claim and fenced an unrelated harvest. oc_claims owns the
+                    # predicate; an empty list means no evidence of overlap.
+                    files = oc_claims.resolve_issue_files(repo_path, iss, index=_issue_ref_index(repo_path))
                 claims.append({
                     'uuid': uuid,
                     'issue': iss,
@@ -1819,6 +1843,82 @@ EOF
   else
     echo "  ok 11d - #305: an author-less claim row (legacy by:null) is skipped, not a phantom claim"
   fi
+
+  # 11e/11f. #307 anchored Issue-Ref in-flight fencing — the negative control.
+  # The footprint leg used to be an unanchored `git log -n 10 --grep=#N`, so a
+  # commit that merely MENTIONED the issue in its subject contributed its files
+  # to the claim and fenced an unrelated harvest. A claim whose issue appears
+  # ONLY in commit prose must now resolve to an EMPTY footprint (11e), while a
+  # trailer-anchored commit still supplies its file (11f, the positive twin —
+  # without it a resolver that always returned [] would pass 11e).
+  local fence_repo="$st_dir/fence-repo"
+  mkdir -p "$fence_repo/src/fence"
+  git -C "$fence_repo" init -q -b main
+  git -C "$fence_repo" config user.email "test@example.com"
+  git -C "$fence_repo" config user.name "Test Runner"
+  printf 'base\n' > "$fence_repo/src/fence/base.rs"
+  git -C "$fence_repo" add -A
+  git -C "$fence_repo" commit -q -m "base commit"
+
+  # PROSE-ONLY: #701 in the subject, NO Issue-Ref trailer.
+  printf 'prose\n' > "$fence_repo/src/fence/prose_only.rs"
+  git -C "$fence_repo" add -A
+  git -C "$fence_repo" commit -q -m "fix(unrelated): reword the note (#701)"
+
+  # ANCHORED: a real Issue-Ref trailer for a DIFFERENT issue.
+  printf 'anchored\n' > "$fence_repo/src/fence/anchored.rs"
+  git -C "$fence_repo" add -A
+  git -C "$fence_repo" commit -q -m "fix(anchored): real work on the anchored issue" --trailer "Issue-Ref: #702"
+
+  local fence_ledger="$st_dir/fence-ledger.json"
+  cat << 'EOF' > "$fence_ledger"
+{
+  "workers": [
+    {"uuid": "99999999-9999-9999-9999-999999999999", "role": "editor", "topic_id": 301}
+  ],
+  "events": [
+    {"n": 1, "kind": "claim", "by": "editor 99999999-9999-9999-9999-999999999999", "what": "CLAIM #701 — prose-only mention control"},
+    {"n": 2, "kind": "claim", "by": "editor 99999999-9999-9999-9999-999999999999", "what": "CLAIM #702 — anchored trailer positive twin"}
+  ]
+}
+EOF
+  local fence_out="" fence_prose="" fence_anchor=""
+  fence_out="$(run_engine "test-active-claims" "$fence_ledger" "$fence_repo" 2>&1)"
+  fence_prose="$(printf '%s' "$fence_out" | python3 -c '
+import json, sys
+try:
+    claims = json.load(sys.stdin)
+except Exception:
+    print("PARSE_FAIL"); raise SystemExit(0)
+for c in claims:
+    if c.get("issue") == 701:
+        print(json.dumps(c.get("files"))); raise SystemExit(0)
+print("NO_CLAIM")
+')"
+  if [ "$fence_prose" = "[]" ]; then
+    echo "  ok 11e - #307: prose-only #N mention yields an EMPTY footprint (anchored fence)"
+  else
+    echo "  bad 11e - #307 prose-only #N mention must yield an EMPTY footprint, got ($fence_prose; out: $fence_out)"
+    return 1
+  fi
+  fence_anchor="$(printf '%s' "$fence_out" | python3 -c '
+import json, sys
+try:
+    claims = json.load(sys.stdin)
+except Exception:
+    print("PARSE_FAIL"); raise SystemExit(0)
+for c in claims:
+    if c.get("issue") == 702:
+        print(json.dumps(c.get("files"))); raise SystemExit(0)
+print("NO_CLAIM")
+')"
+  case "$fence_anchor" in
+    *anchored.rs*)
+      echo "  ok 11f - #307: trailer-anchored #N still resolves its footprint (positive twin)" ;;
+    *)
+      echo "  bad 11f - #307 anchored-trailer positive twin must resolve anchored.rs, got ($fence_anchor; out: $fence_out)"
+      return 1 ;;
+  esac
 
   # Leg count is DERIVED, never hardcoded: this line is only reached when every
   # leg passed, so the ok-count equals the total. A hardcoded total drifts the
