@@ -502,6 +502,88 @@ def check_upstream_pr(issue_num, upstream_repo, mock_prs=None):
             return p
     return None
 
+# --- issue #305: author-qualified claim closure ------------------------------
+# The ledger's by field is free text. Observed forms include
+# 'editor <uuid>', '<short-uuid>', 'editor-<short-uuid>', 'toolsmith/<short-uuid>',
+# 'unrostered-actor <short-uuid>', 'editor lane (session <short-uuid>)', and bare
+# lane labels ('lamp-lane', 'editor-14', 'supervisor').
+_ACTOR_FULL_RE = re.compile(r'([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})', re.IGNORECASE)
+_ACTOR_SHORT_RE = re.compile(r'([0-9a-f]{8})(?![0-9a-f-])', re.IGNORECASE)
+# NB: a single character class, NOT '[-:/]?'. The alternation form mis-parses
+# 'editor-1a63f103' by consuming the uuid into the role and losing the identity.
+_ACTOR_ROLE_RE = re.compile(
+    r'^(unrostered-actor|editor|triage|supervisor|hq|toolsmith|carrier|lane)\s*[-:/]?\s*',
+    re.IGNORECASE)
+_CLOSING_KINDS = ('close', 'confirm', 'reject', 'done', 'unclaim')
+
+def actor_key(by):
+    # Collapse a free-text ledger actor into a comparable key.
+    # ('uuid', <hex>) when any identity token is present, else ('label', <slug>).
+    # Short 8-hex forms are kept short and compared by prefix (see actor_match),
+    # so no roster lookup is needed here.
+    s = str(by or '').strip()
+    m = _ACTOR_FULL_RE.search(s)
+    if m:
+        return ('uuid', m.group(1).lower())
+    shorts = _ACTOR_SHORT_RE.findall(s)
+    if shorts:
+        return ('uuid', shorts[-1].lower())   # last token: '<role> <uuid>'
+    return ('label', _ACTOR_ROLE_RE.sub('', s).strip().lower())
+
+def actor_match(a, b):
+    # True when two ledger actor strings denote the SAME lane.
+    # uuid-vs-uuid compares by prefix (an 8-hex short form is a prefix of the
+    # full uuid); label-vs-label compares by exact slug. A uuid never matches a
+    # label: 'editor-14' and a bare 8-hex token are different lanes, and guessing
+    # between them is exactly what let a foreign lane close another lane's claim.
+    ka, kb = actor_key(a), actor_key(b)
+    if ka[0] == 'uuid' and kb[0] == 'uuid':
+        return ka[1] == kb[1] or ka[1].startswith(kb[1]) or kb[1].startswith(ka[1])
+    if ka[0] == 'label' and kb[0] == 'label':
+        return ka[1] != '' and ka[1] == kb[1]
+    return False
+
+def claim_is_closed(events, idx, claim_actor, iss):
+    # Has the claim at events[idx] been closed by a LATER row?
+    # Two independent signals, both AUTHOR-QUALIFIED (issue #305):
+    #   1. a closing-kind row authored by the SAME lane, or
+    #   2. a closing-kind row ADDRESSED to this issue -- its 'what' begins '#<N>'.
+    # Signal 2 is what keeps the administrative
+    # '#<N> -- closed-issue stale claim sweep' rows and a lane's own
+    # '#<N> COMPLETE' row working: those are authored by whoever swept, not
+    # necessarily by the claimant.
+    #
+    # A foreign lane's closing row that merely MENTIONS #N in prose no longer
+    # closes the claim. 'UNCLAIM #N -- stood down in favour of editor lane X' is
+    # the sharp case: that row releases the AUTHOR's own claim on N, and by
+    # naming X it in fact confirms that X still holds it.
+    for later_ev in events[idx+1:]:
+        if later_ev.get('kind') not in _CLOSING_KINDS:
+            continue
+        if actor_match(claim_actor, later_ev.get('by', '')):
+            return True
+        if iss and re.match(r'^\s*#%d\b' % iss, str(later_ev.get('what', '')).strip()):
+            return True
+    return False
+
+def resolve_actor_uuid(by, roster):
+    # Best-effort full uuid for a claim author, for busy-set comparison.
+    # A short form is expanded against the roster so that 'editor-1a63f103' and
+    # 'editor 1a63f103-b899-...' collapse to one lane and a busy lane is not
+    # reported idle.
+    s = str(by or '')
+    m = _ACTOR_FULL_RE.search(s)
+    if m:
+        return m.group(1).lower()
+    shorts = _ACTOR_SHORT_RE.findall(s)
+    if shorts:
+        short = shorts[-1].lower()
+        for w in roster:
+            if w.startswith(short):
+                return w
+        return short
+    return s.replace('editor ', '').strip()
+
 def get_active_claims(ledger_file, repo_path=None):
     if not os.path.exists(ledger_file):
         return []
@@ -511,22 +593,23 @@ def get_active_claims(ledger_file, repo_path=None):
     except Exception:
         return []
     events = data.get('events', [])
+    roster = [str(w.get('uuid', '')).lower() for w in data.get('workers', [])]
     claims = []
     for idx, ev in enumerate(events):
         if ev.get('kind') == 'claim':
             by = ev.get('by', '')
-            m_uuid = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', by)
-            uuid = m_uuid.group(1) if m_uuid else by.replace('editor ', '').strip()
+            # An AUTHOR-LESS claim row (legacy artifacts carry by:null) names no
+            # lane: it can never occupy a lane in the busy set, and under the
+            # author-qualified predicate no signal could ever close it, so it
+            # would sit in the active list forever. Skip it instead of reporting
+            # a phantom claim owned by the empty uuid.
+            if not str(by or '').strip():
+                continue
+            uuid = resolve_actor_uuid(by, roster)
             what = ev.get('what', '')
             m_iss = re.search(r'#(\d+)', what) or re.search(r'issue\s*=?\s*(\d+)', what, re.IGNORECASE)
             iss = int(m_iss.group(1)) if m_iss else None
-            closed = False
-            for later_ev in events[idx+1:]:
-                later_by = later_ev.get('by', '')
-                if (uuid in later_by or (iss and f'#{iss}' in later_ev.get('what', ''))) and later_ev.get('kind') in ['close', 'confirm', 'reject', 'done', 'unclaim']:
-                    closed = True
-                    break
-            if not closed:
+            if not claim_is_closed(events, idx, by, iss):
                 files = []
                 if 'files' in ev and isinstance(ev['files'], list):
                     files = ev['files']
@@ -949,6 +1032,13 @@ if action == 'test-check-pr':
     else:
         print('NOT_FOUND')
     sys.exit(0)
+
+elif action == 'test-active-claims':
+    # issue #305 regression hook: expose get_active_claims() to the selftest so
+    # claim-closure semantics can be asserted against a fixture ledger.
+    ledger_file = sys.argv[2]
+    repo_path = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != 'none' else None
+    print(json.dumps(get_active_claims(ledger_file, repo_path)))
 
 elif action == 'vet':
     candidate = sys.argv[2]
@@ -1672,7 +1762,79 @@ EOF
     return 1
   fi
 
-  echo "selftest: 19/19 OK"
+  # 11. issue #305: claim closure must be AUTHOR-QUALIFIED. A foreign lane's
+  # closing row that merely MENTIONS #N in prose must NOT close the owner's
+  # claim, while the two shapes that legitimately close a claim (a lane's own
+  # completion row, and the administrative 'closed-issue stale claim sweep')
+  # must keep working. Fixture lanes are distinct so no probe can be closed by
+  # another probe's self-row.
+  local clos_ledger="$st_dir/clos-ledger.json"
+  cat << 'EOF' > "$clos_ledger"
+{
+  "workers": [
+    {"uuid": "aaaa1111-1111-1111-1111-111111111111", "role": "editor", "topic_id": 201},
+    {"uuid": "bbbb2222-2222-2222-2222-222222222222", "role": "editor", "topic_id": 202},
+    {"uuid": "cccc3333-3333-3333-3333-333333333333", "role": "editor", "topic_id": 203},
+    {"uuid": "dddd4444-4444-4444-4444-444444444444", "role": "editor", "topic_id": 204},
+    {"uuid": "eeee5555-5555-5555-5555-555555555555", "role": "editor", "topic_id": 205},
+    {"uuid": "ffff6666-6666-6666-6666-666666666666", "role": "editor", "topic_id": 206}
+  ],
+  "events": [
+    {"n": 1, "kind": "claim", "by": "editor aaaa1111-1111-1111-1111-111111111111", "what": "CLAIM #264 — foreign-prose-close probe"},
+    {"n": 2, "kind": "unclaim", "by": "editor bbbb2222-2222-2222-2222-222222222222", "what": "UNCLAIM #264 — stood down in favour of editor lane aaaa1111"},
+    {"n": 3, "kind": "claim", "by": "editor cccc3333-3333-3333-3333-333333333333", "what": "CLAIM #301 — own-completion probe"},
+    {"n": 4, "kind": "done", "by": "editor cccc3333-3333-3333-3333-333333333333", "what": "#301 COMPLETE - landed"},
+    {"n": 5, "kind": "claim", "by": "editor dddd4444-4444-4444-4444-444444444444", "what": "CLAIM #305 — administrative-sweep probe"},
+    {"n": 6, "kind": "unclaim", "by": "triage eeee5555-5555-5555-5555-555555555555", "what": "#305 — closed-issue stale claim sweep (H-5 batch)"},
+    {"n": 7, "kind": "claim", "by": "editor-ffff6666", "what": "CLAIM #306 — short-form author probe"},
+    {"n": 8, "kind": "close", "by": "editor ffff6666-6666-6666-6666-666666666666", "what": "probe resolved and closed"},
+    {"n": 9, "kind": "claim", "by": "", "what": "CLAIM #307 — author-less phantom probe (legacy by:null row)"}
+  ]
+}
+EOF
+  local clos_out="" clos_n=""
+  clos_out="$(run_engine "test-active-claims" "$clos_ledger" "none" 2>&1)"
+  clos_n="$(printf '%s' "$clos_out" | grep -o '"issue"' | wc -l | tr -d '[:space:]')"
+  if [ "$clos_n" = "1" ]; then
+    echo "  ok 11 - #305: foreign prose mention does not close a claim (1 stays active)"
+  else
+    echo "  bad 11 - #305 expected exactly 1 active claim, got '$clos_n' ($clos_out)"
+    return 1
+  fi
+  if printf '%s' "$clos_out" | grep -q '"issue": 264'; then
+    echo "  ok 11b - #305: the surviving active claim is the foreign-mentioned #264"
+  else
+    echo "  bad 11b - #305 expected #264 to survive as active, got ($clos_out)"
+    return 1
+  fi
+  if ! printf '%s' "$clos_out" | grep -qE '"issue": (301|305|306)'; then
+    echo "  ok 11c - #305: own-completion, admin-sweep and short-form self-close all still close"
+  else
+    echo "  bad 11c - #305 expected #301/#305/#306 all closed, got ($clos_out)"
+    return 1
+  fi
+  if printf '%s' "$clos_out" | grep -q '"uuid": ""'; then
+    echo "  bad 11d - #305 an author-less claim row surfaced as an active claim owned by the empty uuid"
+    return 1
+  else
+    echo "  ok 11d - #305: an author-less claim row (legacy by:null) is skipped, not a phantom claim"
+  fi
+
+  # Leg count is DERIVED, never hardcoded: this line is only reached when every
+  # leg passed, so the ok-count equals the total. A hardcoded total drifts the
+  # moment a leg is added -- it read '19/19' while 20 legs ran.
+  # The scan is over the whole script with an INDENT-ANCHORED pattern, not an
+  # awk /^cmd_selftest()/,/^}/ range: a fixture heredoc inside this function
+  # carries a column-0 brace, which closes the range after ~90 lines and
+  # silently reported 0/0. The anchor also keeps this line out of its own count
+  # (it starts with legs_total=, not with an echo).
+  local legs_total
+  legs_total="$(grep -cE '^[[:space:]]+echo "  ok ' "$0")"
+  if [ "${legs_total:-0}" -lt 1 ]; then
+    echo "  bad - leg-count derivation matched no ok-lines; the summary below cannot be trusted"
+    return 1
+  fi
+  echo "selftest: ${legs_total}/${legs_total} OK"
   return 0
 }
 
