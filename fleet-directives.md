@@ -585,7 +585,7 @@ Lane-to-lane and lane-to-HQ `session_notify` traffic MUST default to deferred de
 
 Work notifications go **sender → resource-owner directly**. No intermediary lane re-sends, forwards, or "relays" work to a third lane. Evidence (2026-09-09): the Triage→TOOLSMITH hop silently died twice (v0.4.129 needed an owner "Go" to move; v0.4.130 stalled until the owner asked HQ to check TOOLSMITH); a spawn-nudge was mis-addressed from a remembered prefix; a frankenstein uuid existed because a dispatch was queued through an intermediary. Every relay hop is a silent-failure surface; direct delivery fails loudly at the sender instead.
 
-## Designated Domain Affinity & Topic Context Focus Law (owner order 2026-09-17) [DISPATCH]
+## Designated Domain Affinity & Topic Context Focus Law (owner order 2026-09-17) [LANE]
 
 **Dispatching to a random lane with no regard for its designated domain/feature area mixes up topic history for the human operator and wastes the lane's existing in-context focus.**
 
