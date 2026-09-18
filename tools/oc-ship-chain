@@ -22,6 +22,10 @@
 #   --eval-docs-skip [<sha>] Evaluate whether a commit qualifies for the docs-only
 #                    LEG1 gate skip (rc 0 = docs-only / gate skippable; rc 1 = gate
 #                    required; rc 2 = missing sha; rc 3 = bad commit or git error).
+#                    Judges the WHOLE shipped range (merge-base of fork main and
+#                    <sha> .. <sha>), not the tip commit alone — the chain
+#                    fast-forwards the entire branch into main, so a code commit
+#                    under a docs-only tip must gate (#322).
 #                    Can also be paired with --sha <sha>.
 #   --fast           Default gate mode (passes fast=true to oc-prchecks).
 #   --full|--no-fast Opt-in full test suite gate (~30 min).
@@ -187,11 +191,38 @@ shipchain_compiled_md_set() {
   )
 }
 
+# The ref the shipped range is measured against. The chain's LEG3 fast-forwards
+# fork main onto $SHA, so everything from the merge-base of main and $SHA is
+# what this chain introduces. Prefer origin/main (the shared truth; a stale
+# origin/main sits BEHIND and yields a LARGER range — the conservative
+# direction), fall back to local main. No main ref -> the range is unjudgeable.
+shipchain_main_ref() {
+  local r
+  for r in refs/remotes/origin/main refs/heads/main; do
+    if git -C "$FORK_REPO" rev-parse --verify --quiet "$r^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$r"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # rc 0 = docs-only, prints the changed paths; rc 1 = must gate.
+#
+# #322 (editor lane #286 report): this judged `$SHA^..$SHA` — the TIP commit
+# only — while LEG3 fast-forwards the WHOLE branch into main. A 2-commit branch
+# (code commit under a docs-only tip) therefore skipped LEG1 and shipped
+# ungated: the tip diff is pure markdown, the shipped range is not. The
+# predicate now judges the range the chain actually introduces, so a code
+# commit under a docs tip gates. Base = merge-base(main, $SHA); when that
+# resolves to $SHA itself the branch adds nothing to main and the answer is
+# gate (conservative, and the empty diff would gate anyway).
 shipchain_docs_only() {
-  local base paths p compiled
-  base="$(git -C "$FORK_REPO" rev-parse --verify --quiet "$SHA^" 2>/dev/null || true)"
-  [ -n "$base" ] || return 1                    # root commit: no range to judge
+  local mainref base paths p compiled
+  mainref="$(shipchain_main_ref)" || return 1   # no main ref: gate
+  base="$(git -C "$FORK_REPO" merge-base "$mainref" "$SHA" 2>/dev/null || true)"
+  [ -n "$base" ] || return 1                    # no common ancestor: gate
+  [ "$base" != "$SHA" ] || return 1             # nothing new to introduce: gate
   paths="$(git -C "$FORK_REPO" diff --name-only "$base" "$SHA" 2>/dev/null || true)"
   [ -n "$paths" ] || return 1                   # empty diff: gate (conservative)
   compiled="$(shipchain_compiled_md_set)"
@@ -1404,6 +1435,40 @@ EOF
   RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_FORK_REPO="$T/clone" bash "$SELF" --eval-docs-skip "$CMDSHA" 2>&1)" || RC=$?
   check_rc "eval-docs-skip-compiled-rc1" "$RC" 1
   case "$OUT" in *"GATE-REQUIRED"*) ok "eval-docs-skip-compiled-msg" ;; *) bad "eval-docs-skip-compiled-msg: $OUT" ;; esac
+
+  # 20e. RANGE vs TIP (defect #322, editor lane #286 report). The skip must
+  #      judge the WHOLE range the chain fast-forwards into main, not the tip
+  #      commit. Every #20 fixture above is a SINGLE commit, where tip and range
+  #      are the same diff by construction — which is exactly why the tip-based
+  #      predicate looked correct and the defect survived the battery. The
+  #      negative fixture below is the shape that broke it: a code commit UNDER
+  #      a docs-only tip. The positive control (both commits markdown) proves
+  #      the range judgement still skips a genuinely docs-only branch, so the
+  #      new assertion cannot be satisfied by simply gating everything.
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  git -C "$T/clone" checkout -qB range-code-fixture main
+  printf 'pub fn f() {}\n' > "$T/clone/src/code_322.rs"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "code under a docs tip" --trailer "Session-Id: $FIXTURE_SESSION"
+  printf '# notes\n' > "$T/clone/NOTES_322.md"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "docs tip" --trailer "Session-Id: $FIXTURE_SESSION"
+  RANGE_CODE_SHA="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" checkout -qB range-docs-fixture main
+  printf '# one\n' > "$T/clone/ONE_322.md"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "docs one" --trailer "Session-Id: $FIXTURE_SESSION"
+  printf '# two\n' > "$T/clone/TWO_322.md"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "docs two" --trailer "Session-Id: $FIXTURE_SESSION"
+  RANGE_DOCS_SHA="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_FORK_REPO="$T/clone" bash "$SELF" --eval-docs-skip "$RANGE_CODE_SHA" 2>&1)" || RC=$?
+  check_rc "eval-docs-skip-range-code-rc1" "$RC" 1
+  case "$OUT" in *"GATE-REQUIRED"*) ok "eval-docs-skip-range-code-msg" ;; *) bad "eval-docs-skip-range-code-msg: $OUT" ;; esac
+
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_FORK_REPO="$T/clone" bash "$SELF" --eval-docs-skip "$RANGE_DOCS_SHA" 2>&1)" || RC=$?
+  check_rc "eval-docs-skip-range-docs-rc0" "$RC" 0
+  case "$OUT" in *"DOCS-ONLY gate skip permitted"*) ok "eval-docs-skip-range-docs-msg" ;; *) bad "eval-docs-skip-range-docs-msg: $OUT" ;; esac
 
   # 21. CGROUP DETACH (LAW 17, defect #21). A chain launched from a session is
   #     a child of the daemon and sits INSIDE the unit cgroup a swap's
