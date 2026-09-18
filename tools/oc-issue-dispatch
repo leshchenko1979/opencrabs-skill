@@ -601,7 +601,13 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
     ledger_bin = os.path.join(TOOL_DIR, "oc-ledger")
     if os.path.exists(ledger_bin):
         stamp_text = f"Triage dispatch issue #{issue_num} to editor {target_uuid[:8]} — wire zero-ack claim-first"
-        run_cmd([ledger_bin, "stamp", "note", stamp_text], env=dict(os.environ, OC_ACTOR="triage"))
+        # A1: inherit the ambient environment so oc-ledger's derive_by() resolves
+        # the ACTUAL dispatching session. Forcing the actor to a bare role label
+        # here was a trap: derive_by() resolves UUIDs only and classifies any
+        # non-hex/non-dash value as a LABEL it never resolves, so every dispatch
+        # row was stamped 'unrostered-actor triage' while OPENCRABS_SESSION_ID
+        # held the resolvable uuid (98 rows measured; issue #328).
+        run_cmd([ledger_bin, "stamp", "note", stamp_text])
 
     return 0
 
@@ -1011,6 +1017,31 @@ def run_selftest():
             os.environ["OC_TOOLS_NOLOG"] = old_nolog
         else:
             os.environ.pop("OC_TOOLS_NOLOG", None)
+
+    # Test 9: the dispatch stamp must NOT force a bare-label actor (#328).
+    # The defect was a literal in this file. derive_by() resolves UUIDs only --
+    # any non-hex/non-dash value is classified as a LABEL and lands in the
+    # 'unrostered-actor' sentinel -- so forcing the label made every dispatch row
+    # unattributable while OPENCRABS_SESSION_ID held the resolvable session.
+    # The guard below is paired with a positive control: without it, the guard
+    # would pass for free on a file where the stamp call had been deleted.
+    _src = ""
+    try:
+        with open(os.path.abspath(__file__), "r") as _sf:
+            _src = _sf.read()
+    except Exception as _e:
+        assert_true(f"self-source readable for the #328 actor guard ({_e})", False)
+    assert_true("stamp call site present (positive control for the #328 guard)",
+                '"stamp", "note"' in _src)
+    # The needles are ASSEMBLED, never written verbatim: this test's own source
+    # lives in _src, so a literal needle would match itself and the guard could
+    # never pass. Same self-matching trap as grepping a log for your own command.
+    _needle_label = 'OC_ACTOR=' + '"' + 'triage' + '"'
+    _needle_env = 'env=dict(os.environ, ' + 'OC_ACTOR='
+    assert_true("dispatch stamp does not force a bare-label actor (#328)",
+                _needle_label not in _src)
+    assert_true("dispatch stamp passes no actor env= override to oc-ledger (#328)",
+                _needle_env not in _src)
 
     total = tests_passed + tests_failed
     print(f"selftest: {tests_passed}/{total} OK")
