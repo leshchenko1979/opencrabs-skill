@@ -8,6 +8,11 @@
 #     MERGED   — tip reachable from base  -> DELETE class (history preserved in
 #                base; the 21:56Z owner deletion condition is satisfied by
 #                reachability). Deletion records tip sha in the TSV (archive).
+#     UNSTARTED— the reflog holds nothing but the branch's own creation, i.e.
+#                it never received a commit of its own -> report only, NEVER
+#                deleted (issue #303). Such a branch is in the merged set only
+#                because an ancestor test cannot tell "never committed" from
+#                "already landed"; it is a lane that has not started yet.
 #     ABSORBED — cherry-detects as already in base (patch-id) -> report only
 #                (evaluated only when --check-absorbed is passed to avoid slow O(N) cherry scans).
 #     STALE    — no commit in 14+ days, not merged  -> report only.
@@ -77,6 +82,30 @@ cmd_sweep() {
     if [ "$b" = "$base" ] || [ "$b" = "$head_branch" ] || printf '%s' "$b" | grep -Eq "$keep"; then
       cls="PROTECTED"; action="keep"
     elif [ -n "${merged_set[$b]:-}" ]; then
+      # UNSTARTED guard (issue #303): a branch whose reflog holds nothing but its
+      # own creation never received a commit of its own — it is a lane that has
+      # not started yet, and it sits in the merged set only because an ancestor
+      # test cannot tell "never committed" from "already landed".
+      # Report-only, NEVER archive-deleted.
+      #
+      # Tip equality is deliberately NOT part of this predicate. A branch is
+      # created from the base tip, and the base then moves on as other lanes
+      # land work — so by the time a sweep runs, an unstarted branch's tip is
+      # usually strictly BEHIND the base tip, not equal to it. Gating on tip
+      # equality misses exactly the branches this guard exists to protect
+      # (observed live: fix/299 was tip-equal and read UNSTARTED, then main
+      # advanced and the same untouched branch flipped back to MERGED).
+      #
+      # Fallback direction is deliberate: an EMPTY reflog means reflog expiry,
+      # which means an old branch, which means no lane is mid-start on it — that
+      # case keeps today's MERGED path. A freshly created branch always has a
+      # readable reflog, so the hazard cannot hide in the fallback.
+      local rl=""
+      rl="$(git -C "$repo" reflog show --format='%gs' "refs/heads/$b" 2>/dev/null)"
+      if [ -n "$rl" ] && ! printf '%s\n' "$rl" | grep -qvE '^branch: Created from '; then
+        printf '%s\t%s\t%s\t%s\n' "$b" "UNSTARTED" "$tip" "report-only"
+        continue
+      fi
       cls="MERGED"
       if [ -n "${wt_branches[$b]:-}" ]; then
         action="held-by-worktree"
@@ -162,6 +191,34 @@ cmd_selftest() {
   ! grep -q "delete-failed" "$T/out-wt-real.tsv" && ok || bad "wt-no-delete-failed"
   [ -n "$(git -C "$T/r" branch --list wt-merged)" ]; chk "wt-branch-survives" 0 $?
   git -C "$T/r" worktree remove -f "$T/wt" 2>/dev/null
+  # issue #303: UNSTARTED — a branch whose reflog holds nothing but its own
+  # creation never received a commit of its own. It must be report-only and must
+  # SURVIVE a real sweep. The reflog is the discriminator, NOT tip equality: an
+  # unstarted branch is created from the base tip and the base then moves on, so
+  # its tip is usually strictly behind the base by sweep time.
+  local BR; BR="$(git -C "$T/r" rev-parse --abbrev-ref HEAD)"
+  # a branch whose own commit IS in the base (ff-merged) -> MERGED, not UNSTARTED
+  git -C "$T/r" checkout -qb tip-equal-merged
+  echo d > "$T/r/g"; git -C "$T/r" add g; git -C "$T/r" commit -q -m "ff commit"
+  git -C "$T/r" checkout -q "$BR"
+  git -C "$T/r" merge -q --ff-only tip-equal-merged
+  local OLDSHA; OLDSHA="$(git -C "$T/r" rev-parse "$BR~1")"
+  git -C "$T/r" branch fresh-unstarted "$BR"      # tip == base tip, bare reflog
+  git -C "$T/r" branch behind-unstarted "$OLDSHA" # tip BEHIND base tip, bare reflog
+  bash "$ME" --repo "$T/r" --dry-run > "$T/out-unstarted.tsv" 2>/dev/null
+  grep -q "^fresh-unstarted	UNSTARTED.*report-only" "$T/out-unstarted.tsv" && ok || bad "unstarted-classified"
+  ! grep -q "^fresh-unstarted	MERGED" "$T/out-unstarted.tsv" && ok || bad "unstarted-not-MERGED"
+  # the load-bearing leg: a bare reflog with a tip BEHIND the base must still be
+  # UNSTARTED — gating on tip equality here is the bug this guard exists to fix
+  grep -q "^behind-unstarted	UNSTARTED.*report-only" "$T/out-unstarted.tsv" && ok || bad "behind-tip-unstarted-classified"
+  ! grep -q "^behind-unstarted	MERGED" "$T/out-unstarted.tsv" && ok || bad "behind-tip-unstarted-not-MERGED"
+  grep -q "^tip-equal-merged	MERGED" "$T/out-unstarted.tsv" && ok || bad "tip-equal-with-commits-stays-MERGED"
+  # real sweep: the unstarted branches must SURVIVE (the whole point of the guard)
+  bash "$ME" --repo "$T/r" > "$T/out-unstarted-real.tsv" 2>/dev/null
+  [ -n "$(git -C "$T/r" branch --list fresh-unstarted)" ]; chk "unstarted-survives-real-sweep" 0 $?
+  [ -n "$(git -C "$T/r" branch --list behind-unstarted)" ]; chk "behind-tip-unstarted-survives-real-sweep" 0 $?
+  grep -q "^fresh-unstarted	UNSTARTED.*report-only" "$T/out-unstarted-real.tsv" && ok || bad "unstarted-real-report-only"
+  grep -q "^behind-unstarted	UNSTARTED.*report-only" "$T/out-unstarted-real.tsv" && ok || bad "behind-tip-unstarted-real-report-only"
   # Duty-6 lens F task 8: invalid --keep regex -> rc 2 up front, NOTHING deleted
   git -C "$T/r" checkout -qb doomed
   bash "$ME" --repo "$T/r" --keep '[' >/dev/null 2>&1; chk "bad-keep-rc2" 2 $?
