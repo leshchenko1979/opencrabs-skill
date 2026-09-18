@@ -47,7 +47,8 @@ per that section. Owner veto overrides retroactively, as with rulings.
      - Blockers: If candidate has active blockers declared via `gh issue edit <issue> --add-blocked-by <blocker-issue>`, reject dispatch as `HELD_BLOCKED_BY_DEPENDENCY` until blockers land upstream.
      - Upstream baseline verification: Verify target code path on live `adolfousier/main` to ensure work is not already clean or differently structured upstream.
   3. Verify target editor lane availability using `tools/oc-harvest-dispatch dispatch <issue> <commits> [--to <uuid>]`. If target lane is busy with an active claim, the tool refuses dispatch (rc 4); Triage must select an idle editor or commission a dedicated harvest worker.
-  4. Never dispatch unvetted candidates or busy editors. (Worktree creation belongs to the Editor lane per `fleet-directives.md §PHOP`).
+  4. **Landed-term gate (v0.4.204, HQ ruling 2026-09-18):** before wiring, confirm the issue is NOT already landed — a `done`/`close` row addressing it, or a commit referencing it on fork `main`. This patrol runs from a cron (`oc-harvest-dispatch-4h`) that wired #302 while #302 carried Triage's own `done` row (n=8267) and zero claims: `done` + zero claims satisfied the old two-term predicate. A landed-but-unharvested issue is HARVEST-queue work, never a fresh editor dispatch. Canon: `fleet-directives.md §Dispatch Eligibility — the 4-bucket predicate`.
+  5. Never dispatch unvetted candidates or busy editors. (Worktree creation belongs to the Editor lane per `fleet-directives.md §PHOP`).
 
 - **Stale-branch sweep patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** run
@@ -113,6 +114,18 @@ below needs a regular cadence to be worth anything.
 3. Diff the OPEN set against the workers-ledger claim-refs
    (`grep -c '"issue'` or the claim rows) — an OPEN fork issue with NO
    open claim-ref is unclaimed backlog.
+   - **LANDED TERM (v0.4.204, HQ ruling 2026-09-18):** the predicate is
+     `DISPATCHABLE = unclaimed AND vetted AND NOT landed` — there IS a third
+     term and a sweep that omits it re-wires work that already shipped.
+     `landed` = a ledger row of kind `done`/`close` addressing the issue
+     (`oc_claims.LANDED_KINDS` — NEVER `CLOSING_KINDS`, which includes
+     `confirm`/`unclaim`/`reject` and starves real work), OR a commit
+     referencing the issue on fork `main`. Under the harvest-gated closure law
+     a DONE issue stays OPEN until its upstream PR files, so without this term
+     every landed-but-unharvested issue reads as dispatchable backlog.
+     **Landed-and-unharvested ⇒ route to the HARVEST QUEUE, never to an editor
+     lane** — such an issue waits on a PR, not on code. Canon (the one home):
+     `fleet-directives.md §Dispatch Eligibility — the 4-bucket predicate`.
 4. For each unclaimed issue: route to the owning editor, or if
    none is obvious, surface the unclaimed set to HQ for
    dispatch — do NOT let it sit silent (the v0.4.91 gap: "claimed when

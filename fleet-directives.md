@@ -68,12 +68,15 @@ No single role "owns ports" alone — the law names the chain explicitly (owner 
 
 Maintainer coordination protocol between Alexey (`@leshchenko1979`) and Adolfo (`@adolfodev`):
 1. **Scope Classification**:
-   - **Deep Core:** Runtime scheduler, context compaction algorithms, provider routing/fallbacks, subagent orchestration, and tool execution loop (`src/brain/`, `src/agent/`, `src/scheduler/`).
+   - **Deep Core:** Runtime scheduler, context compaction algorithms, provider routing/fallbacks, subagent orchestration, and tool execution loop. **The prose scope is OPERATIVE; the path list is a reading aid, never the definition.**
+     - **Real paths (corrected v0.4.204, HQ ruling 2026-09-18):** runtime scheduler `src/cron/` (`scheduler.rs`, `pipeline.rs`, `trigger.rs`, `send_scope.rs`) · tool execution loop `src/brain/agent/service/tool_loop.rs` · context compaction `src/brain/agent/context.rs` · provider routing/fallbacks `src/brain/provider/` · subagent orchestration `src/brain/tools/subagent/`.
+     - **Defect this fixes:** the former list named `src/agent/` and `src/scheduler/`, NEITHER of which exists in the tree (`find src -type d -name 'scheduler*'` → empty). A filer reading the list as exhaustive would conclude a cron-runtime-scheduler change is NOT Deep Core — the wrong direction of error, and exactly the #317 shape.
    - **Surface Integrations:** Telegram channel handler, rich cards, MTProto/MCP bridge (`src/channels/telegram/`).
 2. **The Advance Heads-Up Protocol (Venues: `OC Dev` Group Chat — `-1003627148483` / `3627148483`, or `Opencrabs Dev Factory` tagging `@adolfodev`):**
    - For any architectural change, behavior shift, or non-trivial fix touching **Deep Core**, post a concise technical 1-liner heads-up to either the **`OC Dev`** Telegram group chat or the **`Opencrabs Dev Factory`** group chat (tagging `@adolfodev`) *before* or *simultaneously with* opening the upstream PR:
      > `Core heads-up: <observed symptom/issue> → proposed fix in <subsystem> (PR #<N>)`
    - This ensures early alignment on core abstractions before or during maintainer review.
+   - **WHO POSTS — HQ posts it, on the filing lane's behalf. There is NO editor carve-out (v0.4.204, HQ ruling 2026-09-18).** An editor lane CANNOT discharge this gate itself: SKILL.md §Telegram surface law forbids editors from invoking ANY telegram send/edit tool, not even into their own topic. Without this assignment the two laws bind the same actor and the obligation has **no executor on the filing side**. So: the filing editor sends HQ the 1-liner text (`session_notify`, `delivery.mode="turn-end"`) in the same turn it stages the PR; HQ posts it to the venue. This is NOT a new carve-out — it is the existing lifecycle assignment, since SKILL.md §Upstream relations item 5 makes **Maintainer Interaction (incl. the OC Dev chat heads-up) HQ's area**. The obligation is on the CHAIN, not the filer: a lane that has put the text in HQ's queue has discharged it, and its harvest may proceed.
 3. **Surface Integrations Autonomy:**
    - Changes to Telegram, rich card rendering, formatting, and local developer tooling remain under our autonomous maintainer authority; they ship directly to upstream PRs with verified 4-leg smoke receipts without requiring advance group chat discussion.
 
@@ -466,6 +469,38 @@ The churn cure — both operational (Triage-owned; no new tooling, no new class)
 2. The issue is linked natively — `gh issue edit <issue> --add-blocked-by 338` (leshchenko1979/opencrabs#338, the carrier-set **decision record** and the blocker anchor) — per the Continuous Issue Relationship Linking order. A wire carries the RELATION, so the anchor's own state never unblocks it: #338 is a RECORD whose decision is MADE (owner ruling 2026-09-18), not a live question. Its closure is Triage's call under §Autonomous closure (c) owner-confirmed-withdrawn; no lane re-raises the question while the close is pending.
 
 **Worked example (2026-09-18):** #319 (post-delivery re-entry for failed image delivery on Slack / Discord / WhatsApp) — carrier set `telegram,code-graph,browser`; the three channels are feature-gated modules in `Cargo.toml [features]`, compiled only under `--all-features`. The CI gate covers them; the shipped binary does not. Verdict ceiling `UNPROVEN (structural N/A)`; harvest blocked on the carrier set — **permanently**, per the owner's 2026-09-18 ruling that the set stays as-is (leshchenko1979/opencrabs#338, the decision record); lane released. The 4th wire landed a claim (n=8274) — the issue was dispatchable on wire 1.
+
+## Dispatch Eligibility — the 4-bucket predicate, with the LANDED term (v0.4.204, HQ ruling 2026-09-18) [LANE]
+
+**Canonical statement — THIS section is the one home; every other reference (`triage.md` T4/T5) points here.**
+
+`DISPATCHABLE = unclaimed AND vetted AND NOT landed`
+
+| Bucket | Predicate | Action |
+|---|---|---|
+| **CLAIMED** | an open claim-ref exists | no action — the owning lane's chain holds it |
+| **PARKED** | owner standdown | never re-ignite |
+| **UNVETTABLE** | no acceptance criteria | park, naming the reason |
+| **DISPATCHABLE** | unclaimed AND vetted AND **NOT landed** | wire it |
+
+### D1 — "landed" is `LANDED_KINDS`, NEVER `CLOSING_KINDS`
+
+`landed` := a ledger row of kind `done` or `close` addressing the issue, **OR** a commit referencing the issue on fork `main` (git arm). Either arm marks it landed. Implementation: `tools/oc-issue-dispatch` — `ledger_landed_issues()` (imports `oc_claims.LANDED_KINDS`) + `fetch_landed_issues()` (git arm). Tool side: leshchenko1979/opencrabs#337.
+
+`tools/lib/oc_claims.py` is the ONE canonical predicate — no lane re-inlines it. It carries BOTH sets, and their distinction is load-bearing:
+
+- `LANDED_KINDS = ("close", "done")` — evidence the WORK landed.
+- `CLOSING_KINDS = ("close", "confirm", "reject", "done", "unclaim")` — the kinds that can close a CLAIM. A strict superset; **NOT interchangeable**.
+
+**Using `CLOSING_KINDS` as the landing test STARVES real work.** The module's own docstring records the measurement: over the live ledger on 2026-09-18, `CLOSING_KINDS` reaches 228 issues, 125 of them ONLY via the three non-landing kinds — and 48 were reachable by `unclaim` ALONE (a released claim whose work was still unbuilt), suppressed purely because a claim had been RELEASED. A `confirm` row flips a bookkeeping flag and ships nothing; an `unclaim` row returns the issue to the pool, unbuilt; a `reject` row means no work was done at all. **None of the three is evidence the work shipped**, and a released-but-unbuilt issue is legitimately re-dispatchable.
+
+### D2 — Landed-but-unharvested issues are HARVEST QUEUE, not editor dispatch
+
+The closure law (`triage.md §Autonomous closure`) deliberately keeps DONE work **OPEN** until its own upstream PR files. Without the landed term every such issue reads `unclaimed AND vetted` → DISPATCHABLE, so the sweep re-wires exactly the issues the closure law forbids closing. **With the term present the two sets are disjoint by construction:** an OPEN issue whose work already landed in fork `main` waits on a PR, not on code — it routes to the harvest queue and NEVER to an editor lane.
+
+### D3 — Live instance, receipted (2026-09-18)
+
+One T5 sweep (ledger n=8331–8341) wired 8 issues; **5 of the 8 were OPEN AND carried a ledger `done` row** — #330 (n=8317), #324 (n=8192), #302 (n=8267), #299 (n=8325), #297 (n=8266). GitHub state OPEN for all five, verified the same turn. #302's `done` row is Triage's own and says verbatim: *"Issue STAYS OPEN under the harvest-gated closure law until its own upstream PR files"* — and the sweep wired #302 anyway. A second surface, the `oc-harvest-dispatch-4h` cron (session c32f43ee), wired the same issue from the same root cause: `done` + zero claims satisfies the old predicate. Editor 127429e6 claimed #297 (n=8345) then stood it down (n=8353, "dispatch was stale, no work owed") — one wasted claim, real churn.
 
 ## Claim Release & Superseded Plans — the mechanisms exist; use them (v0.4.202, HQ ruling 2026-09-18) [LANE]
 
