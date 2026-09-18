@@ -928,6 +928,11 @@ cleanup_selftest() {
 cmd_selftest() {
   selftest_tmp="$(mktemp -d)"
   trap cleanup_selftest EXIT
+  # Computed, never hand-maintained: the suite returns 1 on the first failure,
+  # so the number of passes at the end IS the total. A literal here drifted
+  # twice (16 tests reported as 15/15, then 21 as 20/20).
+  ok_n=0
+  ok() { ok_n=$((ok_n + 1)); printf '  ok   - %s\n' "$1"; }
 
   local mock_prs="$selftest_tmp/mock_prs.json"
   local mock_commits="$selftest_tmp/mock_commits.json"
@@ -1052,8 +1057,8 @@ EOF
     "files": ["src/tools/shared.rs"]
   },
   {
-    "sha": "20260917cb0000000000000000000000000000",
-    "short_sha": "2026091",
+    "sha": "ab20260917cb0000000000000000000000000",
+    "short_sha": "ab20260",
     "subject": "chore(sync): upstream sync upstream-20260917-2",
     "trailer": "",
     "commit_ts": 100000,
@@ -1063,6 +1068,14 @@ EOF
     "sha": "271ace0cb0000000000000000000000000000000",
     "short_sha": "271ace0",
     "subject": "fix(parser): handle empty input (#271)",
+    "trailer": "",
+    "commit_ts": 100000,
+    "files": ["src/tools/shared.rs"]
+  },
+  {
+    "sha": "c0ffee10000000000000000000000000000000",
+    "short_sha": "c0ffee1",
+    "subject": "chore(soak): drop stale 429 handling",
     "trailer": "",
     "commit_ts": 100000,
     "files": ["src/tools/shared.rs"]
@@ -1105,7 +1118,7 @@ EOF
   # 1. Check on MERGED issue (#132) -> exits 1 REFUSED
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "132" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "REFUSED.*MERGED"; then
-    echo "  ok   - check merged unit -> REFUSED exit 1"
+    ok "check merged unit -> REFUSED exit 1"
   else
     echo "  bad  - check merged unit expected rc=1, got rc=$rc ($out)"
     return 1
@@ -1115,7 +1128,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "144" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "REFUSED.*IN_FLIGHT"; then
-    echo "  ok   - check in_flight unit -> REFUSED exit 1"
+    ok "check in_flight unit -> REFUSED exit 1"
   else
     echo "  bad  - check in_flight unit expected rc=1, got rc=$rc ($out)"
     return 1
@@ -1125,7 +1138,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "200" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
-    echo "  ok   - check unharvested unit -> ELIGIBLE exit 0"
+    ok "check unharvested unit -> ELIGIBLE exit 0"
   else
     echo "  bad  - check unharvested unit expected rc=0, got rc=$rc ($out)"
     return 1
@@ -1135,7 +1148,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "300" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
-    echo "  ok   - check fresh feature unit -> REFUSED 24h soak exit 1"
+    ok "check fresh feature unit -> REFUSED 24h soak exit 1"
   else
     echo "  bad  - check fresh feature unit expected rc=1 with soak refusal, got rc=$rc ($out)"
     return 1
@@ -1145,7 +1158,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "400" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_DEPENDENT_SOAK"; then
-    echo "  ok   - check dependent soak unit -> REFUSED HELD_DEPENDENT_SOAK exit 1"
+    ok "check dependent soak unit -> REFUSED HELD_DEPENDENT_SOAK exit 1"
   else
     echo "  bad  - check dependent soak unit expected rc=1 HELD_DEPENDENT_SOAK, got rc=$rc ($out)"
     return 1
@@ -1155,7 +1168,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_IN_FLIGHT_LANE"; then
-    echo "  ok   - check in-flight lane conflict -> REFUSED HELD_IN_FLIGHT_LANE exit 1"
+    ok "check in-flight lane conflict -> REFUSED HELD_IN_FLIGHT_LANE exit 1"
   else
     echo "  bad  - check in-flight lane conflict expected rc=1 HELD_IN_FLIGHT_LANE, got rc=$rc ($out)"
     return 1
@@ -1165,7 +1178,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "111" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE_REWORK"; then
-    echo "  ok   - check closed unit -> ELIGIBLE_REWORK exit 0"
+    ok "check closed unit -> ELIGIBLE_REWORK exit 0"
   else
     echo "  bad  - check closed unit expected rc=0, got rc=$rc ($out)"
     return 1
@@ -1175,7 +1188,7 @@ EOF
   rc=0
   bash "$0" check >/dev/null 2>&1 || rc=$?
   if [ "$rc" -eq 2 ]; then
-    echo "  ok   - check without args -> usage exit 2"
+    ok "check without args -> usage exit 2"
   else
     echo "  bad  - check without args expected rc=2, got rc=$rc"
     return 1
@@ -1185,7 +1198,7 @@ EOF
   rc=0
   out="$(run_engine "scan" "mock/repo" "$selftest_tmp" "$mock_reg" "" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Upstream In-Flight PRs (1 open)"; then
-    echo "  ok   - scan classified output clean"
+    ok "scan classified output clean"
   else
     echo "  bad  - scan expected rc=0 with classified output, got rc=$rc ($out)"
     return 1
@@ -1195,7 +1208,7 @@ EOF
   rc=0
   bash "$0" record --unit "test-unit" --pr "1500" --issue "199" >/dev/null 2>&1 || rc=$?
   if [ -f "$REGISTRY_FILE" ] && grep -q "test-unit" "$REGISTRY_FILE"; then
-    echo "  ok   - registry write preserves manual_records (no clobber)"
+    ok "registry write preserves manual_records (no clobber)"
   else
     echo "  bad  - registry write did not record test-unit"
     return 1
@@ -1205,7 +1218,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$REGISTRY_FILE" "test-unit" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "manually recorded as filed in PR #1500"; then
-    echo "  ok   - check consults manual records -> REFUSED exit 1"
+    ok "check consults manual records -> REFUSED exit 1"
   else
     echo "  bad  - check manual records expected rc=1, got rc=$rc ($out)"
     return 1
@@ -1215,7 +1228,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$REGISTRY_FILE" "200" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
-    echo "  ok   - unrelated target still ELIGIBLE with manual records present"
+    ok "unrelated target still ELIGIBLE with manual records present"
   else
     echo "  bad  - unrelated target expected rc=0 ELIGIBLE, got rc=$rc ($out)"
     return 1
@@ -1225,7 +1238,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "8888888" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
-    echo "  ok   - sha lookup for fresh feature -> REFUSED 24h soak exit 1"
+    ok "sha lookup for fresh feature -> REFUSED 24h soak exit 1"
   else
     echo "  bad  - sha lookup for fresh feature expected rc=1 soak, got rc=$rc ($out)"
     return 1
@@ -1234,7 +1247,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "9999999" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
-    echo "  ok   - sha lookup for mature feature -> ELIGIBLE exit 0"
+    ok "sha lookup for mature feature -> ELIGIBLE exit 0"
   else
     echo "  bad  - sha lookup for mature feature expected rc=0, got rc=$rc ($out)"
     return 1
@@ -1244,7 +1257,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "112" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
-    echo "  ok   - closed PR fresh feature -> REFUSED 24h soak exit 1"
+    ok "closed PR fresh feature -> REFUSED 24h soak exit 1"
   else
     echo "  bad  - closed PR fresh feature expected rc=1 soak, got rc=$rc ($out)"
     return 1
@@ -1254,7 +1267,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "133" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "REFUSED: Target 133 is already MERGED upstream in PR #1556"; then
-    echo "  ok   - closed PR squash-merged upstream -> REFUSED MERGED exit 1"
+    ok "closed PR squash-merged upstream -> REFUSED MERGED exit 1"
   else
     echo "  bad  - closed PR squash-merged upstream expected rc=1 REFUSED MERGED, got rc=$rc ($out)"
     return 1
@@ -1266,7 +1279,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "262" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
-    echo "  ok   - #323 issue number is not a sha prefix -> ELIGIBLE exit 0"
+    ok "#323 issue number is not a sha prefix -> ELIGIBLE exit 0"
   else
     echo "  bad  - #323 sha-prefix collision expected rc=0, got rc=$rc ($out)"
     return 1
@@ -1278,7 +1291,7 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "192" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
-    echo "  ok   - #323 issue number is not a subject substring -> ELIGIBLE exit 0"
+    ok "#323 issue number is not a subject substring -> ELIGIBLE exit 0"
   else
     echo "  bad  - #323 swap-marker subject collision expected rc=0, got rc=$rc ($out)"
     return 1
@@ -1288,26 +1301,41 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "202" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
-    echo "  ok   - #323 date stamp is not an issue reference -> ELIGIBLE exit 0"
+    ok "#323 date stamp is not an issue reference -> ELIGIBLE exit 0"
   else
     echo "  bad  - #323 date-stamp subject collision expected rc=0, got rc=$rc ($out)"
     return 1
   fi
 
-  # 16. POSITIVE CONTROL for 13-15: an EXPLICIT #<n> citation must still match,
+  # 16. #323: a bare number in a trailer-less subject is not the commit's issue.
+  # The trailer-less branch previously adopted the FIRST number anywhere in the
+  # subject as that commit's issue, feeding matches_iss — the path behind BOTH
+  # the manual-records gate and the 24h soak gate, so its blast radius exceeds
+  # the sha and subject paths. A subject that merely mentions a number in prose
+  # must not attribute the commit to that issue.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "429" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    ok "#323 prose numeral is not an issue reference -> ELIGIBLE exit 0"
+  else
+    echo "  bad  - #323 prose-numeral fallback collision expected rc=0, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 17. POSITIVE CONTROL for 13-16: an EXPLICIT #<n> citation must still match,
   # including the trailer-less fallback that adopted an arbitrary number before.
-  # Without this control the three cases above would pass equally if the matcher
+  # Without this control the cases above would pass equally if the matcher
   # had simply been disabled.
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "271" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_DEPENDENT_SOAK"; then
-    echo "  ok   - #323 explicit #n citation still matches -> HELD_DEPENDENT_SOAK exit 1"
+    ok "#323 explicit #n citation still matches -> HELD_DEPENDENT_SOAK exit 1"
   else
     echo "  bad  - positive control expected rc=1 HELD_DEPENDENT_SOAK, got rc=$rc ($out)"
     return 1
   fi
 
-  echo "selftest: 19/19 OK"
+  echo "selftest: ${ok_n}/${ok_n} OK"
   return 0
 }
 
