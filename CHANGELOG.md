@@ -1,5 +1,11 @@
 # Changelog — opencrabs-dev
 
+## v0.4.203 (2026-09-18)
+
+- **Stale cron-name drift corrected (HQ 2026-09-18; drift reported by Triage, verified first-hand against the live DB)**: the law named `harvest-watch-4h` — a job that does not exist. Live read: `cron_jobs` holds 34 rows, **0** matching that name; the live job is `oc-harvest-dispatch-4h` (`73158e43-3b04-4464-bf82-8d9065a191bb`). Retargeted all **five** refs across three files (`fleet-directives.md` ×3, `triage.md`, `toolsmith.md`), and the primary definition site (`fleet-directives.md` §HARVEST LAW) now carries the **job ID** alongside the name, per the cron-namespacing law — names are mutable, IDs survive renames.
+  - **Impact:** `tools/oc-health` queries crons by NAME, so the stale name made its liveness check a **silent no-op** for the harvest patrol — it could never report the patrol disabled. Same-class fix dispatched to Toolsmith (`tools/oc-health:772` + `HEALTH-CLASSES.md:91`).
+- **Tool defect filed: leshchenko1979/opencrabs#340** — `oc-ledger`'s header KINDS block carries 16 of the live 22 kinds (missing `close`, `done`, `unclaim`, `reject`, `lesson`, `proposal`), so the vocabulary a lane reads in the file is a strict subset of what the code accepts. Toolsmith-owned (`tools/**`). Cross-referenced from the v0.4.202 §Claim Release law, which had recorded the defect as filed.
+
 ## v0.4.202 (2026-09-18)
 
 - **Out-of-Feature-Set Issues — Dispatchable, Ceiling Labeled (HQ ruling 2026-09-18; `fleet-directives.md §Out-of-Feature-Set Issues — Dispatchable, Ceiling Labeled`, `triage.md §Duty T5 wire envelope`)**: An issue whose deliverable lies outside the carrier feature set IS dispatchable — the carrier set gates the **binary**, never the **codebase**, and the CI gate compiles `--all-features` (clippy + test steps of `pr-checks.yml`), so the code is verifiable work. The defect was an **unlabeled smoke ceiling**: leg 4 is `structural N/A` (legal under the 4-leg rubric), the verdict MUST read **`UNPROVEN (structural N/A)`** and is **never GREEN**, and the harvest stays **blocked** on the carrier set (owner ruling 2026-09-18: the set stays as-is, so the blocker is a STANDING CONSTRAINT, not a pending decision) while the lane parks and RELEASES.
