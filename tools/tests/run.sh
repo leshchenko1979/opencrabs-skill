@@ -381,6 +381,49 @@ chk("#329: non-numeric structured entries are ignored, not crashed on",
 LEG = [{"n": 1, "actor": "editor 11111111", "type": "claim", "note": "CLAIM #7 — legacy keys"}]
 chk("legacy keys parsed", len(oc.open_claims(LEG)), 1)
 
+# --- #307 anchored Issue-Ref resolution: the TRAILER, never prose.
+# A commit that merely MENTIONS #N in its subject or body is not work on #N.
+# The pre-#307 footprint leg was an unanchored `git log --grep=#N`, so upstream
+# commit 1e34378050 (subject `(#478)`, body prose `(#300)`) read as fork work on
+# #300 and fenced #291's harvest on files #291 never touched. These cases pin the
+# anchored predicate AND the positive twin (a trailer DOES resolve), so a
+# resolver that simply always returned [] could not pass.
+import tempfile, subprocess as _sp, shutil as _sh
+def _g(repo, *a):
+    return _sp.run(["git", "-C", repo] + list(a), capture_output=True, text=True)
+_fx = tempfile.mkdtemp(prefix="occlaims-")
+_g(_fx, "init", "-q", "-b", "main")
+_g(_fx, "config", "user.email", "unit@local")
+_g(_fx, "config", "user.name", "unit")
+with open(_fx + "/base.txt", "w") as f: f.write("b\n")
+_g(_fx, "add", "-A"); _g(_fx, "commit", "-q", "-m", "base commit")
+# subject prose only, no trailer
+with open(_fx + "/prose.txt", "w") as f: f.write("p\n")
+_g(_fx, "add", "-A"); _g(_fx, "commit", "-q", "-m", "fix(x): reword the note (#701)")
+# body prose only, no trailer
+with open(_fx + "/bodyprose.txt", "w") as f: f.write("bp\n")
+_g(_fx, "add", "-A"); _g(_fx, "commit", "-q", "-m", "fix(w): plain subject",
+                         "-m", "This mentions #704 in the body prose only.")
+# the positive twin: a real fork Issue-Ref trailer
+with open(_fx + "/anchored.txt", "w") as f: f.write("a\n")
+_g(_fx, "add", "-A"); _g(_fx, "commit", "-q", "-m", "fix(y): real work",
+                         "--trailer", "Issue-Ref: #702")
+# cross-space trap: a trailer naming ANOTHER repo must not fence a fork issue
+with open(_fx + "/upstream.txt", "w") as f: f.write("u\n")
+_g(_fx, "add", "-A"); _g(_fx, "commit", "-q", "-m", "fix(z): upstream work",
+                         "--trailer", "Issue-Ref: adolfousier/opencrabs#703")
+_idx = oc.issue_ref_index(_fx)
+chk("#307 subject-prose mention resolves to NO commits", oc.resolve_issue_commits(_fx, 701), [])
+chk("#307 subject-prose mention resolves to NO files", oc.resolve_issue_files(_fx, 701), [])
+chk("#307 body-prose mention resolves to NO commits", oc.resolve_issue_commits(_fx, 704), [])
+chk("#307 body-prose mention resolves to NO files", oc.resolve_issue_files(_fx, 704), [])
+chk("#307 trailer-anchored issue resolves its own file",
+    oc.resolve_issue_files(_fx, 702), ["anchored.txt"])
+chk("#307 foreign-slug trailer does not fence a fork issue",
+    oc.resolve_issue_files(_fx, 703), [])
+chk("#307 only the fork-anchored commit enters the index", len(_idx), 1)
+_sh.rmtree(_fx, ignore_errors=True)
+
 if fails:
     for f in fails:
         sys.stderr.write("  unit-fail: %s\n" % f)

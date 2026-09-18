@@ -79,6 +79,18 @@ as a structured `issues` array on the row, so a claim written from now on is
 never re-derived from prose at all; :func:`primary_issue_tokens` is the
 fallback for rows written before that field existed.
 
+CLAIM FOOTPRINT (#307). The ledger raises a SECOND question alongside closure —
+"which FILES does the claimed work touch?" — and that answer had drifted into
+two more unanchored copies (one in `oc-harvest-census`, one in
+`oc-harvest-dispatch`). Both resolved it by grepping commit messages for the
+bare text `#N` (`git log -n 10 --grep=#N` in one, a substring test over
+subjects and trailers in the other), so a commit whose PROSE merely mentioned
+`#N` was read as work on `#N`. Closure and footprint are different questions
+with different predicates; this module owns both, so a fifth and sixth copy
+cannot appear. Footprint is anchored to the `Issue-Ref` TRAILER — the
+machine-written link `oc-commit` derives from the actor's ledger claim — and
+scoped to fork space: see :func:`resolve_issue_commits`.
+
 READ-ONLY. This module never writes the ledger; the sweep's write path lives in
 `oc-ledger` and goes through the sanctioned `stamp` verb.
 
@@ -90,7 +102,9 @@ does not merely mis-report — it lets the tool write a claim the scanner cannot
 see, or derive an issue the scanner never wrote. Agreement is the point.
 """
 
+import os
 import re
+import subprocess
 
 #: The only event kinds that can close a claim (v1 vocabulary).
 CLOSING_KINDS = ("close", "confirm", "reject", "done", "unclaim")
@@ -349,3 +363,141 @@ def open_claims(events, target_issue=None):
                 "tokens": unclosed,
             })
     return out
+
+# ---------------------------------------------------------------------------
+# CLAIM FOOTPRINT (#307) — which FILES an issue's work touches
+# ---------------------------------------------------------------------------
+
+#: The fork that OWNS the issue space. An `Issue-Ref` naming another repository
+#: is an UPSTREAM reference and must never fence a fork issue: measured live
+#: 2026-09-18, six commits carry `Issue-Ref: adolfousier/opencrabs#1419`.
+FORK_REPO_SLUG = "leshchenko1979/opencrabs"
+
+# `#N` or `<owner>/<repo>#N` — the two forms oc-commit writes.
+_SLUG_REF_RE = re.compile(r"^([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+)?#(\d+)$")
+# A bare integer. Observed live (`295`, `238`, `169`, ...): hand-written values
+# that dropped the `#`. Still a fork issue number.
+_BARE_REF_RE = re.compile(r"^(\d+)$")
+
+_REC_SEP = "\x1e"
+_FLD_SEP = "\x1f"
+# git's own ESCAPE syntax for the same bytes. A raw control character in
+# `--format=` is rejected (`fatal: invalid --pretty format`), so the command
+# line carries `%x1e`/`%x1f` while the PARSER splits on the real bytes git
+# then emits.
+_REC_ESC = "%x1e"
+_FLD_ESC = "%x1f"
+
+def _git(repo_path, *args):
+    """Run git in ``repo_path``; return stdout, or None on any failure."""
+    if not repo_path or not os.path.isdir(str(repo_path)):
+        return None
+    try:
+        proc = subprocess.run(["git", "-C", str(repo_path)] + list(args),
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
+
+def parse_issue_ref_value(value, fork_slug=FORK_REPO_SLUG):
+    """Issue numbers a single `Issue-Ref` trailer value anchors to.
+
+    Fork space ONLY. A value naming another repository is skipped, so an
+    upstream reference cannot fence a fork issue. One value may carry several
+    references separated by commas (`#89,#92,#93`) — every one is returned.
+    """
+    out = []
+    for part in str(value or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        match = _SLUG_REF_RE.match(part)
+        if match:
+            slug, num = match.group(1), int(match.group(2))
+            if slug and slug != fork_slug:
+                continue
+            out.append(num)
+            continue
+        match = _BARE_REF_RE.match(part)
+        if match:
+            out.append(int(match.group(1)))
+    return out
+
+def issue_ref_index(repo_path, ref="--all"):
+    """``{sha: [issue, ...]}`` for commits carrying a fork-space `Issue-Ref`.
+
+    ONE `git log` pass, so a caller resolving many issues pays for it once and
+    passes the result on as ``index``. ``ref`` defaults to ``--all`` on
+    purpose: a lane's work lives on its own branch until the ff-merge, so a
+    fork-main-only scan cannot see it (#307 — issue #262's own lane commits
+    were invisible, and its file set came out 3 instead of 5).
+    """
+    out = _git(repo_path, "log", ref,
+               "--format=%H" + _FLD_ESC +
+               "%(trailers:key=Issue-Ref,valueonly)" + _REC_ESC)
+    index = {}
+    if not out:
+        return index
+    for record in out.split(_REC_SEP):
+        record = record.strip("\n")
+        if not record:
+            continue
+        sha, sep, values = record.partition(_FLD_SEP)
+        sha = sha.strip()
+        if not sha or not sep:
+            continue
+        nums = []
+        # A multi-value trailer field arrives newline-separated.
+        for line in values.splitlines():
+            for num in parse_issue_ref_value(line):
+                if num not in nums:
+                    nums.append(num)
+        if nums:
+            index[sha] = nums
+    return index
+
+def resolve_issue_commits(repo_path, iss, ref="--all", index=None):
+    """Full SHAs of commits that ANCHOR to fork issue ``iss``.
+
+    Anchored means the commit's `Issue-Ref` trailer names ``iss`` — the
+    machine-written link `oc-commit` derives from the actor's ledger claim.
+    Prose is never consulted: a commit that merely MENTIONS `#N` in its subject
+    or body is not work on `#N`. That was the #307 defect — the old unanchored
+    `git log --grep=#N` read upstream commit `1e34378050` (subject `(#478)`,
+    body prose `(#300)`) as fork work on #300 and fenced #291's harvest on
+    files #291 never touched.
+
+    Returns ``[]`` when nothing anchors — an EMPTY set, never a guess.
+    """
+    target = int(iss)
+    idx = issue_ref_index(repo_path, ref) if index is None else index
+    return [sha for sha, nums in idx.items() if target in nums]
+
+def commit_files(repo_path, shas):
+    """Union of the paths ``shas`` touch, as a sorted list."""
+    files = set()
+    shas = [s for s in (shas or []) if s]
+    for start in range(0, len(shas), 200):
+        chunk = shas[start:start + 200]
+        out = _git(repo_path, "log", "--no-walk=unsorted", "--name-only",
+                   "--format=" + _REC_ESC, *chunk)
+        if not out:
+            continue
+        for record in out.split(_REC_SEP):
+            for line in record.splitlines():
+                line = line.strip()
+                if line:
+                    files.add(line)
+    return sorted(files)
+
+def resolve_issue_files(repo_path, iss, ref="--all", index=None):
+    """Files touched by the commits anchoring to fork issue ``iss``.
+
+    The footprint half of the in-flight fence. An empty list is a legitimate
+    answer (nothing anchored) and callers must read it as "no evidence of
+    overlap", never as "no other lane is working".
+    """
+    return commit_files(repo_path, resolve_issue_commits(
+        repo_path, iss, ref=ref, index=index))

@@ -44,6 +44,11 @@ fi
 trap 'oc_log_finish $?' EXIT
 
 PROG="$(basename "$0")"
+# The Python engine arrives on stdin, so it has no __file__ and sys.argv[0] is
+# "-". Hand it the tool dir explicitly so it can import tools/lib/oc_claims.py
+# (#307 — the claim-closure + claim-footprint predicates live there, not here).
+OC_TOOLS_DIR="$(cd "$(dirname "$0")" && pwd)"
+export OC_TOOLS_DIR
 REPO="${HOME}/opencrabs"
 UPSTREAM_REPO="adolfousier/opencrabs"
 STATE_DIR="${HOME}/.opencrabs/profiles/ops/opencrabs-dev"
@@ -73,6 +78,19 @@ EOF
 run_engine() {
   python3 - "$@" <<'OCPY'
 import sys, os, json, re, subprocess, argparse, time, datetime, glob
+
+# The claim-CLOSURE and claim-FOOTPRINT predicates are NOT local to this tool
+# (#307). `tools/lib/oc_claims.py` owns both; a copy here is a drift, and this
+# file had accumulated two of them — a pre-#305 closure form that closed a
+# claim on a mere prose mention of `#N` by an unrelated actor, and an
+# unanchored `git log -n 10 --grep=#N` that read upstream commit prose as work.
+_TOOLS_DIR = os.environ.get('OC_TOOLS_DIR') or os.path.dirname(os.path.abspath(sys.argv[0]))
+sys.path.insert(0, os.path.join(_TOOLS_DIR, 'lib'))
+try:
+    import oc_claims
+except ImportError as _oc_err:  # pragma: no cover - fail loud, never guess
+    sys.stderr.write('oc-harvest-census: cannot import tools/lib/oc_claims.py (%s)\n' % _oc_err)
+    sys.exit(3)
 
 def parse_iso_ts(ts_str):
     if not ts_str: return 0
@@ -504,36 +522,35 @@ def get_active_claims(ledger_file, repo_path=None):
     except Exception:
         return []
     events = data.get('events', [])
+    # CLOSURE: the canonical predicate (#307), not a local copy. The previous
+    # local form closed a claim when ANY later row of a closing kind merely
+    # mentioned `#N` in prose, regardless of actor — a pre-#305 shape.
+    open_rows = oc_claims.open_claims(events)
+    index = None  # one `git log --all` pass, shared by every claim
     claims = []
-    for idx, ev in enumerate(events):
-        if ev.get('kind') == 'claim':
-            by = ev.get('by', '')
-            m_uuid = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', by)
-            uuid = m_uuid.group(1) if m_uuid else by
-            what = ev.get('what', '')
-            m_iss = re.search(r'#(\d+)', what) or re.search(r'issue\s*=?\s*(\d+)', what, re.IGNORECASE)
-            iss = int(m_iss.group(1)) if m_iss else None
-            closed = False
-            for later_ev in events[idx+1:]:
-                later_by = later_ev.get('by', '')
-                if (uuid in later_by or (iss and f'#{iss}' in later_ev.get('what', ''))) and later_ev.get('kind') in ['close', 'confirm', 'reject', 'done', 'unclaim']:
-                    closed = True
-                    break
-            if not closed:
-                files = []
-                if 'files' in ev and isinstance(ev['files'], list):
-                    files = ev['files']
-                elif iss and repo_path and os.path.isdir(repo_path):
-                    res = subprocess.run(['git', '-C', repo_path, 'log', '-n', '10', f'--grep=#{iss}', '--format=%H'], capture_output=True, text=True)
-                    if res.returncode == 0 and res.stdout.strip():
-                        c_shas = [s.strip() for s in res.stdout.strip().split('\n') if s.strip()]
-                        files = get_affected_files_for_commits(c_shas, repo_path)
-                claims.append({
-                    'uuid': uuid,
-                    'issue': iss,
-                    'what': what,
-                    'files': files
-                })
+    for row in open_rows:
+        by = row.get('by', '')
+        m_uuid = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', by)
+        uuid = m_uuid.group(1) if m_uuid else by
+        raw = events[row['idx']] if 0 <= row.get('idx', -1) < len(events) else {}
+        for iss in row.get('tokens') or []:
+            files = []
+            if isinstance(raw.get('files'), list):
+                files = raw['files']
+            elif repo_path:
+                # FOOTPRINT: anchored to the `Issue-Ref` TRAILER, fork space
+                # only. An empty answer means no commit anchors to this issue —
+                # a real answer. The old unanchored `--grep=#N` filled it with
+                # files from commits whose PROSE mentioned the number (#307).
+                if index is None:
+                    index = oc_claims.issue_ref_index(repo_path)
+                files = oc_claims.resolve_issue_files(repo_path, iss, index=index)
+            claims.append({
+                'uuid': uuid,
+                'issue': iss,
+                'what': row.get('what', ''),
+                'files': files
+            })
     return claims
 
 action = sys.argv[1]
@@ -717,8 +734,9 @@ if action == 'check':
             if target_iss is not None and c_iss == target_iss:
                 continue # own claim is not a foreign conflict
             c_files = set(claim.get('files', []))
-            if not c_files and c_iss and repo_path:
-                c_files = set(get_affected_files_for_commits(resolve_issue_commits(c_iss, repo_path) if 'resolve_issue_commits' in locals() else [], repo_path))
+            # Files arrive ANCHORED from get_active_claims (#307). An empty set
+            # is a real answer — "no commit anchors to this claim's issue" — and
+            # is never a gap to refill by grepping commit prose for `#N`.
             overlap = target_files.intersection(c_files)
             if overlap:
                 overlap_sample = ', '.join(sorted(list(overlap))[:3])
@@ -1247,6 +1265,45 @@ EOF
     ok "check in-flight lane conflict -> REFUSED HELD_IN_FLIGHT_LANE exit 1"
   else
     echo "  bad  - check in-flight lane conflict expected rc=1 HELD_IN_FLIGHT_LANE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 3e. PROSE-ONLY NEGATIVE CONTROL (#307) -> must NOT fence, exits 0 ELIGIBLE.
+  #     Fixture: a claim with NO `files` key, over a history in which ONLY a
+  #     prose mention of #700 exists. The anchored resolver returns an EMPTY
+  #     footprint — a real answer, not a gap — so the fence cannot fire.
+  #     MUTATION GUARD: regress the footprint to the old unanchored
+  #     `git log -n 10 --grep=#N` and this case turns HELD_IN_FLIGHT_LANE and
+  #     fails the selftest. That is what makes it a control, not a smoke.
+  #     ARGV ORDER IS LOAD-BEARING: run_engine is `python3 - "$@"`, so argv[2]
+  #     is the UPSTREAM repo and argv[3] is the repo whose history the claim
+  #     footprint resolves against. This leg originally passed $prose_repo into
+  #     argv[2] and $selftest_tmp into argv[3] — a non-git directory — so the
+  #     resolver answered [] for BOTH the anchored and the unanchored matcher
+  #     and the case passed vacuously. The mutation guard caught it: census
+  #     stayed green under a reverted matcher while dispatch went red.
+  local prose_repo="$selftest_tmp/prose_repo"
+  local mock_ledger_prose="$selftest_tmp/mock_ledger_prose.json"
+  local mock_commits_prose="$selftest_tmp/mock_commits_prose.json"
+  mkdir -p "$prose_repo/src/prose"
+  printf 'x\n' > "$prose_repo/src/prose/target.rs"
+  git -C "$prose_repo" init -q 2>/dev/null
+  git -C "$prose_repo" config user.email selftest@local
+  git -C "$prose_repo" config user.name selftest
+  git -C "$prose_repo" add -A 2>/dev/null
+  git -C "$prose_repo" commit -q -m "fix(unrelated): reword the note (#700)" 2>/dev/null
+  cat << 'PROSEEOF' > "$mock_ledger_prose"
+{"events":[{"n":1,"kind":"claim","by":"editor 99999999-8888-7777-6666-555555555555","what":"CLAIM #700 active lane work"}]}
+PROSEEOF
+  cat << 'PROSEEOF' > "$mock_commits_prose"
+[{"sha":"aaaaaaa700000000000000000000000000000000","short_sha":"aaaaaaa","subject":"fix(prose-control): candidate touching the prose file (#701)","trailer":"leshchenko1979/opencrabs#701","commit_ts":100000,"files":["src/prose/target.rs"]}]
+PROSEEOF
+  rc=0
+  out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_prose" OC_HARVEST_MOCK_COMMITS="$mock_commits_prose" run_engine "check" "mock/repo" "$prose_repo" "$mock_reg" "701" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    ok "prose-only mention does NOT fence a no-files claim (#307 negative control)"
+  else
+    echo "  bad  - prose-only mention must NOT fence, got rc=$rc ($out)"
     return 1
   fi
 
