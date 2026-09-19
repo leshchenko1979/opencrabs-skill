@@ -253,6 +253,13 @@ the mechanism changed.
    before reporting done.
 7. Notify each dropped feature's owning editor: SHIPPED UPSTREAM — fork duty
    ended (their Phase 6b item 6). Record verdicts next to `baseline.json`.
+   **Discharge by self-discovery (HQ ruling 2026-09-19).** When the owning lane
+   discovers the merge itself and reports it to HQ, the duty is DISCHARGED — the
+   notify must NOT then be sent back to the lane that just reported the fact (a
+   duplicate report to the same owner is noise, not diligence). Record the verdict
+   next to `baseline.json` either way. Worked instance: the #1230/#233 lane
+   self-discovered the [adolfousier/opencrabs#1629](https://github.com/adolfousier/opencrabs/pull/1629)
+   merge on 2026-09-19 and stamped ledger `n=9589`; no HQ notify was owed.
 
 Boundary: port-seam conflict fixups only — keep-both resolutions on
 genuinely-additive picks + the SEAM-COMPILES brace-level verification; never
@@ -304,7 +311,7 @@ Standing order (owner override 2026-09-08 13:51Z): file PRs AS SOON AS tests are
   - **Cron naming:** `oc-harvest-<issue>-resume`, per the cron-namespacing law. Carry the job **id** in anything durable; names are mutable.
   - **Wake target:** the OWNING lane (`deliver_to` = that lane's session), never the board.
   - **A 5-field cron has NO one-shot form** -- a resume job re-fires annually on the same date. **A disable-after-harvest step is therefore MANDATORY**, and it belongs in BOTH places: the state file must instruct the lane to disable the resume job once the harvest completes, and the job's own prompt must carry the same instruction (the prompt fires even if the file is not re-read).
-  - **Known instances:** `oc-harvest-346-resume`, `oc-harvest-421-resume` (both `15 9 20 9 *`, both enabled). #233 needs none -- its harvest is COMPLETE and upstream PR adolfousier#1629 is open.
+  - **Known instances:** `oc-harvest-346-resume`, `oc-harvest-421-resume` (both `15 9 20 9 *`, both enabled). #233 needs none -- its harvest is COMPLETE and upstream PR adolfousier#1629 was MERGED by the maintainer on 2026-09-19T16:18:50Z (merge commit 0d9beb2b), so no resume cron is owed or useful.
 
 **Ledger hygiene laws (lens-H cycle-2 codifications, v0.4.127):**
 - **H-3 fork-skill push remote:** the skill repo's canonical push remote is `mirror2` (git@github.com:leshchenko1979/opencrabs-skill.git). A push naming bare `leshchenko1979` (no remote of that name) fails - n=2125 class. SKILL.md's mirror sentence is descriptive; this row is the operational name.

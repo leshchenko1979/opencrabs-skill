@@ -1,5 +1,14 @@
 # Changelog — opencrabs-dev
 
+## v0.4.221 (2026-09-19)
+
+**T9's harvest COMPLETED — upstream PR [adolfousier/opencrabs#1629](https://github.com/adolfousier/opencrabs/pull/1629) MERGED by the maintainer.** Reported by the Editor lane "rich-formatting" (#1230/#233 bundle) and verified first-hand before any edit: `gh pr view 1629 --repo adolfousier/opencrabs` → `state=MERGED`, `mergedAt=2026-09-19T16:18:50Z`, `mergedBy=adolfousier`, `mergeCommit=0d9beb2bad2efa7ba26c9d9fcfbd90ea4b98b080`, `head=9d2c9645a589405df6c4e89d222a7fe06708a0ff`, `createdAt=2026-09-18T02:30:54Z`.
+
+1. **The freeze does not reach a pre-freeze-filed PR (new ruling, `fleet-directives.md`).** The reporting lane asked whether the freeze covers a PR filed before it existed; it does not, and cannot. `#1629` was filed **15 h before** the owner's `2026-09-18 17:33Z` freeze order, and the merge was the maintainer's own action on his side of the wall — the freeze withholds *our* upstream push, not his merge button. No lane breached the freeze. T9 is therefore recorded in a new `merged_by_maintainer` key in the json block rather than moved to `released`, because `released` means "the owner released this group for US to harvest" and T9 needed no release.
+2. **The heads-up question is MOOT, not missed.** `gh api repos/adolfousier/opencrabs/issues/1629/comments` returns **zero** comments; the only event is the maintainer's own `COMMENTED` review at `14:51:52Z`, **87 min before** he merged. The long-open observation about whether this PR ever got its heads-up is now closed as moot.
+3. **`upstream-merge-runbook.md` item 7 — the SHIPPED-UPSTREAM notify duty can be DISCHARGED BY SELF-DISCOVERY.** When the owning lane discovers the merge itself and reports it to HQ, sending the notify back to that same lane is a duplicate report — noise, not diligence. Recorded as law with this merge as the worked instance (the lane stamped ledger `n=9589`). The `#233` line in the harvest-resume section no longer describes `#1629` as open.
+4. **T9's fork-side duty has ENDED** (`editor.md` Phase 6b item 6): #233/#237/#247/#265 carry no further fork maintenance and no fix rounds; all four fork issues are CLOSED.
+
 ## v0.4.220 (2026-09-19)
 
 **Stale refusal-handling bullet corrected (`SKILL.md` §session_notify mechanics).** Reported by the Editor lane "Push to session" (#393) and verified first-hand before the edit: `grep -rn 'resend with' *.md` over the skill dir returned exactly ONE hit — the bullet still reading *"a mid-turn refusal is NOT delivery … resend with `interrupt: true` in the same turn"*. It contradicted `SKILL.md:193` IN THE SAME SECTION (`interrupt` = legacy alias, INERT) and `fleet-directives.md:415` (escalation: there is NONE). The reporting lane places it as the eighth site of the interrupt-stale-text family, missed by all four earlier waves (v0.4.212 `toolsmith.md`, v0.4.213 `fleet-directives.md`, v0.4.215 `hq.md` ×2).

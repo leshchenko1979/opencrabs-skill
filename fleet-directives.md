@@ -39,7 +39,7 @@
 
 | State | Groups |
 |---|---|
-| **FROZEN** — no upstream push / harvest | **17 T-groups:** T1 (#299), T2 (#286), T3 (#291), T4 (#295), T5 (#285), T7 (#280/#289/#258), T8 (#234/#155), T9 (#1629/#233), T10 (#317), T11 (#247), T12 (#208/#228), T13 (#278), T14 (#298), T15 (#241), T16 (`[agent] default_provider`), T17 (#256), T18 (#150) · **7 Tier-3 items:** #290, #271, cron per-job in-flight guard, #264, #273, repeated-bash nudge, #345 |
+| **FROZEN** — no upstream push / harvest | **17 T-groups:** T1 (#299), T2 (#286), T3 (#291), T4 (#295), T5 (#285), T7 (#280/#289/#258), T8 (#234/#155), T9 (#1629/#233 — **MERGED upstream 2026-09-19 by the maintainer, harvest COMPLETE; ruling below**), T10 (#317), T11 (#247), T12 (#208/#228), T13 (#278), T14 (#298), T15 (#241), T16 (`[agent] default_provider`), T17 (#256), T18 (#150) · **7 Tier-3 items:** #290, #271, cron per-job in-flight guard, #264, #273, repeated-bash nudge, #345 |
 | **RELEASED** — harvest eligible | **T6 — Telegram flow cluster** (#250 🎯 telemetry marker, 🌐/🧠 tool classes, ⏰ cron icon, compact event labels, #232 telemetry bar, queued-message roll tag) |
 
 **Machine-readable source of truth (the #358 shape — HQ ruling 2026-09-19).** The block below is the ONLY home of the frozen/released data. Tools read it from HERE — never from the prose table, and never from a second file: a separate state-dir copy would be a second home for law data and would drift, which is precisely the contradiction this block exists to end (see the T3 ruling below). **`law_version` = the `SKILL.md` version at which this block last CHANGED; it is not re-stamped on every bump.**
@@ -48,7 +48,7 @@
 
 ```json
 {
-  "law_version": "0.4.207",
+  "law_version": "0.4.221",
   "owner_order": "2026-09-18 17:33Z",
   "released": ["T6"],
   "frozen": {
@@ -59,7 +59,12 @@
     "T17": ["#256"], "T18": ["#150"],
     "TIER3": ["#290", "#271", "#264", "#273", "#345", "cron per-job in-flight guard", "repeated-bash nudge"]
   },
-  "disputed_not_released": ["T3"]
+  "disputed_not_released": ["T3"],
+  "merged_by_maintainer": {
+    "T9": {"pr": 1629, "merged_at": "2026-09-19T16:18:50Z", "merged_by": "adolfousier",
+           "merge_commit": "0d9beb2bad2efa7ba26c9d9fcfbd90ea4b98b080",
+           "head": "9d2c9645a589405df6c4e89d222a7fe06708a0ff", "filed_at": "2026-09-18T02:30:54Z"}
+  }
 }
 ```
 
@@ -77,6 +82,18 @@
 3. **The freeze binds the machinery, not just the prose.** Triage's harvest patrol (`oc-harvest-dispatch-4h`, job id `73158e43-3b04-4464-bf82-8d9065a191bb` — live expr `15 3,9,15,21 * * *`, i.e. every 6h, NOT the 4h this line used to claim; **and currently OFF under the owner's 2026-09-18T20:41:30Z pacemakers-off order**, so this leg is VACUOUS until that order lifts — the patrol cannot dispatch a frozen group while it is not running, and re-arming it is an owner decision, not a lane's) must not dispatch a frozen group; `oc-harvest-census` / `oc-harvest-dispatch` must read a frozen group as NOT harvest-eligible **by reading the `json` block above through the fail-loud reader — which DOES NOT EXIST YET (see the reader-status note above).** Verified 2026-09-19: neither tool contains any freeze awareness, so **a green `oc-harvest-census check <N>` is NOT evidence that a frozen group may be dispatched** — the census does not read the block, and until the reader lands this leg rests on lane discipline alone. An editor holding a frozen group's work stops short of Phase 7 (upstream PR filing).
 4. **This is NOT the carrier FREEZE of `upstream-merge-runbook.md §Remotes & sync` (2).** That one is mechanical (no sync while a carrier chain sits between dispatch and swap). This one is an owner hold on a feature group's harvest. Same word, different concept — write **owner push freeze (harvest hold)** when you mean this one.
 5. **Scope boundary — the freeze holds HARVEST, not development.** Lanes keep fixing, committing, shipping and smoking inside fork `main`; what is withheld is the upstream push of a frozen group. A defect found in a frozen group (e.g. the owner's 2026-09-18 finding that #291 puts the compaction result, not the latest thought, in the tool-roll header) is fixed and re-soaked normally — it stays frozen only at the harvest boundary.
+
+
+**Pre-freeze PRs are NOT reached by the freeze (HQ ruling 2026-09-19, answering the Editor lane "rich-formatting", #1230/#233 bundle).** Upstream PR [adolfousier/opencrabs#1629](https://github.com/adolfousier/opencrabs/pull/1629) — T9's harvest — was **MERGED by the maintainer at 2026-09-19T16:18:50Z** (merge commit `0d9beb2bad2efa7ba26c9d9fcfbd90ea4b98b080`, head `9d2c9645a589405df6c4e89d222a7fe06708a0ff`). It was filed `2026-09-18T02:30:54Z`, i.e. **15 h BEFORE the owner's freeze order** (`2026-09-18 17:33Z`), so no lane push ever happened under the freeze and this merge was `adolfousier`'s own action.
+
+The lane asked whether the freeze reaches a PR filed before it existed. It does not, and it cannot:
+
+- **A filed PR is the maintainer's to merge.** The freeze binds OUR machinery — it withholds *our* upstream push (Rule 1). Once a PR is filed it sits on his side of the wall, and merging it is his act, not a lane's harvest. No lane breached the freeze here.
+- **The filing itself predated the order.** `#1629` was filed 15 h before the freeze existed, so there was no hold for it to violate.
+- **Consequence for this block:** T9 is neither pending-frozen nor ours to harvest — its harvest is COMPLETE. It is recorded in `merged_by_maintainer` in the json block above and is NOT moved to `released`, because `released` means "the owner released this group for US to harvest" (Rule 2) and T9 needed no release: the maintainer had already shipped it.
+- **No heads-up was ever posted to that PR** — verified 2026-09-19: `gh api repos/adolfousier/opencrabs/issues/1629/comments` returns ZERO comments; the only event is the maintainer's own `COMMENTED` review at `2026-09-19T14:51:52Z`, **87 min before he merged**. The heads-up question is therefore MOOT rather than missed: the PR was reviewed and merged on its own merits.
+
+**Fork-side duty for T9 has ENDED** (`editor.md` Phase 6b item 6): #233/#237/#247/#265 carry no further fork maintenance and no fix rounds; all four fork issues are CLOSED.
 
 **Rationale (owner's own words):** *"I want to review them first"* — the soak groups ARE his live-test surface, and harvesting one before he has exercised it upstreams a feature he has not yet accepted.
 
