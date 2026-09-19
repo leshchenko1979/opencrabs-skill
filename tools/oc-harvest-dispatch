@@ -704,6 +704,11 @@ def select_spread_lane(avail, ledger_file):
 def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=None, mock_inventory=None, mock_ledger=None):
     issue_num = None
     commits = []
+    # Non-blocking findings raised during vetting (#389). An advisory is a
+    # fact the packaging step must weigh, never a gate failure — the census
+    # tool has carried this stream since #365; dispatch had none, which is
+    # why the same condition was a refusal here and an advisory there.
+    advisories = []
     
     rc, _, _ = run_cmd(['git', '-C', repo_path, 'cat-file', '-e', candidate_arg + '^{commit}'])
     is_commit = (rc == 0)
@@ -982,14 +987,25 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                                 'files': affected_files,
                                 'exit_code': 1
                             }
-                    return {
-                        'status': 'REJECTED',
-                        'verdict': f'UPSTREAM_VOID: Path {f_path} does not exist in {base_ref} (deleted or modified by candidate, but absent upstream)',
-                        'issue': issue_num,
-                        'commits': commits,
-                        'files': affected_files,
-                        'exit_code': 1
-                    }
+                    # NOT a refusal (#389). Two shapes reach here and neither is
+                    # a gate failure:
+                    #   (a) the candidate's OWN issue introduced the path and a
+                    #       follow-up commit modified it — the {A, M} action set
+                    #       the Atomic Subsystem Bundling law (v0.4.200) produces
+                    #       when follow-ups are squashed into the parent commit;
+                    #   (b) no fork provenance at all — a genuinely new path.
+                    # A new path is exactly what an upstream PR exists to add.
+                    # oc-harvest-census has always advised here (:1058); the
+                    # unconditional UPSTREAM_VOID this replaces ran the FILE test
+                    # the v0.4.201 subject-test ruling (triage.md) names as
+                    # superseded, and #365 fixed it in census only.
+                    _own = intro_iss is not None and intro_iss == issue_num
+                    advisories.append(
+                        'orphan path %s (absent upstream) - port decision required%s'
+                        % (f_path,
+                           ' [introduced by this issue, %s]' % (intro_sha[:8] if intro_sha else '?')
+                           if _own else '')
+                    )
 
     # Gate 3: Empty tree-diff check on affected files
     if affected_files:
@@ -1050,6 +1066,7 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
         'commits': commits,
         'files': affected_files,
         'slug': slug,
+        'advisories': advisories,
         'exit_code': 0
     }
 
@@ -1088,6 +1105,8 @@ elif action == 'vet':
         st = res.get('status', 'UNKNOWN')
         vd = res.get('verdict', '')
         print(f'[{st}] {vd}')
+        for _adv in (res.get('advisories') or []):
+            print(f'  ADVISORY: {_adv}')
         if st == 'APPROVED':
             iss = res.get('issue') or 'N/A'
             cmts = res.get('commits', [])
@@ -1172,6 +1191,10 @@ elif action == 'dispatch':
                     dep_notice_lines.append(f'> ⚠️ **Dependency Notice**: Blocked by unmerged upstream {b_ref}. Please merge first, or review/release together in a single batch.')
 
     dep_section = ('\nPR Dependency Header (inject into PR description):\n' + '\n'.join(dep_notice_lines) + '\n') if dep_notice_lines else ''
+    # Packaging advisories (#389): facts the editor must weigh at port time.
+    # They never block a dispatch — an orphan path is what an upstream PR is for.
+    _adv = v.get('advisories') or []
+    adv_section = ('\nPackaging Advisories (weigh at port time; NOT a gate failure):\n' + '\n'.join('  - ' + a for a in _adv) + '\n') if _adv else ''
     contract_line = f'Contract: AUTO-SHIP on GREEN CI gate. File PR ({contract_mode}) on {upstream_repo}:main citing gate run ID, link fork {iss_str}, include dependency notices if applicable, notify Triage. Note: Under relaxed PR-Freeze Law, PR bodies may be updated with gh pr edit --body-file to add/maintain dependency notices.'
 
     envelope = f'''[HARVEST DISPATCH: {iss_str}]
@@ -1179,7 +1202,7 @@ Target Issue: {iss_str} ({slug})
 {draft_line}Source Commits: {commits_str}
 Upstream Base: {base_ref} ({tip_sha})
 Target Branch: {branch_name}
-{dep_section}Commands:
+{dep_section}{adv_section}Commands:
   1. tools/oc-wt add up-{slug} {branch_name} --create --from {base_ref}
   2. git cherry-pick {commits_str}
   3. tools/oc-harvest-sweep {branch_name} --base {base_ref}
@@ -1773,6 +1796,40 @@ EOF
     return 1
   fi
 
+  unset OC_HARVEST_MOCK_HIERARCHY
+  unset OC_HARVEST_MOCK_DEPLOYED_TS
+
+  # 8g. Same-issue ADD + MODIFY must be APPROVED, never UPSTREAM_VOID (#389).
+  # The {A, M} action set is what the Atomic Subsystem Bundling law (v0.4.200)
+  # produces when a follow-up fix is squashed into its parent commit: one commit
+  # ADDS the path, a later commit MODIFIES it. Gate 2g fired on the M, found the
+  # path absent upstream, and fell through to an UNCONDITIONAL UPSTREAM_VOID --
+  # refusing the very file the issue itself added, which is what an upstream PR
+  # exists to add. Census has always advised at the same point (:1058). This arm
+  # is the missing POSITIVE control: 8f only covers a path introduced by a
+  # DIFFERENT issue, so the fall-through was never exercised.
+  mkdir -p "$mock_repo/src/orphan"
+  echo "first cut" > "$mock_repo/src/orphan/added.rs"
+  git -C "$mock_repo" add src/orphan/added.rs
+  GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" \
+    git -C "$mock_repo" commit -q -m "feat(orphan): add the file this issue exists to add (#601)" --trailer "Issue-Ref: #601"
+  echo "follow-up truncation fix" > "$mock_repo/src/orphan/added.rs"
+  git -C "$mock_repo" add src/orphan/added.rs
+  GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" \
+    git -C "$mock_repo" commit -q -m "fix(orphan): truncate the record as a true prefix (#601)" --trailer "Issue-Ref: #601"
+  local commit_601
+  commit_601="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  export OC_HARVEST_MOCK_HIERARCHY="$mock_hier_file"
+  export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
+  rc=0
+  out="$(run_engine "vet" "$commit_601" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED" && echo "$out" | grep -q "ADVISORY" && ! echo "$out" | grep -q "UPSTREAM_VOID"; then
+    echo "  ok 8g - vet #601 (same-issue add+modify, path absent upstream) -> APPROVED with ADVISORY, exit 0"
+  else
+    echo "  bad 8g - vet #601 expected rc=0 APPROVED + ADVISORY and NO UPSTREAM_VOID, got rc=$rc ($out)"
+    return 1
+  fi
   unset OC_HARVEST_MOCK_HIERARCHY
   unset OC_HARVEST_MOCK_DEPLOYED_TS
 
