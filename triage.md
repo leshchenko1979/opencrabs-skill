@@ -104,6 +104,13 @@ per that section. Owner veto overrides retroactively, as with rulings.
   crons are enabled and have recent last-run rows (e.g. oc-harvest-dispatch-4h —
   via the cron tool, fresh receipt); a dead patrol cron posts no census and
   trips no alarm, so the liveness check IS the heartbeat for the heartbeat.
+  **EXCEPTION — an owner-ordered OFF is not a dead cron (2026-09-19).** While the
+  owner's `2026-09-18T20:41:30Z` pacemakers-off order stands, four ops patrols are
+  disabled BY THAT ORDER (`oc-harvest-dispatch-4h`, `oc-upstream-delta-watch`,
+  `oc-roster-detached-sweep`, `oc-health-hourly`), and the state dir's
+  `pacemakers-off` marker is what distinguishes an ordered stop from a dead patrol.
+  Report them as ORDER-HONOURED, never as dead, and never re-enable one — a
+  liveness patrol that flags them is re-reporting the owner's own order back to him.
 
 - **Checkable Completion Formula**: `DONE = all patrol dimensions checked with tool receipts (or explicit zero-event statement) + census posted to board topic 30220.`
 

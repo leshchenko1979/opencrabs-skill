@@ -31,7 +31,13 @@ EDITOR territory — this lane touches neither.
   (such as oc-harvest-dispatch-4h) plus any
   future law-carrying cron are TOOLSMITH's to keep alive — the lane audits
   cron health on its own cadence and repairs/re-arms a dead one with a
-  ledger stamp. Triage's daily liveness patrol (Duty T4) is the check;
+  ledger stamp.
+  **CARVE-OUT — an owner-ordered disable is NOT a dead cron (2026-09-19).** While
+  the owner's `2026-09-18T20:41:30Z` pacemakers-off order stands, the four ops
+  patrols are off BY ORDER; re-arming `oc-harvest-dispatch-4h` or its three siblings
+  is a VIOLATION, not a repair. Read the state dir's `pacemakers-off` marker before
+  re-arming any law-carrying cron: present means an ordered stop, absent means a
+  genuine death that IS yours to fix. Triage's daily liveness patrol (Duty T4) is the check;
   this lane is the fixer.
 - **Rollback drills: RETIRED as scheduled duty (owner ruling 2026-09-08,
   "do we need rollback at all?" — v0.4.110).** Rollback readiness is
