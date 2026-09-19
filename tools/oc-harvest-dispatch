@@ -889,8 +889,18 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                 continue
             c_files = set(claim.get('files', []))
             overlap = target_files_set.intersection(c_files)
-            if overlap:
-                overlap_sample = ', '.join(sorted(list(overlap))[:3])
+            # Registry-only overlap is NOT a substantive conflict (#375). Every
+            # test-bearing change registers its module in src/tests/mod.rs, so a
+            # raw intersection fences ANY test-bearing harvest against ANY lane
+            # holding a test claim. Gate 2c (HELD_DEPENDENT_SOAK) already filters
+            # via filter_substantive_overlap; this gate did not. The filter was
+            # introduced scoped to the soak gate by name (6d9735da) with no
+            # rationale, and the HQ amendment that created both gates names them
+            # as parallel cases of one predicate -- the asymmetry was an omission,
+            # not a design.
+            substantive_overlap = filter_substantive_overlap(overlap)
+            if substantive_overlap:
+                overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
                 c_uuid = claim.get('uuid', '')[:8]
                 iss_label = str(c_iss) if c_iss else '?'
                 return {

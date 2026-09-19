@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Mutation guards for #307 and #365 — prove the negative controls are LIVE, not
-# vacuous.
+# Mutation guards for #307, #365 and #375 — prove the negative controls are
+# LIVE, not vacuous.
 #
 # A negative control that cannot fail is decoration. Each section reverts one
 # shipped behaviour on a COPY of the tools tree and requires the selftests to
@@ -18,6 +18,11 @@
 # requires the shape's own leg to be the FIRST failure on its mutant. The legs
 # abort the suite on first failure, so "first bad leg == the leg aimed at" is
 # the strongest assertion available without splitting the suite.
+#
+# #375 — the shared-declaration-registry exemption in the HELD_IN_FLIGHT_LANE
+# fence. A fifth mutation (same §4 machinery) drops the filter call and requires
+# the registry-only leg to be the FIRST failure, proving that leg is
+# load-bearing rather than decoration.
 #
 # Harness guards (AGENTS.md §Repro harnesses): explicit tool path, recursion
 # guard, process budget cap.
@@ -154,7 +159,7 @@ fi
 # some UNRELATED leg would be caught, and a mutant that reddened nothing at all
 # is caught by the rc check.
 echo
-echo "[4] #365 gate-4 subject predicate (oc-harvest-census --selftest)"
+echo "[4] #365 gate-4 subject predicate + #375 in-flight registry exemption (oc-harvest-census --selftest)"
 
 base365="$WORK/base365.out"
 rc_base="$(run_st base365 "$SRC/oc-harvest-census" "$base365")"
@@ -164,12 +169,13 @@ else
   bad "baseline census rc=$rc_base (expected 0)"
 fi
 
-for label in case_a_dropped refuse_all_absent parent_number_dropped empty_derivation_unnamed; do
+for label in case_a_dropped refuse_all_absent parent_number_dropped empty_derivation_unnamed registry_filter_dropped; do
   case "$label" in
     case_a_dropped)           want_ok="#253 shape:"            want_bad="subject-absent fixture" ;;
     refuse_all_absent)        want_ok="#341 shape:"            want_bad="orphan-subject fixture" ;;
     parent_number_dropped)    want_ok="parent-harvested shape:" want_bad="harvested-parent fixture" ;;
     empty_derivation_unnamed) want_ok="inconclusive shape:"    want_bad="inconclusive fixture" ;;
+    registry_filter_dropped)  want_ok="check registry-only in-flight overlap -> ELIGIBLE exit 0 (shared-registry exemption)" want_bad="registry-only overlap" ;;
   esac
 
   # The aimed leg must be GREEN on the pristine tree, or there is nothing to
@@ -217,6 +223,21 @@ MUTATIONS = {
         "tested = ', '.join(absent_syms[:6]) or 'none derived'",
         "tested = ', '.join(absent_syms[:6]) or 'symbols omitted'",
     ),
+    # #375: drop the shared-declaration-registry filter from the IN-FLIGHT
+    # fence, so a registry-only overlap fences again. The anchor is FOUR lines
+    # because the soak gate carries the SAME first line -- only the in-flight
+    # block follows `substantive_overlap` with `c_uuid`, which is what makes
+    # this anchor unique (verified: short form occurs 2x, this form 1x).
+    "registry_filter_dropped": (
+        "            substantive_overlap = filter_substantive_overlap(overlap)\n"
+        "            if substantive_overlap:\n"
+        "                overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])\n"
+        "                c_uuid = claim.get('uuid', '')[:8]",
+        "            substantive_overlap = overlap\n"
+        "            if substantive_overlap:\n"
+        "                overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])\n"
+        "                c_uuid = claim.get('uuid', '')[:8]",
+    ),
 }
 if label not in MUTATIONS:
     sys.stderr.write("unknown mutation %r\n" % label)
@@ -255,7 +276,7 @@ done
 
 echo
 if [ "$fails" -eq 0 ]; then
-  echo "MUTATION GUARD PASSED — every #307 and #365 control fails under its mutant"
+  echo "MUTATION GUARD PASSED — every #307, #365 and #375 control fails under its mutant"
   exit 0
 fi
 echo "MUTATION GUARD FAILED (failures=$fails)"

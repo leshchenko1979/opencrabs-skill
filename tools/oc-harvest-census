@@ -956,8 +956,18 @@ if action == 'check':
             # is a real answer — "no commit anchors to this claim's issue" — and
             # is never a gap to refill by grepping commit prose for `#N`.
             overlap = target_files.intersection(c_files)
-            if overlap:
-                overlap_sample = ', '.join(sorted(list(overlap))[:3])
+            # Registry-only overlap is NOT a substantive conflict (#375). Every
+            # test-bearing change registers its module in src/tests/mod.rs, so a
+            # raw intersection fences ANY test-bearing harvest against ANY lane
+            # holding a test claim. §2 (HELD_DEPENDENT_SOAK) already filters via
+            # filter_substantive_overlap; this gate did not. The filter was
+            # introduced scoped to the soak gate by name (6d9735da) with no
+            # rationale, and the HQ amendment that created both gates names them
+            # as parallel cases of one predicate — the asymmetry was an omission,
+            # not a design.
+            substantive_overlap = filter_substantive_overlap(overlap)
+            if substantive_overlap:
+                overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
                 c_uuid = claim.get('uuid', '')[:8]
                 print('REFUSED: Target %s touches files of active lane %s claim #%s [HELD_IN_FLIGHT_LANE: %s]' % (target, c_uuid, c_iss or '?', overlap_sample))
                 sys.exit(1)
@@ -1552,6 +1562,15 @@ EOF
     "files": ["src/active/lane.rs"]
   },
   {
+    "sha": "5151515cb0000000000000000000000000000000",
+    "short_sha": "5151515",
+    "subject": "test(registry-only): mature fix whose ONLY footprint is a shared registry (#501)",
+    "trailer": "leshchenko1979/opencrabs#501",
+    "commit_ts": 100000,
+    "deployed_ts": 100000,
+    "files": ["src/tests/mod.rs"]
+  },
+  {
     "sha": "262193f67cb0000000000000000000000000000",
     "short_sha": "262193f",
     "subject": "chore(attribution): sign tip for #249 deploy",
@@ -1603,6 +1622,13 @@ EOF
       "by": "editor 11111111-2222-3333-4444-555555555555",
       "what": "CLAIM #600 active lane work",
       "files": ["src/active/lane.rs"]
+    },
+    {
+      "n": 101,
+      "kind": "claim",
+      "by": "editor 11111111-2222-3333-4444-555555555555",
+      "what": "CLAIM #601 active lane work whose only footprint is a shared registry",
+      "files": ["src/tests/mod.rs"]
     }
   ]
 }
@@ -1682,6 +1708,27 @@ EOF
     ok "check in-flight lane conflict -> REFUSED HELD_IN_FLIGHT_LANE exit 1"
   else
     echo "  bad  - check in-flight lane conflict expected rc=1 HELD_IN_FLIGHT_LANE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 3d2. REGISTRY-ONLY POSITIVE CONTROL (#375) -> must NOT fence, exits 0 ELIGIBLE.
+  #      Fixture: target #501's ONLY file is `src/tests/mod.rs`, which is in
+  #      SHARED_DECLARATION_REGISTRIES, and active claim #601 (a DIFFERENT issue)
+  #      holds exactly that file. A raw intersection fences here; the filtered
+  #      predicate does not, because co-occurrence on a module-declaration
+  #      registry is not a substantive conflict — every test-bearing change
+  #      registers its module there.
+  #      This is the ANTI-VACUITY proof for #375: it fails (HELD_IN_FLIGHT_LANE)
+  #      the moment the filter call is removed from §3. 3d above remains the
+  #      NEGATIVE control — its overlap is `src/active/lane.rs`, a real file.
+  #      #501 is deliberately DISTINCT from the #500 fixture: reusing #500's
+  #      issue would take the own-claim `continue` branch and pass vacuously.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "501" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    ok "check registry-only in-flight overlap -> ELIGIBLE exit 0 (shared-registry exemption)"
+  else
+    echo "  bad  - check registry-only overlap expected rc=0 ELIGIBLE, got rc=$rc ($out)"
     return 1
   fi
 
