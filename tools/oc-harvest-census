@@ -494,6 +494,32 @@ def check_upstream_file_existence(path, base_ref, repo_path):
     res = subprocess.run(['git', '-C', repo_path, 'cat-file', '-e', f'{base_ref}:{path}'], capture_output=True, text=True)
     return res.returncode == 0
 
+def ref_exists(base_ref, repo_path):
+    # Gate-4 RUNNABILITY, not a verdict. The upstream comparison is only
+    # meaningful against a resolvable base ref in a real git repo; the offline
+    # selftest drives the engine against a plain temp dir with synthetic commit
+    # dicts, where every git call fails and "no subject derived" would be a
+    # FALSE refusal (#365 — caught by the selftest itself on the unharvested
+    # case). Absent a base ref the gate is not exercisable, so it is skipped
+    # exactly as the file test skipped it before; a real repo always has the ref.
+    if not repo_path or not os.path.isdir(repo_path):
+        return False
+    return subprocess.run(['git', '-C', repo_path, 'rev-parse', '--verify', '--quiet', base_ref],
+                          capture_output=True).returncode == 0
+
+def commits_present(commits_list, repo_path):
+    # The fix's own commits must be IN the repo for its diff to be derivable.
+    # Synthetic/mocked commit dicts (selftest) name shas that do not exist, so
+    # nothing is derivable and the subject test cannot speak — skip, don't refuse.
+    for c in commits_list or []:
+        sha = c.get('sha', '') if isinstance(c, dict) else str(c)
+        if not sha or not repo_path:
+            continue
+        if subprocess.run(['git', '-C', repo_path, 'cat-file', '-e', sha + '^{commit}'],
+                          capture_output=True).returncode == 0:
+            return True
+    return False
+
 def check_fork_path_provenance(path, repo_path):
     range_arg = 'adolfousier/main..origin/main'
     rc_rev = subprocess.run(['git', '-C', repo_path, 'rev-parse', '--verify', 'origin/main'], capture_output=True).returncode
@@ -515,6 +541,150 @@ def check_fork_path_provenance(path, repo_path):
         intro_iss = _refs[0] if _refs else None
         return intro_sha, intro_iss, intro_subj
     return None, None, None
+
+# --- #365: SUBJECT derivation (symbol-level gate-4 predicate) ----------------
+# Gate 4 historically decided on the FILE test: any touched path absent from
+# `adolfousier/main` -> UPSTREAM_VOID. The codified law (HQ ruling 2026-09-18,
+# v0.4.201, triage.md "Closure predicate for fork-only base-fault fixes") makes
+# the operative question the fix's SUBJECT, and names the file test as the wrong
+# one. The derivation below reads the subject out of the fix's OWN diff, so it
+# needs no declared metadata and cannot be gamed by naming an unrelated symbol.
+#
+# The derivation is heuristic and its limits are MEASURED, not assumed. On the
+# #341 fix (commits 6a83afd4e + 1ddf5f7d1): 25 hunks at -U0, 12 resolved from
+# the hunk header, 12 by backward-scan, 1 unresolved (a module-level `use`).
+# Two known hazards, both tolerated because the gate's job is to stop
+# UNHARVESTABLE units, never to certify that a diff ports cleanly:
+#   * a hunk header may name a NEARBY item rather than the edited one (git
+#     headed a CONFIG_TYPO_WARNINGS doc-comment hunk `FIRST_LOAD_STATUS`);
+#   * a bare `impl` header forces a backward scan that can land on a
+#     function-local `static` (a naive scan returned `CHECKED`), so the scan
+#     prefers the nearest `fn` and falls back to a static name only if none.
+# Anything unresolved falls through to the declared-subject path (fail-closed).
+
+_HUNK_RE = re.compile(r'^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@(.*)$')
+_FN_DECL_RE = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)')
+_STATIC_DECL_RE = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?static\s+([A-Za-z_][A-Za-z0-9_]*)')
+
+
+def _show_at_rev(sha, path, repo_path, rev=None):
+    spec = ('%s:%s' % (rev, path)) if rev else ('%s^:%s' % (sha, path))
+    res = subprocess.run(['git', '-C', repo_path, 'show', spec], capture_output=True, text=True)
+    return res.stdout if res.returncode == 0 else ''
+
+
+def _nearest_enclosing_fn(lines, start_idx):
+    fallback_static = None
+    for i in range(min(start_idx, len(lines) - 1), -1, -1):
+        m = _FN_DECL_RE.match(lines[i])
+        if m:
+            return m.group(1)
+        s = _STATIC_DECL_RE.match(lines[i])
+        if s and fallback_static is None:
+            fallback_static = s.group(1)
+    return fallback_static
+
+
+def derive_symbols(commits_list, repo_path):
+    # Symbols touched by the fix, read from the fix's own diff.
+    # Takes the same commits_list shape as get_affected_files_for_commits (the
+    # sibling helper in this file) rather than a raw range string: the callers
+    # hold matching_commits already, and re-deriving a range would duplicate the
+    # #323 target-resolution logic that built it.
+    pairs = []
+    stats = {'hunks': 0, 'header': 0, 'backscan': 0, 'unresolved': 0}
+    for c in commits_list:
+        sha = c.get('sha', '') if isinstance(c, dict) else str(c)
+        if not sha or not os.path.isdir(repo_path):
+            continue
+        res = subprocess.run(['git', '-C', repo_path, 'show', '--format=', '--unified=0', sha],
+                             capture_output=True, text=True)
+        if res.returncode != 0 or not res.stdout:
+            continue
+        cur_file = None
+        old_lines = None
+        for line in res.stdout.split('\n'):
+            if line.startswith('+++ b/'):
+                cur_file = line[6:].strip()
+                old_lines = None
+                continue
+            if not line.startswith('@@'):
+                continue
+            m = _HUNK_RE.match(line)
+            if not m:
+                continue
+            stats['hunks'] += 1
+            fm = _FN_DECL_RE.search(m.group(2).strip())
+            if fm:
+                stats['header'] += 1
+                pairs.append((cur_file, fm.group(1)))
+                continue
+            if old_lines is None and cur_file:
+                old_lines = _show_at_rev(sha, cur_file, repo_path).split('\n')
+            sym = _nearest_enclosing_fn(old_lines or [], int(m.group(1)) - 1)
+            if sym:
+                stats['backscan'] += 1
+            else:
+                stats['unresolved'] += 1
+            pairs.append((cur_file, sym))
+    return pairs, stats
+
+
+def subject_present_upstream(pairs, repo_path, base_ref='adolfousier/main'):
+    # FILE-SCOPED subject test: a symbol counts only when it resolves in the
+    # UPSTREAM copy of the SAME file. A global `git grep -c S <base_ref> -- src/`
+    # is satisfied by generic names (initialize, create_job, update_job and the
+    # function-local CHECKED all match upstream trivially), so a fix whose real
+    # subject is fork-only could ride one of them into eligibility. Scoping to
+    # the same file removes every cross-file match; a generic name that also
+    # exists in the same upstream file remains the residual risk, which is why
+    # the orphan paths are still reported as ADVISORY for the harvester to read.
+    cache = {}
+    present, absent = [], []
+    for f_path, sym in pairs:
+        if not sym or not f_path:
+            continue
+        if f_path not in cache:
+            res = subprocess.run(['git', '-C', repo_path, 'show', '%s:%s' % (base_ref, f_path)],
+                                 capture_output=True, text=True)
+            cache[f_path] = res.stdout if res.returncode == 0 else None
+        body = cache[f_path]
+        if body is not None and re.search(r'(?<![A-Za-z0-9_])' + re.escape(sym) + r'(?![A-Za-z0-9_])', body):
+            present.append((f_path, sym))
+        else:
+            absent.append((f_path, sym))
+    return present, absent
+
+def issue_subject_upstream(iss, repo_path, base_ref='adolfousier/main'):
+    # Class-2 SUB-RULE (#365): the provenance lookup answers "which fork issue
+    # introduced this path?" — never "is that issue's work upstream yet?".
+    #
+    # #341 is the live instance. Its one orphan path carries an introducing
+    # issue (#148), and #148's subsystem IS upstream: the validator was deleted
+    # there deliberately (5a1cedb2e, Issue-Ref: #148) and the replacement landed
+    # upstream via PR #1497 (merged 2026-09-10). A path left behind by an
+    # ALREADY-HARVESTED parent is not a held child. Refusing it as
+    # HELD_PARENT_UNHARVESTED blocks a standalone fix outright AND owes an
+    # --add-blocked-by link to a parent that has already landed — the link the
+    # issue-linking law would then demand for no reason.
+    #
+    # Reuses the fix's own derivation on the introducing issue's commits, so
+    # both classes share ONE definition of "subject present" (DRY): the
+    # mechanism that decides the fix's own subject decides the parent's.
+    #
+    # True = parent harvested (fall through to the class-3 subject test)
+    # False = parent still fork-only (refuse HELD_PARENT_UNHARVESTED)
+    # None = undeterminable, no anchored commits (callers read as unharvested:
+    #        the gate never loosens on missing evidence)
+    try:
+        shas = oc_claims.resolve_issue_commits(repo_path, iss)
+    except Exception:
+        return None
+    if not shas:
+        return None
+    pairs, _stats = derive_symbols(shas, repo_path)
+    present, _absent = subject_present_upstream(pairs, repo_path, base_ref)
+    return bool([1 for _f, sym in present if sym])
 
 def get_active_claims(ledger_file, repo_path=None):
     if not os.path.exists(ledger_file):
@@ -748,9 +918,44 @@ if action == 'check':
                 print('REFUSED: Target %s touches files of active lane %s claim #%s [HELD_IN_FLIGHT_LANE: %s]' % (target, c_uuid, c_iss or '?', overlap_sample))
                 sys.exit(1)
 
-    # 4. UPSTREAM FILE EXISTENCE & FORK PROVENANCE (UPSTREAM-VOID / HELD_PARENT_UNHARVESTED)
-    if target_files and repo_path and os.path.isdir(repo_path):
+    # 4. UPSTREAM SUBJECT EXISTENCE & FORK PROVENANCE
+    #    (UPSTREAM_VOID / HELD_PARENT_UNHARVESTED / orphan ADVISORY)
+    #
+    # The operative question is whether the fix's SUBJECT exists upstream, not
+    # whether every touched FILE does (#365; HQ ruling 2026-09-18, v0.4.201,
+    # triage.md "Closure predicate for fork-only base-fault fixes"). The old
+    # file test refused any unit touching a path absent from adolfousier/main,
+    # which hard-stopped #341 — a standalone fix whose one absent file is a test
+    # it merely extends — and could never be cleared, because the provenance
+    # lookup reads the path's ADD commit and the fork-main synthesis commit
+    # carries no issue reference.
+    #
+    # The FILE test survives only as the provenance lookup that separates a
+    # genuine fork-only child (HELD_PARENT_UNHARVESTED) from an orphan path
+    # (ADVISORY, non-blocking). Fail-closed: nothing loosens unless the subject
+    # is positively established from the fix's own diff.
+    if matching_commits and repo_path and os.path.isdir(repo_path) and ref_exists('adolfousier/main', repo_path) and commits_present(matching_commits, repo_path):
         base_ref = 'adolfousier/main'
+        subject_pairs, subject_stats = derive_symbols(matching_commits, repo_path)
+        present_pairs, absent_pairs = subject_present_upstream(subject_pairs, repo_path, base_ref)
+        present_syms = sorted({s for _, s in present_pairs if s})
+        absent_syms = sorted({s for _, s in absent_pairs if s})
+
+        if not present_syms:
+            # No subject symbol resolves upstream: either the fix's substance is
+            # fork-only (a genuine refusal) or the derivation found nothing to
+            # test (inconclusive). Both refuse, and the refusal names what was
+            # tested so the lane can tell which case it is.
+            tested = ', '.join(absent_syms[:6]) or 'none derived'
+            print('REFUSED: Target %s has no subject symbol present in %s [UPSTREAM_VOID: tested %s]' % (target, base_ref, tested))
+            sys.exit(1)
+
+        # Per-hunk packaging advisory: a hunk whose symbol does not resolve
+        # upstream has no target there and is dropped at packaging — an
+        # informational outcome, never a gate failure.
+        for f_path, sym in sorted(set(absent_pairs)):
+            print('ADVISORY: hunk inside fork-only symbol — dropped at packaging (%s :: %s)' % (f_path, sym))
+
         file_actions = get_affected_file_actions_for_commits(matching_commits, repo_path)
         for f_path, actions in file_actions.items():
             if any(a in ('D', 'M') for a in actions):
@@ -758,10 +963,19 @@ if action == 'check':
                 if not exists_upstream:
                     intro_sha, intro_iss, intro_subj = check_fork_path_provenance(f_path, repo_path)
                     if intro_iss and target_iss is not None and intro_iss != target_iss:
-                        print('REFUSED: Target %s path %s was introduced by unharvested fork issue #%s (%s) and does not exist in %s [HELD_PARENT_UNHARVESTED]' % (target, f_path, intro_iss, intro_sha[:8] if intro_sha else '?', base_ref))
-                        sys.exit(1)
-                    print('REFUSED: Target %s path %s does not exist in %s [UPSTREAM_VOID]' % (target, f_path, base_ref))
-                    sys.exit(1)
+                        # Class-2 SUB-RULE (#365): the refusal needs the
+                        # introducing issue to be STILL unharvested. A path left
+                        # behind by an already-harvested parent is not a held
+                        # child — it falls through to the class-3 subject test
+                        # (which already passed for this unit, or we would not
+                        # be here) and reports as an advisory instead.
+                        parent_harvested = issue_subject_upstream(intro_iss, repo_path, base_ref)
+                        if parent_harvested is not True:
+                            print('REFUSED: Target %s path %s was introduced by unharvested fork issue #%s (%s) and does not exist in %s [HELD_PARENT_UNHARVESTED]' % (target, f_path, intro_iss, intro_sha[:8] if intro_sha else '?', base_ref))
+                            sys.exit(1)
+                        print('ADVISORY: orphan path %s (absent upstream) — parent #%s already harvested; port decision required' % (f_path, intro_iss))
+                        continue
+                    print('ADVISORY: orphan path %s (absent upstream) — port decision required' % f_path)
 
     if closed_match:
         num = closed_match['pr']
@@ -1018,6 +1232,59 @@ cleanup_selftest() {
   fi
 }
 
+# --- Gate-4 subject-predicate fixture (#365) ---------------------------------
+# Builds a REAL git repo whose upstream ref (`adolfousier/main`) and fork range
+# (`adolfousier/main..origin/main`) exercise gate 4 end to end. The offline
+# selftest's synthetic commit dicts cannot: gate 4 derives symbols from real
+# diffs, so a fixture that only fakes commit metadata would test nothing.
+#
+# Shape (target #901, orphan path src/orphan.rs introduced by #900):
+#   A  base commit            src/base.rs  -> upstream copy (adolfousier/main)
+#   B  add src/orphan.rs      Issue-Ref #900   (the orphan's provenance)
+#   C  parent #900's work     mode=harvested   -> inside fn base_fn  (upstream-present symbol)
+#                             mode=unharvested -> inside fn orphan_fn (fork-only symbol)
+#   D  target #901's fix      inside fn base_fn AND src/orphan.rs (M) -> gate 4's file loop
+#
+# `$1` = repo dir, `$2` = harvested|unharvested.
+build_gate4_fixture() {
+  _fx_dir="$1"
+  _fx_mode="$2"
+  mkdir -p "$_fx_dir/src"
+  git -C "$_fx_dir" init -q
+  git -C "$_fx_dir" config user.name fixture
+  git -C "$_fx_dir" config user.email fixture@example.invalid
+  git -C "$_fx_dir" config commit.gpgsign false
+
+  printf 'pub fn base_fn() -> u8 {\n    1\n}\n' > "$_fx_dir/src/base.rs"
+  git -C "$_fx_dir" add -A
+  git -C "$_fx_dir" commit -q -m "base"
+  _fx_a="$(git -C "$_fx_dir" rev-parse HEAD)"
+  git -C "$_fx_dir" update-ref refs/remotes/adolfousier/main "$_fx_a"
+
+  printf 'pub fn orphan_fn() -> u8 {\n    2\n}\n' > "$_fx_dir/src/orphan.rs"
+  git -C "$_fx_dir" add -A
+  git -C "$_fx_dir" commit -q -m "add fork-only helper" --trailer "Issue-Ref: leshchenko1979/opencrabs#900"
+
+  if [ "$_fx_mode" = "harvested" ]; then
+    # Parent work lands in an upstream-present symbol -> parent HARVESTED.
+    printf 'pub fn base_fn() -> u8 {\n    3\n}\n' > "$_fx_dir/src/base.rs"
+  else
+    # Parent work lands only in the fork-only symbol -> parent UNHARVESTED.
+    printf 'pub fn orphan_fn() -> u8 {\n    4\n}\n' > "$_fx_dir/src/orphan.rs"
+  fi
+  git -C "$_fx_dir" add -A
+  git -C "$_fx_dir" commit -q -m "parent work" --trailer "Issue-Ref: leshchenko1979/opencrabs#900"
+
+  # Target's own fix: one upstream-present symbol (so class 3 passes) plus a
+  # modification to the orphan path (so gate 4's file loop reaches class 2).
+  printf 'pub fn base_fn() -> u8 {\n    5\n}\n' > "$_fx_dir/src/base.rs"
+  printf 'pub fn orphan_fn() -> u8 {\n    6\n}\n' > "$_fx_dir/src/orphan.rs"
+  git -C "$_fx_dir" add -A
+  git -C "$_fx_dir" commit -q -m "target fix" --trailer "Issue-Ref: leshchenko1979/opencrabs#901"
+
+  git -C "$_fx_dir" update-ref refs/remotes/origin/main "$(git -C "$_fx_dir" rev-parse HEAD)"
+}
+
 cmd_selftest() {
   selftest_tmp="$(mktemp -d)"
   trap cleanup_selftest EXIT
@@ -1034,6 +1301,9 @@ cmd_selftest() {
   # target file EXISTS (it is guarded by `[ -f "$REGISTRY_FILE" ]`), so without
   # this the record case silently no-ops.
   printf '{"manual_records": []}\n' > "$mock_reg"
+  # #365: an EMPTY ledger for the gate-4 fixtures. Without it the engine reads
+  # the LIVE workers-ledger and a real claim could fence the synthetic target.
+  printf '{"events": []}\n' > "$selftest_tmp/mock_ledger_empty.json"
   local mock_ledger="$selftest_tmp/mock_ledger.json"
   local mock_squashed="$selftest_tmp/mock_squashed.json"
 
@@ -1512,6 +1782,54 @@ PROSEEOF
     ok "record is idempotent (re-record updates, no duplicate)"
   else
     echo "  bad  - record idempotency expected 1 dup-unit row, got $n"
+    return 1
+  fi
+
+  # 25. #365 class-2 sub-rule: a path introduced by an ALREADY-HARVESTED parent
+  #     must NOT refuse HELD_PARENT_UNHARVESTED — the parent's subsystem is
+  #     upstream, so the path falls through to the class-3 subject test (#341's
+  #     live shape: validator deleted upstream by #148, its subsystem shipped).
+  fx_harvested="$selftest_tmp/fx_harvested"
+  build_gate4_fixture "$fx_harvested" harvested
+  printf '{"manual_records": []}\n' > "$selftest_tmp/mock_reg_fx.json"
+  rc=0
+  # ENV LEAKAGE GUARD: this suite EXPORTS OC_HARVEST_MOCK_COMMITS and
+  # _SQUASHED (see the export block above), and an exported mock COMMIT LIST
+  # wins over the fixture repo inside get_ahead_commits. This case therefore
+  # read the suite's synthetic commit list, found no #901 in it, and left
+  # matching_commits EMPTY — so gate 4 was skipped outright: case 25 passed
+  # VACUOUSLY and case 26 could never fail for the right reason. Blanking both
+  # makes the engine read the fixture repo, which is what the case is about.
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_harvested" "$selftest_tmp/mock_reg_fx.json" "901" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    ok "class-2 sub-rule: harvested parent falls through -> ELIGIBLE"
+  else
+    echo "  bad  - harvested-parent fixture expected rc=0 ELIGIBLE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 26. NEGATIVE CONTROL for 25: the same fixture with the parent's work landing
+  #     ONLY in the fork-only symbol must still refuse — the sub-rule loosens
+  #     nothing when the parent is genuinely unharvested.
+  fx_unharvested="$selftest_tmp/fx_unharvested"
+  build_gate4_fixture "$fx_unharvested" unharvested
+  rc=0
+  # ENV LEAKAGE GUARD: this suite EXPORTS OC_HARVEST_MOCK_COMMITS and
+  # _SQUASHED (see the export block above), and an exported mock COMMIT LIST
+  # wins over the fixture repo inside get_ahead_commits. This case therefore
+  # read the suite's synthetic commit list, found no #901 in it, and left
+  # matching_commits EMPTY — so gate 4 was skipped outright: case 25 passed
+  # VACUOUSLY and case 26 could never fail for the right reason. Blanking both
+  # makes the engine read the fixture repo, which is what the case is about.
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_unharvested" "$selftest_tmp/mock_reg_fx.json" "901" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+    ok "class-2 sub-rule negative control: unharvested parent still REFUSED"
+  else
+    echo "  bad  - unharvested-parent fixture expected rc=1 HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
     return 1
   fi
 
