@@ -8,8 +8,20 @@
 # it via gh --body-file ONLY — the inline-heredoc shell-substitution class
 # can never happen through this tool.
 #
-# Usage: oc-issue-log <issue-n> <sha> [--state <verification text>] [--repo <slug>] [--repo-path <dir>] [--dry-run] | --selftest
+# Usage: oc-issue-log <issue-n> <sha> [--state <verification text>] [--repo <slug>] [--repo-path <dir>] [--dry-run] [--force] | --selftest
 # Exit:  0 posted / 2 usage / 3 gh-fail / 4 no repo at --repo-path
+#        0 is ALSO returned when the comment for this (issue, sha) already
+#        exists — see the idempotency note below; both callers treat it as
+#        success ("the mandatory note for this sha is on the issue").
+#
+# IDEMPOTENT per (issue, sha) since issue #392. Before posting, the existing
+# comments are read and searched for the body's own full-sha marker; a hit
+# skips the post and exits 0. `--force` bypasses the check for a deliberate
+# re-post. A FAILED read does not skip — it fails OPEN to posting, because the
+# per-commit note is mandatory and a duplicate is cheaper than a missing note.
+# This guard lives at the posting authority because the tool has two callers
+# (oc-ship-chain LEG2, oc-commit); a caller-side guard would cover only one.
+#
 # Body composition: git log -1 subject + trailers (Session-Id, Issue-Ref) +
 # --state text; written to a mktemp body file; no backticks, no substitutions.
 #
@@ -28,18 +40,22 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-issue-log" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
-usage() { echo "usage: $0 <issue-n> <sha> [--state <text>] [--repo <slug>] [--repo-path <dir>] [--dry-run] | --selftest" >&2; exit 2; }
+usage() { echo "usage: $0 <issue-n> <sha> [--state <text>] [--repo <slug>] [--repo-path <dir>] [--dry-run] [--force] | --selftest" >&2; exit 2; }
 die() { echo "oc-issue-log: $2" >&2; exit "$1"; }
 
 FORK="${OC_ISSUE_LOG_REPO:-leshchenko1979/opencrabs}"
 REPO_PATH="${OC_ISSUE_LOG_REPO_PATH:-$PWD}"
-ISSUE=""; SHA=""; STATE=""; DRY=0
+ISSUE=""; SHA=""; STATE=""; DRY=0; FORCE=0
+# GH_BIN is overridable so the idempotency guard can be exercised hermetically
+# (issue #392 selftest legs) without reaching the network.
+GH_BIN="${OC_ISSUELOG_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --state) STATE="${2:-}"; shift 2 ;;
     --repo) FORK="${2:-}"; shift 2 ;;
     --repo-path) REPO_PATH="${2:-}"; [ -n "$REPO_PATH" ] || usage; shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    --force) FORCE=1; shift ;;
     --selftest)
       d="$(mktemp -d)"
       git -C "$d" init -q 2>/dev/null; git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "test subject" 2>/dev/null
@@ -60,6 +76,43 @@ while [ $# -gt 0 ]; do
       # against an unrelated tree and never masquerade as rc 3 not-found.
       (cd / && OC_TOOLS_NOLOG=1 bash "$_SELF" 1 "$s" --repo-path "$d/not-a-repo" --dry-run) >/dev/null 2>&1 && rc3=0 || rc3=$?
       [ "$rc3" = 4 ] || { echo "selftest: bad --repo-path expected rc 4, got $rc3" >&2; exit 1; }
+      # ---- idempotency legs (issue #392) ------------------------------------
+      # A fake gh keeps all four legs hermetic: no network, no real comment.
+      cat > "$d/fakegh" <<'FAKEGH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "issue view")
+    [ -n "${OC_FAKE_VIEW_BODY:-}" ] && printf '%s\n' "$OC_FAKE_VIEW_BODY"
+    exit "${OC_FAKE_VIEW_RC:-0}" ;;
+  "issue comment")
+    printf 'posted\n' >> "${OC_FAKE_SENTINEL:-/dev/null}"
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+FAKEGH
+      chmod +x "$d/fakegh"
+      _il_run() { OC_TOOLS_NOLOG=1 OC_ISSUELOG_GH="$d/fakegh" OC_FAKE_SENTINEL="$d/sentinel" \
+                    bash "$_SELF" 1 "$s" --repo-path "$d" "$@"; }
+      # A. marker PRESENT -> skip: rc 0, self-reporting, and NOTHING posted.
+      rm -f "$d/sentinel"
+      a_out="$(OC_FAKE_VIEW_BODY="Implementation commit: \`$s\`" _il_run 2>&1)"; a_rc=$?
+      [ "$a_rc" = 0 ] || { echo "selftest: idempotent skip expected rc 0, got $a_rc: $a_out" >&2; exit 1; }
+      case "$a_out" in *"already posted"*) : ;; *) echo "selftest: skip did not report itself: $a_out" >&2; exit 1 ;; esac
+      [ ! -f "$d/sentinel" ] || { echo "selftest: skip STILL posted a comment" >&2; exit 1; }
+      # B. marker ABSENT -> post.
+      b_out="$(OC_FAKE_VIEW_BODY="an unrelated existing comment" _il_run 2>&1)"; b_rc=$?
+      [ "$b_rc" = 0 ] || { echo "selftest: post expected rc 0, got $b_rc: $b_out" >&2; exit 1; }
+      [ -f "$d/sentinel" ] || { echo "selftest: absent marker did NOT post" >&2; exit 1; }
+      # C. --force overrides a present marker.
+      rm -f "$d/sentinel"
+      OC_FAKE_VIEW_BODY="Implementation commit: \`$s\`" _il_run --force >/dev/null 2>&1 || { echo "selftest: --force run failed" >&2; exit 1; }
+      [ -f "$d/sentinel" ] || { echo "selftest: --force did NOT post" >&2; exit 1; }
+      # D. unreadable comment list -> FAIL OPEN: post anyway, warn loudly.
+      rm -f "$d/sentinel"
+      d_out="$(OC_FAKE_VIEW_RC=1 _il_run 2>&1)"; d_rc=$?
+      [ "$d_rc" = 0 ] || { echo "selftest: fail-open expected rc 0, got $d_rc: $d_out" >&2; exit 1; }
+      [ -f "$d/sentinel" ] || { echo "selftest: failed read did NOT fail open to posting" >&2; exit 1; }
+      case "$d_out" in *"WARNING"*) : ;; *) echo "selftest: fail-open did not warn: $d_out" >&2; exit 1 ;; esac
       echo "selftest OK"; exit 0 ;;
     -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
     *) if [ -z "$ISSUE" ]; then ISSUE="$1"; elif [ -z "$SHA" ]; then SHA="$1"; else usage; fi; shift ;;
@@ -88,7 +141,46 @@ BODY="$(mktemp /tmp/oc-issue-log-body.XXXXXX.md)"
 } > "$BODY"
 
 if [ "$DRY" = "1" ]; then cat "$BODY"; rm -f "$BODY"; echo "dry-run: body composed, nothing posted"; exit 0; fi
-if gh issue comment "$ISSUE" --repo "$FORK" --body-file "$BODY"; then
+
+# ---- idempotency guard (defect fix 2026-09-19, issue #392) ------------------
+# oc-ship-chain LEG2 runs ABOVE the ship lock (tools/oc-ship-chain:766 posts,
+# :792 acquires), so a chain that dies in LEG3-LEG5 and is re-run executes LEG2
+# again with nothing serialising it — and this tool posted unconditionally, so
+# every retry added an identical comment to the same issue for the same sha
+# (live: #319 carried two for 6e26029d, 07:01Z and 07:15Z).
+#
+# The guard belongs HERE, at the posting authority, not in the caller: this tool
+# has TWO callers (oc-ship-chain LEG2 and oc-commit, which folds in the same
+# post-commit comment), so a caller-side guard protects one path and leaves the
+# other able to duplicate. Identity marker = the FULL sha inside the body's own
+# marker line, so it cannot collide across commits or with a sha prefix.
+BT='`'
+MARKER="Implementation commit: ${BT}${FULL_SHA}${BT}"
+if [ "$FORCE" = "1" ]; then
+  echo "oc-issue-log: --force given — posting without the idempotency check" >&2
+else
+  EXISTING=""; _read_ok=0
+  for _try in 1 2; do
+    if EXISTING="$("$GH_BIN" issue view "$ISSUE" --repo "$FORK" --json comments --jq '.comments[].body' 2>/dev/null)"; then
+      _read_ok=1; break
+    fi
+  done
+  if [ "$_read_ok" = "1" ]; then
+    if printf '%s\n' "$EXISTING" | grep -qF "$MARKER"; then
+      rm -f "$BODY"
+      echo "already posted: $FORK#$ISSUE carries an implementation comment for $FULL_SHA — nothing to do (idempotent; use --force to re-post)"
+      exit 0
+    fi
+  else
+    # FAIL-OPEN, deliberately. The per-commit note is MANDATORY (owner
+    # 2026-08-28 22:54Z): a duplicate comment is cosmetic, a MISSING mandatory
+    # note is a process breach. So an unreadable comment list must never turn
+    # into a silent skip — it degrades to the old post-always behaviour, loudly.
+    echo "oc-issue-log: WARNING — could not read existing comments on $FORK#$ISSUE; posting without the idempotency check (fail-open: the note is mandatory)" >&2
+  fi
+fi
+
+if "$GH_BIN" issue comment "$ISSUE" --repo "$FORK" --body-file "$BODY"; then
   rm -f "$BODY"; echo "posted implementation comment on $FORK#$ISSUE for $FULL_SHA"; exit 0
 else
   rc=$?; die 3 "gh issue comment failed (rc=$rc) — body preserved at $BODY (set OC_ISSUE_LOG_REPO if the slug is wrong)"
