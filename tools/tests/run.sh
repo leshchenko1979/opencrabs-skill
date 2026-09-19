@@ -499,6 +499,89 @@ Issue-Ref: #11"
   rm -rf "$d"
 fi
 
+# ---- 9b2. oc-attrib #407 — novelty filter (re-sha'd + empty commits) ---------
+# After a lineage rewrite the deployed range is full of commits whose change is
+# ALREADY in the baseline (a rebase re-sha's every commit) plus EMPTY commits
+# (which carry no patch-id at all). Both were attributed to their original
+# authors, so a post-swap fan-out woke every lane on every ship — 276 of 310
+# commits in the measured live range were replays. These legs pin the black-box
+# contract: RAW is untouched, --novel drops replayed + empty, --no-novel is
+# byte-identical to RAW, and a range whose every commit is filtered out is a
+# legitimate EMPTY result at rc 0 (not an error).
+section "oc-attrib #407 novelty filter (re-sha'd + empty commits)"
+run_selftest oc-attrib
+if tool oc-attrib; then
+  d="$(mktemp -d)"
+  git -C "$d" init -q -b main >/dev/null 2>&1
+  git -C "$d" config user.email t@t; git -C "$d" config user.name t
+  printf 'base\n' > "$d/base.txt"; git -C "$d" add base.txt; git -C "$d" commit -qm base
+  B0="$(git -C "$d" rev-parse HEAD)"
+  # the ORIGINAL feature commit on its own branch, absorbed into main — the
+  # baseline must CONTAIN the original, or `git cherry` cannot see its patch-id.
+  git -C "$d" checkout -q -b src
+  printf 'twin\n' > "$d/twin.txt"; git -C "$d" add twin.txt
+  git -C "$d" commit -qm "twin
+
+Session-Id: 11111111-1111-1111-1111-111111111111"
+  TWIN="$(git -C "$d" rev-parse HEAD)"
+  git -C "$d" checkout -q main
+  git -C "$d" merge -q --ff-only src
+  BASE="$(git -C "$d" rev-parse HEAD)"
+  # the tip lineage starts at B0 (the commit BEFORE the original), never at the
+  # baseline itself: cherry-picking onto the baseline would be a no-op, and
+  # cherry-picking onto a tree that already contains the change commits nothing
+  # at all.
+  git -C "$d" checkout -q -b tip "$B0"
+  # a genuinely NOVEL commit lands FIRST — it also gives the replay a different
+  # parent (and tree) than the original, so the cherry-pick yields a NEW sha
+  # instead of a byte-identical commit (same author, same message, same second).
+  printf 'pre\n' > "$d/pre.txt"; git -C "$d" add pre.txt
+  git -C "$d" commit -qm "pre
+
+Session-Id: 22222222-2222-2222-2222-222222222222"
+  NOVEL="$(git -C "$d" rev-parse HEAD)"
+  # the REPLAY: same patch, new sha — exactly what a rebase produces
+  git -C "$d" cherry-pick "$TWIN" >/dev/null 2>&1 || bad "#407 fixture: cherry-pick failed"
+  REPLAY="$(git -C "$d" rev-parse HEAD)"
+  # an EMPTY commit — no patch-id, so `git cherry` can never match it
+  git -C "$d" commit -q --allow-empty -m empty
+  EMPTY="$(git -C "$d" rev-parse HEAD)"
+  [ "$REPLAY" != "$TWIN" ] && ok "#407 fixture: replay carries a distinct sha" \
+    || bad "#407 fixture: replay reproduced the twin sha (no twin to detect)"
+  S_TWIN="$(printf '%s' "$TWIN" | cut -c1-7)"
+  S_REPLAY="$(printf '%s' "$REPLAY" | cut -c1-7)"
+  S_NOVEL="$(printf '%s' "$NOVEL" | cut -c1-7)"
+  S_EMPTY="$(printf '%s' "$EMPTY" | cut -c1-7)"
+  RAW="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range "$BASE..tip" 2>/dev/null)"
+  NOV="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range "$BASE..tip" --novel 2>"$d/nov.err")"; nrc=$?
+  [ "$nrc" -eq 0 ] && ok "#407 --novel exits 0" || bad "#407 --novel rc=$nrc want 0"
+  [ "$(printf '%s\n' "$RAW" | wc -l)" -eq 3 ] && ok "#407 RAW range keeps all 3 commits (replay+novel+empty)" \
+    || bad "#407 RAW rows=$(printf '%s\n' "$RAW" | wc -l) want 3"
+  [ "$(printf '%s\n' "$NOV" | wc -l)" -eq 1 ] && ok "#407 --novel keeps exactly the 1 novel commit" \
+    || bad "#407 --novel rows=$(printf '%s\n' "$NOV" | wc -l) want 1 (raw=3)"
+  printf '%s\n' "$NOV" | grep -q "$S_NOVEL" && ok "#407 --novel keeps the novel commit" || bad "#407 --novel dropped the novel commit"
+  printf '%s\n' "$NOV" | grep -q "$S_REPLAY" && bad "#407 --novel KEPT the replayed twin (patch-id equivalence missed)" || ok "#407 --novel drops the replayed twin"
+  printf '%s\n' "$NOV" | grep -q "$S_EMPTY" && bad "#407 --novel KEPT the empty commit" || ok "#407 --novel drops the empty commit"
+  printf '%s\n' "$RAW" | grep -q "$S_REPLAY" && ok "#407 RAW still shows the replayed twin (filter is opt-in)" || bad "#407 RAW lost the replayed twin"
+  grep -q "3 raw, 1 replayed, 1 empty, 1 contributing" "$d/nov.err" && ok "#407 stderr accounting names raw/replayed/empty/contributing" \
+    || bad "#407 stderr accounting missing: $(cat "$d/nov.err" 2>/dev/null)"
+  NN="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range "$BASE..tip" --no-novel 2>/dev/null)"
+  [ "$NN" = "$RAW" ] && ok "#407 --no-novel is byte-identical to RAW" || bad "#407 --no-novel != RAW"
+  # an ALL-REPLAYED tip — nothing but a re-sha'd original plus an empty commit,
+  # against a baseline that already carries both — must yield ZERO rows at rc 0.
+  # This is the case oc-deploy's fan-out has to read as "nothing to notify"
+  # rather than as an attrib breakdown (issue #407 instance B).
+  git -C "$d" checkout -q -b tip2 "$B0"
+  git -C "$d" cherry-pick "$TWIN" >/dev/null 2>&1 || bad "#407 fixture: tip2 cherry-pick failed"
+  git -C "$d" commit -q --allow-empty -m "chore: sign tip2"
+  ALLF="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range "$BASE..tip2" --novel 2>"$d/allf.err")"; arc=$?
+  [ "$arc" -eq 0 ] && [ -z "$ALLF" ] && ok "#407 all-replayed range -> rc 0 with no rows" \
+    || bad "#407 all-replayed range rc=$arc rows=$(printf '%s\n' "$ALLF" | wc -l) want rc 0 / 0 rows"
+  grep -q "0 contributing" "$d/allf.err" && ok "#407 all-replayed accounting reports 0 contributing" \
+    || bad "#407 all-replayed accounting missing: $(cat "$d/allf.err" 2>/dev/null)"
+  rm -rf "$d"
+fi
+
 # ---- 9c. oc-consent-check — RETIRED 2026-08-28 (owner order 18:50Z: consent
 #         process eliminated; tool archived to tools/archive/). Tests removed.
 section "oc-consent-check (RETIRED — skipped)"

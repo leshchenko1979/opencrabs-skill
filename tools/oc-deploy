@@ -634,14 +634,14 @@ case "$*" in
   *actions/runs/998/jobs*) echo '{"jobs":[{"name":"ORDER gates (2f604e56...)"}]}' ;;
   *actions/runs/998*) echo '{"status":"completed","conclusion":"success"}' ;;
   *workflows/quick-build-linux.yml/runs*) echo '{"workflow_runs":[{"id":111}]}' ;;
-  *actions/runs/222/jobs*|*actions/runs/555/jobs*|*actions/runs/789/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (cccccccccccccccccccccccccccccccccccccccc, telegram)"}]}' ;;
+  *actions/runs/222/jobs*|*actions/runs/555/jobs*|*actions/runs/789/jobs*|*actions/runs/790/jobs*|*actions/runs/791/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (cccccccccccccccccccccccccccccccccccccccc, telegram)"}]}' ;;
   *actions/runs/333/jobs*) echo '{"jobs":[{"name":"ORDER gates"},{"name":"Linux amd64 (dddddddddddddddddddddddddddddddddddddddd, telegram)"}]}' ;;
   *actions/runs/668/jobs*) echo '{"jobs":[{"name":"Linux amd64 (ffffffffffffffffffffffffffffffffffffffff, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9002"}]}' ;;
   *check-runs/9002/annotations*) echo '[]' ;;
   *actions/runs/666/jobs*|*actions/runs/667/jobs*|*actions/runs/669/jobs*|*actions/runs/670/jobs*) echo '{"jobs":[{"name":"ORDER gates","conclusion":"success"},{"name":"Linux amd64 (eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee, telegram)","conclusion":"failure","check_run_url":"https://api.github.com/repos/leshchenko1979/opencrabs/check-runs/9001"}]}' ;;
   *check-runs/9001/annotations*) echo '[{"path":"bad.txt","start_line":3}]' ;;
   *actions/runs/444*) echo '{"status":"in_progress","conclusion":null}' ;;
-  *actions/runs/222*|*actions/runs/333*|*actions/runs/555*|*actions/runs/789*) echo '{"status":"completed","conclusion":"success"}' ;;
+  *actions/runs/222*|*actions/runs/333*|*actions/runs/555*|*actions/runs/789*|*actions/runs/790*|*actions/runs/791*) echo '{"status":"completed","conclusion":"success"}' ;;
   *actions/runs/66*|*actions/runs/67*|*actions/runs/77*|*actions/runs/88*)
     RED=""
     case "$*" in *actions/runs/66*|*actions/runs/67*|*actions/runs/77*|*actions/runs/88*) RED=1 ;; esac
@@ -1076,6 +1076,35 @@ NSTUB2
   check_has "fanout-dry-counts" "$out" "notified=2 skipped=0"   # verb never consulted in dry-run: dead uuids count as notified
   [ "$(wc -l < "$NOTIFY_LOG")" = "$NL2" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: dry-run called the verb"; }
   jq -e '.runs["555"]' "$SD/fanout.state" >/dev/null 2>&1 && { fail=$((fail+1)); echo "SELFTEST FAIL: dry-run marked done"; } || pass=$((pass+1))
+  # 17e2. #407: an oc-attrib FAILURE (rc != 0) still dies rc 3 and names the real
+  #       rc — the new empty-result tolerance must not swallow a broken backend.
+  printf '#!/usr/bin/env bash\necho "oc-attrib: bad range" >&2\nexit 5\n' > "$SD/tools/attrib-stub-fail"
+  chmod +x "$SD/tools/attrib-stub-fail"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub-fail" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 790 2>&1)"; rc=$?
+  check_rc "fanout-attrib-fail-rc" $rc 3
+  check_has "fanout-attrib-fail-names-rc" "$out" "rc=5"
+  FJAF="$(ls -t "$SD/oc-deploy/journal/"fanout-790-*.jsonl 2>/dev/null | head -1)"
+  grep -q '"step":"contributors"' "$FJAF" 2>/dev/null && grep -q '"rc":5' "$FJAF" 2>/dev/null \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: attrib-fail journal lacks rc=5 contributors row"; }
+  jq -e '.runs["790"]' "$SD/fanout.state" >/dev/null 2>&1 && { fail=$((fail+1)); echo "SELFTEST FAIL: attrib-fail marked done"; } || pass=$((pass+1))
+  # 17e3. #407: rc 0 with ZERO rows is GREEN (all-replayed / all-empty range after
+  #       the novelty filter), never rc 3. The filter summary must land in the
+  #       journal so "no rows" is legible as "nothing novel".
+  printf '#!/usr/bin/env bash\necho "oc-attrib: novelty filter 0000000..ccccccc: 310 raw, 276 replayed, 34 empty, 0 contributing" >&2\nexit 0\n' > "$SD/tools/attrib-stub-empty"
+  chmod +x "$SD/tools/attrib-stub-empty"
+  local NL3; NL3="$(wc -l < "$NOTIFY_LOG")"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub-empty" \
+    OC_DEPLOY_NOTIFY="$SD/notify" "$SELF_BIN" fanout --run 791 2>&1)"; rc=$?
+  check_rc "fanout-empty-attrib-rc" $rc 0
+  check_has "fanout-empty-attrib-line" "$out" "no novel commits in range"
+  check_has "fanout-empty-attrib-end" "$out" "notified=0 skipped=0"
+  [ "$(wc -l < "$NOTIFY_LOG")" = "$NL3" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: empty-attrib case still notified"; }
+  FJE="$(ls -t "$SD/oc-deploy/journal/"fanout-791-*.jsonl 2>/dev/null | head -1)"
+  grep -q '"novel":0' "$FJE" 2>/dev/null && grep -q '276 replayed' "$FJE" 2>/dev/null \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: empty-attrib journal lacks the filter summary"; }
+  jq -e '.runs["791"].notified == 0' "$SD/fanout.state" >/dev/null 2>&1 \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: legitimately-empty fan-out not marked done"; }
   # 17f. RED leg fixture 1 — culprit blamed, innocent run owner untouched, suspect cc
   git init -q --bare -b main "$T/red1.git"
   git init -q -b main "$T/redc1"; git -C "$T/redc1" remote add origin "$T/red1.git"; git -C "$T/redc1" config user.email t@t; git -C "$T/redc1" config user.name t
@@ -1864,14 +1893,32 @@ green_leg() { # $1=run id $2=built sha — one notify per contributing session
   prev="$(jq -r '.prev_sha // empty' "$DEPLOYED_META" 2>/dev/null)"
   feat="$(jq -r '.features // "-"' "$DEPLOYED_META" 2>/dev/null)"
   range="${prev:-?}..${bsha}"
-  local ATTRIB_RC=0 ATTRIB_OUT=""
+  local ATTRIB_RC=0 ATTRIB_OUT="" ATTRIB_ERR ATTRIB_SUM
   # E-F3 (v0.4.96, lens E): single projection shape — call oc-attrib --contributors directly,
   # no private awk copy of the TSV projection (column drift in oc-attrib used to re-break fanout).
   # Duty-4 P-01 (v0.4.133): pass --first-parent so upstream merge ancestry is NOT traversed into
   # historical foreign trailers (prevents falsely waking completed lanes on merge syncs).
-  ATTRIB_OUT="$("$ATTRIB" --repo "$REPO_DIR" --deployed --ledger "$LEDGER" --contributors --first-parent 2>/dev/null)" || ATTRIB_RC=$?
+  # #407: oc-attrib's stderr carries the novelty-filter accounting (raw/replayed/empty/
+  # contributing); it is captured rather than discarded so the journal records WHY a range
+  # produced no rows. oc-attrib never exits 0 with rows on stdout when it failed.
+  ATTRIB_ERR="$(mktemp)" || die 3 "fanout: cannot create stderr capture for oc-attrib"
+  ATTRIB_OUT="$("$ATTRIB" --repo "$REPO_DIR" --deployed --ledger "$LEDGER" --contributors --first-parent 2>"$ATTRIB_ERR")" || ATTRIB_RC=$?
   rows="$ATTRIB_OUT"
-  [ -n "$rows" ] || { jline contributors 3 "{\"range\":\"$range\",\"error\":\"attrib-fail-or-empty\"}"; die 3 "fanout: oc-attrib returned nothing for deployed range $range"; }
+  ATTRIB_SUM="$(tr '\n' ' ' < "$ATTRIB_ERR" 2>/dev/null | sed 's/[[:space:]]*$//')"
+  rm -f "$ATTRIB_ERR"
+  if [ "$ATTRIB_RC" -ne 0 ]; then
+    jline contributors 3 "{\"range\":\"$range\",\"rc\":$ATTRIB_RC,\"stderr\":$(printf '%s' "$ATTRIB_SUM" | jq -Rs .)}"
+    die 3 "fanout: oc-attrib failed (rc=$ATTRIB_RC) for deployed range $range"
+  fi
+  # #407: rc 0 with ZERO rows is a legitimate green outcome, not a failure — after the
+  # novelty filter an all-replayed / all-empty ship leaves nothing to attribute. The
+  # filter summary goes to the journal so "no rows" is auditable as "nothing novel"
+  # rather than indistinguishable from a silent attrib breakdown.
+  if [ -z "$rows" ]; then
+    jline contributors 0 "{\"range\":\"$range\",\"novel\":0,\"stderr\":$(printf '%s' "$ATTRIB_SUM" | jq -Rs .)}"
+    echo "fanout green: no novel commits in range $range — nothing to notify"
+    return 0
+  fi
   sessions="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$/ {print $1}' | LC_ALL=C sort -u)"
   jline contributors 0 "{\"range\":\"$range\",\"sessions\":[$(printf '%s\n' "$sessions" | sed '/^$/d' | sed 's/.*/"&"/' | paste -sd, -)]}"
   if [ -z "$sessions" ]; then
