@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# Mutation guard for #307 — proves the anchored Issue-Ref negative controls are
-# LIVE, not vacuous.
+# Mutation guards for #307 and #365 — prove the negative controls are LIVE, not
+# vacuous.
 #
-# A negative control that cannot fail is decoration. This guard reverts the
-# anchored matcher to the pre-#307 unanchored `git log --grep=#N` on a COPY of
-# the tools tree and requires every selftest to FAIL on that copy while the
-# unmutated copy stays green. If a prose-only control passes under the mutant,
-# it is not testing what it claims to.
+# A negative control that cannot fail is decoration. Each section reverts one
+# shipped behaviour on a COPY of the tools tree and requires the selftests to
+# FAIL on that copy while the unmutated copy stays green. If a control passes
+# under the mutant, it is not testing what it claims to.
 #
-# Covers all three control sites:
+# #307 — anchored Issue-Ref fencing. Reverts the matcher to the pre-#307
+# unanchored `git log --grep=#N`. Covers all three control sites:
 #   (1) tools/oc-harvest-census --selftest
 #   (2) tools/oc-harvest-dispatch --selftest   (legs 11e/11f)
 #   (3) tools/tests/run.sh §00c lib/oc_claims unit cases
+#
+# #365 — the gate-4 SUBJECT predicate (symbol derivation + the declared-subject
+# fallback). §4 reverts that predicate four ways, one per gate-4 shape, and
+# requires the shape's own leg to be the FIRST failure on its mutant. The legs
+# abort the suite on first failure, so "first bad leg == the leg aimed at" is
+# the strongest assertion available without splitting the suite.
 #
 # Harness guards (AGENTS.md §Repro harnesses): explicit tool path, recursion
 # guard, process budget cap.
@@ -86,10 +92,11 @@ else
 fi
 
 # --- run a selftest, report its rc -----------------------------------------
-run_st() {  # run_st <label> <tool-path> -> echoes rc
-  local label="$1" tool="$2" rc=0 out=""
+run_st() {  # run_st <label> <tool-path> [outfile] -> echoes rc
+  local label="$1" tool="$2" outfile="${3:-}" rc=0 out=""
   out="$(timeout 600 "$tool" --selftest 2>&1)" || rc=$?
   printf '%s' "$out" > "$WORK/last.out"
+  if [ -n "$outfile" ]; then printf '%s' "$out" > "$outfile"; fi
   echo "$rc"
 }
 
@@ -135,9 +142,120 @@ else
   grep -m1 -E '#307' "$WORK/unit_mut.out" | sed 's/^/         /' || true
 fi
 
+# --- (4) #365 gate-4 subject predicate --------------------------------------
+# The #365 predicate is what decides whether a fork-only fix's SUBJECT exists
+# upstream. §4 reverts it four ways -- one per gate-4 shape -- and requires each
+# shape's OWN leg to be the FIRST failure on its mutant.
+#
+# Why "first failure" and not "all four legs": the census selftest returns 1 at
+# the first failing leg, so exactly one `bad` line is ever emitted. That makes
+# "the first bad leg is the leg aimed at" the strongest available assertion
+# without splitting the suite, and it is sufficient -- a mutant that reddened
+# some UNRELATED leg would be caught, and a mutant that reddened nothing at all
+# is caught by the rc check.
+echo
+echo "[4] #365 gate-4 subject predicate (oc-harvest-census --selftest)"
+
+base365="$WORK/base365.out"
+rc_base="$(run_st base365 "$SRC/oc-harvest-census" "$base365")"
+if [ "$rc_base" = "0" ]; then
+  ok "baseline census GREEN (rc=0, $(grep -c '^  ok   - ' "$base365") legs)"
+else
+  bad "baseline census rc=$rc_base (expected 0)"
+fi
+
+for label in case_a_dropped refuse_all_absent parent_number_dropped empty_derivation_unnamed; do
+  case "$label" in
+    case_a_dropped)           want_ok="#253 shape:"            want_bad="subject-absent fixture" ;;
+    refuse_all_absent)        want_ok="#341 shape:"            want_bad="orphan-subject fixture" ;;
+    parent_number_dropped)    want_ok="parent-harvested shape:" want_bad="harvested-parent fixture" ;;
+    empty_derivation_unnamed) want_ok="inconclusive shape:"    want_bad="inconclusive fixture" ;;
+  esac
+
+  # The aimed leg must be GREEN on the pristine tree, or there is nothing to
+  # redden and this mutant proves nothing.
+  if ! grep -q -- "^  ok   - $want_ok" "$base365"; then
+    bad "[$label] baseline has no green '$want_ok' leg — mutant would be vacuous"
+    continue
+  fi
+
+  mut="$WORK/m365_$label"
+  rm -rf "$mut"
+  if ! cp -a "$SRC" "$mut"; then
+    bad "[$label] could not copy the tools tree"
+    continue
+  fi
+
+  if ! python3 - "$mut/oc-harvest-census" "$label" <<'PYEOF'
+import sys
+path, label = sys.argv[1], sys.argv[2]
+# ASCII-only anchors, deliberately: the census source carries em-dashes and this
+# heredoc is fed to python3 on stdin, so a non-ASCII anchor is one encoding
+# surprise away from a silent no-op.
+MUTATIONS = {
+    # revert the derivation's POSITIVE-EVIDENCE branch: an all-absent
+    # derivation stops refusing and falls through to ELIGIBLE (case (a) gone).
+    "case_a_dropped": (
+        "        if not present_syms:",
+        "        if not present_syms and not absent_syms:",
+    ),
+    # revert class 2 to a bare file-existence test: every absent path refuses,
+    # so the orphan ADVISORY shape can no longer pass.
+    "refuse_all_absent": (
+        "port decision required' % f_path)",
+        "port decision required' % f_path)\n                    sys.exit(1)",
+    ),
+    # revert the harvested-parent sub-rule's EVIDENCE: it still falls through,
+    # but the advisory stops naming the parent it consulted.
+    "parent_number_dropped": (
+        "parent #%s already harvested; port decision required' % (f_path, intro_iss))",
+        "port decision required' % f_path)",
+    ),
+    # revert the INCONCLUSIVE branch's report: the derivation is still empty,
+    # but the refusal stops saying so, so the branch is no longer identifiable.
+    "empty_derivation_unnamed": (
+        "tested = ', '.join(absent_syms[:6]) or 'none derived'",
+        "tested = ', '.join(absent_syms[:6]) or 'symbols omitted'",
+    ),
+}
+if label not in MUTATIONS:
+    sys.stderr.write("unknown mutation %r\n" % label)
+    sys.exit(2)
+anchor, repl = MUTATIONS[label]
+src = open(path).read()
+n = src.count(anchor)
+if n != 1:
+    sys.stderr.write("mutation %s: anchor occurs %d times, need exactly 1\n"
+                     % (label, n))
+    sys.exit(2)
+open(path, "w").write(src.replace(anchor, repl))
+print("  mutated: %s (anchor occurrences=%d)" % (label, n))
+PYEOF
+  then
+    bad "[$label] could not apply the mutation — guard is inert"
+    continue
+  fi
+
+  outf="$WORK/m365_$label.out"
+  rc_m="$(run_st "m365-$label" "$mut/oc-harvest-census" "$outf")"
+  if [ "$rc_m" = "0" ]; then
+    bad "[$label] mutant census PASSED — the '$want_ok' leg does not catch it"
+    continue
+  fi
+  first_bad="$(grep -m1 '^  bad  - ' "$outf" | sed 's/^  bad  - //')"
+  if [ -z "$first_bad" ]; then
+    bad "[$label] mutant rc=$rc_m but emitted no 'bad' leg — failure is not a leg"
+  elif printf '%s' "$first_bad" | grep -qF -- "$want_bad"; then
+    ok "[$label] CAUGHT — first failure is the $want_ok leg"
+    printf '%s\n' "         $first_bad" | cut -c1-150
+  else
+    bad "[$label] mutant reddened the WRONG leg: $first_bad"
+  fi
+done
+
 echo
 if [ "$fails" -eq 0 ]; then
-  echo "MUTATION GUARD PASSED — every #307 control fails under the mutant"
+  echo "MUTATION GUARD PASSED — every #307 and #365 control fails under its mutant"
   exit 0
 fi
 echo "MUTATION GUARD FAILED (failures=$fails)"
