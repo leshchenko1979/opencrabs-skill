@@ -11,8 +11,8 @@
 #      a sent brief. A brief containing a literal placeholder token is a
 #      defect generator; the tool refuses to send one (defect class killed
 #      at the root: lanes parsed "<your-uuid>" as the sender's uuid).
-#   2. RELOAD line per fleet-directives.md (L158 law) + explicit ack contract
-#      in EVERY brief.
+#   2. RELOAD line per fleet-directives.md §Post-compaction skill reload &
+#      context manifest curation + explicit ack contract in EVERY brief.
 #   3. TARGET VALIDATION: every target is checked (a) uuid shape, (b) no
 #      all-zero segment (n=2167 placeholder-uuid class), (c) LIVE session
 #      existence via `opencrabs session get <uuid>` rc==0, BEFORE any send.
@@ -21,7 +21,7 @@
 #      stamp kind=notify-fanout carrying all ids (opt-out --no-stamp).
 #   5. QUIET-60S contract text is embedded in briefs. SENDS DEFAULT TO QUIET:
 #      `--mode now|turn-end|quiet` (default **quiet**) is passed straight
-#      through to `session notify`. hq.md:95 (owner law 2026-09-07) mandates
+#      through to `session notify`. hq.md §Duty 3 (owner law 2026-09-07) mandates
 #      delivery=quiet for ANY version bump, so quiet is the default. In the
 #      non-quiet modes a mid-turn rc 3 is re-issued with --interrupt (a
 #      deprecated alias for --mode turn-end); in QUIET mode there is NO
@@ -324,7 +324,7 @@ JSON
   echo "$out" | grep -q "ABORT.*placeholder" && chk 0 law1-placeholder-abort || chk 1 law1-placeholder-abort
 
   # LAW 5 (defect: HQ report d72bd52d, 2026-09-12): the tool could not express
-  # the law's quiet contract — hq.md:95 mandates delivery=quiet for ANY version
+  # the law's quiet contract — hq.md §Duty 3 mandates delivery=quiet for ANY version
   # bump, but the parser had no --mode at all, so `--mode quiet` died "unknown
   # flag" and every wave sent IMMEDIATELY. These assertions pin the flag at the
   # BINARY BOUNDARY (the fake notify's logged argv), not merely the rc: a parser
@@ -501,7 +501,7 @@ JSON
   # D-5 sibling (defect from lane a5b34466, 2026-09-19): the brief must NOT
   # prescribe a SECOND ack. `oc-drift-check --ack` delegates to `oc-ledger
   # ack`, so the retired "ACK after drift-check." taught every lane to mint a
-  # duplicate (uuid,version) row -- the class fleet-directives.md:416 closed
+  # duplicate (uuid,version) row -- the class fleet-directives.md §Cross-lane message delivery discipline closed
   # at v0.4.159. Assert the ABSENCE directly: both checks above pass on a
   # brief carrying the retired phrase, which is exactly how it survived six
   # versions of green selftests.
@@ -750,7 +750,7 @@ SEOF
 fi
 
 title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0 verify_id="" self_uuid=""
-# LAW 5 (fixed 2026-09-12): delivery mode, default QUIET — hq.md:95 mandates
+# LAW 5 (fixed 2026-09-12): delivery mode, default QUIET — hq.md §Duty 3 mandates
 # delivery=quiet for ANY version bump. Passed through verbatim to session notify.
 mode="quiet"
 forum_chat="${OC_FANOUT_FORUM_CHAT:--1003936827469}"

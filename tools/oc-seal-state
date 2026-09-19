@@ -177,7 +177,8 @@ if [ -n "$ADD_ORDER" ] || [ -n "$MARK_ORDER" ] || [ -n "$PURGE_ORDER" ]; then
     printf '%s' "$ADD_ORDER" | grep -Eq '^[0-9a-fA-F]{40}$' || fail 1 "--add-order must be full 40-char"
     if [ -z "$ADD_ORDER_FEAT" ]; then
       # F2 (lens F, v0.4.72): NO hardcoded feature default — the carrier yml is
-      # the single source of truth (SKILL.md:53); resolve via oc-carrier-features,
+      # the single source of truth (SKILL.md §Shared environment facts);
+      # resolve via oc-carrier-features,
       # abort loudly on read failure (same law as oc-deploy ship).
       ADD_ORDER_FEAT="$("$(cd "$(dirname "$0")" && pwd)/oc-carrier-features" 2>/dev/null)" \
         || fail 3 "--order-features unset and oc-carrier-features failed — pass --order-features explicitly"

@@ -1038,7 +1038,7 @@ EOF
   bash "$ME" stamp skill-bump "x" >/dev/null 2>&1; chk "skill-bump-refused" 2 $?
   bash "$ME" stamp claim "CLAIM #1234 — v1.1 kind" >/dev/null 2>&1; chk "stamp-claim-v1.1" 0 $?
   # Duty-4 `proposal` (v0.4.152 A1): the law mandates `stamp proposal` in four
-  # places (hq.md Duty 4, editor.md, fleet-directives.md routing table,
+  # places (hq.md Duty 4, editor.md, fleet-directives.md §Unified Event Capture,
   # CHANGELOG v0.4.144) but the kind was absent from KINDS, so the verb died
   # rc 2 and the channel had NEVER accepted a row (0 of 3558 events, 2026-09-12).
   # A law that names a verb the tool refuses is a dead channel, not a lane error.
@@ -2334,11 +2334,12 @@ oc_ship_audit_chain() {
 # ---- roster (read-only; defect fix 2026-09-11, lane d18ce16a) -----------------
 cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   # role -> FULL uuid resolution — the backend the skill already promised.
-  # The skill cites `oc-ledger roster` in THREE role files (editor.md,
-  # triage.md, fleet-directives.md §Work orders) as THE dynamic way to resolve
-  # a lane uuid, but the verb NEVER EXISTED: `oc-ledger roster` fell through to
-  # the usage branch (rc 2), so a lane following its own skill either fell back
-  # to session_search or HAND-ASSEMBLED a uuid — the exact phantom class
+  # The skill cites `oc-ledger roster --live --role <role>` as THE dynamic way to
+  # resolve a lane uuid (editor.md §Telegram surface law, toolsmith.md
+  # §Tool-problem reports, hq.md §Duty 2), but the verb NEVER EXISTED: `oc-ledger
+  # roster` fell through to the usage branch (rc 2), so a lane following its own
+  # skill either fell back to session_search or HAND-ASSEMBLED a uuid — the exact
+  # phantom class
   # (n=2221 frankenstein id) the full-uuid-from-a-same-turn-receipt law exists
   # to prevent. READ-ONLY: no lock, no mutation, never journals a write.
   #   --role <substr>  case-insensitive substring over .workers[].role
