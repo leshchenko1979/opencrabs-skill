@@ -149,8 +149,9 @@ selftest_impl() {
   # schedulers class read an empty database, and the selftest still passed.
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "CREATE TABLE cron_jobs (name TEXT, enabled INTEGER, deliver_to TEXT, prompt TEXT);"
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-roster-detached-sweep',1,'','silent; uses session_notify');"
-  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('harvest-watch-4h',1,'','ok');"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-harvest-dispatch-4h',1,'','ok');"
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-health-hourly',1,'','ok');"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-upstream-delta-watch',1,'','ok');"
 
   printf '{"ts":"2026-09-11T00:00:00Z","tool":"oc-demo","args":"","exit":0,"secs":0.1,"extra":{}}\n' > "$T/tools.log"
   echo '{"version":1,"events":[],"roster":{"workers":{}}}' > "$T/state/workers-ledger.json"
@@ -304,6 +305,46 @@ print(m.group(1) if m else "none")
   chk "schedulers-leak-rc1" 1 "$RC"
   case "$OUT" in *"cron-leak"*) ok ;; *) bad "schedulers-leak: $OUT" ;; esac
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='' WHERE name='oc-roster-detached-sweep';"
+
+  # 10b. Class: schedulers — law-carrying cron liveness (issue #339).
+  #      The pre-fix query matched name IN ('harvest-watch-4h',...) — a spelling
+  #      that has NEVER existed in cron_jobs — so the harvest patrol could go
+  #      dead in silence and the class still printed "law-carrying enabled".
+  #      This leg disables the LIVE job and demands the finding: it is the exact
+  #      defect, and it fails on the old query.
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=0 WHERE name='oc-harvest-dispatch-4h';"
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  chk "schedulers-lawcron-rc1" 1 "$RC"
+  case "$OUT" in *"cron-disabled"*"oc-harvest-dispatch-4h"*) ok ;; *) bad "schedulers-lawcron: $OUT" ;; esac
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name='oc-harvest-dispatch-4h';"
+
+  # 10c. Rename-proof. The 2026-09-18 namespacing law RENAMES these jobs, so a
+  #      check pinned to a literal name cannot watch its own subject. A renamed
+  #      law-carrying job must still be found (stem matching).
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET name='oc-harvest-dispatch-6h', enabled=0 WHERE name='oc-harvest-dispatch-4h';"
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  case "$OUT" in *"oc-harvest-dispatch-6h"*) ok ;; *) bad "schedulers-rename-proof: $OUT" ;; esac
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET name='oc-harvest-dispatch-4h', enabled=1 WHERE name='oc-harvest-dispatch-6h';"
+
+  # 10d. Owner-order mode (2026-09-18 20:53Z "turn off all of your pacemakers",
+  #      still standing per HEALTH-CLASSES.md class 5). With the marker present a
+  #      DISABLED law-carrying cron is the owner's own order and must NOT be
+  #      reported back to him; what fails is one ENABLED against the order.
+  mkdir -p "$T/state"; : > "$T/state/pacemakers-off"
+  # Order honoured = all four OFF (the live production reading).
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=0 WHERE name IN ('oc-roster-detached-sweep','oc-harvest-dispatch-4h','oc-health-hourly','oc-upstream-delta-watch');"
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  chk "schedulers-offorder-rc0" 0 "$RC"
+  case "$OUT" in *"cron-disabled"*) bad "schedulers-offorder-still-flags: $OUT" ;; *) ok ;; esac
+  case "$OUT" in *"order honoured"*) ok ;; *) bad "schedulers-offorder-cleanline: $OUT" ;; esac
+  # One enabled AGAINST the order = the finding this mode exists to raise.
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name='oc-roster-detached-sweep';"
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  chk "schedulers-against-order-rc1" 1 "$RC"
+  case "$OUT" in *"cron-enabled-against-order"*"oc-roster-detached-sweep"*) ok ;; *) bad "schedulers-against-order: $OUT" ;; esac
+  # Restore: all four enabled, order lifted (marker absent).
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name IN ('oc-roster-detached-sweep','oc-harvest-dispatch-4h','oc-health-hourly','oc-upstream-delta-watch');"
+  rm -f "$T/state/pacemakers-off"
 
   # 11. Class: logs — malformed lines detection
   printf '2026-08-31T04:11:21Z prose evidence line\n' >> "$T/tools.log"
@@ -779,14 +820,47 @@ if is_class_active "schedulers"; then
     # and the only trace was a measurement failure nobody read. Read through the
     # lib, and treat a DB that will not answer as the measurement failure it is
     # -- never as "clean".
-    cron_bad="$("$TOOLS_DIR/lib/oc_sqlite" "$DB" "SELECT name FROM cron_jobs WHERE enabled=0 AND name IN ('harvest-watch-4h','oc-roster-detached-sweep','oc-health-hourly');" 2>/dev/null)"; cron_rc=$?
+    # Law-carrying dev crons. This check has TWO jobs and which one is live
+    # depends on the OWNER ORDER of 2026-09-18 20:53Z ("turn off all of your
+    # pacemakers"), which switched every ops pacemaker off and is STILL STANDING
+    # (HEALTH-CLASSES.md class 5). While it stands, a disabled law-carrying cron
+    # is the owner's own order and flagging it only reports his decision back to
+    # him; what is worth failing on is then one ENABLED AGAINST the order.
+    # Absent marker = the order was lifted, and the original direction resumes.
+    # The marker is state-dir scoped, so it is hermetic in the selftest.
+    #
+    # The name list is deliberately NOT a hardcoded `name IN (...)`: a liveness
+    # check pinned to a name cannot watch its own subject, because the
+    # 2026-09-18 namespacing law RENAMES these jobs. `harvest-watch-4h` ->
+    # `oc-harvest-dispatch-4h` was exactly that rename, and the stale spelling
+    # left the check blind to the harvest patrol for its whole life. Matching on
+    # the stable STEM survives the next rename; `oc-upstream-delta-watch` was
+    # missing from the list outright and is covered now.
+    _LAWCARRY="(name LIKE 'oc-harvest-dispatch%' OR name LIKE 'oc-roster-detached-sweep%' OR name LIKE 'oc-health-hourly%' OR name LIKE 'oc-upstream-delta-watch%')"
+    if [ -f "$STATE/pacemakers-off" ]; then
+      cron_bad="$("$TOOLS_DIR/lib/oc_sqlite" "$DB" "SELECT name FROM cron_jobs WHERE enabled=1 AND $_LAWCARRY;" 2>/dev/null)"; cron_rc=$?
+    else
+      cron_bad="$("$TOOLS_DIR/lib/oc_sqlite" "$DB" "SELECT name FROM cron_jobs WHERE enabled=0 AND $_LAWCARRY;" 2>/dev/null)"; cron_rc=$?
+    fi
     leak_bad="$("$TOOLS_DIR/lib/oc_sqlite" "$DB" "SELECT name FROM cron_jobs WHERE enabled=1 AND name LIKE 'oc-%' AND ((deliver_to LIKE 'telegram:%' AND deliver_to NOT LIKE 'telegram:-%') OR prompt LIKE '%133526395%');" 2>/dev/null)"; leak_rc=$?
     if [ "$cron_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ]; then
       FAILED=$((FAILED + 1))
     else
-      [ -n "$cron_bad" ] && add_finding 8 QUIRK cron-disabled "law-carrying cron(s) disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
+      if [ -n "$cron_bad" ]; then
+        if [ -f "$STATE/pacemakers-off" ]; then
+          add_finding 8 QUIRK cron-enabled-against-order "law-carrying cron(s) ENABLED while the 2026-09-18 pacemakers-off order stands: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
+        else
+          add_finding 8 QUIRK cron-disabled "law-carrying cron(s) disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
+        fi
+      fi
       [ -n "$leak_bad" ] && add_finding 8 QUIRK cron-leak "dev cron(s) delivering outside forum (DM-routed): $(printf '%s' "$leak_bad" | tr '\n' ' ')"
-      [ -z "$cron_bad$leak_bad" ] && clean_line "crons: law-carrying enabled, zero DM leaks"
+      if [ -z "$cron_bad$leak_bad" ]; then
+        if [ -f "$STATE/pacemakers-off" ]; then
+          clean_line "crons: pacemakers-off order honoured, zero DM leaks"
+        else
+          clean_line "crons: law-carrying enabled, zero DM leaks"
+        fi
+      fi
     fi
   else
     FAILED=$((FAILED + 1))
