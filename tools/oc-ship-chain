@@ -783,7 +783,15 @@ if [ -n "$ISSUE" ]; then
     printf '%s\n' "$IL_OUT"
     die "LEG2 issue-log failed rc=$IL_RC — the mandatory per-commit implementation comment did not post. Post it, then re-run with --gated-run <id>: $ISSUELOG_BIN $ISSUE $SHA --repo-path $FORK_REPO" 3
   fi
-  journal "LEG2 issue-log done"
+  # #395: tools.log is SUPPRESSED on this path (OC_TOOLS_NOLOG=1 above), so the
+  # chain's own journal is the only durable record of what the guard did. It
+  # used to read a bare "LEG2 issue-log done" whether the comment posted or the
+  # guard skipped it — indistinguishable in exactly the retry that minted
+  # #392's duplicate. oc-issue-log emits `idem=<verdict>` on stdout; parse it
+  # out of IL_OUT. An older tool version emits no token, and that must read as
+  # `unknown` rather than as silence.
+  IDEM_TAG="$(printf '%s\n' "$IL_OUT" | sed -n 's/^idem=//p' | tail -1)"
+  journal "LEG2 issue-log done (idem=${IDEM_TAG:-unknown})"
 else
   journal "LEG2 issue-log skipped (--issue not given)"
 fi
@@ -1103,6 +1111,34 @@ EOF
   case "$OUT" in *"mandatory per-commit implementation comment did not post"*) ok "leg2-fail-names-the-step" ;; *) bad "leg2-fail-names-the-step: $OUT" ;; esac
   git -C "$T/clone" merge-base --is-ancestor "$FSHA" main 2>/dev/null \
     && bad "leg2-fail-no-merge" || ok "leg2-fail-no-merge"
+
+  # 1d. #395: LEG2's journal must carry the guard's VERDICT. tools.log is
+  #     suppressed on this path, so the journal line is the only durable record
+  #     — and it used to read a bare "LEG2 issue-log done" whether the comment
+  #     posted or the guard skipped it. Two stubs: one emitting the token, one
+  #     silent (an older tool version), which must read `unknown`, not nothing.
+  printf '#!/usr/bin/env bash\necho "idem=skip"\nexit 0\n' > "$T/fake-issuelog-skip"
+  chmod +x "$T/fake-issuelog-skip"
+  rm -f "$T/journal.log"
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog-skip" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
+    OC_SHIPCHAIN_IN_UNIT_CGROUP=0 \
+      bash "$SELF" --sha "$FSHA" --branch feat --issue 42 --wait 5 2>&1)" || RC=$?
+  grep -q "LEG2 issue-log done (idem=skip)" "$T/journal.log" && ok "leg2-idem-journaled" || bad "leg2-idem-journaled"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$T/fake-issuelog-notoken"
+  chmod +x "$T/fake-issuelog-notoken"
+  rm -f "$T/journal.log"
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog-notoken" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
+    OC_SHIPCHAIN_IN_UNIT_CGROUP=0 \
+      bash "$SELF" --sha "$FSHA" --branch feat --issue 42 --wait 5 2>&1)" || RC=$?
+  grep -q "LEG2 issue-log done (idem=unknown)" "$T/journal.log" && ok "leg2-idem-unknown" || bad "leg2-idem-unknown"
 
   # 2. gate RED → exit 4, merge must NOT happen
   rm -f "$T/journal.log"
