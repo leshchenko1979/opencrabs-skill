@@ -1,5 +1,17 @@
 # Changelog — opencrabs-dev
 
+## v0.4.208 (2026-09-19)
+
+**Config joins Deep Core (owner order 2026-09-19, verbatim: "Config is also deep core").**
+
+- **The gate's scope named five subsystems and config was not one of them.** `editor-upstream-pr.md §Deep Core Advance Heads-Up Gate` listed *runtime scheduler, compaction, provider routing/fallbacks, subagent orchestration, tool loop*, with paths `src/cron/`, `src/brain/agent/service/tool_loop.rs`, `src/brain/agent/context.rs`, `src/brain/provider/`, `src/brain/tools/subagent/`. Configuration — the `src/config/` subsystem and the `config.toml` / `keys.toml` write path — appeared in neither the prose scope nor the path list, so a config change read as **NOT** Deep Core. That is the wrong direction of error, and the same shape this section already fixed once: the former `src/agent/` / `src/scheduler/` list named two directories that do not exist in the tree (the `#317` shape).
+
+- **Config is the higher-stakes instance of that error.** `config_manager` writes `config.toml` / `keys.toml`; a malformed write takes a daemon down and can leave no way back in — the live-home guard (`src/config/live_home_guard.rs`) exists for exactly that class. A change there reaching maintainer review with no advance heads-up is the case the gate is FOR, not an exception to it.
+
+- **Both halves amended in one pass:** the prose scope now reads *"… subagent orchestration, tool execution loop, and **configuration** (loading, profile resolution, write guards, migrations)"*, and the path list gains **`src/config/`** with its principal files named (`sections.rs`, `profile.rs`, `secrets.rs`, `guard.rs`, `live_home_guard.rs`, `repair.rs`, `registry_client.rs`). The prose-scope-is-OPERATIVE rule is unchanged, so the added path can only widen the gate, never narrow it.
+
+- **`src/config/` was verified to exist before it was written into law** (20 top-level `.rs` files, read live this turn). A path list naming a nonexistent directory is precisely the defect this section fixed one line above, so the new entry was checked against the tree rather than against memory.
+
 ## v0.4.207 (2026-09-19)
 
 **Owner Push Freeze — the frozen/released set gets ONE machine-readable home, and a claimed release is ruled NOT a release.**
