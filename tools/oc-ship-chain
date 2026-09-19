@@ -740,13 +740,26 @@ else
   esac
 fi
 
-# ---- leg 2: issue-log (optional) ------------------------------------------
+# ---- leg 2: issue-log (mandatory when --issue is given) -------------------
+# Defect fix 2026-09-19 (lane d18ce16a report, fork #361). This leg invoked
+# oc-issue-log in the CHAIN's cwd, unlike LEG4 (:798) and LEG5 (:858/:863) which
+# both cd into $FORK_REPO. oc-issue-log resolved the sha against the caller's
+# cwd, so from the skill dir it died rc 3 "sha not found" on a perfectly valid
+# sha -- and that rc!=0 was journalled merely "non-fatal", so the MANDATORY
+# one-comment-per-commit step (owner 2026-08-28 22:54Z) failed OPEN on every
+# chain: fork #373 reached its ff-merge with 0 comments. Now the checkout is
+# named explicitly (--repo-path, so no cd and no cd-failure mode) and a failure
+# is FATAL: a chain that cannot post its comment does not silently continue.
 if [ -n "$ISSUE" ]; then
   set +e
-  "$ISSUELOG_BIN" "$ISSUE" "$SHA" >/dev/null 2>&1
+  IL_OUT="$(OC_TOOLS_NOLOG=1 "$ISSUELOG_BIN" "$ISSUE" "$SHA" --repo-path "$FORK_REPO" 2>&1)"
   IL_RC=$?
   set -e
-  [ "$IL_RC" = "0" ] || journal "LEG2 issue-log rc=$IL_RC (non-fatal)"
+  if [ "$IL_RC" != "0" ]; then
+    journal "LEG2 issue-log FAILED rc=$IL_RC (mandatory step, owner 2026-08-28 22:54Z)"
+    printf '%s\n' "$IL_OUT"
+    die "LEG2 issue-log failed rc=$IL_RC — the mandatory per-commit implementation comment did not post. Post it, then re-run with --gated-run <id>: $ISSUELOG_BIN $ISSUE $SHA --repo-path $FORK_REPO" 3
+  fi
   journal "LEG2 issue-log done"
 else
   journal "LEG2 issue-log skipped (--issue not given)"
@@ -1041,6 +1054,32 @@ EOF
   grep -q -e "--fast" "$T/prchecks.log" && bad "full-opt-in-passed-fast" || ok "full-opt-in-omits-fast"
   grep "LEG1 gate start" "$T/journal.log" | grep -q -- "--fast" && bad "journal-leg1-argv-truth-full-claims-fast" || ok "journal-leg1-argv-truth-full-omits-fast"
   grep -F "LEG1 gate start (resolved argv:" "$T/journal.log" | grep -qF "$FSHA"     && ok "journal-leg1-argv-names-sha" || bad "journal-leg1-argv-names-sha"
+
+  # 1c. LEG2 issue-log FAILURE must ABORT the chain (defect fix 2026-09-19,
+  #     fork #361, lane d18ce16a report). Before the fix this leg journalled
+  #     "non-fatal" and the chain carried on regardless, so the MANDATORY
+  #     one-comment-per-commit step (owner 2026-08-28 22:54Z) failed OPEN on
+  #     every chain — #373 reached its ff-merge with 0 comments. The stub is
+  #     the ONLY failure injected here, so a chain that still reaches SWAPPED
+  #     reddens this case. Invoked explicitly rather than through run_chain:
+  #     run_chain pins OC_ISSUELOG_BIN internally, so a pre-set override would
+  #     be silently ignored and the test would pass on the GOOD stub.
+  printf '#!/usr/bin/env bash\necho "stub: issue-log refuses" >&2\nexit 3\n' > "$T/fake-issuelog-fail"
+  chmod +x "$T/fake-issuelog-fail"
+  rm -f "$T/journal.log"
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+    OC_ISSUELOG_BIN="$T/fake-issuelog-fail" OC_FORK_REPO="$T/clone" \
+    OC_TOOLS_NOLOG=1 OC_SHIPCHAIN_LEDGER="$T/journal.log" \
+    OC_SHIPCHAIN_FREEZE_OVERRIDE=1 OC_DEPLOY_STATE_DIR="$T/state" \
+    OC_SHIPCHAIN_IN_UNIT_CGROUP=0 \
+      bash "$SELF" --sha "$FSHA" --branch feat --issue 42 --wait 5 2>&1)" || RC=$?
+  check_rc "leg2-fail-aborts" "$RC" 3
+  case "$OUT" in *SWAPPED*) bad "leg2-fail-no-swap (chain continued past a failed mandatory leg)" ;; *) ok "leg2-fail-no-swap" ;; esac
+  grep -q "LEG2 issue-log FAILED" "$T/journal.log" && ok "leg2-fail-journaled" || bad "leg2-fail-journaled"
+  case "$OUT" in *"mandatory per-commit implementation comment did not post"*) ok "leg2-fail-names-the-step" ;; *) bad "leg2-fail-names-the-step: $OUT" ;; esac
+  git -C "$T/clone" merge-base --is-ancestor "$FSHA" main 2>/dev/null \
+    && bad "leg2-fail-no-merge" || ok "leg2-fail-no-merge"
 
   # 2. gate RED → exit 4, merge must NOT happen
   rm -f "$T/journal.log"

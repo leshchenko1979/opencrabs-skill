@@ -166,7 +166,7 @@ if $G commit --trailer "Session-Id: $OC_ACTOR" --trailer "Issue-Ref: #$ISSUE" "$
   # folded post leg (E2 finding 2): one implementation comment per commit
   if [ "$NO_COMMENT" = 0 ] && [ "${OC_COMMIT_COMMENT:-1}" = 1 ]; then
     IL="${OC_ISSUE_LOG_BIN:-$(cd "$(dirname "$0")" && pwd)/oc-issue-log}"
-    if "$IL" "$ISSUE" "$CSHA" ${CSTATE:+--state "$CSTATE"} --repo "${OC_ISSUE_LOG_REPO:-leshchenko1979/opencrabs}" >/dev/null 2>&1; then
+    if "$IL" "$ISSUE" "$CSHA" ${CSTATE:+--state "$CSTATE"} --repo "${OC_ISSUE_LOG_REPO:-leshchenko1979/opencrabs}" --repo-path "$REPO" >/dev/null 2>&1; then
       echo "implementation comment posted on #$ISSUE"
     else
       echo "COMMENT FAILED after commit $CSHA — post it NOW: $IL $ISSUE $CSHA --state '<verification>'" >&2
