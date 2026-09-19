@@ -1,5 +1,66 @@
 # Changelog — opencrabs-dev
 
+## v0.4.224 (2026-09-19)
+
+**Correction + datum refresh on v0.4.223, both caught by reading the shipped text back.**
+
+1. **The v0.4.223 worked-failure clause was stale the moment it shipped.** It read *"the `#346` resume job carries exactly that exposed form and its owner was warned the same turn"*. Both halves were wrong: the job no longer carries that form (its owning lane re-keyed it at 19:59:02Z, **two minutes after the law was committed**), and the warning came from the lane itself, not from HQ. A future reader would have gone looking for an exposed job that no longer existed. Rewritten to record what actually happened -- **the law is the artifact that travels, and the fleet applied it faster than any dispatch could have landed.** Write the rule; do not rely on the hand-carried warning.
+2. **The population datum moved again within the hour.** v0.4.223 recorded **14** resume jobs at 19:38Z; the live table read **15** (issue 318 added) by 20:15Z. The law's own point, demonstrated a second time: the NUMBER moves and only the PREDICATE (`name like 'oc-harvest-%-resume'`) is stable, so the derived read stays canonical and any figure written into the file is a dated datum, never a target to match.
+
+3. **The prescribed exposed-set sweep was under-scoped -- a FALSE-CLEAN generator.**
+   v0.4.223 told the reader to derive the exposed set with a STATE-FILE grep
+   (`grep -n 'trigger_cmd' <state dir>/*-harvest-state.md`). The gate that actually
+   runs is `cron_jobs.trigger_cmd` in the LIVE table, and the two diverge:
+   `oc-harvest-421-resume` carries a live census gate while `421-harvest-state.md`
+   has ZERO `trigger_cmd` hits (250 likewise), so the prescribed sweep cannot see
+   those jobs at all -- a tracker-state-dependent gate on a job with no state-file
+   row would have read as CLEAN. Raised by lane 61161247, verified first-hand. The
+   live-table read is now canonical and the state-file grep demoted to a
+   documentation cross-check. Also recorded there: `NULL` is NOT exposure
+   (`NoTrigger` falls through to fire unconditionally), so 326 and 341's absent
+   trigger is a deliberate satisfaction of the law, not a gap.
+
+**Process hazard surfaced by this very change:** bumping `SKILL.md`'s frontmatter to
+the new version in the WORKING TREE publishes an uncommitted version to every lane's
+drift sensor -- nine lanes acked `0.4.224` (ledger n=9685-9693) before the commit
+existed. Bump the version in the SAME turn as the commit, or lanes adopt a version
+whose content is still moving.
+
+4. **The leg-4 discriminator was under-scoped too -- the same class as item 3, a different command.**
+   The Duty-5 single-sidedness ruling sanctions two forms of mechanical absence proof:
+   `git log -S <string>` returning exactly ONE introduction, or the string absent from
+   `git grep` over the pre-fix tree. BOTH are UNSCOPED, and both silently assume the token is
+   globally unique -- which the law never said. Measured on `96b474e` (lane c6b1a539, verified
+   first-hand): `git grep -nEi 'max_attempts|backoff' 96b474e -- src/cli src/a2a` -> rc=1, ZERO
+   hits, the correct pre-fix answer; the SAME grep UNSCOPED -> rc=0, **265** hits, including a
+   foreign `const MAX_ATTEMPTS: u32 = 3;` at `src/brain/agent/service/compaction.rs:348`. A
+   CORRECT fix therefore fails its own discriminator. The token must now be PATHSPEC-SCOPED to
+   the subtree the fix changes, the row must carry the pathspec, and "exactly ONE introduction"
+   is recorded as a claim about a SCOPE, never about the tree. Items 3 and 4 are ONE class:
+   **a prescribed command that is not scoped to the thing it is asked to prove.**
+5. **The CONSENT REGISTER census is a moving datum, and the stricter reading is already OPERATIONAL.**
+   Refreshed live at 20:41Z: population **15**, all enabled; **9** prompts carry a binding
+   owner-approval gate, **6** silent, **0** unread. The count went 5 -> 6 -> 9 inside one hour as
+   lanes self-remediated -- three of them (250, 321, 402) had their prompts rewritten *after* the
+   20:17Z census that reported them silent, so that census was correct when taken and stale
+   within thirteen minutes. Two divergences are genuine rather than timing: `421` carried a gate
+   from 20:02:55Z yet was reported silent, and `396` was reported gated while its prompt carries
+   no approval language at all. **The load-bearing part for the owner's pending ruling:** the
+   stricter reading is no longer a proposal -- `318` blocks filing on a fourth leg and cites the
+   pending ruling verbatim, so a "not required" ruling must UNWIND a gate a lane has already
+   implemented, while a "required" ruling is a no-op for it. The register entry now carries the
+   predicate and a dated reading instead of a bare figure.
+
+**LOC delta**
+
+| File | Before | After | Delta |
+|---|---|---|---|
+| `CHANGELOG.md` | 2052 | 2113 | +61 |
+| `SKILL.md` | 612 | 612 | +0 |
+| `upstream-merge-runbook.md` | 420 | 420 | +0 |
+
+Predicate: `sum(1 for _ in open(f, encoding='utf-8'))`; before = `ceb8e987`, after = working tree.
+
 ## v0.4.223 (2026-09-19)
 
 Three law items from one inbound (lane #321, verified first-hand) plus a Duty-5 ruling.
