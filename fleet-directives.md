@@ -185,12 +185,6 @@ sequenceDiagram
 
 Canonical full law: SKILL.md §Telegram surface law (v0.4.31). Editor-facing duties: editor.md §Telegram surface law. session_notify is the ONLY inter-role channel; no editor invokes telegram send/edit tools. Fleet-directives carries no extra text — do not restate the law here.
 
-## Topic domain alignment & rename authority (owner order 2026-09-10 03:48Z, updated 2026-09-14)
-
-- **Topic domain alignment (owner order 2026-09-14):** Factory forum topics are organized around **persistent functional domain subsystems** (e.g. `Telegram: Host & Session Guards`, `Core: Streaming & Loop`, `Memory: Search & Indexing`, `Config: Typings & Writers`, `Upstream: Harvest Fleet`, `Governance: Role Architecture`) rather than ephemeral issue numbers or short-lived task names. Topics serve as dedicated domain centers for issues within that area and cross-area issues touching their domain.
-- **Continuous topic alignment:** Auditor (Triage) and HQ actively rename topics whenever a lane's scope shifts or drifts to ensure topics remain strictly connected to their subsystem contents.
-- **Rename authority:** Auditor (Triage) and HQ are free to rename chats and forum topics — no owner approval needed. Keep titles descriptive (3–8 words, reflect actual domain/subsystem per the topic domain alignment policy); renames are bookkeeping, not surface-law sends, so this is not an editor carve-out — editors still never touch Telegram tools.
-
 ## Discussion links + fix-approval gate (owner 2026-08-28 14:28Z)
 
 1. **Whenever a PR or issue is discussed, a link must be given.** Every mention of a PR or issue number — chat, reports, ledger entries, rulings — carries the full URL (or an owner/repo#N reference that resolves to one). No bare numbers: a number without a link is an unfinished sentence. If a reference cannot be resolved to a link, say so explicitly.
@@ -287,22 +281,6 @@ Mandatory standards for any code slated for upstream harvest (`adolfousier/openc
 7. **No Clock-Bomb Fixtures in Tests (v0.4.170, Finding H-1 / row n=2123):** Never write test fixtures with hardcoded absolute future timestamps or recency horizons (e.g. `2026-09-08` in a recency-gated query test). Such fixtures inevitably fail when real calendar time advances past the hardcoded timestamp. Tests must either anchor to simulated/mock time, derive timestamps dynamically relative to `Utc::now()`, or test invariant logic independently of real-world dates.
 8. **Cross-Boundary Unit Test Requirement (No Tautological Helper Assertions, Owner Order 2026-09-17):** Unit tests asserting paths, contracts, file operations, or data formats in upstream PRs must test real cross-boundary interaction (e.g. writing through a real file writer and reading back via the target reader in a tempdir) rather than asserting helper equality against its own internal delegate function. Tautological unit tests (where a function merely tests its own internal implementation helper) provide zero regression protection across module boundaries and are strictly rejected.
 
-## Creating new editors (owner order 2026-09-01 21:56Z)
-
-Trigger: a NEW area is discussed and a research/code task needs doing, and NO existing editor lane has done anything in that area. Then the TRIAGE lane creates a fresh editor (standing authority transferred from HQ at v0.4.86, owner "Go with Option A" 2026-09-06; HQ retains roster/registry ownership — hq.md Duty 2):
-
-1. `tool_search("tg_mtproto")` (dynamic tool; schema dies at compaction — re-search first).
-2. Create the topic (MTProto): forum methods live under `messages.*`, NOT
-   `channels.*` (the durable gotcha); pass `resolve: true`; peer = forum chat
-   id. The exact method incantation + envelope-parse recipe are one
-   `session_search` away (topic-creation receipts in the ledger) — not cached
-   here.
-3. Brief the lane ONLY via `session_notify` to its session id (owner order 2026-09-03 19:28Z — supersedes the former tg_send_message-into-topic briefing). The spawn prompt carries only the task seed; the full brief, corrections, and un-park orders go through `session_notify`. A topic post is allowed for OWNER VISIBILITY only — labeled as such, never the briefing channel.
-   - **Injection verification REQUIRED (owner order 2026-09-07 + auditor finding, n=1803 verify):** a `session_notify` "delivered" receipt ≠ injected. Before stamping any ack ("brief delivered", "lane briefed"), verify injection from the daemon log: a delivery to a spawned-and-dormant session logs `parking until its channel claims it` (restart_recovery.rs) — that line means NOT delivered. Grep the log for the target session id after the send; stamp ack only on a real injection (or queue redelivery). Origin: auditor lane a65e7ab6 — Triage stamped "re-brief delivered" (n=1803) while both sends sat parked (log 05:30:21Z + 05:33:35Z); seed brief survived only because the spawn prompt carried it.
-   - **Liveness check + no_route accounting (auditor finding #2, verified 2026-09-07):** before `session_notify` to any session not heard from this turn, verify the target is live — `session_search` with `updated_since` (or a same-turn log grep for the session id; a session silent since a prior day is DEAD, e.g. c10cd97b last seen 09-05 10:56Z, notified 09-06 23:00Z → no_route). A `no_route`/rc2 outcome is UNHANDLED until the intended content is re-routed to a live surface (successor session or HQ) and the miss is ledger-noted — silent no_route = content unaccounted for.
-   - **"Read the skill first" directive in every spawn prompt (owner order 2026-09-07):** the task seed must instruct the new lane to load `/opencrabs-dev` skill (SKILL.md + fleet-directives.md) BEFORE its first action — post-compaction law applies to fresh lanes the same as compacted ones.
-4. Enroll the new editor in the roster: `oc-ledger enroll <uuid> <role> --topic <topic id>` (lesson 2026-09-01: an unrostered actor fails ship with "Session-Id not in workers ledger"). The verb is `enroll` — `roster-enroll` is a PHANTOM (rc 2, absent from the usage line; corrected in the Task-8 governance pass).
-
 ## Unified Event Capture: Urgent Routing vs. Batched Evolution (v0.4.145)
 
 All observed runtime events, anomalies, proposals, and feature ideas MUST follow the strict taxonomy below. Urgent execution items route directly to the owning substrate without relay hops; non-urgent evolution items persist to disk/ledger to prevent context bloat and memory compaction at HQ.
@@ -319,11 +297,6 @@ All observed runtime events, anomalies, proposals, and feature ideas MUST follow
 1. **Never funnel tool anomalies through HQ or Triage**: Report directly to Toolsmith in the same turn it is observed.
 2. **Never send Duty 4 proposals via `session_notify` to HQ**: Writing to disk or stamping the ledger preserves the findings across context compactions and protects HQ from message floods.
 3. **No Idea or Anomaly is Lost**: Because items are written to filesystem artifacts or appended to git-backed ledger state immediately, they survive crashes, reboots, and compactions automatically.
-
-<!-- source: MEMORY parked-issues -->
-## Parked issues — owner standdown (2026-08-28 16:17Z)
-
-Fork issues [leshchenko1979/opencrabs#20](https://github.com/leshchenko1979/opencrabs/issues/20) (plan auto-approve under `approval_policy=auto-always` — 638µs `created_at`→`approved_at`, design-track promise broken, restart resumes unapproved plans as Active) and [leshchenko1979/opencrabs#16](https://github.com/leshchenko1979/opencrabs/issues/16) (plan-card footer lost in 429 flood) are **PARKED**: owner stood the editor lane down ("It's not your concern anymore — stand down", relayed via ops 329bf3a3). No implementation approval will arrive via ops. Gate stays: no code, no branch, no claim-comment on either issue unless Alexey himself explicitly re-opens and approves the solution+diagram. Do NOT re-ignite these on seeing them open in the fork issue list — filed state IS the deliverable; fixing upstream-reported defects is adolfo's lane.
 
 
 
@@ -620,52 +593,6 @@ Due to high information volume across many factory lanes, the owner naturally fo
 When engaging the owner — especially when time has elapsed since the dialogue occurred, or when re-raising a parked issue or decision:
 - **Never merely mention or index open questions:** A bare note stating that *"open questions Q1–Q5 remain"* or *"requires owner answers to the 5 design questions"* provides zero actionable context, forces the owner to reconstruct context, and wastes a turn prompting *"explain open questions"*.
 - **Explain the most important open question:** The lane MUST explain the most critical open question directly in the message — stating its core dilemma, the trade-off, and the lane's recommended default — so the owner can decide immediately without digging through past history.
-
-## Decision Rollcall — owner-decision sweep, lanes post direct (owner order 2026-09-08 ~06:1xZ, topic 42487, ruling n=1994)
-
-A repeatable owner-facing procedure, distinct from the T5 sweep (issue triage)
-and Duty-4 (skill input). When the owner says **"run a Decision Rollcall"**:
-
-1. **Content — owner decisions ONLY.** Each lane presents outstanding decisions
-   that need the OWNER's word: one decision + the lane's recommendation + one
-   line of context each. NO status reports, no "nothing owed" chatter, no
-   ledger trivia. The lane knows its own asks best — nobody filters or
-   paraphrases them.
-2. **Delivery — LANE-DIRECT, THE ONLY MODE.** Each lane posts IN ITS OWN
-   LANE TOPIC, addressed to the owner directly. Lanes do NOT route their list
-   through Triage or HQ; Triage does not relay, aggregate, or edit. A lane
-   with zero outstanding owner decisions posts NOTHING — silence is the
-   "nothing owed" signal. **Present-here mode is RETIRED** (owner override
-   2026-09-08 09:05Z, topic 30220: "I don't want the decisions to be
-   presented in triage lane. Every editor should be instructed to present
-   their decisions in their own lane" — superseding the 08:34Z topic-42487
-   amendment). Triage NEVER collects or presents decisions on any word;
-   decisions NEVER appear in a Triage/HQ message, only in each lane's own
-   topic.
-3. **Triage role — coverage + stamp, nothing more.** Triage triggers the
-   Rollcall on owner word, verifies every holding lane actually posted (or is
-   sanctioned-silent: a same-turn lane-targeted chase receipt, or the lane's
-   own zero-decision statement on the ledger — a bare non-post is neither),
-   and stamps completion in the ledger. (This criterion is the single home;
-   triage.md T7 points here.)
-4. **Trigger — on demand** ("run a Decision Rollcall"). A cron or post-ship-chain
-   hook is possible later; the owner has not ordered one. Do not self-schedule.
-
-**Format law (owner amendment 2026-09-08 ~06:3xZ, topic 30220):**
-
-5. **No acks.** A lane posts its decisions and nothing else — no "Rollcall
-   received", no confirmation posts, no receipt chatter. The post IS the ack.
-6. **No telegram_send.** Lane posts as its topic's final chat message
-   (text auto-posts). `telegram_send` / `send_document` / media calls are
-   forbidden in a Rollcall post.
-7. **Context + diagrams.** Each decision is presented WITH its context and,
-   where the decision has shape (flow, options, architecture), a mermaid
-   diagram — the owner judges renderings, not descriptions.
-8. **One decision per message.** Present 1 by 1 — sequential posts, never a
-   batched wall. Each post: decision + recommendation + context (+ diagram).
-9. **Owner gates designs and special cases.** A lane does NOT implement a
-   design or a special case on its own recommendation — those await the
-   owner's explicit word, same as any semantic gate.
 
 ## Review lens `brain-scrub` (owner order 2026-09-05)
 
