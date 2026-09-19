@@ -102,6 +102,35 @@ JSON
   [ $? -eq 0 ] || { echo "selftest: closed-claim + --issue override != 0" >&2; exit 1; }
   git -C "$R" log -1 --format=%B | grep -q "Issue-Ref: #42" \
     || { echo "selftest: closed-claim --issue override trailer missing" >&2; exit 1; }
+  # 6c. (#346) a message that ALREADY carries the trailers must not get them twice.
+  #     git's trailer.ifexists default compares only the NEIGHBOURING trailer, so
+  #     the second append (Issue-Ref) collides with a caller-supplied copy while
+  #     the first (Session-Id) does not -- hence -c trailer.ifexists=replace.
+  #     Verified as a matrix in a scratch repo: message tail x value class. A
+  #     first repro attempt was VACUOUS because its message ended in Session-Id.
+  _dup() { # $1=label: exactly one of each key, derived values authoritative
+    git -C "$R" log -1 --format="%(trailers)" | grep -c '^Session-Id:' | grep -qx 1 \
+      || { echo "selftest: duplicate/absent Session-Id ($1)" >&2; exit 1; }
+    git -C "$R" log -1 --format="%(trailers)" | grep -c '^Issue-Ref:' | grep -qx 1 \
+      || { echo "selftest: duplicate/absent Issue-Ref ($1)" >&2; exit 1; }
+    git -C "$R" log -1 --format="%(trailers)" | grep -q '^Session-Id: u-fix$' \
+      || { echo "selftest: derived Session-Id did not win ($1)" >&2; exit 1; }
+    git -C "$R" log -1 --format="%(trailers)" | grep -q '^Issue-Ref: #149$' \
+      || { echo "selftest: derived Issue-Ref did not win ($1)" >&2; exit 1; }
+  }
+  ( cd "$R" && echo d1 > d1 && git add d1 && OC_ACTOR=u-fix "$OC" -m "fix: caller already carries the trailers
+
+Issue-Ref: #149
+" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: dup same-value commit != 0" >&2; exit 1; }
+  _dup "same value"
+  ( cd "$R" && echo d2 > d2 && git add d2 && OC_ACTOR=u-fix "$OC" -m "fix: caller carries FOREIGN values
+
+Issue-Ref: #999
+Session-Id: a-foreign-session
+" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: dup foreign-value commit != 0" >&2; exit 1; }
+  _dup "foreign value"
   # 7. usage
   OC_ACTOR=u-fix "$OC" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: no args != 2" >&2; exit 1; }
   echo "selftest OK"; exit 0
@@ -160,7 +189,7 @@ else
 fi
 
 # gated commit
-if $G commit --trailer "Session-Id: $OC_ACTOR" --trailer "Issue-Ref: #$ISSUE" "${MSGS[@]}"; then
+if $G -c trailer.ifexists=replace commit --trailer "Session-Id: $OC_ACTOR" --trailer "Issue-Ref: #$ISSUE" "${MSGS[@]}"; then
   CSHA="$($G rev-parse --short HEAD)"
   echo "committed on $($G rev-parse --abbrev-ref HEAD): $CSHA (actor $OC_ACTOR, issue #$ISSUE)"
   # folded post leg (E2 finding 2): one implementation comment per commit
