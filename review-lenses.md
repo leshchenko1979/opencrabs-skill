@@ -281,7 +281,9 @@ on census evidence + owner word (hq.md step 7).
      brief's defects, but never reviews its own report (recursion capped at
      one level).
 
-#### Review lens `brain-scrub` (owner order 2026-09-05)
+#### STANDING LENS: `brain-scrub` — OUTSIDE the A–J families (owner order 2026-09-05)
+
+*(Heading shape note, lens I F7 v0.4.206: this brief sat at `####` — the FAMILY level — with no family claiming it, so a cold reader could not tell whether it belonged to META or was a family of its own. It is neither: the rotation is `A–J + standing brain-scrub` (`hq.md §Duty 6` step 1), the family map stays A–J, and this lens owns its own report. Registered in `oc-review-persist` LENSES as `brain-scrub`.)*
 
 Standing lens in the Duty 4+6 skill-review rotation (registered in `oc-review-persist` LENSES). Scrubs the ops profile's brain files for opencrabs-dev process content living outside the skill:
 
@@ -289,4 +291,4 @@ Standing lens in the Duty 4+6 skill-review rotation (registered in `oc-review-pe
 2. **MEMORY.md** carries no discipline laws — passive memory never binds on a cold session (shipped template law); directives found there are findings.
 3. **Every finding lands as a move-with-verification:** the canonical copy is verified present in the skill BEFORE anything is removed from the brain file. Brain files are append-only — shrink/cleanup requires explicit owner approval and `dedup_intent`/`cleanup_intent`.
 
-Reports persist via `oc-review-persist brain-scrub <text|@file>`. Same mechanics as every other lens: verdict consolidated → stamped (`review-battery` boundary law above applies unchanged).
+Reports persist via `oc-review-persist brain-scrub <text|@file>`. Same mechanics as every other lens: verdict consolidated → stamped (the `review-battery` boundary law at `hq.md §Duty 6` applies unchanged).

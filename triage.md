@@ -42,10 +42,10 @@ per that section. Owner veto overrides retroactively, as with rulings.
 - **Parallel Harvest Orchestration Patrol (PHOP) & Pre-Dispatch Vetting (v0.4.136, 2026-09-10; Native GitHub Protection 2026-09-16):**
   When orchestrating harvest work, Triage MUST mechanically vet candidate packages before dispatching harvest work orders to editor lanes:
   1. Run `tools/oc-harvest-dispatch vet <issue-or-commits>` to verify upstream absence (tree-diff non-empty, patch-id unmerged, not already merged upstream, not superseded).
-  2. **Native Sub-Issues & Blockers Check (owner order 2026-09-16; strengthened v0.4.198):**
-     - Sub-issues / Child cleanups: If candidate is a sub-issue or child cleanup (linked via `gh issue edit <issue> --parent <parent-issue>` or touching/deleting code from an unharvested subsystem), verify parent feature is already merged upstream. If parent is unmerged, reject candidate harvest as blocked sub-issue (Issue #188 unharvested parent refusal).
-     - Blockers: If candidate has active blockers declared via `gh issue edit <issue> --add-blocked-by <blocker-issue>`, reject dispatch as `HELD_BLOCKED_BY_DEPENDENCY` until blockers land upstream.
-     - Upstream baseline verification: Verify target code path on live `adolfousier/main` to ensure work is not already clean or differently structured upstream.
+  2. **Native Sub-Issues & Blockers Check (owner order 2026-09-16; strengthened v0.4.198):** `vet` (item 1) already evaluates BOTH legs and returns the verdict code — read that code; do NOT re-derive either by hand (a hand re-check of a tool verdict is the agent-memory-as-gate-input defect, lens J / F24).
+     - Sub-issues / child cleanups → `HELD_PARENT_UNHARVESTED`: parent unmerged, or a touched path introduced by an unharvested fork issue. Issue #188 unharvested-parent refusal.
+     - Blockers declared via `gh issue edit <issue> --add-blocked-by <blocker-issue>` → `HELD_BLOCKED_BY_DEPENDENCY` until blockers land upstream.
+     - Upstream baseline (path already clean, or differently structured on `adolfousier/main`) is `vet`'s own tree-diff leg — item 1, not a separate manual check.
   3. Verify target editor lane availability using `tools/oc-harvest-dispatch dispatch <issue> <commits> [--to <uuid>]`. If target lane is busy with an active claim, the tool refuses dispatch (rc 4); Triage must select an idle editor or commission a dedicated harvest worker.
   4. **Landed-term gate (v0.4.204, HQ ruling 2026-09-18):** before wiring, confirm the issue is NOT already landed — a `done`/`close` row addressing it, or a commit referencing it on fork `main`. This patrol runs from a cron (`oc-harvest-dispatch-4h`) that wired #302 while #302 carried Triage's own `done` row (n=8267) and zero claims: `done` + zero claims satisfied the old two-term predicate. A landed-but-unharvested issue is HARVEST-queue work, never a fresh editor dispatch. Canon: `fleet-directives.md §Dispatch Eligibility — the 4-bucket predicate`.
   5. Never dispatch unvetted candidates or busy editors. (Worktree creation belongs to the Editor lane per `upstream-merge-runbook.md §PHOP`).
@@ -140,6 +140,7 @@ below needs a regular cadence to be worth anything.
    - Normal progression: no action; the owning editor's chain owns them.
    - **Continuous Relationship Linking Mandate (owner order 2026-09-16)**: During triage sweeps, if Triage discovers open issues that depend on in-flight features or unharvested subsystems, Triage MUST establish native links in the same turn via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
    - **Stalled progression nudge (owner order 2026-09-16 08:54 UTC)**: If an editor holding an active claim has stalled (no CI/gate/ship progress or silence extending beyond the patrol window), Triage MAY nudge the lane via `session_notify` (`delivery.mode="turn-end"`) to request a status check or unblock.
+   - **Design-gated exemption — a parked lane is NOT stalled (owner order 2026-09-19 03:49:33Z: *"if a lane is design-gated, don't nudge it anymore, just mark it in the ledger"*).** The gate test is **the LANE'S OWN STATEMENT — never the plan file.** The plan file is not evidence in either direction: #326 read `Editing` / `approved_at: null` though the owner HAD approved, and #346 read `Active` / `approved_at` set while its lane reported itself parked (ledger lesson n=8722). Action when a lane reports itself design-gated: stamp the park (`oc-ledger stamp note "<lane> design-gated — parked at owner gate"`), send NO nudge, and let the patrol continue past it. The lane leaves the stalled set when it reports itself unparked — not when the plan file changes.
 
 
 **Autonomous closure — limited disposal authority (owner option 2, ruling
@@ -191,7 +192,8 @@ autonomous-close class: neither branch satisfies (a) superseded-by,
 
 **Night-shift phase variant (v0.4.157):** inside the operator-initiated Night
 Shift window this duty is promoted from a patrol to the window's CLOSING
-PHASE — **Phase 3, Idle-Lane Issue Triage** (`fleet-directives.md`). Same
+PHASE — **Phase 3, Idle-Lane Issue Triage** (this section IS its home;
+never cited from `fleet-directives.md`, which does not carry it). Same
 census + classification, extended with capacity resolution, dispatch, and
 bounded expansion, under the overnight design-gate contract (a dispatched
 editor designs and PARKS at the owner gate; it does NOT open `/goal`). Exit
@@ -241,15 +243,14 @@ triage.md §Decision Rollcall; editor-side duty: editor.md
    one targeted chase — to the lane, not a board complaint.
 3. Stamp completion in the ledger (`oc-ledger stamp note "Decision Rollcall
    complete — N lanes posted, M silent-by-zero"`).
-4. Lane Decision Autonomy: Workers post decisions directly in their own topics.
-   Triage only tracks submission status and records the rollcall completion stamp in workers-ledger.json.
-5. Enforce the format law on coverage check (owner amendment 2026-09-08,
-   topic 30220): no acks, no telegram_send in Rollcall posts, context +
-   mermaid diagrams per decision, ONE decision per message presented 1 by 1,
-   designs/special cases owner-gated.
 - **Checkable Completion Formula**: `DONE = Rollcall broadcast delivered to holding lanes + coverage verified + completion stamp recorded in workers-ledger.json note.`
-6. Enforcement: A lane that starts implementing an unapproved design/recommendation gets one targeted correction via session_notify.
-7. **Topic-scoped decision ownership**: Decisions are published directly by each worker lane in its own forum topic. Triage maintains the coverage report (which lanes posted, which are silent-by-zero) and stamps progress in the ledger. Centralized decision aggregation is superseded by direct topic posting.
+
+**Everything else is the §Decision Rollcall law, NOT a T7 duty.** Lane-direct
+delivery (item 2), the format law — no acks, no `telegram_send`, context +
+mermaid diagrams, ONE decision per message presented 1 by 1 (items 5–8) — and
+design/special-case owner gating, whose breach earns one targeted correction
+(item 9), all live at `triage.md §Decision Rollcall`. T7 points there and never
+re-carries them.
 
 
 ## Escalation to HQ
@@ -288,8 +289,8 @@ Trigger: a NEW area is discussed and a research/code task needs doing, and NO ex
    `session_search` away (topic-creation receipts in the ledger) — not cached
    here.
 3. Brief the lane ONLY via `session_notify` to its session id (owner order 2026-09-03 19:28Z — supersedes the former tg_send_message-into-topic briefing). The spawn prompt carries only the task seed; the full brief, corrections, and un-park orders go through `session_notify`. A topic post is allowed for OWNER VISIBILITY only — labeled as such, never the briefing channel.
-   - **Injection verification REQUIRED (owner order 2026-09-07 + auditor finding, n=1803 verify):** a `session_notify` "delivered" receipt ≠ injected. Before stamping any ack ("brief delivered", "lane briefed"), verify injection from the daemon log: a delivery to a spawned-and-dormant session logs `parking until its channel claims it` (restart_recovery.rs) — that line means NOT delivered. Grep the log for the target session id after the send; stamp ack only on a real injection (or queue redelivery). Origin: auditor lane a65e7ab6 — Triage stamped "re-brief delivered" (n=1803) while both sends sat parked (log 05:30:21Z + 05:33:35Z); seed brief survived only because the spawn prompt carried it.
-   - **Liveness check + no_route accounting (auditor finding #2, verified 2026-09-07):** before `session_notify` to any session not heard from this turn, verify the target is live — `session_search` with `updated_since` (or a same-turn log grep for the session id; a session silent since a prior day is DEAD, e.g. c10cd97b last seen 09-05 10:56Z, notified 09-06 23:00Z → no_route). A `no_route`/rc2 outcome is UNHANDLED until the intended content is re-routed to a live surface (successor session or HQ) and the miss is ledger-noted — silent no_route = content unaccounted for.
+   - **Injection verification REQUIRED (owner order 2026-09-07 + auditor finding, n=1803 verify):** a `session_notify` "delivered" receipt ≠ injected. Before stamping any ack ("brief delivered", "lane briefed"), prove injection with `tools/oc-log-search <session-id> --since <send-ts>` — a delivery to a spawned-and-dormant session logs `parking until its channel claims it` (restart_recovery.rs), and that line means NOT delivered. Stamp the ack only on a real injection (or queue redelivery). Origin: auditor lane a65e7ab6 — Triage stamped "re-brief delivered" (n=1803) while both sends sat parked (log 05:30:21Z + 05:33:35Z); seed brief survived only because the spawn prompt carried it. A hand `grep` of the daemon log is the agent-memory-as-gate-input defect (lens J / F25) — use the tool, whose hard fence also keeps `brain::provider` lines out.
+   - **Liveness check + no_route accounting (auditor finding #2, verified 2026-09-07):** before `session_notify` to any session not heard from this turn, prove the target live with `tools/oc-ping-proof <uuid> <ping-ts>` — WOKEN / SILENT / UNREACHABLE, read as a verdict, never inferred (lens J / F25). `session_search` with `updated_since` remains the cheap pre-check; a session silent since a prior day is DEAD, e.g. c10cd97b last seen 09-05 10:56Z, notified 09-06 23:00Z → no_route. A `no_route`/rc2 outcome is UNHANDLED until the intended content is re-routed to a live surface (successor session or HQ) and the miss is ledger-noted — silent no_route = content unaccounted for.
    - **"Read the skill first" directive in every spawn prompt (owner order 2026-09-07):** the task seed must instruct the new lane to load `/opencrabs-dev` skill (SKILL.md + fleet-directives.md) BEFORE its first action — post-compaction law applies to fresh lanes the same as compacted ones.
 4. Enroll the new editor in the roster: `oc-ledger enroll <uuid> <role> --topic <topic id>` (lesson 2026-09-01: an unrostered actor fails ship with "Session-Id not in workers ledger"). The verb is `enroll` — `roster-enroll` is a PHANTOM (rc 2, absent from the usage line; corrected in the Task-8 governance pass).
 

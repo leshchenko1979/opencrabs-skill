@@ -73,16 +73,11 @@ editor-facing duties:
 - Reads: `tg_get_messages` in your own topic only; no `tg_search_global`, no
   cross-chat/list probing. Reactions allowed (owner consent signal).
 
-## CI-wait discipline & actor attribution
+## Direct dispatch & CI execution discipline (owner order 2026-09-10, fleet-directives §Direct dispatch)
 
-*(Waiter-discipline items — poll floor, --wait ceiling, invocation
-verify, notify wiring, log-window cuts, REST casing — live canonically in:
-editor.md §CI-wait discipline & actor attribution.)*
-
-**Direct dispatch (owner order 2026-09-10, fleet-directives §Direct dispatch):
-work orders go sender → resource-owner directly — never through an intermediary
-lane. Address by full uuid from a same-turn roster read; stamp the dispatch +
-receipt id via oc-ledger.**
+**Direct dispatch:** work orders go sender → resource-owner directly — never
+through an intermediary lane. Address by full uuid from a same-turn roster read;
+stamp the dispatch + receipt id via oc-ledger.
 
 1. **Detached command execution (`background: true` — THE standard):** Long-running
    operations (>60s, CI waits, test batteries, multi-step chains) run detached via the
@@ -138,6 +133,7 @@ receipt id via oc-ledger.**
    another repo (#1431, 2026-09-07: "PR head auto-updated" claim dissolved on
    first-hand check; headRefOid was still the old rider sha). Check event +
    branch + head sha ALL match before concluding PR state.
+
 ## Mid-cycle skill drift — pull-check on every detached resume (v0.4.52)
 
 Claim-time re-read (Phase 1 step 0) covers the START of a task; bumps keep
@@ -596,8 +592,6 @@ Post-swap smoke FAIL → rollback is the OWNER's call, never mechanical. The swa
 4. **W4 (Notify wiring):** Automated watchers notify directly to the owning session UUID via `session_notify` upon terminal completion.
 5. **W5 (Log-window cuts):** Grep and log queries must bound search ranges (`--since` or fixed tail) to avoid context compaction floods.
 6. **W6 (Actor attribution — automatic via ambient `OPENCRABS_SESSION_ID`, v0.4.176):** Tools automatically derive attribution from `$OPENCRABS_SESSION_ID`. Manual `export OC_ACTOR` is retired.
-
-Procedure detail: `editor.md §CI-wait discipline & actor attribution`.
 
 ## Swap-sha test coverage & Split-Gate Pipeline (v0.4.145)
 

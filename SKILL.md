@@ -33,7 +33,7 @@ procedures live in FOUR role files (`editor.md` / `hq.md` / `triage.md` / `tools
 load ONLY the one matching the session's role.
 
 **Binding owner directives** (sync policy, upstream PR law, carriers/builds, cargo
-prohibition, telegram surface law, tool logging, gates, editor creation, tool-problem triage (Triage lane),
+prohibition, telegram surface law, gates, editor creation, tool-problem triage (Triage lane),
 cadence) live in `fleet-directives.md` — re-homed from ops AGENTS.md/MEMORY.md per
 owner order 2026-09-02. Load it before ANY opencrabs-dev work. Executing procedure for the sync
 policy's rebase procedure: `upstream-merge-runbook.md` (freeze gate, roles, conflict
@@ -48,7 +48,7 @@ Ask the operator which role this session employs before doing anything:
 | Role | Owns | Procedure file |
 |------|------|----------------|
 | **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR filed on smoke PASS (procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
-| **HQ** | Skill set maintenance, worker ledger, Duty 4 worker polls, Duty 6 periodic 11-lens reviews (details in `hq.md` and `review-lenses.md`) | `hq.md` |
+| **HQ** | Skill set maintenance, worker ledger, Duty 4 worker polls, Duty 6 periodic lens reviews — count derived from the catalog at gate time (details in `hq.md` and `review-lenses.md`) | `hq.md` |
 | **TRIAGE** | Intake & hygiene: issue assignment, repo hygiene patrols, rebase/merge execution delegated from HQ, upstream lifecycle tracking (delta watch, PR census, dependency tracking folded from Harvester v0.4.176) | `triage.md` |
 | **TOOLSMITH** | CLI tools author & maintainer: owns `tools/` code, test battery stewardship, direct recipient of tool quirks/defects (v0.4.176) | `toolsmith.md` |
 
@@ -191,7 +191,7 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   | quiet (DEFAULT) / turn-end / now (EXCEPTION) / redirect / no-route | full table = fleet-directives.md §Cross-lane message delivery discipline (CANONICAL — this row is a failsafe pointer, lens B-F15 v0.4.96) |
   | failsafe | target mid-turn — `interrupt: true` ("#13 failsafe"): message QUEUES, drains at next boundary; escalation of a stuck quiet/turn-end delivery (~30 min, time-critical) |
 
-  Escalation ladder canonical: fleet-directives.md §Cross-lane delivery
+  Escalation ladder canonical: fleet-directives.md §Cross-lane message delivery discipline
   (quiet → turn-end ~30 min if time-critical → interrupt last resort — lens A5
   v0.4.89: pointer only, no second copy).
 - Refusal handling: a mid-turn refusal is NOT delivery. Operational content →

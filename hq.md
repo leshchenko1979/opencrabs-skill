@@ -238,7 +238,7 @@ Method:
 8. **Duty-6 Ledger Cadence Reset Stamp (owner order 2026-09-15):** Upon completing the cycle (reports persisted, master verdict written, codifications applied or planned), HQ **MUST explicitly stamp the cycle close note** onto the ledger:
    `tools/oc-ledger stamp note "v<version> ACCEPTED — Duty 6 Cycle <cycle-id> closed" --by "hq <uuid>"`
    This stamps the mechanical boundary recognized by `oc-ledger cadence` (`^v[0-9]+\.[0-9]+\.[0-9]+ ACCEPTED`), resetting the review cadence counter from `FIRE` back to `0/5 WAIT`. Without this stamp, `oc-ledger cadence` will fail to reset and will continuously report overdue review cycles.
-- **Checkable Completion Formula**: `DONE = all 11 lens reports persisted via oc-review-persist + receipts logged in skill-review-index.log + master verdict compiled in reviews/<cycle-id>/verdict.md + review manifest marked COMPLETED in reviews/<cycle-id>/state.json + oc-ledger stamp note "v<version> ACCEPTED — Duty 6 Cycle <id> closed" executed (resetting cadence to 0/5 WAIT).`
+- **Checkable Completion Formula**: `DONE = every catalog lens persisted via oc-review-persist (assert `./tools/oc-review-persist check-cycle reviews/<cycle-id>` rc 0 — the tool derives the lens set from the catalog AT GATE TIME; NEVER hardcode the count here) + receipts logged in skill-review-index.log + master verdict compiled in reviews/<cycle-id>/verdict.md + review manifest marked COMPLETED in reviews/<cycle-id>/state.json + oc-ledger stamp note "v<version> ACCEPTED — Duty 6 Cycle <id> closed" executed (resetting cadence to 0/5 WAIT).`
 
 Rationale: HQ authors most rules — author-blindness is structural.
 Independent subagent eyes + the owner gate keep the set honest.
@@ -273,7 +273,7 @@ Long-running commands (>60s, test batteries, carrier/CI waits, heavy audits) MUS
 
 - **Auto-resume & injection:** The daemon tracks detached executions natively and auto-resumes the session upon process completion. Do NOT hand-roll polling loops or detached background daemons.
 - **Terminal state:** CI waits must gate completion on terminal state (`completed` status; `success`/`failure` conclusion).
-- **Checkout-ref verification:** Checkout log lines identify the tested tree; verify checkout-ref matches the expected head SHA before treating a verdict as final evidence.
+- **Checkout-ref verification:** Checkout log lines identify the tested tree, but comparing them against the expected head SHA by hand is the agent-memory-as-gate-input defect (lens J / F27). Run `tools/oc-job-verify <run-id> <source-ref>` — **rc 4 means the run's identity is reported but never trusted**; on rc 4 the verdict is not final evidence.
 - **REST v3 keys are snake_case:** In `gh api` `--jq` filters, `run_started_at`/`updated_at` work; camelCase (`runStartedAt`) silently evaluates to null.
 
 ## HQ does not execute lane work — refuse and reroute (owner order 2026-09-09 ~10:4xZ: "you should refuse work that should be done by the triage lane and tell the requesting lane to reroute")

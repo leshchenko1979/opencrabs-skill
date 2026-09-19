@@ -77,6 +77,35 @@ Hard discipline for every change:
   lanes when not owned here.
 - **Checkable Completion Formula**: `DONE = tool code edited under tools/ + tools/tests/run.sh battery PASS (all tests pass) + tools/RC-CONTRACT.md updated (if rc changed) + dual-pushed.`
 
+### Explore & DRY gate — before the first edit (mandatory, same intent as editor.md Phase 3)
+
+`tools/` is shell + Python, and the external symbol graph indexes only
+`/root/opencrabs/src/**/*.rs` — so the editor's `memory_search scope="external"`
+gate does NOT cover this lane's code. The equivalent here is a filesystem one,
+and it is still mandatory:
+
+1. **Read the tool before changing it.** `read_file` the whole script — a flag's
+   contract usually lives in its arg-parse block and its rc map, not in the
+   docstring.
+2. **Find its consumers first.** `grep -rn 'oc-<tool>' tools/ tools/*.md` plus
+   `tools/RC-CONTRACT.md` — enumerate every caller and every parses-its-output
+   dependency before touching an interface. The tool-surface sync duty above is
+   the consequence of skipping this.
+3. **DRY — reuse `tools/lib/` before writing anything new.** The shared helpers
+   (`oc-log.sh`, `oc-notify.sh`, `oc-snap.sh`, `oc-embed.sh`, `oc_claims.py`)
+   are sourced by 16 files. A new logging/notify/snapshot/claim helper that
+   duplicates one of these is a defect, not a feature; if the existing helper
+   almost fits, extend it rather than forking a parallel one.
+4. **Logging goes through `lib/oc-log.sh`** — every tool in `tools/` appends its
+   one JSONL line on exit through it. Hand-rolled JSONL writes drift from the
+   schema at `tools/RC-CONTRACT.md` §Unified tools log.
+5. **rc semantics are contract, not preference.** Check the register before
+   inventing a new code; a changed rc needs its RC-CONTRACT row updated in the
+   same commit.
+
+DONE = the tool read in full, its consumers enumerated by grep, and reuse of
+`tools/lib/` checked before the first edit.
+
 
 ## Duty TM2 — Battery stewardship
 
@@ -96,7 +125,7 @@ WHAT escalates: skill-edit requests, protocol disputes, semantic questions,
 daemon/carrier defects (or route to an editor lane via TRIAGE if that's the
 faster path), anything owner-verdict-shaped.
 
-HOW: `session_notify` per fleet-directives §Cross-lane delivery (cadence law
+HOW: `session_notify` per fleet-directives.md §Cross-lane message delivery discipline (cadence law
 canonical — quiet DEFAULT, turn-end for boundary-bound, `interrupt=true`
 failsafe only). Batch at turn-end — one notify with
 N items beats N notifies. Receipts, ACKs, and ROUTED stamps NEVER escalate;

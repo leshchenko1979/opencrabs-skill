@@ -9,7 +9,7 @@
 | sync model & rebase, seam resolution, harvest cadence / HARVEST LAW / NO-HOLD, PHOP, swap-head signature | `upstream-merge-runbook.md` |
 | editor phases, smoke procedure, CI-wait & CI-watcher discipline, carrier hotfix gates, swap-sha coverage, no auto-rollback, inherited-claim pillars | `editor.md` |
 | upstream PR lifecycle, deep-core heads-up gate, dependent PRs law, cross-fork PR inspection, upstream issue filings | `editor-upstream-pr.md` |
-| intake & assignment, dispatch hygiene, topic domain alignment, parked issues, Decision Rollcall, creating new editors | `triage.md` |
+| intake & assignment, dispatch hygiene, topic domain alignment, parked issues, Decision Rollcall, creating new editors, night-shift cadence (Phase 3, Idle-Lane Issue Triage) | `triage.md` |
 | tool-problem reports, tool logging rule | `toolsmith.md` |
 | HQ duties, cadence boundary, rule-text provenance, refuse-and-reroute | `hq.md` |
 | Duty-6 lens briefs (A–J families + brain-scrub) | `review-lenses.md` |
@@ -45,7 +45,7 @@
 1. **No upstream push of a frozen group.** No upstream PR is filed for a frozen group's commits, and no lane stages one, until the owner releases that group by name. Soak maturity elapsing is not a release.
 2. **Release is an OWNER action, never a lane decision.** A group leaves the freeze only on an explicit owner message naming it — exactly as T6 did. Silence, a green census, a lane's own confidence, or an idle editor never release a group. The released set grows one named group at a time, and currently holds exactly one member: **T6**.
 3. **The freeze binds the machinery, not just the prose.** Triage's 4h harvest patrol (`oc-harvest-dispatch-4h`, job id `73158e43-3b04-4464-bf82-8d9065a191bb`) must not dispatch a frozen group; `oc-harvest-census` / `oc-harvest-dispatch` must read a frozen group as NOT harvest-eligible; an editor holding a frozen group's work stops short of Phase 7 (upstream PR filing).
-4. **This is NOT the carrier FREEZE of §Remotes & sync guard (2).** That one is mechanical (no sync while a carrier chain sits between dispatch and swap). This one is an owner hold on a feature group's harvest. Same word, different concept — write **owner push freeze (harvest hold)** when you mean this one.
+4. **This is NOT the carrier FREEZE of `upstream-merge-runbook.md §Remotes & sync` (2).** That one is mechanical (no sync while a carrier chain sits between dispatch and swap). This one is an owner hold on a feature group's harvest. Same word, different concept — write **owner push freeze (harvest hold)** when you mean this one.
 5. **Scope boundary — the freeze holds HARVEST, not development.** Lanes keep fixing, committing, shipping and smoking inside fork `main`; what is withheld is the upstream push of a frozen group. A defect found in a frozen group (e.g. the owner's 2026-09-18 finding that #291 puts the compaction result, not the latest thought, in the tool-roll header) is fixed and re-soaked normally — it stays frozen only at the harvest boundary.
 
 **Rationale (owner's own words):** *"I want to review them first"* — the soak groups ARE his live-test surface, and harvesting one before he has exercised it upstreams a feature he has not yet accepted.
@@ -75,9 +75,11 @@ and HQ**. Opening a fork issue confers no claim on it, no slot in the fix queue,
 disposition — a report is an input to Triage, not an assignment.
 
 Origin: owner ruling 2026-09-13 — *"The fork issues stand. The law should be amended. You are allowed
-to fork to open fork issues, but not allowed to participate in the development process."* Codified in
-the ops brain at `~/.opencrabs/profiles/ops/AGENTS.md` (§ External lanes — fork issue reporting vs dev
-process non-participation) and forwarded to HQ by lane `1122b15e` for canonical alignment here.
+to fork to open fork issues, but not allowed to participate in the development process."* **This section IS
+the canonical home** — forwarded by lane `1122b15e` and codified HERE. The ops brain
+(`~/.opencrabs/profiles/ops/AGENTS.md`) carries a duplicate of this law; where the two drift, THIS
+section governs and the brain copy yields. Brain-file text is always-loaded but is never the
+dev-process authority — the skill is.
 
 ## Stage-entry consent (owner 2026-08-28 16:57Z)
 
@@ -185,7 +187,7 @@ All observed runtime events, anomalies, proposals, and feature ideas MUST follow
 
 **Owner ruling (verbatim, 2026-09-12 11:04Z):** *"We don't need the pure docs commits to pass through ci on our side."* Origin: lane `6630dc9a`'s docs commit `eee36027` (ONTOLOGY.md + CONTRIBUTING.md, zero code) burned LEG1 run `34688939568` in full before the ruling landed.
 
-- **The law.** A commit whose changed paths are ALL **pure docs** SKIPS the LEG1 CI gate on the fork ship chain. A skip is neither PASS nor RED — it is a **SKIP**, and it MUST be recorded as one (see §Recording).
+- **The law.** A commit whose changed paths are ALL **pure docs** SKIPS the LEG1 CI gate on the fork ship chain. A skip is neither PASS nor RED — it is a **SKIP**, and it MUST be recorded as one — the SKIP is recorded in the ship chain journal, never left implicit.
 - **"Pure docs" is DEFINED HERE, in the law — never left to a tool's discretion.** A commit is pure docs iff **every** changed path (a) ends in `.md`, **and** (b) is **NOT compiled into the binary** via `include_str!` / `include_bytes!`. Clause (b) is load-bearing: a `.md` compiled into the binary changes COMPILED OUTPUT, so a commit touching it is a code change and MUST run the gate. When a chain ships a RANGE rather than a single commit, every commit in the range must be pure docs for the skip to apply.
 - **The compiled-in exclusion set — 21 paths (HQ-verified first-hand 2026-09-12 against `src/**/*.rs`).** A commit touching ANY of these is NOT docs-only, whatever its extension:
   - `README.md` (repo root — `src/tests/subagent_tool_description_test.rs`)
@@ -210,7 +212,7 @@ A smoke leg that only the OWNER can satisfy (a visual pass, a tap, an eye-confir
 2. appends a **`PARKED-OWNER-EYE`** row to `smoke-verdicts.log` naming the exact owner action required AND the packaging sha;
 3. **RELEASES the lane** and moves to its next task.
 
-`PARKED-OWNER-EYE` is a lane-release, NOT a hold: the lane goes idle and claimable, the candidate is deferred. This does not contradict the NO-HOLD law (§Upstream-merge cadence) — NO-HOLD forbids a *waiting state*; parking is the mechanism that keeps a lane OUT of one. A lane idling on an owner leg is in violation; a lane that parks and moves on is compliant.
+`PARKED-OWNER-EYE` is a lane-release, NOT a hold: the lane goes idle and claimable, the candidate is deferred. This does not contradict the NO-HOLD law (`upstream-merge-runbook.md §Upstream-merge cadence`) — NO-HOLD forbids a *waiting state*; parking is the mechanism that keeps a lane OUT of one. A lane idling on an owner leg is in violation; a lane that parks and moves on is compliant.
 
 ### L2 — Shift exit condition: receipts or an explicit park
 
@@ -239,7 +241,7 @@ Worked example: the #172 row at 01:56:01Z cited `3b095f27` while the packaging t
 
 ### F1 — Dispatchability never depends on the carrier feature set
 
-The existing classification bucket governs: `DISPATCHABLE = unclaimed AND vetted` (the 4-bucket law). The carrier set gates the **binary**, never the **codebase**: a feature-gated module is still compiled and unit-tested by the CI gate, whose flags are `--all-features` (both the clippy and the test step of `pr-checks.yml`). Work on such an issue is therefore verifiable work and MUST NOT be parked, blocked, or skipped for being outside the built set.
+The existing classification bucket governs — `DISPATCHABLE = unclaimed AND vetted AND NOT landed`, stated once and canonically in §Dispatch Eligibility below (the 4-bucket law). The carrier set gates the **binary**, never the **codebase**: a feature-gated module is still compiled and unit-tested by the CI gate, whose flags are `--all-features` (both the clippy and the test step of `pr-checks.yml`). Work on such an issue is therefore verifiable work and MUST NOT be parked, blocked, or skipped for being outside the built set.
 
 ### F2 — The ceiling is `structural N/A`, and the verdict MUST read `UNPROVEN (structural N/A)`
 
@@ -254,7 +256,7 @@ A smoke PASS is required to file upstream (PR shipment law). `UNPROVEN (structur
 The churn cure — both operational (Triage-owned; no new tooling, no new class):
 
 1. When `oc-carrier-features` shows the deliverable's modules outside the set, the dispatch note carries `SMOKE CEILING: UNPROVEN (structural N/A) — <feature> absent from carrier set`, so wire 1 behaves like wire N.
-2. The issue is linked natively — `gh issue edit <issue> --add-blocked-by 338` (leshchenko1979/opencrabs#338, the carrier-set **decision record** and the blocker anchor) — per the Continuous Issue Relationship Linking order. A wire carries the RELATION, so the anchor's own state never unblocks it: #338 is a RECORD whose decision is MADE (owner ruling 2026-09-18), not a live question. Its closure is Triage's call under §Autonomous closure (c) owner-confirmed-withdrawn; no lane re-raises the question while the close is pending.
+2. The issue is linked natively — `gh issue edit <issue> --add-blocked-by 338` (leshchenko1979/opencrabs#338, the carrier-set **decision record** and the blocker anchor) — per the Continuous Issue Relationship Linking order. A wire carries the RELATION, so the anchor's own state never unblocks it: #338 is a RECORD whose decision is MADE (owner ruling 2026-09-18), not a live question. Its closure is Triage's call under `triage.md §Autonomous closure` (c) owner-confirmed-withdrawn; no lane re-raises the question while the close is pending.
 
 **Worked example (2026-09-18):** #319 (post-delivery re-entry for failed image delivery on Slack / Discord / WhatsApp) — carrier set `telegram,code-graph,browser`; the three channels are feature-gated modules in `Cargo.toml [features]`, compiled only under `--all-features`. The CI gate covers them; the shipped binary does not. Verdict ceiling `UNPROVEN (structural N/A)`; harvest blocked on the carrier set — **permanently**, per the owner's 2026-09-18 ruling that the set stays as-is (leshchenko1979/opencrabs#338, the decision record); lane released. The 4th wire landed a claim (n=8274) — the issue was dispatchable on wire 1.
 
@@ -320,7 +322,7 @@ An approved design plan whose work is superseded — another lane ships it first
 
 Origin (2026-09-12): the #172 lane's 03:44Z turn announced *"Upstream PR #1514 Filed & Smoked!"*; the guard correctly set `phantom_blocked=1` — and nothing escalated it. The lane went idle believing it had filed, and **~3 h** elapsed before a manual re-verification (`gh pr view 1514` → *"Could not resolve to a PullRequest"*) caught it. The guard was right; the routing was missing. The real PR (#1524) followed only after a re-dispatch.
 
-Sibling of the receipt laws (phantom #6, §Receipt + delivery discipline additions): a blocked claim is never silently dropped — the guard's verdict is itself the receipt that something must be routed.
+Sibling of the receipt laws (phantom #6, `fleet-directives.md §Cross-lane message delivery discipline`): a blocked claim is never silently dropped — the guard's verdict is itself the receipt that something must be routed.
 
 ## Attribution & Goal Hygiene (v0.4.152, owner order 2026-09-12) [LANE]
 
@@ -371,13 +373,15 @@ flowchart TD
 
 Lane-to-lane and lane-to-HQ `session_notify` traffic MUST default to deferred delivery; immediate delivery is the exception, not the default. Evidence: 2026-09-04 logs show 1267 `now`-mode deliveries vs 7 deferred — most were status receipts that interrupted working lanes mid-task.
 
-- **`quiet` (defer until idle)** — default for: status receipts, progress pings, scope confirmations, verdict relays, ACKs, non-urgent questions. The target finishes its current turn; the message lands when the lane is actually free.
-- **`turn-end`** — when the content must be seen at the lane's next boundary (un-park signals, approval rulings on a lane blocked on that ruling, corrections to in-flight work).
-- **`now`** — reserved for urgent wake-ups only: carrier build/swap orders, gate verdicts a lane is actively blocked on, anything where minutes matter. If nothing breaks by waiting for idle, it is not `now`.
-- Escalation path: send `quiet` → if unclaimed after ~30 min AND genuinely time-critical, re-send `turn-end`. Do not start at `now`.
+**MODE SEMANTICS — re-ruled by owner order 2026-09-19 03:34:30Z / 03:36:54Z** (*"the factories should use end-turn delivery"* · *"session delivery mode `now` needs to retire — `turn-end` delivery to become the new default. for an idle session `turn-end` = `now`. for a busy session `now` will be a noop"*). This supersedes the quiet-default table that stood here:
+
+- **`turn-end` — THE DEFAULT for ALL lane traffic.** The message queues and lands at the target's next tool-loop boundary; for an IDLE target that boundary is immediate, so `turn-end` loses nothing `now` ever delivered. Use it for status receipts, progress pings, scope confirmations, verdict relays, ACKs, un-park signals, approval rulings, corrections to in-flight work, AND urgent wake-ups — the single default removes the mode-choice decision that produced the 1267-vs-7 skew this section was written about.
+- **`quiet` — retained, no longer the default.** For traffic that must not interrupt a working turn and whose ack contract is the ledger rather than a reply (batch/fan-out notices). It is a deliberate choice now, never the fall-through.
+- **`now` — RETIRED as a mode name (owner order 2026-09-19 03:36:54Z).** Its case is subsumed: an idle target wakes on `turn-end` exactly as it did on `now`, and a busy target treated `now` as a noop anyway. Code-side retirement is fork issue [#373](https://github.com/leshchenko1979/opencrabs/issues/373); until it lands, a lane that still has the mode available MUST NOT prefer it over `turn-end`.
+- **Escalation path (rewritten for the retired mode):** send `turn-end` (the default). If the target is mid-turn and the content is genuinely time-critical, the escalation is `interrupt: true` — the failsafe that queues and drains at the next boundary. Never re-send on a `no wake observed` confirm verdict; that verdict MEANS the target is mid-turn (bullet below).
 - **Ack expectation line (owner order 2026-09-08; A-L8 v0.4.116 rename — "ack contract" now means only the retired-worker registry policy in hq.md):** every `session_notify` states its ack contract IN the message body — end with a line like `No ack needed` / `ACK by <date>: <what>` / `Reply required: <question>`. Silence-ambiguous traffic ("fyi" that secretly wants confirmation) forces the receiver to guess and breeds unattributed-ACK incidents. When no ack is needed, SAY SO; when one is, name what a valid ack contains. Lanes must not send pure-ack replies to messages marked `No ack needed`.
 - **The LEDGER is the ACK channel (owner order 2026-09-11 — "why don't the editors just write the freeze ack to the ledger instead of spending tokens on notifications? And you can just check the ledger"):** For any wave/fan-out whose ack contract is "confirm you received X" (freeze, unfreeze, skill-change reload, rebase notices), the ack is an `oc-ledger stamp note "…"` row — **not** a `session_notify` reply. The sender reads acks ONCE with `oc-ledger events --n N` and counts them; no per-lane reply traffic, no reply-tracking state. A lane that answers such a wave with a `session_notify` reply has spent tokens on the wrong surface: the ledger row IS the receipt, and a row absent from the ledger means the ack did not happen. Origin: the 2026-09-11 unfreeze wave — **36 UNFREEZE-ACK rows from 17 lanes** were read in a single `oc-ledger events` call, where per-lane notify replies would have been 36 interrupts of working lanes.
-- **Task & Harvest Dispatches are ZERO-ACK (owner order 2026-09-13 — "Why do you need all these acks?"):** Task dispatches (`[ISSUE TRIAGE DISPATCH: #N]`) and harvest dispatches (`[HARVEST DISPATCH: #N]`) are strictly one-way work directives. **The receiving lane MUST NOT reply with a conversational `session_notify` ack** (e.g. `[ack] Received dispatch...`, `Starting now...`). Conversational acks interrupt the dispatching lane, pollute session queues, and waste tokens on the wrong surface. The **ONLY** valid receipt for a task dispatch is the lane's ledger claim: `oc-ledger claim <issue>` (or for a harvest dispatch, the upstream PR filing link). Senders verify task receipt by querying `workers-ledger.json` (`oc-ledger events --kind claim`), never by waiting for a message. Every dispatch wire envelope MUST conclude with: `Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed.` **Stalled Claim Nudge Exception (owner order 2026-09-16 08:54 UTC)**: Triage or patrol lanes MAY send a progress check nudge via `session_notify` (`delivery.mode="turn-end"`) to an active claim holder if expected work has not arrived or progress has stalled beyond the patrol window.
+- **Task & Harvest Dispatches are ZERO-ACK (owner order 2026-09-13 — "Why do you need all these acks?"):** Task dispatches (`[ISSUE TRIAGE DISPATCH: #N]`) and harvest dispatches (`[HARVEST DISPATCH: #N]`) are strictly one-way work directives. **The receiving lane MUST NOT reply with a conversational `session_notify` ack** (e.g. `[ack] Received dispatch...`, `Starting now...`). Conversational acks interrupt the dispatching lane, pollute session queues, and waste tokens on the wrong surface. The **ONLY** valid receipt for a task dispatch is the lane's ledger claim: `oc-ledger claim <issue>` (or for a harvest dispatch, the upstream PR filing link). Senders verify task receipt by querying `workers-ledger.json` (`oc-ledger events --kind claim`), never by waiting for a message. Every dispatch wire envelope MUST conclude with: `Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed.` **Stalled Claim Nudge Exception (owner order 2026-09-16 08:54 UTC)**: Triage or patrol lanes MAY send a progress check nudge via `session_notify` (`delivery.mode="turn-end"`) to an active claim holder if expected work has not arrived or progress has stalled beyond the patrol window. **Design-gated exemption (owner order 2026-09-19 03:49:33Z — *"if a lane is design-gated, don't nudge it anymore, just mark it in the ledger"*): a lane parked on the OWNER design gate is NOT stalled and MUST NOT be nudged — stamp the park in the ledger and let the patrol continue past it. Full rule + the counterexample evidence: `triage.md §Duty T5`.**
 - **Skill-change notification policy — JIT turn-start hints vs Proactive waves (v0.4.172, advisory n=5322; owner order 2026-09-14):**
   - **Routine version bumps:** Shift from proactive `PUSH-ALL-QUIET` broadcast waves to **JIT / pull-absorption**. The daemon harness automatically evaluates and injects a JIT turn-start skill hint whenever an active skill diffs on disk (shipped in `#210`, commit `acb8c5e6`). Routine version bumps do NOT emit mass fanout pings across dormant lanes; lanes absorb the diff and reload at their own natural turn boundaries without session churn.
   - **Proactive `oc-notify-fanout` waves:** Strictly reserved for **breaking process shifts**, **fleet-wide safety halts**, or **explicit owner-ordered fleet reloads**.
@@ -394,6 +398,14 @@ Lane-to-lane and lane-to-HQ `session_notify` traffic MUST default to deferred de
 
 Work notifications go **sender → resource-owner directly**. No intermediary lane re-sends, forwards, or "relays" work to a third lane. Evidence (2026-09-09): the Triage→TOOLSMITH hop silently died twice (v0.4.129 needed an owner "Go" to move; v0.4.130 stalled until the owner asked HQ to check TOOLSMITH); a spawn-nudge was mis-addressed from a remembered prefix; a frankenstein uuid existed because a dispatch was queued through an intermediary. Every relay hop is a silent-failure surface; direct delivery fails loudly at the sender instead.
 
+- **Rule 1 — Direct dispatch:** the sender of a work order notifies the lane that owns the resource directly. An intermediary may name the target, never carry the payload.
+- **Rule 2 — Address by receipt:** the target's full uuid comes from a same-turn roster/ledger read — never from memory or a remembered prefix. The v0.4.129 livecheck (session-DB full-id match) enforces this mechanically: dead/frankenstein ids refuse at send.
+- **Rule 3 — Ledger stays the record:** every direct dispatch stamps dispatch + delivery-receipt id via oc-ledger. No send exists that isn't on the ledger; DM history is not the record.
+- **Rule 4 — Triage re-roles to auditor:** Triage no longer relays work between lanes. It runs periodic ledger sweeps for unclaimed/stale dispatches and escalates orphans **directly to the sender** (not through HQ). Verify-unclaimed (grep open claim-refs before dispatch) STAYS with Triage — it is an audit, not a relay.
+- **Rule 5 — Escalation is direct too:** a dispatch unacked past its stated ack deadline is escalated by the sender straight to HQ. No third-lane relay.
+- **Exceptions (not relays):** skill-change broadcast waves (oc-notify-fanout) and HQ rulings/broadcasts are fanout, not relayed work. The owner's design gate (v0.4.128) and roster authority stay with HQ.
+- Backed out in: editor.md §Telegram surface law (one line, pointer), triage.md (T2 re-role note).
+
 ## Designated Domain Affinity & Topic Context Focus Law (owner order 2026-09-17) [LANE]
 
 **Dispatching to a random lane with no regard for its designated domain/feature area mixes up topic history for the human operator and wastes the lane's existing in-context focus.**
@@ -402,14 +414,6 @@ Work notifications go **sender → resource-owner directly**. No intermediary la
 2. **Negative Affinity & Misallocation Refusal**: Mismatched dispatches to specialized feature lanes (e.g. dumping a DB/persistence issue onto a Mermaid or Photo lane) are strictly forbidden. Specialized lanes receive a severe negative affinity penalty (-50) and refuse fallback dispatch.
 3. **No Random Fallbacks**: If no idle lane matches the issue's domain affinity, the issue remains queued as `CAPACITY_EXHAUSTED: No available lane with matching domain affinity` until a matching lane becomes idle or Triage commissions a dedicated topic lane. Random fallbacks across unrelated topics are blocked.
 4. **Override Gate**: Bypassing domain affinity requires explicit `--force` and owner authorization.
-
-- **Rule 1 — Direct dispatch:** the sender of a work order notifies the lane that owns the resource directly. An intermediary may name the target, never carry the payload.
-- **Rule 2 — Address by receipt:** the target's full uuid comes from a same-turn roster/ledger read — never from memory or a remembered prefix. The v0.4.129 livecheck (session-DB full-id match) enforces this mechanically: dead/frankenstein ids refuse at send.
-- **Rule 3 — Ledger stays the record:** every direct dispatch stamps dispatch + delivery-receipt id via oc-ledger. No send exists that isn't on the ledger; DM history is not the record.
-- **Rule 4 — Triage re-roles to auditor:** Triage no longer relays work between lanes. It runs periodic ledger sweeps for unclaimed/stale dispatches and escalates orphans **directly to the sender** (not through HQ). Verify-unclaimed (grep open claim-refs before dispatch) STAYS with Triage — it is an audit, not a relay.
-- **Rule 5 — Escalation is direct too:** a dispatch unacked past its stated ack deadline is escalated by the sender straight to HQ. No third-lane relay.
-- **Exceptions (not relays):** skill-change broadcast waves (oc-notify-fanout) and HQ rulings/broadcasts are fanout, not relayed work. The owner's design gate (v0.4.128) and roster authority stay with HQ.
-- Backed out in: editor.md §Telegram surface law (one line, pointer), triage.md (T2 re-role note).
 
 ## Early Claim — claim at domain recognition, not at dispatch (owner order 2026-09-18) [LANE]
 
@@ -441,12 +445,15 @@ When engaging the owner — especially when time has elapsed since the dialogue 
 
 ## Upstream PR filing — base CI gate pre-claim (Duty-4 proposal, theme-1 lane, owner-approved 2026-09-06) [LANE]
 
-Before filing an upstream PR, poll base-main CI gate state and pre-claim any
-OWNERLESS red files by carrying a sweep commit in the PR itself
-(Session-Id-only trailer, no Issue-Ref). Do NOT rely on sequencing comments
-or separate base-repair PRs landing first — the 2026-09-05 #1394/#1393/#1395
-out-of-order merge (fork #103 incident) proved sequencing comments don't
-protect merge order.
+Before filing an upstream PR, read base-main CI gate state with the owning
+tool rather than polling by hand (lens J / F28): `tools/oc-pr-fault-scope
+<pr#> --run <id>` returns **IN-SCOPE** (the PR owns the failure) or
+**BASE-FAULT** (zero intersection — do NOT chase), and `tools/oc-harvest-sweep`
+runs the mechanical pre-gate legs. Pre-claim any OWNERLESS red files by
+carrying a sweep commit in the PR itself (Session-Id-only trailer, no
+Issue-Ref). Do NOT rely on sequencing comments or separate base-repair PRs
+landing first — the 2026-09-05 #1394/#1393/#1395 out-of-order merge (fork #103
+incident) proved sequencing comments don't protect merge order.
 
 ## Verification during a truncated-output window is not verification (Duty-4 proposal, owner-approved 2026-09-06; sharpens AGENTS.md truncated-output law)
 

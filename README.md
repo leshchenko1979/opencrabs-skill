@@ -14,7 +14,9 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `SKILL.md` | Main entry: roles, hard rules, tool register, ship path, glossary |
 | `editor.md` | EDITOR role procedure — Phases 0–7b (issue claim → worktree → edit → gate → commit → ship → upstream PR) |
 | `editor-upstream-pr.md` | Harvest & upstream PR filing procedure (Phase 7b/7c) |
-| `hq.md` | HQ role — worker roster, duty cadence, CI-wait & waiter discipline, review lenses |
+| `hq.md` | HQ role — worker roster, duty cadence, review lenses, issue triage |
+| `triage.md` | TRIAGE role procedure — intake & assignment, dispatch hygiene, hygiene patrols, upstream lifecycle tracking |
+| `toolsmith.md` | TOOLSMITH role procedure — owns `tools/` code, battery stewardship, tool-problem reports |
 | `review-lenses.md` | Full Duty-6 lens briefs (A–J) — split from hq.md v0.4.78 |
 | `war-stories.md` | Incident histories behind the hard rules (disclosed from SKILL.md, v0.4.80) |
 | `fleet-directives.md` | Binding owner directives that apply to EVERY lane — the `[LANE]` cross-role law + a residual of cross-cutting rulings, with a pointer table to the role/topic file that owns scoped law. Re-homed from ops AGENTS.md/MEMORY.md, 2026-09-02; split 2026-09-18 |
