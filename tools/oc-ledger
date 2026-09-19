@@ -373,17 +373,41 @@ for tok in oc.primary_issue_tokens(sys.argv[2]):
 }
 
 cmd_stamp() {
-  local kind="" what="" by="" allow_unattr=0 allow_noref=0
+  local kind="" what="" by="" allow_unattr=0 allow_noref=0 what_file="" what_stdin=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --by) by="${2:-}"; shift 2 ;;
       --allow-unattributed) allow_unattr=1; shift ;;
       --allow-no-ref) allow_noref=1; shift ;;
       --what) what="${2:-}"; [ -n "$what" ] || die 2 "--what needs a value"; shift 2 ;;
-      --*) die 2 "stamp: unknown flag '$1' (forms: stamp <kind> \"<what>\" | stamp <kind> --what \"<text>\")" ;;
+      --what-file) what_file="${2:-}"; [ -n "$what_file" ] || die 2 "--what-file needs a path"; shift 2 ;;
+      --what-stdin) what_stdin=1; shift ;;
+      --*) die 2 "stamp: unknown flag '$1' (forms: stamp <kind> \"<what>\" | stamp <kind> --what \"<text>\" | stamp <kind> --what-file <path> | stamp <kind> --what-stdin)" ;;
       *) if [ -z "$kind" ]; then kind="$1"; elif [ -z "$what" ]; then what="$1"; fi; shift ;;
     esac
   done
+  # Shell-free text input (defect fix 2026-09-19, lane facd50af report, #341).
+  # Text passed on a BASH COMMAND LINE is expanded by the CALLER's shell BEFORE
+  # this tool sees it: backticks and $(...) run command substitution, and a
+  # substitution yielding EMPTY output leaves NO trace in the stored row. The
+  # read-back below cannot catch that -- it compares the already-expanded value
+  # against the already-expanded stored copy, so it is blind to caller-side
+  # expansion BY CONSTRUCTION, and the tool reported "read-back ok" over a row
+  # that had silently lost a word. --what-file / --what-stdin give the text a
+  # path that never travels through a shell. Both are mutually exclusive with
+  # each other and with --what; a single trailing newline is stripped so
+  # `printf 'x\n' > f` and `--what x` agree byte-for-byte.
+  local _srcs=0
+  [ -n "$what" ] && _srcs=$((_srcs+1))
+  [ -n "$what_file" ] && _srcs=$((_srcs+1))
+  [ "$what_stdin" = 1 ] && _srcs=$((_srcs+1))
+  [ "$_srcs" -le 1 ] || die 2 "stamp: give the text ONE way (--what | --what-file | --what-stdin), not $_srcs"
+  if [ -n "$what_file" ]; then
+    [ -r "$what_file" ] || die 2 "stamp: --what-file not readable: $what_file"
+    what="$(cat -- "$what_file")"
+  elif [ "$what_stdin" = 1 ]; then
+    what="$(cat)"
+  fi
   [ -n "$kind" ] || die 2 "usage: oc-ledger stamp <kind> \"<what>\" [--by <label>] [--allow-unattributed] [--allow-no-ref]"
   [ -n "$what" ] || die 2 "stamp: what must be non-empty"
   [ -n "$by" ] || by="$(derive_by)"
@@ -455,7 +479,17 @@ cmd_stamp() {
     if [ "$kind" = "claim" ] && [ "$r_iss" != "$issues_json" ]; then
       die 4 "stamp READ-BACK MISMATCH: sent issues=$issues_json, disk has issues=$r_iss — the claim's target is not what was written; investigate before further stamps"
     fi
-    echo "stamped n=$n kind=$kind (read-back ok)"
+    # Surface WHAT WAS STORED, not merely that something was stored (lane
+    # facd50af report, #341). The read-back above compares two values that were
+    # BOTH already expanded by the caller's shell, so it cannot see caller-side
+    # expansion; this line is the last place a silently-corrupted `what` is
+    # catchable by eye. Prints the value read back OFF DISK (r_what), so it
+    # reports what landed, not what was intended. Sanitised to one line.
+    local w_show w_len w_hash
+    w_show="$(printf '%s' "$r_what" | tr '\n' ' ' | cut -c1-80)"
+    w_len=${#r_what}
+    w_hash="$(printf '%s' "$r_what" | sha256sum | cut -c1-8)"
+    echo "stamped n=$n kind=$kind (read-back ok) what=\"$w_show\" len=$w_len hash8=$w_hash"
     git_state_commit "ledger n=$n: $kind (oc-ledger stamp)"
   }
   with_lock _stamp_locked
@@ -1017,6 +1051,46 @@ EOF
   bash "$ME" stamp note --bogus x >/dev/null 2>&1; chk "stamp-unknown-flag" 2 $?
   OC_LEDGER="$T/nope.json" bash "$ME" stamp note "x" >/dev/null 2>&1; chk "ledger-missing" 3 $?
   echo "{broken" > "$T/bad.json"; OC_LEDGER="$T/bad.json" bash "$ME" stamp note "x" >/dev/null 2>&1; chk "ledger-corrupt" 3 $?
+  # --- #341 (2026-09-19): shell-free stamp input + observable stored text ------
+  # The defect: text passed on a COMMAND LINE is expanded by the CALLER's shell
+  # BEFORE this tool runs, so backticks and $(...) execute, and a substitution
+  # that yields EMPTY output leaves NO trace in the stored row -- while the
+  # read-back self-verify above still reports "(read-back ok)". That check
+  # compares the already-expanded value against the already-expanded stored
+  # copy, so it is blind to caller-side expansion BY CONSTRUCTION. --what-file /
+  # --what-stdin give the text a path that never enters a shell; the success
+  # line now echoes what actually landed. A length assertion here would pass on
+  # a wrong-but-same-length string, so the legs compare CONTENT.
+  local WANT_TEXT H1 H2
+  # content-equality helper: `chk` above is rc-specific, so routing a CONTENT
+  # comparison through it reports "want rc=<text> got rc=<text>" -- nonsense.
+  chkeq() { if [ "$2" = "$3" ]; then ok; else bad "$1 (want '$2' got '$3')"; fi; }
+  cat > "$T/payload.txt" <<'PAYLOAD'
+names the messages table in backticks `messages` and a dollar `$HOME` too
+PAYLOAD
+  WANT_TEXT="$(cat "$T/payload.txt")"
+  bash "$ME" stamp note --what-file "$T/payload.txt" >"$T/wf.out" 2>&1; chk "stamp-what-file-rc" 0 $?
+  chkeq "stamp-what-file-roundtrip" "$WANT_TEXT" "$(jq -r '[.events[] | select(.kind=="note")] | last | .what' "$OC_LEDGER")"
+  # the success line must SURFACE the stored bytes (len + hash8) so a caller
+  # whose shell ate a word can SEE the bite -- the read-back cannot tell them.
+  case "$(cat "$T/wf.out")" in *"len=$(printf '%s' "$WANT_TEXT" | wc -c | tr -d ' ')"*) ok ;; *) bad "stamp-success-line-len" ;; esac
+  case "$(cat "$T/wf.out")" in *"hash8=$(printf '%s' "$WANT_TEXT" | sha256sum | cut -c1-8)"*) ok ;; *) bad "stamp-success-line-hash8" ;; esac
+  bash "$ME" stamp note --what-stdin < "$T/payload.txt" >/dev/null 2>&1; chk "stamp-what-stdin-rc" 0 $?
+  chkeq "stamp-what-stdin-roundtrip" "$WANT_TEXT" "$(jq -r '[.events[] | select(.kind=="note")] | last | .what' "$OC_LEDGER")"
+  # ANTI-VACUITY: the surfaced hash8 is computed FROM THE STORED BYTES, not a
+  # constant -- two different texts must not collide on it.
+  H1="$(printf '%s' "$WANT_TEXT" | sha256sum | cut -c1-8)"
+  H2="$(printf '%s' 'x' | sha256sum | cut -c1-8)"
+  if [ "$H1" != "$H2" ]; then ok; else bad "stamp-hash8-anti-vacuity"; fi
+  # guards: exactly ONE text source; an unreadable file is a usage error (rc 2).
+  # The missing-file leg asserts the TOOL's OWN diagnostic, not merely that the
+  # path appears in stderr: with the -r guard removed, `cat` still fails and its
+  # own message still names the path, so a path-substring assertion passes on a
+  # tool that never checked anything (mutation-checked -- M4 stayed GREEN on
+  # that weaker form). "not readable" is a string `cat` cannot produce.
+  bash "$ME" stamp note --what x --what-file "$T/payload.txt" >/dev/null 2>&1; chk "stamp-two-sources-refused" 2 $?
+  bash "$ME" stamp note --what-file "$T/does-not-exist.txt" >/dev/null 2>"$T/wfmiss.err"; chk "stamp-what-file-missing" 2 $?
+  case "$(cat "$T/wfmiss.err")" in *"not readable"*) ok ;; *) bad "stamp-what-file-missing-owned-diagnostic" ;; esac
   # 9-13: sync gates
   bash "$ME" sync --version 0.4.2 >/dev/null 2>&1; chk "sync-no-receipt" 5 $?
   echo '{"verdict":"FAIL","fail":2,"ts":"'"$(now_iso)"'"}' > "$T/skill/tools/tests/battery-last.json"
