@@ -230,12 +230,6 @@ process non-participation) and forwarded to HQ by lane `1122b15e` for canonical 
 
 When the owner says to go to a stage ("let's go to S3", "go to Sx"), that word IS the approval for ALL actions defined in that stage's definition (stage table: `~/oc-work/target-process-*.md`). No per-action re-asking for anything inside the stage definition. Gates the stage definition itself spells out (e.g. the sha-bound artifact verify that authorizes each swap) REMAIN — they are part of the stage definition, not exceptions to it.
 
-## No auto-rollback on smoke FAIL (owner 2026-08-28 18:50Z)
-
-Post-swap smoke FAIL → rollback is the OWNER's call, never mechanical. The swap-chain auto-rollback on post-bounce verify fail (crash-integrity: disk==proc mismatch → restore backup) is UNCHANGED — that one stays automatic. With deploy consent eliminated the same day, this is the only human gate left near the deploy pipeline.
-
-**Smoke-verdict ledger append discipline (owner 2026-09-05, ops relay):** the DRIVING lane appends its verdict to the smoke ledger file (`opencrabs-dev/smoke-verdicts.log` — the canonical state dir; `oc-smoke-evidence` prints the boilerplate row) in the SAME turn as the verdict — posting to topics is visibility, not persistence. Relay/HQ sessions never backfill on the lane's behalf; a late entry is only legal explicitly marked `LATE ENTRY` with the on-record source receipts. Rationale: the theme-3 verdict lived in topics only until a morning audit caught it; the file mtime proved the claimed append never ran.
-
 ## Post-swap notify (LIVE — mechanical fan-out since 2026-08-29)
 
 Mechanics canonical: `oc-deploy fanout` (GREEN leg at the swap_execute tail, RED leg via poll failed-run scan; idempotent `fanout.state`; drills off via `OC_DEPLOY_NOFANOUT=1`) + s2-swap-journal-spec §Fan-out legs. No manual notify steps anywhere. Ledger path is canonical `opencrabs-dev/workers-ledger.json` — the skill-dir duplicate was deleted 2026-08-29 (v0.4.38); fix shipped FIRST, deletion second.
@@ -296,18 +290,6 @@ Mandatory standards for any code slated for upstream harvest (`adolfousier/openc
 6. **`ONTOLOGY.md` Synchronization:** Shared vocabulary lives in `src/docs/reference/ONTOLOGY.md`. If your change introduces, renames, or retires a concept, update `ONTOLOGY.md` in the same PR.
 7. **No Clock-Bomb Fixtures in Tests (v0.4.170, Finding H-1 / row n=2123):** Never write test fixtures with hardcoded absolute future timestamps or recency horizons (e.g. `2026-09-08` in a recency-gated query test). Such fixtures inevitably fail when real calendar time advances past the hardcoded timestamp. Tests must either anchor to simulated/mock time, derive timestamps dynamically relative to `Utc::now()`, or test invariant logic independently of real-world dates.
 8. **Cross-Boundary Unit Test Requirement (No Tautological Helper Assertions, Owner Order 2026-09-17):** Unit tests asserting paths, contracts, file operations, or data formats in upstream PRs must test real cross-boundary interaction (e.g. writing through a real file writer and reading back via the target reader in a tempdir) rather than asserting helper equality against its own internal delegate function. Tautological unit tests (where a function merely tests its own internal implementation helper) provide zero regression protection across module boundaries and are strictly rejected.
-
-## CI-wait discipline & actor attribution (owner 2026-08-30 — fix batch)
-
-**Canonical Waiter Discipline Standards (W1–W6):**
-1. **W1 (Detached execution standard):** Long-running commands (>60s) execute detached (`background: true`). Hand-rolled nohup/sleep loops are strictly forbidden.
-2. **W2 (Poll floor & ceiling):** Detached CI watchers must respect a ≥30s poll interval floor and a bounded timeout ceiling (default 2700s via `oc-prchecks wait`).
-3. **W3 (Invocation verification):** Verify job dispatch identity before entering wait loops; never poll an ambiguous or unverified run ID.
-4. **W4 (Notify wiring):** Automated watchers notify directly to the owning session UUID via `session_notify` upon terminal completion.
-5. **W5 (Log-window cuts):** Grep and log queries must bound search ranges (`--since` or fixed tail) to avoid context compaction floods.
-6. **W6 (Actor attribution — automatic via ambient `OPENCRABS_SESSION_ID`, v0.4.176):** Tools automatically derive attribution from `$OPENCRABS_SESSION_ID`. Manual `export OC_ACTOR` is retired.
-
-Procedure detail: `editor.md §CI-wait discipline & actor attribution`.
 
 ## Creating new editors (owner order 2026-09-01 21:56Z)
 
@@ -569,16 +551,6 @@ A rebase orphans the deployed sha (it stops being an ancestor of `main`), and th
 
 `oc-deploy lineage-check --prev <deployed> --sha <incoming>` returns the verdict (`ok` / `rewritten` / `absent`) read-only, without touching gate state. Re-pointing `deployed.sha` by hand leaves a false audit trail for a sha that was never built as a run and is **prohibited** (HQ ruling 2026-09-12, lane `2fbfb2f8` incident). A genuinely-absent change refuses until the audited `--allow-rewritten-lineage` override is passed with a mandatory justification.
 
-## Swap-sha test coverage & Split-Gate Pipeline (v0.4.145)
-
-To optimize daytime delivery velocity while maintaining binary safety, shipping follows the **Split-Gate Pipeline**:
-
-1. **Pre-Merge Gate (Fast Lint, ~2.2 min)**: `oc-ship-chain` runs fast pre-merge checks (`fmt` + `clippy`) on the topic branch via `oc-prchecks --fast`.
-2. **Merge-First & In-Tool Auto-Rebase**: Feature branches merge sequentially to `main`. If a concurrent merge creates a non-fast-forward push rejection, `oc-deploy` auto-fetches, auto-rebases, audits diff safety via `oc-rebase-safety audit`, and retries the push in 3s.
-3. **Post-Merge Carrier Compile (~10.4 min)**: Carrier `quick-build-linux.yml` compiles the unified tip of `main`. Compilation verifies Rust types, syntax, and borrow checker safety before producing a binary.
-4. **Immediate Live Swap & Smoke Review**: Binary swaps atomically onto the host (`oc-deploy swap-execute`), and editors execute Phase 6b smoke tests (`oc-smoke-evidence`) during active daytime hours.
-5. **Asynchronous / Nightly Full Regression**: Full regression suites (`cargo test --all-features`, ~25 min) execute asynchronously in CI on `main` or run in consolidated batches during the nighttime sync. If asynchronous test runs report regressions, a fix issue is queued for triage.
-
 ## Carrier Concurrency & Coalescence Law (v0.4.148, Toolsmith brief 2026-09-12) [LANE]
 
 - **Workflow Concurrency Semantics:** The GitHub Actions carrier workflow `ci/quick-build-linux` uses `concurrency: group: quick-build-linux` with default queuing semantics (1 active run, 1 pending run; additional dispatches cancel and replace the pending run).
@@ -601,10 +573,6 @@ flowchart TD
 ## Features-compat gate — no silent feature-loss swaps (HQ ruling 2026-09-04, MANDATORY) [LANE]
 
 `oc-deploy swap-execute` **refuses** any artifact whose feature set drops a feature present in `deployed.meta.json` (exit 4, journal `features-drop-gate`, markers untouched) unless the operator passes `--allow-features-drop` explicitly. Feature *additions* pass freely; *drops* are the failure class. Enforced in-code (selftest 17p/17q). Rationale: the 06:36:06Z rogue swap (run `33844429519`, `features="telegram"` over a live `telegram,code-graph` binary) killed structural memory for 12h — and the 18:57Z f3c03269 swap was the same class (no-tests artifact, auto-consumed). The gate would have refused both.
-
-## Carrier hotfix gates are build-no-tests — expect BASE-FAULT REDs (harvest, A3 lane 2026-09-03)
-
-A green main gate does **not** prove a test-GREEN base: carrier hotfix gates run build-no-tests, so a lane whose branch base is hotfix-fresh may hit its first full-gate RED from base faults it doesn't own. Mitigation that works: triage with `--fault-scope BASE-FAULT`, park, rebase after the main-side repair. (Supersedes nothing; complements the coverage law above — that fixes the process, this prepares the lanes for the window where it isn't applied yet.)
 
 ## Cross-lane message delivery discipline (owner order 2026-09-04 22:31Z) [LANE]
 
@@ -763,14 +731,6 @@ upstream; restoration shipped E0432, retracted same day).
 Ops-unit (`opencrabs-ops`) restarts/reaps ONLY that unit — family and default
 daemons are never touched by ops/dev work. Default-profile `opencrabs.service`
 running an old binary is EXPECTED, not an incident (ruling 1273, owner).
-
-## Inherited-claim three-pillar verification (landed in skill 2026-09-06, brain-scrub F6; previously only in MEMORY.md)
-
-When adopting another session's claim (branch, gate, fix): (1) the artifact
-exists on disk/remote as claimed, (2) the evidence trail (gate run, job-name
-sha pin) is live-verified by the adopting session itself, (3) no newer state
-invalidates it (main moved, superseded fix). All three or the claim is
-treated as unverified input, not as a receipt.
 
 ## telegram_send addressing rule (owner ruling 2026-09-07, telegram_send error audit) — AS-IS law [LANE]
 

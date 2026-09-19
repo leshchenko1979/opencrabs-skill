@@ -580,3 +580,43 @@ resolves there (law home: SKILL.md §ISSUE ROUTING, PR SHIPMENT row).
 ## CI Watcher Discipline & Throttling (v0.4.143)
 
 - **`gh run watch` throttling**: Mandatory `--interval 30` (or `60`) on raw `gh run watch` invocations per `fleet-directives.md §CI Watcher Discipline`. Prefer `tools/oc-prchecks wait`, which throttles mechanically.
+
+## No auto-rollback on smoke FAIL (owner 2026-08-28 18:50Z)
+
+Post-swap smoke FAIL → rollback is the OWNER's call, never mechanical. The swap-chain auto-rollback on post-bounce verify fail (crash-integrity: disk==proc mismatch → restore backup) is UNCHANGED — that one stays automatic. With deploy consent eliminated the same day, this is the only human gate left near the deploy pipeline.
+
+**Smoke-verdict ledger append discipline (owner 2026-09-05, ops relay):** the DRIVING lane appends its verdict to the smoke ledger file (`opencrabs-dev/smoke-verdicts.log` — the canonical state dir; `oc-smoke-evidence` prints the boilerplate row) in the SAME turn as the verdict — posting to topics is visibility, not persistence. Relay/HQ sessions never backfill on the lane's behalf; a late entry is only legal explicitly marked `LATE ENTRY` with the on-record source receipts. Rationale: the theme-3 verdict lived in topics only until a morning audit caught it; the file mtime proved the claimed append never ran.
+
+## CI-wait discipline & actor attribution (owner 2026-08-30 — fix batch)
+
+**Canonical Waiter Discipline Standards (W1–W6):**
+1. **W1 (Detached execution standard):** Long-running commands (>60s) execute detached (`background: true`). Hand-rolled nohup/sleep loops are strictly forbidden.
+2. **W2 (Poll floor & ceiling):** Detached CI watchers must respect a ≥30s poll interval floor and a bounded timeout ceiling (default 2700s via `oc-prchecks wait`).
+3. **W3 (Invocation verification):** Verify job dispatch identity before entering wait loops; never poll an ambiguous or unverified run ID.
+4. **W4 (Notify wiring):** Automated watchers notify directly to the owning session UUID via `session_notify` upon terminal completion.
+5. **W5 (Log-window cuts):** Grep and log queries must bound search ranges (`--since` or fixed tail) to avoid context compaction floods.
+6. **W6 (Actor attribution — automatic via ambient `OPENCRABS_SESSION_ID`, v0.4.176):** Tools automatically derive attribution from `$OPENCRABS_SESSION_ID`. Manual `export OC_ACTOR` is retired.
+
+Procedure detail: `editor.md §CI-wait discipline & actor attribution`.
+
+## Swap-sha test coverage & Split-Gate Pipeline (v0.4.145)
+
+To optimize daytime delivery velocity while maintaining binary safety, shipping follows the **Split-Gate Pipeline**:
+
+1. **Pre-Merge Gate (Fast Lint, ~2.2 min)**: `oc-ship-chain` runs fast pre-merge checks (`fmt` + `clippy`) on the topic branch via `oc-prchecks --fast`.
+2. **Merge-First & In-Tool Auto-Rebase**: Feature branches merge sequentially to `main`. If a concurrent merge creates a non-fast-forward push rejection, `oc-deploy` auto-fetches, auto-rebases, audits diff safety via `oc-rebase-safety audit`, and retries the push in 3s.
+3. **Post-Merge Carrier Compile (~10.4 min)**: Carrier `quick-build-linux.yml` compiles the unified tip of `main`. Compilation verifies Rust types, syntax, and borrow checker safety before producing a binary.
+4. **Immediate Live Swap & Smoke Review**: Binary swaps atomically onto the host (`oc-deploy swap-execute`), and editors execute Phase 6b smoke tests (`oc-smoke-evidence`) during active daytime hours.
+5. **Asynchronous / Nightly Full Regression**: Full regression suites (`cargo test --all-features`, ~25 min) execute asynchronously in CI on `main` or run in consolidated batches during the nighttime sync. If asynchronous test runs report regressions, a fix issue is queued for triage.
+
+## Carrier hotfix gates are build-no-tests — expect BASE-FAULT REDs (harvest, A3 lane 2026-09-03)
+
+A green main gate does **not** prove a test-GREEN base: carrier hotfix gates run build-no-tests, so a lane whose branch base is hotfix-fresh may hit its first full-gate RED from base faults it doesn't own. Mitigation that works: triage with `--fault-scope BASE-FAULT`, park, rebase after the main-side repair. (Supersedes nothing; complements the coverage law above — that fixes the process, this prepares the lanes for the window where it isn't applied yet.)
+
+## Inherited-claim three-pillar verification (landed in skill 2026-09-06, brain-scrub F6; previously only in MEMORY.md)
+
+When adopting another session's claim (branch, gate, fix): (1) the artifact
+exists on disk/remote as claimed, (2) the evidence trail (gate run, job-name
+sha pin) is live-verified by the adopting session itself, (3) no newer state
+invalidates it (main moved, superseded fix). All three or the claim is
+treated as unverified input, not as a receipt.
