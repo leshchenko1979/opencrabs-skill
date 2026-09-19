@@ -88,6 +88,13 @@
 #         `oc-deploy poll --sha <sha> --execute --wait <sec>`, or re-run the
 #         chain with a larger --wait. Distinct from 6 (INFRA) so "the build
 #         is slow" and "the build is broken" stop sharing an exit code.
+#       9 SHIP-LOCK-TIMEOUT — another chain held the landing lock for the whole
+#         queue budget. NOT infra: the gate is fine and the holder is a real
+#         carrier build. Do NOT re-dispatch the gate (that burns a full gate
+#         cycle for the same answer) — wait for the holder, or raise the budget
+#         with SHIP_LOCK_TIMEOUT=<sec> / OC_SHIPCHAIN_LOCK_WAIT=<sec>.
+#         Distinct from 6 (INFRA) for the same reason 7 and 8 are: lock
+#         contention is a queue condition, not a broken component.
 #
 # Chain-id: every leg stamps the ledger under one id (kind=shipchain)
 #   CHAIN-<shortsha>-<UTCstamp>  →  retrieve the whole run with
@@ -190,6 +197,22 @@ GATE_RESUMES="${OC_SHIPCHAIN_GATE_RESUMES:-2}"     # max rc-5 resume-polls befor
 # a genuinely broken carrier. 2700 s mirrors GATE_WAIT and leaves 22.6 min of
 # headroom over the worst observed (1344 s).
 WAIT="${OC_SHIPCHAIN_SHIP_WAIT:-2700}"             # 45 min — one carrier build, comfortably
+# SHIP-LOCK queue budget (defect fix 2026-09-19, fork #391; reported
+# independently by lanes 61161247 and c78e78e0). The lock is acquired at LEG3
+# and released ONLY from the exit trap, so it is held across LEG3 (ff-merge,
+# seconds) + LEG4 (WAIT above) + LEG5 (swap poll, 12 x 10 s + poll runtime).
+# The old default was a hardcoded 600 s against a ~3300 s max hold: the queue
+# budget was STRUCTURALLY SHORTER than the thing it serialized, so any chain
+# that queued behind a real ship expired by construction. Volume measured over
+# tools.log shipchain rows: 56 contended, 36 acquired-after-wait, 10 timeouts.
+# Mirrors the LEG4 fix (#336) reasoning: a budget must outlast the hold it
+# waits on, not the average. WAIT + 600 s covers LEG5 and leaves headroom.
+# The timeout also stopped masquerading as INFRA: it now dies rc 9
+# (SHIP-LOCK-TIMEOUT), because "another ship is ahead of you" is a QUEUE
+# condition, not a broken component — the same split rc 7 and rc 8 got.
+# The documented workaround SHIP_LOCK_TIMEOUT=<sec> keeps working and WINS
+# over this default; OC_SHIPCHAIN_LOCK_WAIT is the file's own-prefix alias.
+SHIP_LOCK_WAIT="${OC_SHIPCHAIN_LOCK_WAIT:-$((WAIT + 600))}"
 [ "$SELFTEST_MODE" = "1" ] && OC_SHIPCHAIN_IMPL=1 OC_SHIPCHAIN_SELFTEST=1 exec bash "$SELF"
 [ "$SELFTEST_MODE" = "2" ] && eval "$(sed -n '/^selftest_impl()/,/^}$/p' "$SELF")" && { selftest_impl; exit $?; }
 
@@ -542,9 +565,9 @@ acquire_ship_lock() {
     now="$(date +%s)"
     elapsed=$((now - start_ts))
     if [ "$elapsed" -ge "$timeout" ]; then
-      journal "SHIP-LOCK timeout after ${elapsed}s"
-      printf '%s\n' "oc-ship-chain: landing lock timeout after ${elapsed}s" >&2
-      die "ship lock acquisition timed out after ${timeout}s — another ship is in progress" 6
+      journal "SHIP-LOCK timeout after ${elapsed}s (budget ${timeout}s)"
+      printf '%s\n' "oc-ship-chain: landing lock timeout after ${elapsed}s (budget ${timeout}s)" >&2
+      die "SHIP-LOCK-TIMEOUT: another ship held the landing lock for the whole ${timeout}s queue budget. This is NOT an infrastructure fault and the gate is NOT broken — do NOT re-dispatch the gate (that burns another full gate cycle for the same answer). The holder is serializing LEG3+LEG4+LEG5, i.e. a real carrier build; re-run the chain once it finishes, or raise the budget with SHIP_LOCK_TIMEOUT=<sec> (or OC_SHIPCHAIN_LOCK_WAIT=<sec>)." 9
     fi
     sleep 1
   done
@@ -766,7 +789,7 @@ else
 fi
 
 # ---- leg 3: ff-merge into fork main (under ship lock) ----------------------
-acquire_ship_lock "${SHIP_LOCK_TIMEOUT:-600}"
+acquire_ship_lock "${SHIP_LOCK_TIMEOUT:-$SHIP_LOCK_WAIT}"
 git -C "$FORK_REPO" fetch origin --quiet || true
 CUR="$(git -C "$FORK_REPO" rev-parse --abbrev-ref HEAD)"
 [ "$CUR" = "main" ] || die "fork checkout on '$CUR', not main — check out main first" 3
@@ -1437,6 +1460,48 @@ EOF2
   check_rc "ship-lock-contention-resolved" "$RC" 0
   grep -q "SHIP-LOCK acquired after" "$T/journal.log" && ok "journal-ship-lock-waited" || bad "journal-ship-lock-waited"
   grep -q "SHIP-LOCK released" "$T/journal.log" && ok "journal-ship-lock-released" || bad "journal-ship-lock-released"
+
+  # Ship Lock TIMEOUT is rc 9, NOT rc 6 (defect fix 2026-09-19, fork #391;
+  # reported independently by lanes 61161247 and c78e78e0). The old timeout died
+  # rc 6 — the INFRA branch — so a lane reading the exit table went hunting a
+  # broken component and re-dispatched the gate, burning a full gate cycle for a
+  # queue condition. Contention is NOT infra: the same reasoning that split rc 7
+  # (gate in flight) and rc 8 (ship wait) out of rc 6.
+  flock -x "$T/state/ship.lock" sleep 5 &
+  SUBPID=$!
+  sleep 0.1
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_DEPLOY_STATE_DIR="$T/state" OC_SHIPCHAIN_IMPL=0 OC_PRCHECKS_BIN="$T/fake-prchecks" OC_DEPLOY_BIN="$T/fake-deploy" \
+      OC_ISSUELOG_BIN="$T/fake-issuelog" OC_FORK_REPO="$T/clone" OC_TOOLS_NOLOG=1 \
+      OC_SHIPCHAIN_LEDGER="$T/journal.log" OC_SHIPCHAIN_FREEZE_OVERRIDE=1 \
+      SHIP_LOCK_TIMEOUT=1 \
+      bash "$SELF" --sha "$FSHA" --branch feat --wait 5 2>&1)" || RC=$?
+  kill $SUBPID 2>/dev/null || true; wait $SUBPID 2>/dev/null || true
+  check_rc "ship-lock-timeout-is-rc9-not-infra" "$RC" 9
+  case "$OUT" in
+    *"SHIP-LOCK-TIMEOUT"*) ok "ship-lock-timeout-names-itself" ;;
+    *) bad "ship-lock-timeout-names-itself" ;;
+  esac
+  case "$OUT" in
+    *"gate infra"*|*"ship infra"*) bad "ship-lock-timeout-not-labelled-infra" ;;
+    *) ok "ship-lock-timeout-not-labelled-infra" ;;
+  esac
+  grep -q "SHIP-LOCK timeout" "$T/journal.log" && ok "journal-ship-lock-timeout" || bad "journal-ship-lock-timeout"
+
+  # The queue budget must OUTLAST the hold it serializes (LEG4's WAIT). The old
+  # literal 600 was structurally shorter than the ~3300s hold, so every chain
+  # that queued behind a real ship expired by construction. Assert the DERIVED
+  # relation rather than a pinned number, so a future edit to WAIT carries the
+  # budget with it instead of silently re-introducing the shortfall.
+  _lwait="$( ( unset OC_SHIPCHAIN_SHIP_WAIT; eval "$(grep -m1 '^WAIT=' "$SELF")"; printf '%s' "$WAIT" ) 2>/dev/null)"
+  _lbudg="$( ( unset OC_SHIPCHAIN_LOCK_WAIT; eval "$(grep -m1 '^WAIT=' "$SELF")"; eval "$(grep -m1 '^SHIP_LOCK_WAIT=' "$SELF")"; printf '%s' "$SHIP_LOCK_WAIT" ) 2>/dev/null)"
+  if [ "${_lbudg:-0}" -ge "$(( ${_lwait:-0} + 600 ))" ]; then
+    ok "ship-lock-budget-outlasts-leg4-hold"
+  else
+    bad "ship-lock-budget-outlasts-leg4-hold (WAIT=${_lwait:-?} budget=${_lbudg:-?})"
+  fi
 
   # 12. ACTOR DEFAULTING (v0.4.152 §Attribution & Goal Hygiene A1; defect fix
   # 2026-09-12, toolsmith). A tool that ALREADY KNOWS the owning session MUST
