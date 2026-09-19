@@ -1,5 +1,31 @@
 # Changelog — opencrabs-dev
 
+## v0.4.209 (2026-09-19)
+
+**Lens A/B sediment pass across the four law files, and the LOC metric becomes a MANDATORY part of every law change (owner order 2026-09-19: *"The lines of code check must be a part of every law change. It's one of the main metrics"*).**
+
+- **The order, and why it is law rather than advice.** Large law files degrade context compaction, so the four files that every lane loads were audited by an 8-subagent matrix — Lens A (sediment / provenance / churn-drift) × Lens B (redundancy / cache / subsumed procedure) over `fleet-directives.md`, `editor.md`, `SKILL.md` and the ops brain `AGENTS.md`. 51 of 54 quoted findings were mechanically validated against disk truth before a single edit was applied. `fleet-directives.md §Upstream Coding & Testing Standards` now carries the rule: **every law/process edit ships an explicit before/after LOC delta table for each file touched**, law files stay under the 500-line budget, and a law change with no LOC delta is INCOMPLETE. A second, smaller rule landed beside it: an ad-hoc test or cleanup script must genuinely respect `--dry-run` (mutating actions stay strictly behind flags), and the `--dry-run` form is quoted verbatim from the tool's own `--help`, never hand-written.
+
+- **The measured result — `wc -l`, pre-pass copy vs live file, one turn:**
+
+  | File | Before | After | Δ |
+  |---|---|---|---|
+  | `fleet-directives.md` | 603 | 598 | −5 |
+  | `editor.md` | 598 | 524 | −74 |
+  | `SKILL.md` | 576 | 575 | −1 |
+  | ops `AGENTS.md` | 543 | 520 | −23 |
+  | **Total** | **2320** | **2217** | **−103** |
+
+- **`editor.md` carried the bulk (−74), and almost all of it was DUPLICATION rather than detail.** Removed: the 36-line `Decision Rollcall` procedure (canonical in `fleet-directives.md`), the dead `CI Watcher Discipline & Throttling` section, the `Split-Gate Pipeline` design prose, the carrier-hotfix war story, the manual smoke-verdict append procedure (`oc-smoke` owns that append), and the redundant detached-execution / attribution restatements. The long-form local-fmt-drift derivation was cut to the rule it existed to teach — *foreign cosmetic drift is KEPT AS-IS; fix only what you introduced* — the three-receipt re-derivation that produced it is history, not procedure.
+
+- **`fleet-directives.md` lost its duplicate surface stubs and restatements.** The Telegram-surface section was a pointer that restated nothing (canonical: `SKILL.md §Telegram surface law`), the zero-relay law duplicated the routing table directly above it, and the `Re-homed here from ops AGENTS.md/MEMORY.md per owner order 2026-09-02` provenance tail plus the migration history were sediment from a move that is long finished. **One concept, one home** — the pointer is the home, the copy is drift.
+
+- **`SKILL.md` was nearly clean (−1) and lost only provenance.** A stale compiler re-enable pointer, git-commit sediment inside the `oc-harvest-census` register row (commit shas describing how the tool was wired are not how a reader uses it), a bookkeeping origin note, and a war-story parenthetical about the `git checkout` glob. Added on the `oc-lint-laws` row: the measured `--strict` limitation — 5 PHANTOM-FLAG findings that are all false positives on real working flags (recorded in v0.4.208), so no lane "fixes" them.
+
+- **ops `AGENTS.md` shed forensic history and point-in-time telemetry.** 5.7 KB of SQLite/dpkg/binutils investigation collapsed to the rules it established (read in place via a `mode=ro` URI, never copy a DB; the CLI is the HOST read path only); the 4-leg smoke restatement and the lane-briefing bullet were duplicates of canon held elsewhere; and the cgroup paragraph lost the live readings it had accumulated (`high 1598`, `767.8 MiB current`, `08:5xZ`) while KEEPING the durable content — the 200 MB RSS limit and the cgroup read path. **A measurement that only describes the moment it was taken is not law**; the limit it justified is.
+
+- **What the pass did NOT do.** No rule was weakened, no canonical definition moved, and no gate was narrowed — every cut removed a duplicate, a provenance tail, or a moment-in-time reading. The canon pointers were verified to resolve (`SKILL.md §Test ontology`, `upstream-merge-runbook.md §HARVEST LAW · NO-HOLD`, `fleet-directives.md §Cross-lane message delivery discipline`) before the text that pointed at them was removed.
+
 ## v0.4.208 (2026-09-19)
 
 **Config joins Deep Core (owner order 2026-09-19, verbatim: "Config is also deep core").**

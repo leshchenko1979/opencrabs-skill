@@ -5,7 +5,7 @@ description: >
   worktrees, CI gate (pr-checks), signed commits, push + sha hand-off, oc-deploy ship,
   smoke-test-on-notify, upstream PR), HQ (skill set + worker ledger),
   TRIAGE (interrupt lane: idea/QUIRK intake, fix routing, enforcement — carved out of HQ at v0.4.86),
-  TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); the Compiler role is retired — re-enable trigger in STEP ZERO).
+    TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); Compiler role retired 2026-08-28).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
 globs:
@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.208
+version: 0.4.209
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -105,7 +105,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ship-audit [--hours N] [--log f] [--journal-dir d] [--grace min]` | dispatch-WITHOUT-swap alarm |
 | `./tools/oc-tg-audit <uuid> [--date D] [--days N] [--log-dir P]` | Telegram surface-law evidence scan |
 | `./tools/oc-ledger sync` CHANGELOG gate | sync refuses a version bump whose CHANGELOG entry is missing |
-| `./tools/oc-harvest-census <scan|check|record|sync>` | pre-flight census & lifecycle registry for upstream PR harvests; prevents duplicate/colliding PRs. `record` appends to `manual_records`, which `check` CONSULTS before declaring a unit unharvested — rc 1 `REFUSED … manually recorded as filed in PR #<n> (unit <u>)` — and the registry write MERGES into the loaded dict so foreign keys survive (v0.4.167; wired at `8f7b9558`, three commits after the v0.4.166 row read NO-OP — that law's own subject matter, one iteration later). Use `check`/`scan`, which derive IN_FLIGHT from the live scan |
+| `./tools/oc-harvest-census <scan|check|record|sync>` | pre-flight census & lifecycle registry for upstream PR harvests; prevents duplicate/colliding PRs. `record` appends to `manual_records`, which `check` CONSULTS before declaring a unit unharvested — rc 1 `REFUSED … manually recorded as filed in PR #<n> (unit <u>)` — and the registry write MERGES into the loaded dict so foreign keys survive. Use `check`/`scan`, which derive IN_FLIGHT from the live scan |
 | `./tools/oc-harvest-dispatch <issue> [--dry-run]` | dispatches automated harvest-to-upstream work order for eligible features |
 | `./tools/oc-harvest-sweep <pr-branch> [--base adolfousier/main] [--repo P] [--port-of sha1,sha2]` | pre-gate harvest verification (editor Phase 7 sweep, mechanical legs); behavioral judgment stays human |
 | `./tools/oc-health [--class <name>|--all] [--rotate] [--status] [--json] [--reap] [--quiet] [--selftest]` | 8-class rotating fleet health & cleanliness sweep (owner order 2026-09-11); spec + per-check remediation in `tools/HEALTH-CLASSES.md` & `tools/HEALTH-CHECKS.md`. `--reap` applies SAFE remediations only; without it the tool is a pure read |
@@ -276,8 +276,7 @@ bookkeeping legs — ALL THREE PASSING still does not constitute a successful
 smoke test. Smoke PASS requires a live behavioral probe of the corrected
 runtime path on the running box (full rule: editor.md Phase 6b). A verdict
 citing only bookkeeping legs is INCOMPLETE — returned to the lane, never GREEN.
-Origin: the ship-38585459 smoke (n=2036) passed all bookkeeping legs while its
-"behavioral" leg was only CI test counts.
+
 
 **Owner-dependent leg → PARK, never wait (v0.4.152, owner order 2026-09-12):** when
 the only remaining behavioral evidence requires the OWNER (a visual pass, a tap, an
@@ -443,7 +442,7 @@ codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing 
   of the SAME sha is a DISTINCT build, serialized by the single-flight invariant.
 - `source_ref` accepts a branch NAME (`main`) or the FULL 40-char commit sha —
   NEVER an 8-char short form: actions/checkout treats it as a glob and fetches a
-  branch literally named `<sha>*` — the live incident behind this rule; no war-story entry exists). PASS THE FULL SHA ALWAYS —
+  branch literally named `<sha>*`). PASS THE FULL SHA ALWAYS —
   see next rule for why it is now the only auditable record of what was built.
 - The workflow lives ONLY on the carrier branch `ci/quick-build-linux` (moved off
   fork `main` 2026-08-26, Alexey's call — mirrors upstream dropping it from their

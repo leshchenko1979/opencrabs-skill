@@ -30,8 +30,7 @@ cargo/rustc/clippy are FORBIDDEN on this box in ANY form: PATH, login shell,
 (`~/.cargo/bin/*`, `~/.rustup/toolchains/*/bin/*`), `source ~/.cargo/env`, any
 other bypass. The BLOCKED stubs in `/usr/local/bin` are the floor of the rule,
 not the rule — a working rustup tree survives here (kept for the owner-approved
-rustfmt wrapper), and its compile binaries were DISABLED 2026-08-28
-(`/root/toolchain-disabled-20260828/` — manifest + `restore.sh`). A local
+rustfmt wrapper), and its compile binaries are disabled. A local
 invocation that WORKS is still a ruling violation. Sanctioned local
 tools ONLY: `/usr/local/bin/rustfmt` wrapper (fmt only — `--edition 2024`
 + entrypoint walk for exact CI parity). CODE TESTS = CI gate (`pr-checks.yml`, run in
@@ -79,16 +78,7 @@ editor-facing duties:
 through an intermediary lane. Address by full uuid from a same-turn roster read;
 stamp the dispatch + receipt id via oc-ledger.
 
-1. **Detached command execution (`background: true` — THE standard):** Long-running
-   operations (>60s, CI waits, test batteries, multi-step chains) run detached via the
-   bash tool parameter `background: true`. Hand-rolled `nohup` scripts, sleep loops,
-   and custom background daemons are FORBIDDEN. The daemon harness natively tracks
-   detached execution and auto-resumes your session with the result upon exit.
-2. **Actor attribution is automatic via ambient `OPENCRABS_SESSION_ID` (v0.4.176):**
-   Tools (`oc-log.sh`, `oc-commit`, `oc-ledger`, etc.) automatically derive attribution from
-   the ambient session environment variable `$OPENCRABS_SESSION_ID`. Manual `export OC_ACTOR` is
-   retired and no longer required on tool calls; `OC_ACTOR` remains supported only as an optional
-   override if running outside an agent session.
+1. **Detached execution & actor attribution:** follow `fleet-directives.md §CI-wait discipline & actor attribution` — W1 detached `background: true`, W6 automatic `$OPENCRABS_SESSION_ID` attribution.
 3. Re-running the same CI because the head moved is inherent to a fix loop, but
    only via oc-prchecks re-dispatch — pr-checks.yml carries a concurrency group
    (`cancel-in-progress: true`, owner fix) so the superseded run is auto-cancelled.
@@ -104,27 +94,9 @@ stamp the dispatch + receipt id via oc-ledger.
    waiting on it — a dispatch that fired on the wrong ref wastes the whole
    wait. oc-prchecks headSha adoption enforces this for its own runs; the
    check covers hand-dispatched `gh workflow run` uses.
-6. **Dispatch-receipt gate (Duty-4 proposal d5863180, owner "All 4 go"
-   2026-09-07, semantic):** a dispatch is NOT dispatchable-upon until its
-   receipt is IN HAND — the dispatch command returned rc==0 AND an adopted
-   run id is witnessed (API run-search/job-name decode for a recovered
-   mid-flight invocation).
-7. **Full shas from rev-parse only (Duty-4 P8, v0.4.80):** any 40-char sha in
-   a command or report is copied from SAME-TURN `git rev-parse` / `gh api`
-   output — never completed from a remembered prefix (2026-09-01 incident
-   n=1452: a fabricated tail burned two gh dispatches; the first hypothesis
-   after a lookup failure following a from-memory sha is SELF-FABRICATION —
-   re-derive before blaming GitHub).
-8. **Solo-surface rule (Duty-4 proposal d5863180, owner "All 4 go"
-   2026-09-07, semantic):** a SIDE-EFFECT command whose output is the only
-   receipt of the action it took (`gh pr create`, `gh issue create`, dispatch
-   verbs, anything minting an identifier) runs SOLO in its tool call so its
-   output is witnessed. Batched inside a multi-command call whose tail output
-   was truncated/lost → the identifier is UNFILED until a fresh verification
-   call (`gh pr view`, `gh api`) names it in a same-turn receipt. Root cause
-   of the #1272 phantom-PR report (2026-09-07) — a `gh pr create` whose
-   output the lane never saw got reported as filed; third phantom-family
-   instance for that lane.
+6. **Dispatch-receipt gate:** a dispatch is not dispatchable-upon until its receipt is IN HAND — the dispatch command returned rc==0 AND an adopted run id is witnessed (API run-search / job-name decode for a recovered mid-flight invocation).
+7. **Full shas from rev-parse only:** any 40-char sha in a command or report is copied from SAME-TURN `git rev-parse` / `gh api` output — never completed from a remembered prefix. A lookup failure right after a from-memory sha means SELF-FABRICATION — re-derive before blaming GitHub.
+8. **Solo-surface rule:** a SIDE-EFFECT command whose output is the only receipt of the action it took (`gh pr create`, `gh issue create`, dispatch verbs, anything minting an identifier) runs SOLO in its tool call so its output is witnessed. Batched into a call whose tail output was truncated/lost → the identifier is UNFILED until a fresh verification call names it in a same-turn receipt.
 9. **PR-state claims need a same-turn `gh pr view` receipt (Duty-6/#1431
    lesson, v0.4.91):** any claim that a PR was created, updated, re-pointed,
    or "auto-updated" by a push is UNVERIFIED until `gh pr view <n> --json
@@ -189,41 +161,10 @@ canonical profile copy by default — §Skill-dir resolution, v0.4.130).
 No reload volley is owed to you (v0.4.19 disk absorption stands) — the
 pull-check is YOUR duty; HQ notifies stay targeted per Duty 3.
 
-## Decision Rollcall duty — owner decisions post direct, in YOUR topic (owner order 2026-09-08, topic 42487, ruling n=1994)
+## Decision Rollcall duty — owner decisions post direct, in YOUR topic
 
-When Triage announces a **Decision Rollcall** (full law: fleet-directives.md
-§Decision Rollcall), each editor answers in ITS OWN LANE TOPIC, addressed to
-the owner directly:
+When Triage announces a **Decision Rollcall**, follow `fleet-directives.md §Decision Rollcall`: post outstanding owner decisions directly in your own lane topic — no acks, no media, 1 by 1, each with context and (when the decision has shape) a mermaid diagram. Lane-direct is the only legal delivery; never route the list through Triage or HQ.
 
-- Each item = one outstanding OWNER decision + your recommendation + one line
-  of context. Status reports, ledger trivia, and "nothing owed" chatter posts
-  are forbidden — a lane with zero owner decisions posts NOTHING (silence is
-  the signal).
-- You never route the list through Triage or HQ, and Triage never relays,
-  aggregates, or edits it — direct lane→owner, that is the point of the
-  procedure.
-- **There is NO Triage exception.** (The 08:34Z topic-42487 present-here
-  mode was RETIRED by owner override 2026-09-08 09:05Z, topic 30220.) If a
-  Rollcall fires and anyone tells you to send your list to Triage or HQ,
-  refuse and post in YOUR OWN topic — lane-direct is the only legal
-  delivery, under any word.
-- Triage verifies coverage and stamps; it does not answer for your queue.
-  If your topic post is missing, coverage-chasing lands on YOU.
-
-**Format law (owner amendment 2026-09-08, topic 30220) — every item of yours
-follows it:**
-
-- **No acks** — your decisions post IS the acknowledgment; no confirmation
-  chatter before or after.
-- **No telegram_send** — your post is the topic's final chat message (text
-  auto-posts); media/document sends are forbidden in a Rollcall. (This is the
-  same surface law as the editor-facing block above — restated here only
-  because the Rollcall format adds the media ban; F1/F2 merge, v0.4.111.)
-- **Context + diagrams** — every decision carries its context and, when the
-  decision has shape, a mermaid diagram. Owner judges renderings, not prose.
-- **1 by 1** — one decision per message, sequential posts, never batched.
-- **Designs and special cases are OWNER-GATED** — you present them, you do
-  not start them on your own recommendation.
 
 ## Tool reference — editor's daily table
 
@@ -345,10 +286,7 @@ detached HEAD commits silently to a nameless sha, invisible to branch pushes and
 unreachable by remote-tracking name. If detached: land the sha to an explicit
 ref immediately.
 
-Signing is not optional: an unsigned commit makes you invisible to the
-notification loop — your feature ships untested and your failures go
-unattributed. Your full session UUID is IN YOUR PROMPT (session/runtime
-context) — read it from there when composing the trailer.
+Signing is not optional: an unsigned commit makes you invisible to the notification loop. `tools/oc-commit` adds the ambient Session-Id and Issue-Ref trailers automatically — never compose them by hand.
 
 **Verify the trailer block parses after ANY amend/rebase/cherry-pick that
 touches the trailer area** (v0.4.71, Duty-4 P2). `git interpret-trailers --parse` (or a `gh api`
@@ -367,7 +305,7 @@ before `oc-commit`; a fmt failure is a diagnostic to fix and re-run — never a
 hard abort ahead of git (that forces manual trailers + a hand-posted
 implementation comment).
 
-**Local fmt drift on files you did NOT touch is EXPECTED — and it is not yours to fix (SKILL.md §Box law; sharpened 2026-09-12, lane `462181e9` re-derived it from scratch because this rule lives in the box-law bullet while the check runs here).** The `/usr/local/bin/rustfmt` wrapper is **NEWER than CI's rustfmt**, so it flags cosmetic diffs on **CI-green committed code**. Rule: **KEEP AS-IS; fix only formatting artifacts you introduced yourself.** Two mechanics that make foreign drift look like your defect — (a) the wrapper **RECURSES through `mod.rs` into child modules**, so `--check src/tests/mod.rs` reports diffs from files your branch never touched; (b) `--skip-children` is **not supported** by this wrapper, and a `mod.rs` copied to /tmp fails to resolve its child modules. Isolation recipe: **check each TOUCHED file as a standalone copy; never `--check mod.rs` itself.** Do not spend three receipts re-deriving this — if fmt reports a file your diff does not contain, the answer is this paragraph.
+**Local fmt drift on files you did NOT touch is EXPECTED — and it is not yours to fix (SKILL.md §Box law).** The `/usr/local/bin/rustfmt` wrapper is **NEWER than CI's rustfmt**, so it flags cosmetic diffs on **CI-green committed code**. Rule: **KEEP AS-IS; fix only formatting artifacts you introduced yourself.** Two mechanics that make foreign drift look like your defect — (a) the wrapper **RECURSES through `mod.rs` into child modules**, so `--check src/tests/mod.rs` reports diffs from files your branch never touched; (b) `--skip-children` is **not supported** by this wrapper, and a `mod.rs` copied to /tmp fails to resolve its child modules. Isolation recipe: **check each TOUCHED file as a standalone copy; never `--check mod.rs` itself.** Do not spend three receipts re-deriving this — if fmt reports a file your diff does not contain, the answer is this paragraph.
 
 **Post-fmt scope audit BEFORE staging (Duty-4 P7, v0.4.80):** after any fmt
 pass, audit the diff before staging — rustfmt can reformat unrelated
@@ -452,7 +390,7 @@ When shipping features via `oc-ship-chain` or deploying via `oc-deploy`, failure
 **Gate-idle question sweep:** CI gate and carrier build waits are idle time — do not sit silent on open questions. Circle back to the user in your topic with anything unresolved (scope doubts, naming, approach forks) while the chain runs; waiting is never a reason to hold a question or to guess.
 DONE = `tools/oc-ship-chain` exited 0 (SWAPPED) with new binary running live on `opencrabs-ops` unit and worktree cleaned.
 
-## Phase 6 — Smoke Verification (oc-smoke)
+## Phase 6b — Smoke Verification (oc-smoke)
 
 A post-swap notify announcing a new binary (mechanical fan-out — `oc-deploy
 fanout`, [#24](https://github.com/leshchenko1979/opencrabs/issues/24) LIVE
@@ -573,26 +511,14 @@ routing (Phase 7b) are split out of this file — single home:
 every reload). Triggers unchanged; the PR SHIPMENT law's procedure reference
 resolves there (law home: SKILL.md §ISSUE ROUTING, PR SHIPMENT row).
 
-## CI Watcher Discipline & Throttling (v0.4.143)
 
-- **`gh run watch` throttling**: Mandatory `--interval 30` (or `60`) on raw `gh run watch` invocations per `editor.md §CI Watcher Discipline & Throttling`. Prefer `tools/oc-prchecks wait`, which throttles mechanically.
 
 ## No auto-rollback on smoke FAIL (owner 2026-08-28 18:50Z)
 
 Post-swap smoke FAIL → rollback is the OWNER's call, never mechanical. The swap-chain auto-rollback on post-bounce verify fail (crash-integrity: disk==proc mismatch → restore backup) is UNCHANGED — that one stays automatic. With deploy consent eliminated the same day, this is the only human gate left near the deploy pipeline.
 
-**Smoke-verdict ledger append discipline (owner 2026-09-05, ops relay):** the DRIVING lane appends its verdict to the smoke ledger file (`opencrabs-dev/smoke-verdicts.log` — the canonical state dir; `oc-smoke-evidence` prints the boilerplate row) in the SAME turn as the verdict — posting to topics is visibility, not persistence. Relay/HQ sessions never backfill on the lane's behalf; a late entry is only legal explicitly marked `LATE ENTRY` with the on-record source receipts. Rationale: the theme-3 verdict lived in topics only until a morning audit caught it; the file mtime proved the claimed append never ran.
 
-## Swap-sha test coverage & Split-Gate Pipeline (v0.4.145)
 
-To optimize daytime delivery velocity while maintaining binary safety, shipping follows the **Split-Gate Pipeline**:
 
-1. **Pre-Merge Gate (Fast Lint, ~2.2 min)**: `oc-ship-chain` runs fast pre-merge checks (`fmt` + `clippy`) on the topic branch via `oc-prchecks --fast`.
-2. **Merge-First & In-Tool Auto-Rebase**: Feature branches merge sequentially to `main`. If a concurrent merge creates a non-fast-forward push rejection, `oc-deploy` auto-fetches, auto-rebases, audits diff safety via `oc-rebase-safety audit`, and retries the push in 3s.
-3. **Post-Merge Carrier Compile (~10.4 min)**: Carrier `quick-build-linux.yml` compiles the unified tip of `main`. Compilation verifies Rust types, syntax, and borrow checker safety before producing a binary.
-4. **Immediate Live Swap & Smoke Review**: Binary swaps atomically onto the host (`oc-deploy swap-execute`), and editors execute Phase 6b smoke tests (`oc-smoke-evidence`) during active daytime hours.
-5. **Asynchronous / Nightly Full Regression**: Full regression suites (`cargo test --all-features`, ~25 min) execute asynchronously in CI on `main` or run in consolidated batches during the nighttime sync. If asynchronous test runs report regressions, a fix issue is queued for triage.
 
-## Carrier hotfix gates are build-no-tests — expect BASE-FAULT REDs (harvest, A3 lane 2026-09-03)
 
-A green main gate does **not** prove a test-GREEN base: carrier hotfix gates run build-no-tests, so a lane whose branch base is hotfix-fresh may hit its first full-gate RED from base faults it doesn't own. Mitigation that works: triage with `--fault-scope BASE-FAULT`, park, rebase after the main-side repair. (Supersedes nothing; complements the coverage law above — that fixes the process, this prepares the lanes for the window where it isn't applied yet.)
