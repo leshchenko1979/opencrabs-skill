@@ -1,5 +1,29 @@
 # Changelog — opencrabs-dev
 
+## v0.4.215 (2026-09-19)
+
+Two stale-law sites closed, both reported by active lanes, both verified first-hand before the edit.
+
+**1. `hq.md` carried the PRE-re-ruling delivery cadence — the THIRD site of the family (filed by editor lane d18ce16a).** Two sites in the one file:
+- line 97, the Duty-3 confirm-law row: prescribed `delivery=now` + `confirm=true` for CRITICAL notifies and called `interrupt=true` a "failsafe". `now` now **FAILS the delivery outright** (`notify_policy.rs` → `Err`, #373), so the row taught a mode that cannot be sent — a lane following it loses the notify entirely, not merely its escalation.
+- lines 118-120, the Duty-3 blockquote: "quiet DEFAULT, turn-end for boundary-bound signals, `interrupt=true` failsafe ONLY for urgent wakes a lane is blocked on" — the INVERTED default plus a non-existent escalation, citing the superseded 2026-09-04 law and a `SKILL.md` section that now says the opposite.
+
+Proof (same-turn, read-back-immune): `grep -rl 'quiet DEFAULT' --include='*.md'`, excluding `CHANGELOG.md` and `reviews/`, returned EXACTLY ONE live law file — `hq.md`. Canonical counter-texts confirmed live in the same pass: `fleet-directives.md` "Escalation: there is NONE" ×1; `SKILL.md` "accepted but INERT" ×1. The family is now closed at all three sites: `toolsmith.md` (v0.4.212), `fleet-directives.md` (v0.4.213), `hq.md` (this bump).
+
+**2. `SKILL.md` §Hard rules contradicted itself on the fork-claim mechanism (lens-pass finding, left unfixed by the v0.4.209 pass).** Line 553 read "fixer claims via a `gh` comment on the issue + an `oc-ledger claim` row"; line 511 of the SAME file reads "Fork issues NEVER claimed on GitHub: no tackling comments, assignment, labels/reactions by any lane — claiming = `Issue-Ref` trailer + workers-ledger `claim` row". A cold reader took the wrong mechanism from the wrong line. Fixed to the canonical mechanism only: ledger `claim` row + `Issue-Ref` trailer, NO `gh` comment, assignment or label.
+
+**LOC before/after:**
+
+| File | Before | After | Δ |
+|---|---|---|---|
+| `hq.md` | 288 | 291 | +3 |
+| `SKILL.md` | 576 | 576 | 0 |
+| `CHANGELOG.md` | 1774 | 1798 | +24 |
+
+**What this bump did NOT do.** No `tools/` path touched. **No mass fanout wave:** `fleet-directives.md` v0.4.172 (owner order 2026-09-14) reserves proactive `oc-notify-fanout` waves for breaking process shifts, fleet-wide safety halts or explicit owner-ordered fleet reloads, and routes routine bumps through JIT pull-absorption — so the filing lane is answered directly instead of pinging 29 lanes for a +3-line correction. The four 500-line-budget law files are STILL over: `fleet-directives.md` 598, `editor.md` 512, `SKILL.md` 576, ops `AGENTS.md` 531.
+
+**Finding filed, NOT fixed (brain file — the owner's call).** ops `AGENTS.md:277` still orders "every skill version bump / law change → quiet-notify all active lanes", which the v0.4.172 order supersedes for routine bumps. Reported to the owner; brain files are edited only on his word.
+
 ## v0.4.214 (2026-09-19)
 
 Three lane-filed defects, all verified first-hand before the edit; all in `upstream-merge-runbook.md`.

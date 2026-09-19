@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.214
+version: 0.4.215
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -551,9 +551,9 @@ links; development-time upstream contact is PR-comments only (supersedes the
   FILED before any fix work starts — on the FORK `leshchenko1979/opencrabs`
   (ALL new issues — upstream-code bugs and fork-only infra alike; upstream
   receives PRs only). Discoverer
-  files it (symptom + evidence); fixer claims via a `gh` comment on the issue +
-  an `oc-ledger claim` row (the `Tackling`-comment instruction is RETIRED —
-  upstream issue comments on OUR fork issues are the owner's lane only,
+  files it (symptom + evidence); fixer claims via an `oc-ledger claim` row +
+  an `Issue-Ref` trailer on the commit — NO `gh` comment, assignment or label
+  on the fork issue (fork-issue comments are the owner's lane only,
   2026-08-27). Covers
   task starts (`editor.md` Phase 1) AND mid-loop finds: red-build bugs, failed
   smoke tests, defects in another editor's feature.
