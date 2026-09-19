@@ -1,5 +1,13 @@
 # Changelog — opencrabs-dev
 
+## v0.4.211 (2026-09-19)
+
+**The `mod.rs` declarations-only standard is FORK discipline, not a gate — the enforcement claim was unsupported by upstream's own tree.**
+
+- **Defect (filed same-day by lane 52058a75, verified first-hand here).** `fleet-directives.md §Upstream Coding & Testing Standards` standard 2 ended with *"Upstream CI strictly enforces this"*, and `editor.md`'s restatement of the same list implied the same. Measured against upstream's own tree: `git show adolfousier/main:src/channels/telegram/mod.rs` at tip `b6e200a119976f92bf0d3e5347f08b01daaecfb3` contains a top-level `pub(crate) async fn record_topic_created(` at line 47 of 94. Either their CI does not enforce it or their `main` is red — and the lane correctly did **not** poll upstream CI to settle which (§Upstream relations bars uninvited polls), so the law could not keep the claim. A lane reading it could treat a pre-existing `mod.rs` function as an in-scope gate obligation.
+- **Fix.** The rule survives unchanged as **fork discipline**; the enforcement sentence is replaced by the counterexample and an explicit instruction not to cite it as a CI obligation when triaging pre-existing `mod.rs` functions. `editor.md`'s list item carries the pointer.
+- **LOC delta (mandatory on every law change):** `fleet-directives.md` 598 → 598 (0), `editor.md` 512 → 512 (0) — both are single-line in-line rewrites, **net 0**. Stated because a zero delta is still a delta, and the metric is the check, not the reduction.
+
 ## v0.4.210 (2026-09-19)
 
 **The local Rust toolchain is gone — the rustfmt-only exception is RETIRED in law — and the smoke-verdict taxonomy gets a token for post-rewrite re-verification.**

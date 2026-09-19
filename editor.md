@@ -294,7 +294,7 @@ gate or push.
 
 **Test placement & upstream coding standards (CONTRIBUTING.md policy, Adolfo DM 2026-09-13):**
 - Tests live under `src/tests/*_test.rs` registered in `src/tests/mod.rs`, never inline `#[cfg(test)] mod tests { ... }` blocks.
-- `mod.rs` is for module declarations and re-exports ONLY — zero function definitions (`fn`) in any `mod.rs`.
+- `mod.rs` is for module declarations and re-exports ONLY — zero function definitions (`fn`) in any `mod.rs` (fork discipline, not a CI gate — see `fleet-directives.md §Upstream Coding & Testing Standards`).
 - Commit trailers must never include `Co-Authored-By`.
 - No `#[allow(dead_code)]` / `#[allow(unused)]` suppression; unused code must be deleted.
 - If introducing, renaming, or retiring concepts, update `src/docs/reference/ONTOLOGY.md`. Upstream CI strictly enforces these.
