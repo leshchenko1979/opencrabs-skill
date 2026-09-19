@@ -100,9 +100,16 @@ per-commit at replay time.
    git cherry origin/main <lane-branch> | grep -Ff <(echo "$LANE_COMMITS") | grep -c '^+' # 0 -> absorbed, SKIP
    # 1. how much of this branch is NOT already in the new base?
    git rev-list --count origin/main..<lane-branch>     # 0 -> absorbed, see below
-   # 2. cut at the PARENT of the oldest of THAT range
-   CUT="$(git rev-list --reverse origin/main..<lane-branch> | head -1)^"
+   # 2. cut at the base the branch SITS ON — read it from the branch's own
+   #    lineage (<lane-base> = the base the branch was cut from), NEVER from a
+   #    range against origin/main: once fork main's lineage is rewritten that
+   #    range walks OUT of the branch's history and the derived cut lands far
+   #    behind the real fork point (the STALE POINTER case below).
+   CUT="$(git merge-base <lane-base> <lane-branch>)"
    git rebase --onto origin/main "$CUT" <lane-branch>
+   # UNSAFE once the base's lineage was rewritten — correct ONLY while
+   # origin/main is still an ancestor of <lane-base>:
+   # CUT="$(git rev-list --reverse origin/main..<lane-branch> | head -1)^"
    ```
    **Zero-pending case — the semantic patch-id test (step 0) comes FIRST, and it is not optional (proposal n=4067, v0.4.170).**
    Do not rely on an aggregate `git cherry ... | grep -c '^+'` without scoping to the lane's unique commits: after an interactive rebase with conflict resolutions, divergence in common ancestor history shifts patch-ids and produces aggregate false-positives. Always test the lane's specific commits against the new base. If `+` count for the lane's own commits is 0, the branch is fully absorbed post-synthesis — skip rebase and fast-forward/move pointer directly. Furthermore, `rev-list --reverse … | head -1` on an EMPTY range yields nothing, so `CUT`
