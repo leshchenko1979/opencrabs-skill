@@ -190,6 +190,28 @@ autonomous-close class: neither branch satisfies (a) superseded-by,
 `git grep -c FlowEvent adolfousier/main -- src/` → empty; no upstream PR carries
 #253's work) and #324 **reopen stands** (child of fork-only #286, OPEN).
 
+**Close identity guard — the cited artifact must touch the issue's own surface
+(HQ ruling 2026-09-19, v0.4.216).** Every close resting on a commit or PR
+reference — autonomous (a)/(b)/(c) and harvest-gated alike — MUST confirm the
+cited artifact touches the issue's OWN surface (the path/module the issue names)
+before closing. A trailer or auto-link naming `#N` is an **ATTRIBUTION, not
+identity**: `oc-commit` derives `Issue-Ref` from the actor's latest OPEN claim,
+so a lane that claims the wrong number poisons every signal downstream —
+trailer, landed-detection, close — and each stays faithful to a corrupted input.
+Mechanical form:
+
+```
+F = changed files of the cited artifact
+gh api repos/<owner>/<repo>/commits/<sha> --jq '[.files[].filename]'   # or /pulls/<N>
+```
+
+Empty intersection with the issue's own surface ⇒ **REFUSE the close**; the issue
+stays OPEN. Origin: #199 (a2a gateway listener) was closed on sha=b10ca242f, a
+loop-guard commit carrying a real `Issue-Ref: #199` trailer and **0** files under
+`src/a2a/`, because ledger claim `n=4683` named #199 for #219's work. Corollary:
+a REOPENED issue overrides the landed arm (`oc-issue-dispatch` git arm), else a
+misreferenced close leaves the issue permanently un-dispatchable.
+
 **Night-shift phase variant (v0.4.157):** inside the operator-initiated Night
 Shift window this duty is promoted from a patrol to the window's CLOSING
 PHASE — **Phase 3, Idle-Lane Issue Triage** (this section IS its home;

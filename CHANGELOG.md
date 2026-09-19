@@ -1,5 +1,34 @@
 # Changelog — opencrabs-dev
 
+## v0.4.216 (2026-09-19)
+
+**Close identity guard — a close must confirm the cited artifact touches the issue's own surface.** Filed by the Triage lane, verified first-hand, and the ROOT CAUSE turned out to be somewhere neither the filing lane nor the law had looked.
+
+**What happened.** #199 ("fix(a2a): the gateway listener is load-coupled to the agent runtime") was closed by a Triage hygiene sweep on 2026-09-14T08:04:27Z, citing sha=`b10ca242f` + upstream PR 1557. `b10ca242f` is a **loop-guard** commit (`fix(loop-guard): exempt paginated arguments…`) touching `helpers.rs`, `profile.rs`, `loop_guard_test.rs`, `profile_pid_lock_test.rs` — **0 files under `src/a2a/`**. The issue was correctly reopened by the detecting lane on 2026-09-19 and its defect is still live.
+
+**The filing lane's mechanism claim was WRONG, and the correction moved the root cause.** The report held that D1's git arm is "a TEXTUAL reference, which is exactly what admitted this close". It is not: `tools/oc-issue-dispatch:434-436` reads `%(trailers:key=Issue-Ref,valueonly,…)` and line 451-452 **skips any commit without a `Session-Id` trailer**. It matches `Issue-Ref` TRAILERS; a `(#199)` typed into a message body would never have matched.
+
+**Actual root cause — one corrupted input, faithfully propagated by every mechanical step downstream:**
+1. Ledger row **`n=4683`** (2026-09-13T20:10:43Z, session `40427d4f`): `CLAIM #199 — fix(loop-guard): exempt paginated arguments…` — the **claim itself named #199 for #219's work**.
+2. `tools/oc-commit:176` derives `Issue-Ref` via `claim-ref "$OC_ACTOR" --open` (the actor's latest OPEN claim) → faithfully emitted `Issue-Ref: #199`.
+3. `b10ca242f` really carries `Issue-Ref: #199` + `Session-Id: 40427d4f-…`.
+4. `fetch_landed_issues()` → #199 reads LANDED. Mechanically correct.
+5. The sweep closed #199 on a harvest-gated close. Correct form, wrong issue.
+
+**The guard, and why it went where it did.** A surface check WOULD have caught this — the commit's files share no path with #199's a2a surface — so the ask was right even though its mechanism was wrong. But it belongs on the **CLOSE path** (`triage.md §Autonomous closure`), **not in D1**: D1 is *dispatch eligibility*, whose git arm is deliberately conservative (a false "landed" merely suppresses re-dispatch), whereas the harm here happens at the *close decision*. Conflating the two puts one predicate with two opposite error costs. D1's git arm is therefore NOT amended; only its **law text** was tightened to name trailers explicitly, so the law stops reading looser than its own implementation.
+
+**Second, live harm the report did not raise.** #199 still carries `Issue-Ref: #199` on fork `main`, so it still reads landed and **will never be re-wired by the dispatch sweep** despite being OPEN with its work genuinely undone. Rule added: **a REOPENED issue overrides the landed arm.** That half touches `tools/oc-issue-dispatch` → routed to Toolsmith as their surface.
+
+**LOC before/after** (owner order: the LOC check is part of every law change):
+
+| File | Before | After | Δ |
+|---|---|---|---|
+| `triage.md` | 294 | 316 | +22 |
+| `fleet-directives.md` | 598 | 598 | 0 |
+| `SKILL.md` | 577 | 577 | 0 |
+
+The guard was placed in `triage.md` **deliberately** — it is the under-budget file (316 < 500). `fleet-directives.md` (598), `SKILL.md` (577) and `editor.md` (512) all remain over the 500-line budget, so the one place a new law could land without worsening the metric is the one it landed in.
+
 ## v0.4.215 (2026-09-19)
 
 Two stale-law sites closed, both reported by active lanes, both verified first-hand before the edit.
