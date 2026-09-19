@@ -50,18 +50,45 @@ usage() {
 }
 
 selftest() {
-  local passed=0 total=4 rc d
+  local passed=0 total=9 rc d jout
   d="$(mktemp -d)"
   printf '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00\x01\x00\x00\x00' > "$d/fake-bin-x64"
   printf 'SOME_MARKER_ABC123\nregular text\n' >> "$d/fake-bin-x64"
+  # #401 fixture: the SAME three words as the phrase below, but NOT contiguous.
+  # This is the file that reddens if the word-split bug ever returns: the old
+  # code turned the phrase into three single words, so it PASSED on a binary
+  # that never contained the phrase.
+  printf '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00\x01\x00\x00\x00' > "$d/fake-bin-split"
+  printf 'attempting\nbounded\nreclaim\n' >> "$d/fake-bin-split"
+  printf 'attempting bounded reclaim\n' >> "$d/fake-bin-x64"
   printf '#!/bin/sh\necho 0.3.83-fake\n' > "$d/fake-ver"
   chmod +x "$d/fake-ver" 2>/dev/null
   "$0" "$d/fake-bin-x64" --markers SOME_MARKER_ABC123 >/dev/null 2>&1;      rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
   "$0" "$d/fake-bin-x64" --markers NO_SUCH_MARKER >/dev/null 2>&1;           rc=$?; [ "$rc" = 3 ] && passed=$((passed+1))
   "$0" "$d/fake-bin-x64" --expect-sha 0000000000000000000000000000000000000000 >/dev/null 2>&1; rc=$?; [ "$rc" = 4 ] && passed=$((passed+1))
   "$0" "$d/nonexistent" >/dev/null 2>&1;                                     rc=$?; [ "$rc" = 2 ] && passed=$((passed+1))
+  # #401 (2026-09-19, Toolsmith): a marker is a WHOLE PHRASE; the COMMA is the
+  # only separator. Four legs pin that semantics.
+  # (5) the contiguous phrase IS present -> pass
+  "$0" "$d/fake-bin-x64" --markers "attempting bounded reclaim" >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  # (6) THE DISCRIMINATOR: same words, not contiguous -> MUST fail. Reddens on
+  # the word-split regression (three common words each present -> old code said 0).
+  "$0" "$d/fake-bin-split" --markers "attempting bounded reclaim" >/dev/null 2>&1; rc=$?; [ "$rc" = 3 ] && passed=$((passed+1))
+  # (7) whitespace AROUND a comma-separated item is trimmed -> both found
+  "$0" "$d/fake-bin-x64" --markers " SOME_MARKER_ABC123 , regular text " >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  # (8) ...but a comma still SEPARATES: three single words on the split fixture pass
+  "$0" "$d/fake-bin-split" --markers "attempting, bounded, reclaim" >/dev/null 2>&1; rc=$?; [ "$rc" = 0 ] && passed=$((passed+1))
+  # (9) the JSON key is the WHOLE phrase, not three word-keys (the shape the
+  # defect report saw: {"bounded":12,"reclaim":10,"attempting":9})
+  jout="$("$0" "$d/fake-bin-x64" --markers "attempting bounded reclaim" --json 2>/dev/null)"
+  printf '%s' "$jout" | grep -qF '"attempting bounded reclaim"' && passed=$((passed+1))
   rm -rf "$d"
-  echo "selftest OK: $passed/$total cases (no network)"
+  if [ "$passed" = "$total" ]; then
+    echo "selftest OK: $passed/$total cases (no network)"
+  else
+    echo "selftest FAIL: $passed/$total cases (no network)" >&2
+  fi
+  [ "$passed" = "$total" ]
   [ "$passed" = "$total" ]
 }
 
@@ -113,7 +140,21 @@ fi
 # ---- 5. PRESENCE (S1 gate) -------------------------------------------------
 declare -A MARK_FOUND
 if [ -n "$MARKERS" ]; then
-  for m in $(printf '%s' "$MARKERS" | tr ',' ' '); do
+  # #401: a marker is a WHOLE PHRASE; the COMMA is the only separator. The old
+  # `for m in $(printf '%s' "$MARKERS" | tr ',' ' ')` was an UNQUOTED command
+  # substitution, so it word-split on IFS whitespace AS WELL AS on the
+  # translated commas: `--markers "attempting bounded reclaim"` became THREE
+  # markers, each a common English word, and the S1 gate reported pass:true for
+  # a phrase the artifact never contained — a FALSE PASS on the swap gate, on
+  # the natural marker for a multi-word feature (#321's live marker is
+  # "attempting bounded reclaim" where the pre-fix code says "attempting
+  # VACUUM"; split, it can no longer tell fixed from unfixed). Split on the
+  # comma ONLY, trimming whitespace AROUND each item so `--markers "m1, m2"`
+  # keeps working, while preserving whitespace INSIDE a phrase.
+  _oc_marker_ifs="$IFS"
+  IFS=','
+  for m in $MARKERS; do
+    m="$(printf '%s' "$m" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     [ -n "$m" ] || continue
     if command -v strings >/dev/null 2>&1; then
       c="$(strings "$BIN" | grep -cF "$m" 2>/dev/null || true)"
@@ -123,6 +164,7 @@ if [ -n "$MARKERS" ]; then
     MARK_FOUND["$m"]="$c"
     [ "${c:-0}" -ge 1 ] || fail 3 "MARKER-MISSING: '$m' NOT FOUND in artifact (S1 gate) — NO SWAP, report 'feature missing from build'"
   done
+  IFS="$_oc_marker_ifs"
 fi
 
 # ---- 6. --expect-sha -------------------------------------------------------
