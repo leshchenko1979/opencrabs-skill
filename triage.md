@@ -80,10 +80,29 @@ per that section. Owner veto overrides retroactively, as with rulings.
   `now`-mode for receipts/ACKs violate the cadence law — flag with evidence,
   route the correction to the offending lane, escalate repeat offenders to the
   HQ.
-- **Harvest backlog patrol (owner 2026-09-08 "Go", v0.4.97 — DAILY):** run
+- **Harvest backlog patrol (owner 2026-09-08 "Go", v0.4.97 — DAILY; census
+  TARGET RE-SCOPED by owner ruling 2026-09-19, v0.4.225):** run
   `./tools/oc-upstream-delta` and post the tiered backlog census (Tier-1/2/3
   candidates + counter line: fork-only commit count + open upstream PR count)
-  to board topic 30220 — one line even on zero-change days (heartbeat).
+  **on this lane's OWN topic** — one line even on zero-change days (heartbeat).
+  **The board-topic-30220 target ordered 2026-09-08 is SUPERSEDED.** The owner
+  ruled the general principle: the subject-matter owner posts on its own
+  surface — *"why wire it to HQ? It's the subject matter that you own, not HQ,
+  right? You own the issue portfolio, and if you think that HQ needs to know
+  something, you will notify it."* The harvest backlog IS Triage subject matter
+  (Duty T4 owns upstream lifecycle tracking — `triage.md` §Role boundary), so no
+  dimension of this census is board-wired. A later rank-1 owner ruling on the
+  POST TARGET supersedes the earlier target; the earlier "Go" ordered the PATROL,
+  and the board target was its mechanism, not its substance. Notify HQ via
+  `session_notify` ONLY when a dimension is genuinely HQ-specific — a
+  harvest-lifecycle decision, an upstream PR state needing a ruling, or anything
+  requiring HQ authorship. The heartbeat duty is unchanged in SUBSTANCE (still
+  one line on zero-change days, still the patrol-alive signal); only its surface
+  moved. This also removes a structural impossibility: the patrol's own cron
+  delivers to `session:<triage-uuid>` only, so `parse_permitted_targets` yields
+  zero channel targets and a mandated board post could only ever be REFUSED
+  (`SendPermission::Nowhere`) — the refusal is what sent the patrol chasing #332
+  D1 and produced #427 (CLOSED 2026-09-19T23:23:50Z, superseded-by #332).
   **Autonomous Harvest Dispatch via PHOP (owner order 2026-09-16):** The previous
   operator-command-only restriction is RETIRED. The patrol identifies fully-soaked
   (≥24h post-swap for features anchored to latest swap timestamp across relationship graph — parent, sub-issues, and blockers; immediate for
@@ -112,7 +131,7 @@ per that section. Owner veto overrides retroactively, as with rulings.
   Report them as ORDER-HONOURED, never as dead, and never re-enable one — a
   liveness patrol that flags them is re-reporting the owner's own order back to him.
 
-- **Checkable Completion Formula**: `DONE = all patrol dimensions checked with tool receipts (or explicit zero-event statement) + census posted to board topic 30220.`
+- **Checkable Completion Formula**: `DONE = all patrol dimensions checked with tool receipts (or explicit zero-event statement) + census posted on this lane's OWN topic.` Board topic 30220 is RETIRED as the census target (owner ruling 2026-09-19, v0.4.225 — see the Harvest backlog patrol bullet above). The post is still part of DONE and a patrol that cannot post is NOT dimensions-complete; only its surface changed. HQ is `session_notify`d only when a dimension is HQ-specific.
 
 ## Duty T5 — Post-compaction + daily issue sweep (owner order 2026-09-07
 17:23Z, v0.4.92; daily cadence added owner order 2026-09-08 20:0xZ, v0.4.112)
