@@ -1,5 +1,33 @@
 # Changelog — opencrabs-dev
 
+## v0.4.213 (2026-09-19)
+
+**The verdict-token list was not a closed set — it contradicted three other law sites. Reconciled, and the `interrupt`/escalation contradiction closed.**
+
+Five lanes filed this independently in one window (4b0990b7, 61161247, a5b34466, c10cd97b, d5863180); a6b34466's second message de-duplicated itself against 4b0990b7, so the finding is treated as ONE filing with supplements.
+
+- **Defect A — the sanctioned field-2 token list omitted tokens that other law MANDATES.** `upstream-merge-runbook.md §Ledger hygiene laws` listed 8 tokens and omitted `FAIL` and the whole `UNPROVEN` family, while `SKILL.md §Hard rules` makes `FAIL` a formal verdict, `SKILL.md §Test ontology` mandates `UNPROVEN (presence-only)`, and `fleet-directives.md §F2` mandates `UNPROVEN (structural N/A)`. A lane whose honest verdict was one of these was stamped off-taxonomy *by the list itself*. This is the same defect shape as v0.4.211's `mod.rs` claim — a law sentence contradicted by the tree it describes. **Fix:** the list now carries all 12 tokens, and states that the mandated labels are not optional additions. The list describes the vocabulary; it does not forbid a mandated label.
+- **Defect B — `interrupt: true` was still described as an escalation** in `fleet-directives.md §Cross-lane message delivery discipline`, contradicting the always-loaded ops `AGENTS.md` (which has said INERT since #373) and the 2026-09-19 03:34:30Z re-ruling. **Fix:** the bullet now states there is NO escalation — `turn-end` queues and drains at the next boundary, `interrupt` is a legacy alias, `now` fails the delivery.
+- **Defect C — `Rule 5` required an "ack deadline" that does not exist** for ZERO-ACK task/harvest dispatches. **Fix:** escalation now triggers on BLOCKED/stalled work, with the ZERO-ACK reason stated inline.
+- **Defect D — residual of the v0.4.211 fix.** `editor.md`'s trailing sentence *"Upstream CI strictly enforces these"* survived at the foot of the standards list, and its plural "these" still covered the `mod.rs` item two lines above it — the exact reading v0.4.211 removed. **Fix:** the sentence now reads as fork discipline. Grep across the skill corpus for `strictly enforces` returns only the CHANGELOG history afterwards.
+- **Rulings issued (both were live ambiguities lanes were parked on):**
+  1. **`CORRECTION` governs the RE-VERIFICATION row only — it does NOT displace the verdict on the ORIGINAL row.** A ceiling row keeps `UNPROVEN (structural N/A)` for its whole life; the later re-verification is a NEW row stamped `CORRECTION`. Both stand. (Filed by 4b0990b7, who correctly declined to re-label its #295 row rather than guess.)
+  2. **`OWNER-EYE-CONFIRM` is off-taxonomy** — it drifted into field 2 from an `oc-ledger stamp note` convention (origin lane `2fbfb2f8`, 2026-09-12), not from this surface. The sanctioned form for that row shape is `PASS-OWNER-EYE`. (Provenance traced by a5b34466; two rows affected, one self-corrected by its author.)
+- **Field misuse classified separately from list defects.** 5 rows carry a sha, session uuid, or branch name in field 2 instead of any token. That is lane error, not a taxonomy gap, and the law now says field 2 carries a token and nothing else.
+- **A count was corrected in a shipped entry.** The v0.4.210 entry said `RE-VERIFY` was written by "12 lanes"; my own census measured **14 rows / 14 distinct lanes** (243 verdict rows, 31 unsanctioned, 10 distinct unsanctioned tokens). The v0.4.210 entry now carries the corrected figure and says it was corrected. Predicate, stated so it is re-runnable: field 1 parses as ISO-8601 AND exactly 8 tab fields AND field 2 non-empty.
+- **LOC delta (mandatory on every law change):**
+
+  | File | Before | After | Δ |
+  |---|---|---|---|
+  | `upstream-merge-runbook.md` | 389 | 389 | 0 |
+  | `fleet-directives.md` | 598 | 598 | 0 |
+  | `editor.md` | 512 | 512 | 0 |
+  | **Total** | **1499** | **1499** | **0** |
+
+  All three are net 0: every fix in this bump is an in-line rewrite inside an existing line, and the denser taxonomy line still fits one line. Stated because a zero delta is still a delta, and the metric is the check, not the reduction.
+- **What this bump did NOT do.** No `tools/` touch (the battery receipt from 13:23:02Z still covers the tree). The four law files remain above the 500-line budget: `fleet-directives.md` 598, `editor.md` 512, `SKILL.md` 576, ops `AGENTS.md` 531.
+- **Routed, not fixed here.** Triage lane `530c29ec` reported that the sync sequence has no step reconciling the `/root/opencrabs` main worktree after a force-push, so any lane shipping in that window hits a false `LEG3 NON-FF`. That is a runbook-procedure change with a lane-side companion already going to Toolsmith; it is queued as its own bump rather than folded into a taxonomy fix.
+
 ## v0.4.212 (2026-09-19)
 
 **`toolsmith.md` carried two stale laws that steered lanes wrong — both corrected.**
@@ -25,7 +53,7 @@
 
 - **Stale-law defect, filed same-day by editor lane 1a63f103 (measured, not inferred).** `/usr/local/bin/rustfmt` now exits 1 `BLOCKED`; its own header reads *"the sanctioned fmt-only exception is RETIRED (2026-09-19). It exec'd /root/.rustup/toolchains/... and that tree is absent from this host"*, and both `/root/.rustup` and `/root/toolchain-disabled-20260828` are absent. Yet `editor.md §Box law` still sanctioned the wrapper and asserted *"a working rustup tree survives here (kept for the owner-approved rustfmt wrapper)"*, `SKILL.md §Shared environment facts` repeated the sanction, and `upstream-merge-runbook.md §Process` named *"rustfmt wrapper only"*. An editor following Phase 4 now hits a hard BLOCK mid-loop. All four sites state the truth instead: **no local Rust tool exists at all, fmt included — fmt is the soft-fail leg of `pr-checks.yml` only.** The Duty-4 P7 post-fmt scope audit went with its trigger (there is no local fmt pass left to audit), as did the "wrapper is NEWER than CI" drift mechanics; the surviving rule is *cosmetic diffs CI reports on already-green code are KEEP AS-IS; fix only what you introduced yourself*.
 
-- **Verdict taxonomy ruling (filed by lane aff7ff41).** 12 rows across 12 distinct lanes wrote `RE-VERIFY` into `smoke-verdicts.log` field 2 during the run-35441550360 fan-out wave — a token that exists in zero skill files. Ruled rather than coined: **post-lineage-rewrite re-verification is a `CORRECTION`** (it already carries the `sha=`/`evidence=` semantics), now stated on the taxonomy line in `upstream-merge-runbook.md §Ledger hygiene laws`. A genuinely NEW token still needs the owner's word via the poll format.
+- **Verdict taxonomy ruling (filed by lane aff7ff41).** 14 rows across 14 distinct lanes wrote `RE-VERIFY` into `smoke-verdicts.log` field 2 during the run-35441550360 fan-out wave — a token that exists in zero skill files. (The figure was first reported as 12; an independent census on 2026-09-19 measured 14 rows / 14 distinct lanes, all timestamped that day.) Ruled rather than coined: **post-lineage-rewrite re-verification is a `CORRECTION`** (it already carries the `sha=`/`evidence=` semantics), now stated on the taxonomy line in `upstream-merge-runbook.md §Ledger hygiene laws`. A genuinely NEW token still needs the owner's word via the poll format.
 
 - **LOC delta (mandatory on every law change — the v0.4.209 rule), `git show HEAD:<file>` vs the live file:**
 
