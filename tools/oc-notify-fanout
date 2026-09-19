@@ -498,6 +498,17 @@ JSON
     *"oc-drift-check $L1 0."*) chk 1 "reload-line-carries-no-live-version (brief still passes the version as argv)" ;;
     *) chk 0 reload-line-carries-no-live-version ;;
   esac
+  # D-5 sibling (defect from lane a5b34466, 2026-09-19): the brief must NOT
+  # prescribe a SECOND ack. `oc-drift-check --ack` delegates to `oc-ledger
+  # ack`, so the retired "ACK after drift-check." taught every lane to mint a
+  # duplicate (uuid,version) row -- the class fleet-directives.md:416 closed
+  # at v0.4.159. Assert the ABSENCE directly: both checks above pass on a
+  # brief carrying the retired phrase, which is exactly how it survived six
+  # versions of green selftests.
+  case "$A_B" in
+    *"ACK after drift-check"*) chk 1 "reload-line-carries-no-second-ack (brief still prescribes a second ack)" ;;
+    *) chk 0 reload-line-carries-no-second-ack ;;
+  esac
 
   # LAW 10 (defect #5, 2026-09-12): partial delivery surfaced + per-send bound.
   # 10a. --verify diffs the per-attempt manifest against .sent receipts:
@@ -1115,7 +1126,14 @@ while IFS=$'\t' read -r uuid role topic wstate; do
   # has an OMIT-ARG mode that reads the lane's RECORDED last_acked (roster)
   # instead of argv — a pure function of state on disk (Reviewer J lens) —
   # so the brief prescribes THAT and a lane cannot get it wrong.
-  brief="${brief} RELOAD: run oc-drift-check ${uuid} --ack, re-read changed files. ACK after drift-check."
+  # v0.4.159 (proposal n=4055): the trailing "ACK after drift-check." was
+  # RETIRED -- `oc-drift-check --ack` delegates to `oc-ledger ack`, so --ack
+  # IS the ack and prescribing a second one minted the duplicate
+  # (uuid,version) row class the law closed (68 groups / 27 lanes / 75 extra
+  # rows in the audit). This emitter taught the retired instruction to every
+  # lane from v0.4.123 until the defect was reported by lane a5b34466. The
+  # RELOAD line alone is canonical; never append a second ack verb.
+  brief="${brief} RELOAD: run oc-drift-check ${uuid} --ack, re-read changed files."
   case "$brief" in *'{{'*'}}'*)
     receipts+="ABORT ${uuid} ${role} placeholder-token-survived-substitution(law1)"$'\n'
     failed=$((failed+1)); continue ;;
