@@ -228,7 +228,7 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
 
 **Trigger:** the owner's word "run a Decision Rollcall" — on demand, never
 self-scheduled (a cron/hook is a future owner decision). Full law:
-triage.md §Decision Rollcall; editor-side duty: editor.md
+fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
 §Decision Rollcall duty.
 
 **Your role is coverage + stamp, NOTHING more:**
@@ -237,7 +237,7 @@ triage.md §Decision Rollcall; editor-side duty: editor.md
    own topic, direct to the owner."
 2. Verify coverage: every holding lane either posted its list in its own
    topic or is sanctioned-silent — the checkable criterion (single home:
-   triage.md §Decision Rollcall item 3) is a same-turn
+   fleet-directives.md §Decision Rollcall item 3) is a same-turn
    lane-targeted chase receipt, or the lane's own zero-decision statement on
    the ledger; a bare non-post is neither. A lane failing that criterion gets
    one targeted chase — to the lane, not a board complaint.
@@ -272,12 +272,6 @@ WHAT comes back: HQ's rulings and version batches absorb here the
 same way they absorb everywhere — disk absorption (§Glossary, SKILL.md),
 zero-ping (hq.md Duty 3).
 
-## Topic domain alignment & rename authority (owner order 2026-09-10 03:48Z, updated 2026-09-14)
-
-- **Topic domain alignment (owner order 2026-09-14):** Factory forum topics are organized around **persistent functional domain subsystems** (e.g. `Telegram: Host & Session Guards`, `Core: Streaming & Loop`, `Memory: Search & Indexing`, `Config: Typings & Writers`, `Upstream: Harvest Fleet`, `Governance: Role Architecture`) rather than ephemeral issue numbers or short-lived task names. Topics serve as dedicated domain centers for issues within that area and cross-area issues touching their domain.
-- **Continuous topic alignment:** Auditor (Triage) and HQ actively rename topics whenever a lane's scope shifts or drifts to ensure topics remain strictly connected to their subsystem contents.
-- **Rename authority:** Auditor (Triage) and HQ are free to rename chats and forum topics — no owner approval needed. Keep titles descriptive (3–8 words, reflect actual domain/subsystem per the topic domain alignment policy); renames are bookkeeping, not surface-law sends, so this is not an editor carve-out — editors still never touch Telegram tools.
-
 ## Creating new editors (owner order 2026-09-01 21:56Z)
 
 Trigger: a NEW area is discussed and a research/code task needs doing, and NO existing editor lane has done anything in that area. Then the TRIAGE lane creates a fresh editor (standing authority transferred from HQ at v0.4.86, owner "Go with Option A" 2026-09-06; HQ retains roster/registry ownership — hq.md Duty 2):
@@ -298,49 +292,3 @@ Trigger: a NEW area is discussed and a research/code task needs doing, and NO ex
 ## Parked issues — owner standdown (2026-08-28 16:17Z)
 
 Fork issues [leshchenko1979/opencrabs#20](https://github.com/leshchenko1979/opencrabs/issues/20) (plan auto-approve under `approval_policy=auto-always` — 638µs `created_at`→`approved_at`, design-track promise broken, restart resumes unapproved plans as Active) and [leshchenko1979/opencrabs#16](https://github.com/leshchenko1979/opencrabs/issues/16) (plan-card footer lost in 429 flood) are **PARKED**: owner stood the editor lane down ("It's not your concern anymore — stand down", relayed via ops 329bf3a3). No implementation approval will arrive via ops. Gate stays: no code, no branch, no claim-comment on either issue unless Alexey himself explicitly re-opens and approves the solution+diagram. Do NOT re-ignite these on seeing them open in the fork issue list — filed state IS the deliverable; fixing upstream-reported defects is adolfo's lane.
-
-## Decision Rollcall — owner-decision sweep, lanes post direct (owner order 2026-09-08 ~06:1xZ, topic 42487, ruling n=1994)
-
-A repeatable owner-facing procedure, distinct from the T5 sweep (issue triage)
-and Duty-4 (skill input). When the owner says **"run a Decision Rollcall"**:
-
-1. **Content — owner decisions ONLY.** Each lane presents outstanding decisions
-   that need the OWNER's word: one decision + the lane's recommendation + one
-   line of context each. NO status reports, no "nothing owed" chatter, no
-   ledger trivia. The lane knows its own asks best — nobody filters or
-   paraphrases them.
-2. **Delivery — LANE-DIRECT, THE ONLY MODE.** Each lane posts IN ITS OWN
-   LANE TOPIC, addressed to the owner directly. Lanes do NOT route their list
-   through Triage or HQ; Triage does not relay, aggregate, or edit. A lane
-   with zero outstanding owner decisions posts NOTHING — silence is the
-   "nothing owed" signal. **Present-here mode is RETIRED** (owner override
-   2026-09-08 09:05Z, topic 30220: "I don't want the decisions to be
-   presented in triage lane. Every editor should be instructed to present
-   their decisions in their own lane" — superseding the 08:34Z topic-42487
-   amendment). Triage NEVER collects or presents decisions on any word;
-   decisions NEVER appear in a Triage/HQ message, only in each lane's own
-   topic.
-3. **Triage role — coverage + stamp, nothing more.** Triage triggers the
-   Rollcall on owner word, verifies every holding lane actually posted (or is
-   sanctioned-silent: a same-turn lane-targeted chase receipt, or the lane's
-   own zero-decision statement on the ledger — a bare non-post is neither),
-   and stamps completion in the ledger. (This criterion is the single home;
-   triage.md T7 points here.)
-4. **Trigger — on demand** ("run a Decision Rollcall"). A cron or post-ship-chain
-   hook is possible later; the owner has not ordered one. Do not self-schedule.
-
-**Format law (owner amendment 2026-09-08 ~06:3xZ, topic 30220):**
-
-5. **No acks.** A lane posts its decisions and nothing else — no "Rollcall
-   received", no confirmation posts, no receipt chatter. The post IS the ack.
-6. **No telegram_send.** Lane posts as its topic's final chat message
-   (text auto-posts). `telegram_send` / `send_document` / media calls are
-   forbidden in a Rollcall post.
-7. **Context + diagrams.** Each decision is presented WITH its context and,
-   where the decision has shape (flow, options, architecture), a mermaid
-   diagram — the owner judges renderings, not descriptions.
-8. **One decision per message.** Present 1 by 1 — sequential posts, never a
-   batched wall. Each post: decision + recommendation + context (+ diagram).
-9. **Owner gates designs and special cases.** A lane does NOT implement a
-   design or a special case on its own recommendation — those await the
-   owner's explicit word, same as any semantic gate.

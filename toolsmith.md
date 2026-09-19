@@ -135,10 +135,6 @@ WHAT comes back: HQ's rulings and version batches absorb here the
 same way they absorb everywhere — disk absorption (§Glossary, SKILL.md),
 zero-ping (hq.md Duty 3).
 
-## Tool logging rule (owner 2026-08-28)
-
-Every tool/script we build must be debuggable from its logs alone. Each state-changing step writes a timestamped, append-only journal line (input, action, outcome, exit code) to durable storage BEFORE the next step begins — the journal, not memory, is the record. If a crash or restart can leave a run unreconstructable from durable state (journal line + marker file + ledger event), the tool is NOT DONE. Born from the 03:11Z 71e58ce5 swap: the swap succeeded but left zero receipts because the oc-deploy journal vocabulary stops at `dispatch` (no `swap` line type) and the deployed.sha marker was never written — HQ had to reconstruct the audit trail from binary mtimes and artifact shas. Applies to oc-deploy and every future tool; gap list: swap-leg journal lines + marker write land with S2 wiring.
-
 ## Tool-problem reports: direct to TOOLSMITH for tools, issues for core (owner order 2026-09-10 ~02:4xZ & 14:3xZ; v0.4.130 Direct Dispatch Law; Finding BS-01 fix v0.4.133)
 
 **Work orders and anomaly reports follow Direct Dispatch — no relay hops.** Tool-use anomaly reports (failed invocations, wrong args, false journal rows, unbacked persistence claims, CLI quirks) in `tools/oc-*` MUST be dispatched directly to the active **TOOLSMITH** lane (`session_notify`; resolve target dynamically via `oc-ledger roster --live --role <role>` — never hardcode ephemeral UUIDs). Core daemon anomalies (e.g. panic, binary faults) go directly to GitHub fork issues. **Role resolution verb (Task-8 correction 2026-09-11):** `oc-ledger roster --live --role <role>` is the working form. `oc-roster` does NOT resolve roles — its `--role` flag is actively rejected (rc 2, directing callers to `oc-ledger roster`), so role resolution MUST use `oc-ledger roster`. Do not substitute `oc-roster` here.

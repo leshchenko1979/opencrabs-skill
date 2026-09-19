@@ -6,12 +6,12 @@
 
 | Kind of law | Canonical file |
 |---|---|
-| sync model & rebase, seam resolution, harvest cadence / HARVEST LAW / NO-HOLD, PHOP, swap-head signature | `upstream-merge-runbook.md` |
-| editor phases, smoke procedure, CI-wait & CI-watcher discipline, carrier hotfix gates, swap-sha coverage, no auto-rollback, inherited-claim pillars | `editor.md` |
+| sync model & rebase, seam resolution, harvest cadence / HARVEST LAW / NO-HOLD, PHOP | `upstream-merge-runbook.md` |
+| editor phases, smoke procedure, carrier hotfix gates, swap-sha coverage, no auto-rollback | `editor.md` |
 | upstream PR lifecycle, deep-core heads-up gate, dependent PRs law, cross-fork PR inspection, upstream issue filings | `editor-upstream-pr.md` |
-| intake & assignment, dispatch hygiene, topic domain alignment, parked issues, Decision Rollcall, creating new editors, night-shift cadence (Phase 3, Idle-Lane Issue Triage) | `triage.md` |
-| tool-problem reports, tool logging rule | `toolsmith.md` |
-| HQ duties, cadence boundary, rule-text provenance, refuse-and-reroute | `hq.md` |
+| intake & assignment, dispatch hygiene, parked issues, creating new editors, night-shift cadence (Phase 3, Idle-Lane Issue Triage) | `triage.md` |
+| tool-problem reports | `toolsmith.md` |
+| HQ duties, cadence boundary, rule-text provenance | `hq.md` |
 | Duty-6 lens briefs (A–J families + brain-scrub) | `review-lenses.md` |
 | post-swap notify / fan-out vocabulary | `s2-swap-journal-spec.md` |
 
@@ -26,6 +26,8 @@
 **Ships & carriers:** **Features-compat gate** · **Carrier Concurrency & Coalescence Law** · **Post-Rewrite Swap Recovery** · **Upstream PR filing — base CI gate pre-claim** · **Upstream Coding & Testing Standards** · **LLM Ergonomics & Efficiency Law**
 
 **Smoke & dispatch:** **Out-of-Feature-Set Issues** · **Dispatch Eligibility** · **Attribution & Goal Hygiene** · **Verification during a truncated-output window is not verification** · **External lanes**
+
+**Pulled back to fleet-directives (tier C, 2026-09-19):** **Tool logging rule** · **CI-wait discipline & actor attribution** · **Swap-head signature for rebase/synthesis/merge-derived binaries** · **Decision Rollcall** · **Inherited-claim three-pillar verification** · **Topic domain alignment & rename authority** · **HQ does not execute lane work — refuse and reroute**
 
 **Reload & orientation:** **Post-compaction skill reload & context manifest curation** · **Every turn ends with a "what now/next?" answer** · **Explain open questions & re-anchor context** · **Daemon no-reap**
 
@@ -482,3 +484,90 @@ AND explicit `thread_id` (for forum-enabled chats). Never omit either.
   before sending.
 - `thread_id: null` (explicit General) is the only sanctioned way to target
   General; blind omission is not.
+
+## Topic domain alignment & rename authority (owner order 2026-09-10 03:48Z, updated 2026-09-14) [LANE]
+
+- **Topic domain alignment (owner order 2026-09-14):** Factory forum topics are organized around **persistent functional domain subsystems** (e.g. `Telegram: Host & Session Guards`, `Core: Streaming & Loop`, `Memory: Search & Indexing`, `Config: Typings & Writers`, `Upstream: Harvest Fleet`, `Governance: Role Architecture`) rather than ephemeral issue numbers or short-lived task names. Topics serve as dedicated domain centers for issues within that area and cross-area issues touching their domain.
+- **Continuous topic alignment:** Auditor (Triage) and HQ actively rename topics whenever a lane's scope shifts or drifts to ensure topics remain strictly connected to their subsystem contents.
+- **Rename authority:** Auditor (Triage) and HQ are free to rename chats and forum topics — no owner approval needed. Keep titles descriptive (3–8 words, reflect actual domain/subsystem per the topic domain alignment policy); renames are bookkeeping, not surface-law sends, so this is not an editor carve-out — editors still never touch Telegram tools.
+
+## Tool logging rule (owner 2026-08-28) [LANE]
+
+Every tool/script we build must be debuggable from its logs alone. Each state-changing step writes a timestamped, append-only journal line (input, action, outcome, exit code) to durable storage BEFORE the next step begins — the journal, not memory, is the record. If a crash or restart can leave a run unreconstructable from durable state (journal line + marker file + ledger event), the tool is NOT DONE. Born from the 03:11Z 71e58ce5 swap: the swap succeeded but left zero receipts because the oc-deploy journal vocabulary stops at `dispatch` (no `swap` line type) and the deployed.sha marker was never written — HQ had to reconstruct the audit trail from binary mtimes and artifact shas. Applies to oc-deploy and every future tool; gap list: swap-leg journal lines + marker write land with S2 wiring.
+
+## CI-wait discipline & actor attribution (owner 2026-08-30 — fix batch) [LANE]
+
+**Canonical Waiter Discipline Standards (W1–W6):**
+1. **W1 (Detached execution standard):** Long-running commands (>60s) execute detached (`background: true`). Hand-rolled nohup/sleep loops are strictly forbidden.
+2. **W2 (Poll floor & ceiling):** Detached CI watchers must respect a ≥30s poll interval floor and a bounded timeout ceiling (default 2700s via `oc-prchecks wait`).
+3. **W3 (Invocation verification):** Verify job dispatch identity before entering wait loops; never poll an ambiguous or unverified run ID.
+4. **W4 (Notify wiring):** Automated watchers notify directly to the owning session UUID via `session_notify` upon terminal completion.
+5. **W5 (Log-window cuts):** Grep and log queries must bound search ranges (`--since` or fixed tail) to avoid context compaction floods.
+6. **W6 (Actor attribution — automatic via ambient `OPENCRABS_SESSION_ID`, v0.4.176):** Tools automatically derive attribution from `$OPENCRABS_SESSION_ID`. Manual `export OC_ACTOR` is retired.
+
+## Swap-head signature for rebase/synthesis/merge-derived binaries (owner 2026-09-03 "Land 1+2 only, keep version as-is") [LANE]
+
+Gate 4 (Session-Id trailer, `quick-build-linux.yml` ORDER gates) applies to every swap head. **Rebase, synthesis and merge heads cannot carry trailers**, so a bare (unsigned) head must never be dispatched to the build leg (2026-09-03: bare merge `d02f4e08` passed pr-checks GREEN, swap blocked exit 2 pre-install; fixed forward-only with empty marker `1d0dd4cc`. 2026-09-11: the atomic cutover head `12d25260` hit the same wall — `oc-order-validate: UNSIGNED`, chain rc 6 — and stranded main undeployed until marker `70b04864` was landed). **Every upstream sync produces such a head, so this recurs on every sync.** Standing law:
+
+1. **Marker, not waiver** — the marker-commit procedure (tree-identical empty trailer-signed commit before the build dispatch) lives in upstream-merge-runbook.md **step 9** — this file carries the RULING only: never dispatch a bare (unsigned) head, never loosen gate 4. Owner's swap ruling carries over; the marker changes no bytes.
+2. **pr-checks mirrors gate 4 in swap mode** — `pr-checks.yml` (carrier branch `ci/quick-build-linux`, landed `464f77c4`) takes `swap=true`: runs the exact gate-4 regex on the gated ref before fmt/clippy/tests. Swap-mode GREEN ⇒ swappable — the build leg has no remaining semantic failure mode (clippy+tests subsume build success; the binary build itself stays quick-build's job, no duplicate artifact per the 2026-08-31 de-dup ruling). Input-gated: ordinary PR-lane runs unchanged.
+3. **Version stays put on merges/swaps** — merge-derived binaries ship with the tree's standing version; `deployed.meta.json` (sha + artifact sha256) is the identity record, not the version string. Owner 2026-09-03: a version bump is a release-flow event, not a merge or swap event.
+4. **Trailer retention across history rewrites (v0.4.170, Finding H-1 / row n=2102)** — Rebase, cherry-pick, or filter operations can silently strip `Session-Id` and `Issue-Ref` git trailers. Actors executing history rewrites must verify trailer retention across rebased commits (`git log -n <count> --format='%B' | git interpret-trailers --parse`) before fast-forwarding or pushing. Any commit stripped of its trailer during rebase must have its trailer restored before ff-merge.
+
+## Decision Rollcall — owner-decision sweep, lanes post direct (owner order 2026-09-08 ~06:1xZ, topic 42487, ruling n=1994) [LANE]
+
+A repeatable owner-facing procedure, distinct from the T5 sweep (issue triage)
+and Duty-4 (skill input). When the owner says **"run a Decision Rollcall"**:
+
+1. **Content — owner decisions ONLY.** Each lane presents outstanding decisions
+   that need the OWNER's word: one decision + the lane's recommendation + one
+   line of context each. NO status reports, no "nothing owed" chatter, no
+   ledger trivia. The lane knows its own asks best — nobody filters or
+   paraphrases them.
+2. **Delivery — LANE-DIRECT, THE ONLY MODE.** Each lane posts IN ITS OWN
+   LANE TOPIC, addressed to the owner directly. Lanes do NOT route their list
+   through Triage or HQ; Triage does not relay, aggregate, or edit. A lane
+   with zero outstanding owner decisions posts NOTHING — silence is the
+   "nothing owed" signal. **Present-here mode is RETIRED** (owner override
+   2026-09-08 09:05Z, topic 30220: "I don't want the decisions to be
+   presented in triage lane. Every editor should be instructed to present
+   their decisions in their own lane" — superseding the 08:34Z topic-42487
+   amendment). Triage NEVER collects or presents decisions on any word;
+   decisions NEVER appear in a Triage/HQ message, only in each lane's own
+   topic.
+3. **Triage role — coverage + stamp, nothing more.** Triage triggers the
+   Rollcall on owner word, verifies every holding lane actually posted (or is
+   sanctioned-silent: a same-turn lane-targeted chase receipt, or the lane's
+   own zero-decision statement on the ledger — a bare non-post is neither),
+   and stamps completion in the ledger. (This criterion is the single home;
+   triage.md T7 points here.)
+4. **Trigger — on demand** ("run a Decision Rollcall"). A cron or post-ship-chain
+   hook is possible later; the owner has not ordered one. Do not self-schedule.
+
+**Format law (owner amendment 2026-09-08 ~06:3xZ, topic 30220):**
+
+5. **No acks.** A lane posts its decisions and nothing else — no "Rollcall
+   received", no confirmation posts, no receipt chatter. The post IS the ack.
+6. **No telegram_send.** Lane posts as its topic's final chat message
+   (text auto-posts). `telegram_send` / `send_document` / media calls are
+   forbidden in a Rollcall post.
+7. **Context + diagrams.** Each decision is presented WITH its context and,
+   where the decision has shape (flow, options, architecture), a mermaid
+   diagram — the owner judges renderings, not descriptions.
+8. **One decision per message.** Present 1 by 1 — sequential posts, never a
+   batched wall. Each post: decision + recommendation + context (+ diagram).
+9. **Owner gates designs and special cases.** A lane does NOT implement a
+   design or a special case on its own recommendation — those await the
+   owner's explicit word, same as any semantic gate.
+
+## Inherited-claim three-pillar verification (landed in skill 2026-09-06, brain-scrub F6; previously only in MEMORY.md) [LANE]
+
+When adopting another session's claim (branch, gate, fix): (1) the artifact
+exists on disk/remote as claimed, (2) the evidence trail (gate run, job-name
+sha pin) is live-verified by the adopting session itself, (3) no newer state
+invalidates it (main moved, superseded fix). All three or the claim is
+treated as unverified input, not as a receipt.
+
+## HQ does not execute lane work — refuse and reroute (owner order 2026-09-09 ~10:4xZ: "you should refuse work that should be done by the triage lane and tell the requesting lane to reroute") [LANE]
+
+When a lane sends HQ work that belongs to an executing lane — editor-lane fixes/rebases/carrier chains, Triage-lane intake verification, TOOLSMITH tool code — HQ REFUSES execution and tells the requesting lane to reroute to the owning lane (`session_notify` back to sender, one line: refused per HQ-no-execute law, reroute to <owning lane>). HQ executes ONLY: rulings, skill authoring (via the Triage intake channel), verdicts/gates with same-turn receipts, dispatch GOs, and its own duties (Duty 4/6, patrols, board reporting). Origin: the #129 carrier rebase landed on HQ via session-notify and was half-executed before the owner order arrived — lane worktree restored byte-exact, chain rerouted. If ownership is genuinely ambiguous, HQ rules on ownership (that IS HQ work), then reroutes.
