@@ -1,5 +1,25 @@
 # Changelog — opencrabs-dev
 
+## v0.4.222 (2026-09-19)
+
+**The resume-cron instance list at `upstream-merge-runbook.md:314` is replaced by the derived predicate.**
+
+1. **A hand-maintained list of live state cannot stay true.** The line enumerated the known
+   `oc-harvest-<issue>-resume` jobs. Lane "Config: Typings & Writers" reported a THIRD instance
+   missing (`oc-harvest-396-resume`); a first-hand live read this turn found **FOUR** -- the fourth
+   (`oc-harvest-326-resume`) was created at 19:08:23Z, twelve minutes AFTER the census the list had
+   been written from. The canonical read is now the predicate itself:
+   `select name, id, enabled, cron_expr from cron_jobs where name like 'oc-harvest-%-resume'`.
+   The names survive only as a timestamped snapshot, explicitly marked "re-derive before acting".
+2. **Sweep by PROPERTY, never by token.** The same lane's first sweep pass used a token grep
+   (`RETIRE THIS JOB`) and flagged `oc-harvest-396-resume` as a gap; that job's prompt says
+   `DISABLE THIS JOB`, so it was fully compliant. The compliance question is a property -- *does the
+   prompt instruct self-disable, in ANY wording* -- and a token grep manufactures false defects
+   against compliant lanes. Codified beside the instance list.
+3. **Not a defect, and nothing owed:** `oc-harvest-396-resume` satisfies both legs (state file line 52
+   "## MANDATORY -- disable after harvest", and the prompt instruction present). `oc-harvest-dispatch-4h`
+   remains `enabled=0` per the standing suspension -- not re-enabled on a lane's initiative.
+
 ## v0.4.221 (2026-09-19)
 
 **T9's harvest COMPLETED — upstream PR [adolfousier/opencrabs#1629](https://github.com/adolfousier/opencrabs/pull/1629) MERGED by the maintainer.** Reported by the Editor lane "rich-formatting" (#1230/#233 bundle) and verified first-hand before any edit: `gh pr view 1629 --repo adolfousier/opencrabs` → `state=MERGED`, `mergedAt=2026-09-19T16:18:50Z`, `mergedBy=adolfousier`, `mergeCommit=0d9beb2bad2efa7ba26c9d9fcfbd90ea4b98b080`, `head=9d2c9645a589405df6c4e89d222a7fe06708a0ff`, `createdAt=2026-09-18T02:30:54Z`.
