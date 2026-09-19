@@ -281,7 +281,7 @@ on census evidence + owner word (hq.md step 7).
      brief's defects, but never reviews its own report (recursion capped at
      one level).
 
-## Review lens `brain-scrub` (owner order 2026-09-05)
+#### Review lens `brain-scrub` (owner order 2026-09-05)
 
 Standing lens in the Duty 4+6 skill-review rotation (registered in `oc-review-persist` LENSES). Scrubs the ops profile's brain files for opencrabs-dev process content living outside the skill:
 
