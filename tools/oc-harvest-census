@@ -53,12 +53,16 @@ REPO="${HOME}/opencrabs"
 UPSTREAM_REPO="adolfousier/opencrabs"
 STATE_DIR="${HOME}/.opencrabs/profiles/ops/opencrabs-dev"
 REGISTRY_FILE="${STATE_DIR}/harvest-registry.json"
+# #365: a DECLARED subject, passed through to the engine as argv[6]. It is a
+# FALLBACK only -- consulted when the derivation finds nothing to test, and it
+# must still grep present upstream before it may loosen a refusal.
+DECLARED_SUBJECT=""
 
 usage() {
   cat <<EOF
 Usage:
   $PROG scan [--repo <path>] [--upstream <owner/repo>] [--json]
-  $PROG check <issue-number-or-slug> [--repo <path>]
+  $PROG check <issue-number-or-slug> [--repo <path>] [--subject <text>]
   $PROG record --unit <slug> --pr <number> [--issue <N>] [--state-file <path>]
   $PROG purge --unit <slug> [--pr <N>] [--issue <N>] [--state-file <path>] [--dry-run]
   $PROG sync [--repo <path>] [--state-file <path>]
@@ -686,6 +690,44 @@ def issue_subject_upstream(iss, repo_path, base_ref='adolfousier/main'):
     present, _absent = subject_present_upstream(pairs, repo_path, base_ref)
     return bool([1 for _f, sym in present if sym])
 
+def declared_subject_from_commits(commits_list, repo_path):
+    # #365 FALLBACK source: a `Subject:` trailer on the fix's OWN commits.
+    #
+    # git-native by construction -- the value travels with the commit, so it
+    # needs no external metadata store and cannot be edited without rewriting
+    # history. Read only from the commits that matched the target, so a
+    # declaration can only ever describe the unit actually under test.
+    #
+    # Comma-separated (separator=%x2c) for the same reason Issue-Ref is: two
+    # Subject: lines must not concatenate into one garbage value.
+    for c in commits_list or []:
+        sha = c.get('sha', '') if isinstance(c, dict) else str(c)
+        if not sha or not repo_path:
+            continue
+        res = subprocess.run(['git', '-C', repo_path, 'log', '-1',
+                              '--format=%(trailers:key=Subject,valueonly,separator=%x2c)', sha],
+                             capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    return ''
+
+def declared_subject_present(declared, repo_path, base_ref='adolfousier/main'):
+    # Is the DECLARED subject present upstream? FAIL-CLOSED on everything else.
+    #
+    # The declared value is free text, not a derived symbol, so it is tested by a
+    # literal fixed-string grep over the upstream tree rather than the
+    # file-scoped symbol predicate. Every other outcome -- an empty declaration,
+    # an unresolvable base ref, a grep error -- returns False: the fallback may
+    # only LOOSEN a refusal when presence is positively established, never by
+    # default.
+    if not declared or not repo_path or not os.path.isdir(repo_path):
+        return False
+    if not ref_exists(base_ref, repo_path):
+        return False
+    res = subprocess.run(['git', '-C', repo_path, 'grep', '-q', '-F', '-e', declared, base_ref],
+                         capture_output=True)
+    return res.returncode == 0
+
 def get_active_claims(ledger_file, repo_path=None):
     if not os.path.exists(ledger_file):
         return []
@@ -731,6 +773,8 @@ upstream_repo = sys.argv[2]
 repo_path = sys.argv[3]
 registry_file = sys.argv[4]
 target = sys.argv[5] if len(sys.argv) > 5 else ''
+# #365: argv[6] = a declared subject (cmd_check --subject). Empty when not given.
+declared_subject = sys.argv[6] if len(sys.argv) > 6 else ''
 mock_prs = os.environ.get('OC_HARVEST_MOCK_PRS')
 mock_commits = os.environ.get('OC_HARVEST_MOCK_COMMITS')
 mock_ledger = os.environ.get('OC_HARVEST_MOCK_LEDGER')
@@ -942,13 +986,39 @@ if action == 'check':
         absent_syms = sorted({s for _, s in absent_pairs if s})
 
         if not present_syms:
-            # No subject symbol resolves upstream: either the fix's substance is
-            # fork-only (a genuine refusal) or the derivation found nothing to
-            # test (inconclusive). Both refuse, and the refusal names what was
-            # tested so the lane can tell which case it is.
+            # No subject symbol resolves upstream. Two DIFFERENT cases:
+            #
+            #   (a) symbols WERE derived and every one is absent upstream -- the
+            #       fix's substance is fork-only. Positive evidence: refuse, and
+            #       do NOT consult the declared-subject fallback.
+            #   (b) NOTHING was derivable -- the derivation is inconclusive, not a
+            #       verdict, so a DECLARED subject may resolve the unit:
+            #       --subject, else a `Subject:` trailer on the fix's own
+            #       commits. It must still grep present upstream.
+            #
+            # (b) is tested by absent_syms, NOT by subject_pairs: derive_symbols
+            # appends a pair for every hunk even when the symbol resolved to
+            # None, so subject_pairs is non-empty in precisely the case this
+            # branch exists for. Nothing partitioned (both lists empty) IS
+            # "nothing derivable".
+            #
+            # Fail-closed either way: an absent or unverifiable declaration
+            # refuses exactly as it did before the fallback existed.
             tested = ', '.join(absent_syms[:6]) or 'none derived'
-            print('REFUSED: Target %s has no subject symbol present in %s [UPSTREAM_VOID: tested %s]' % (target, base_ref, tested))
-            sys.exit(1)
+            derivation_empty = not absent_syms
+            declared = ''
+            resolved = False
+            if derivation_empty:
+                declared = declared_subject or declared_subject_from_commits(matching_commits, repo_path)
+                resolved = bool(declared) and declared_subject_present(declared, repo_path, base_ref)
+            if resolved:
+                print('ADVISORY: no symbol derivable from the fix diff; DECLARED subject %r is present in %s' % (declared, base_ref))
+            else:
+                why = ''
+                if derivation_empty:
+                    why = '; no declared subject' if not declared else ('; declared subject %r not present in %s' % (declared, base_ref))
+                print('REFUSED: Target %s has no subject symbol present in %s [UPSTREAM_VOID: tested %s%s]' % (target, base_ref, tested, why))
+                sys.exit(1)
 
         # Per-hunk packaging advisory: a hunk whose symbol does not resolve
         # upstream has no target there and is dropped at packaging — an
@@ -1079,6 +1149,7 @@ cmd_check() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) REPO="$2"; shift 2 ;;
+      --subject) DECLARED_SUBJECT="$2"; shift 2 ;;
       -h|--help) usage 0 ;;
       -*) usage ;;
       *)
@@ -1094,7 +1165,7 @@ cmd_check() {
   if [ -z "$target" ]; then
     usage
   fi
-  run_engine "check" "$UPSTREAM_REPO" "$REPO" "$REGISTRY_FILE" "$target"
+  run_engine "check" "$UPSTREAM_REPO" "$REPO" "$REGISTRY_FILE" "$target" "$DECLARED_SUBJECT"
 }
 
 cmd_record() {
@@ -1245,10 +1316,20 @@ cleanup_selftest() {
 #                             mode=unharvested -> inside fn orphan_fn (fork-only symbol)
 #   D  target #901's fix      inside fn base_fn AND src/orphan.rs (M) -> gate 4's file loop
 #
-# `$1` = repo dir, `$2` = harvested|unharvested.
+# `nosym` mode (#365 declared-subject fallback) is a DIFFERENT shape: the target's
+# diff yields NO symbol at all, so the derivation is inconclusive rather than a
+# fork-only verdict, and the class-3 refusal must consult a declared subject.
+#   A  base commit            src/base.rs + README.md  -> upstream copy
+#   D  target #902's fix      README.md (M) only -- a hunk with no enclosing fn,
+#                             so derive_symbols partitions NOTHING (both the
+#                             present and absent lists come back empty).
+#
+# `$1` = repo dir, `$2` = harvested|unharvested|nosym, `$3` = Subject: trailer
+# value for the target commit (optional; empty = no trailer).
 build_gate4_fixture() {
   _fx_dir="$1"
   _fx_mode="$2"
+  _fx_subject="${3:-}"
   mkdir -p "$_fx_dir/src"
   git -C "$_fx_dir" init -q
   git -C "$_fx_dir" config user.name fixture
@@ -1256,10 +1337,28 @@ build_gate4_fixture() {
   git -C "$_fx_dir" config commit.gpgsign false
 
   printf 'pub fn base_fn() -> u8 {\n    1\n}\n' > "$_fx_dir/src/base.rs"
+  printf '# fixture\n' > "$_fx_dir/README.md"
   git -C "$_fx_dir" add -A
   git -C "$_fx_dir" commit -q -m "base"
   _fx_a="$(git -C "$_fx_dir" rev-parse HEAD)"
   git -C "$_fx_dir" update-ref refs/remotes/adolfousier/main "$_fx_a"
+
+  if [ "$_fx_mode" = "nosym" ]; then
+    # Target #902: a README-only change. No fn decl in the hunk header and no
+    # enclosing fn to back-scan to, so no symbol is derived from the diff.
+    printf '# fixture\n\nnote\n' > "$_fx_dir/README.md"
+    git -C "$_fx_dir" add -A
+    if [ -n "$_fx_subject" ]; then
+      git -C "$_fx_dir" commit -q -m "target fix" \
+        --trailer "Issue-Ref: leshchenko1979/opencrabs#902" \
+        --trailer "Subject: $_fx_subject"
+    else
+      git -C "$_fx_dir" commit -q -m "target fix" \
+        --trailer "Issue-Ref: leshchenko1979/opencrabs#902"
+    fi
+    git -C "$_fx_dir" update-ref refs/remotes/origin/main "$(git -C "$_fx_dir" rev-parse HEAD)"
+    return 0
+  fi
 
   printf 'pub fn orphan_fn() -> u8 {\n    2\n}\n' > "$_fx_dir/src/orphan.rs"
   git -C "$_fx_dir" add -A
@@ -1830,6 +1929,71 @@ PROSEEOF
     ok "class-2 sub-rule negative control: unharvested parent still REFUSED"
   else
     echo "  bad  - unharvested-parent fixture expected rc=1 HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # --- #365 declared-subject fallback (cases 27-30) ---------------------------
+  # The `nosym` shape derives NO symbol, so the class-3 refusal must decide from
+  # a DECLARED subject instead of refusing outright. Four shapes: no declaration
+  # (refuse), a Subject: TRAILER that greps upstream (fall through), the --subject
+  # ARGUMENT doing the same, and a declaration that is NOT upstream (refuse --
+  # the fallback may only ever loosen a refusal, never by default).
+  #
+  # ENV LEAKAGE GUARD (same reason as cases 25/26): the suite EXPORTS
+  # OC_HARVEST_MOCK_COMMITS/_SQUASHED and an exported mock commit list wins over
+  # the fixture repo, which would leave matching_commits EMPTY and skip gate 4
+  # entirely -- the case would pass vacuously. Every leg blanks them.
+  fx_nosym="$selftest_tmp/fx_nosym"
+  build_gate4_fixture "$fx_nosym" nosym
+  fx_nosym_subj="$selftest_tmp/fx_nosym_subj"
+  build_gate4_fixture "$fx_nosym_subj" nosym "base_fn"
+
+  # 27. AC1: no derivable symbol AND no declared subject -> still refuse.
+  rc=0
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_nosym" "$selftest_tmp/mock_reg_fx.json" "902" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "UPSTREAM_VOID" && echo "$out" | grep -q "no declared subject"; then
+    ok "declared-subject fallback: no symbol + no declaration -> REFUSED"
+  else
+    echo "  bad  - nosym no-declaration expected rc=1 UPSTREAM_VOID, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 28. AC2: a Subject: TRAILER on the target commit that greps upstream -> rc 0.
+  rc=0
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_nosym_subj" "$selftest_tmp/mock_reg_fx.json" "902" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE" && echo "$out" | grep -q "DECLARED subject"; then
+    ok "declared-subject fallback: Subject: trailer present upstream -> ELIGIBLE"
+  else
+    echo "  bad  - nosym Subject-trailer expected rc=0 ELIGIBLE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 29. AC3: the same decision reached from the --subject ARGUMENT (argv[6]).
+  rc=0
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_nosym" "$selftest_tmp/mock_reg_fx.json" "902" "base_fn" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE" && echo "$out" | grep -q "DECLARED subject"; then
+    ok "declared-subject fallback: --subject argument present upstream -> ELIGIBLE"
+  else
+    echo "  bad  - nosym --subject expected rc=0 ELIGIBLE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 30. NEGATIVE CONTROL for 28/29: a declaration that is NOT upstream must not
+  #     loosen anything -- the fallback is fail-closed by construction.
+  rc=0
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_nosym" "$selftest_tmp/mock_reg_fx.json" "902" "no_such_symbol_9f2a" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "not present in adolfousier/main"; then
+    ok "declared-subject fallback negative control: absent declaration still REFUSED"
+  else
+    echo "  bad  - nosym absent-declaration expected rc=1, got rc=$rc ($out)"
     return 1
   fi
 
