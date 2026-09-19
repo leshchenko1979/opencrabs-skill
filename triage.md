@@ -249,7 +249,7 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
 delivery (item 2), the format law — no acks, no `telegram_send`, context +
 mermaid diagrams, ONE decision per message presented 1 by 1 (items 5–8) — and
 design/special-case owner gating, whose breach earns one targeted correction
-(item 9), all live at `triage.md §Decision Rollcall`. T7 points there and never
+(item 9), all live at `fleet-directives.md §Decision Rollcall`. T7 points there and never
 re-carries them.
 
 

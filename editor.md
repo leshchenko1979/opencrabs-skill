@@ -191,7 +191,7 @@ pull-check is YOUR duty; HQ notifies stay targeted per Duty 3.
 
 ## Decision Rollcall duty — owner decisions post direct, in YOUR topic (owner order 2026-09-08, topic 42487, ruling n=1994)
 
-When Triage announces a **Decision Rollcall** (full law: triage.md
+When Triage announces a **Decision Rollcall** (full law: fleet-directives.md
 §Decision Rollcall), each editor answers in ITS OWN LANE TOPIC, addressed to
 the owner directly:
 
