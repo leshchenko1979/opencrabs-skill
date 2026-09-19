@@ -579,7 +579,7 @@ resolves there (law home: SKILL.md §ISSUE ROUTING, PR SHIPMENT row).
 
 ## CI Watcher Discipline & Throttling (v0.4.143)
 
-- **`gh run watch` throttling**: Mandatory `--interval 30` (or `60`) on raw `gh run watch` invocations per `editor.md §CI Watcher Discipline`. Prefer `tools/oc-prchecks wait`, which throttles mechanically.
+- **`gh run watch` throttling**: Mandatory `--interval 30` (or `60`) on raw `gh run watch` invocations per `editor.md §CI Watcher Discipline & Throttling`. Prefer `tools/oc-prchecks wait`, which throttles mechanically.
 
 ## No auto-rollback on smoke FAIL (owner 2026-08-28 18:50Z)
 
