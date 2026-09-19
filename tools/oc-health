@@ -143,10 +143,14 @@ selftest_impl() {
   echo y > "$T/fork/f"; git -C "$T/fork" add -A >/dev/null 2>&1
   git -C "$T/fork" commit -qm init >/dev/null 2>&1
 
-  sqlite3 "$T/db.sqlite" "CREATE TABLE cron_jobs (name TEXT, enabled INTEGER, deliver_to TEXT, prompt TEXT);"
-  sqlite3 "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-roster-detached-sweep',1,'','silent; uses session_notify');"
-  sqlite3 "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('harvest-watch-4h',1,'','ok');"
-  sqlite3 "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-health-hourly',1,'','ok');"
+  # Fixture DB is built through the shared reader, not the `sqlite3` CLI (#371).
+  # The CLI is absent from this box, so every one of these four lines used to
+  # fail with `sqlite3: command not found` — the fixture DB never existed, the
+  # schedulers class read an empty database, and the selftest still passed.
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "CREATE TABLE cron_jobs (name TEXT, enabled INTEGER, deliver_to TEXT, prompt TEXT);"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-roster-detached-sweep',1,'','silent; uses session_notify');"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('harvest-watch-4h',1,'','ok');"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-health-hourly',1,'','ok');"
 
   printf '{"ts":"2026-09-11T00:00:00Z","tool":"oc-demo","args":"","exit":0,"secs":0.1,"extra":{}}\n' > "$T/tools.log"
   echo '{"version":1,"events":[],"roster":{"workers":{}}}' > "$T/state/workers-ledger.json"
@@ -295,11 +299,11 @@ print(m.group(1) if m else "none")
   rm -rf "$T/wt/orphan"
 
   # 10. Class: schedulers — DM leak detection
-  sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='telegram:133526395' WHERE name='oc-roster-detached-sweep';"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='telegram:133526395' WHERE name='oc-roster-detached-sweep';"
   RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
   chk "schedulers-leak-rc1" 1 "$RC"
   case "$OUT" in *"cron-leak"*) ok ;; *) bad "schedulers-leak: $OUT" ;; esac
-  sqlite3 "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='' WHERE name='oc-roster-detached-sweep';"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='' WHERE name='oc-roster-detached-sweep';"
 
   # 11. Class: logs — malformed lines detection
   printf '2026-08-31T04:11:21Z prose evidence line\n' >> "$T/tools.log"
@@ -768,13 +772,22 @@ fi
 # =============================================================================
 if is_class_active "schedulers"; then
   # 8. Cron liveness & DM leak detection
-  if [ -f "$DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-    cron_bad="$(sqlite3 "$DB" "SELECT name FROM cron_jobs WHERE enabled=0 AND name IN ('harvest-watch-4h','oc-roster-detached-sweep','oc-health-hourly');" 2>/dev/null)"
-    [ -n "$cron_bad" ] && add_finding 8 QUIRK cron-disabled "law-carrying cron(s) disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
-    
-    leak_bad="$(sqlite3 "$DB" "SELECT name FROM cron_jobs WHERE enabled=1 AND name LIKE 'oc-%' AND ((deliver_to LIKE 'telegram:%' AND deliver_to NOT LIKE 'telegram:-%') OR prompt LIKE '%133526395%');" 2>/dev/null)"
-    [ -n "$leak_bad" ] && add_finding 8 QUIRK cron-leak "dev cron(s) delivering outside forum (DM-routed): $(printf '%s' "$leak_bad" | tr '\n' ' ')"
-    [ -z "$cron_bad$leak_bad" ] && clean_line "crons: law-carrying enabled, zero DM leaks"
+  if [ -f "$DB" ]; then
+    # The reader is tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). The old
+    # `command -v sqlite3` guard made an ABSENT BINARY and a CLEAN RESULT the
+    # same output: the whole check was skipped, the class reported no finding,
+    # and the only trace was a measurement failure nobody read. Read through the
+    # lib, and treat a DB that will not answer as the measurement failure it is
+    # -- never as "clean".
+    cron_bad="$("$TOOLS_DIR/lib/oc_sqlite" "$DB" "SELECT name FROM cron_jobs WHERE enabled=0 AND name IN ('harvest-watch-4h','oc-roster-detached-sweep','oc-health-hourly');" 2>/dev/null)"; cron_rc=$?
+    leak_bad="$("$TOOLS_DIR/lib/oc_sqlite" "$DB" "SELECT name FROM cron_jobs WHERE enabled=1 AND name LIKE 'oc-%' AND ((deliver_to LIKE 'telegram:%' AND deliver_to NOT LIKE 'telegram:-%') OR prompt LIKE '%133526395%');" 2>/dev/null)"; leak_rc=$?
+    if [ "$cron_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ]; then
+      FAILED=$((FAILED + 1))
+    else
+      [ -n "$cron_bad" ] && add_finding 8 QUIRK cron-disabled "law-carrying cron(s) disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
+      [ -n "$leak_bad" ] && add_finding 8 QUIRK cron-leak "dev cron(s) delivering outside forum (DM-routed): $(printf '%s' "$leak_bad" | tr '\n' ' ')"
+      [ -z "$cron_bad$leak_bad" ] && clean_line "crons: law-carrying enabled, zero DM leaks"
+    fi
   else
     FAILED=$((FAILED + 1))
   fi

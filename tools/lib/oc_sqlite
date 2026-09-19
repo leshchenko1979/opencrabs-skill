@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# tools/lib/oc_sqlite — the sanctioned SQLite reader for this box (#371).
+#
+# WHY THIS EXISTS
+# The `sqlite3` CLI is NOT installed on this host and never was a package here
+# (verified 2026-09-19: not on PATH, not on disk, 0 lines in /var/log/dpkg.log
+# and /var/log/apt/history.log). Tools that shelled out to it did one of two
+# things, and the second is worse than the first:
+#   - died outright        (oc-ledger roster --live: rc 3, the verb every lane
+#                           uses to resolve a role to a session UUID), or
+#   - degraded SILENTLY    (oc-health guarded the call with `command -v sqlite3`
+#                           and skipped the check, so an ABSENT BINARY and a
+#                           CLEAN RESULT were the same output: "0 findings").
+# The capability was never missing — only the CLI. python3's built-in `sqlite3`
+# MODULE is present (SQLite 3.45.1) and is already the production reader in
+# oc-roster and oc-issue-dispatch. This lib makes that ONE implementation, so
+# the next host-binary assumption cannot fork into four private copies.
+#
+# USAGE — a drop-in for the CLI's common form
+#   oc_sqlite <db-path-or-uri> [<sql>]
+#   oc_sqlite <db-path-or-uri> <<SQL
+#     ...statements...
+#   SQL
+# With no SQL argument the statements are read from stdin, so existing
+# heredocs work unchanged. A `file:...?mode=ro` URI is opened read-only, in
+# place — never copied (AGENTS.md §Reading daemon state).
+#
+# OUTPUT — CLI list-mode compatible: one row per line, fields joined by `|`,
+# NULL rendered as the empty string. That is what every call site parses.
+#
+# EXIT CODES
+#   0  success (including a statement that returns no rows)
+#   2  usage error
+#   3  database could not be opened, or a statement failed
+# rc 3 is a HARD fail on purpose: callers guard with `|| die 3`, and an empty
+# roster must never be indistinguishable from an unreadable database.
+#
+# NOTE — a plain path that does not exist is CREATED (sqlite3.connect
+# semantics), matching the CLI. A `mode=ro` URI on a missing file fails rc 3.
+
+set -u
+set -o pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: oc_sqlite <db-path-or-uri> [<sql>]" >&2
+  exit 2
+fi
+
+case "$1" in
+  -h|--help)
+    echo "usage: oc_sqlite <db-path-or-uri> [<sql>]   (sql defaults to stdin)"
+    echo "reads via python3's built-in sqlite3 module; output is CLI list-mode (| joined)"
+    exit 0
+    ;;
+esac
+
+_DB="$1"
+_SQL="${2:-}"
+
+# The python source is built with a QUOTED heredoc so the shell performs no
+# expansion on it, then handed to `python3 -c`. The SQL travels as argv, or on
+# stdin when argv carries none — so the script and the data never share a
+# channel.
+_PY="$(cat <<'OC_SQLITE_PY'
+import sqlite3, sys
+
+def die(msg, rc):
+    sys.stderr.write('oc_sqlite: %s\n' % msg)
+    sys.exit(rc)
+
+if len(sys.argv) < 2 or not sys.argv[1]:
+    die('usage: oc_sqlite <db-path-or-uri> [<sql>]', 2)
+
+db = sys.argv[1]
+# An EMPTY argv[2] means "no SQL given", not "run zero statements" — otherwise
+# the heredoc form would silently no-op (argv[2] is always present under
+# `python3 -c code "$db" "$sql"`, even when "$sql" is empty).
+sql = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2].strip() else sys.stdin.read()
+
+# A `file:` URI may carry ?mode=ro; a bare path is opened normally (and is
+# created when absent, matching the sqlite3 CLI).
+uri = db.startswith('file:')
+try:
+    con = sqlite3.connect(db, uri=uri)
+except sqlite3.Error as e:
+    die('cannot open %s: %s' % (db, e), 3)
+
+def statements(text):
+    """Split on statement boundaries the way sqlite parses them, so a
+    multi-statement heredoc works and a `;` inside a string literal does not
+    split it."""
+    out, buf = [], ''
+    for ch in text:
+        buf += ch
+        if ch == ';' and sqlite3.complete_statement(buf):
+            out.append(buf)
+            buf = ''
+    if buf.strip():
+        out.append(buf)
+    return out
+
+try:
+    for stmt in statements(sql):
+        if not stmt.strip():
+            continue
+        cur = con.execute(stmt)
+        if cur.description:
+            for row in cur.fetchall():
+                sys.stdout.write(
+                    '|'.join('' if v is None else str(v) for v in row) + '\n')
+except sqlite3.Error as e:
+    try:
+        con.close()
+    except sqlite3.Error:
+        pass
+    die('%s (db=%s)' % (e, db), 3)
+
+# A read-only handle has nothing to commit; ignore that specific refusal so a
+# `mode=ro` URI never reports a failure it did not have.
+try:
+    con.commit()
+except sqlite3.Error:
+    pass
+con.close()
+OC_SQLITE_PY
+)"
+
+exec python3 -c "$_PY" "$_DB" "$_SQL"

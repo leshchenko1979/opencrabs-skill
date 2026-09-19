@@ -9,6 +9,11 @@ export OC_TOOLS_NOLOG=1
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOOL="$(dirname "$SELF_DIR")/oc-roster"
+# SQLite reader: tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). The CLI is
+# absent from this box and never was a package here, so the fixture DB below was
+# never created — every live-DB leg then read "session DB unreadable" while the
+# suite still reported success. One binding, three call sites.
+SQLITE="$(dirname "$SELF_DIR")/lib/oc_sqlite"
 D="$(mktemp -d)"
 trap 'rm -rf "$D"' EXIT
 
@@ -30,7 +35,7 @@ L5=55555555-5555-4555-8555-555555555555
 FORUM=-1003936827469
 
 # ---- fixture session DB -----------------------------------------------------
-sqlite3 "$D/db.sqlite" <<SQL
+"$SQLITE" "$D/db.sqlite" <<SQL
 CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, updated_at INTEGER, archived_at INTEGER);
 CREATE TABLE session_bindings (session_id TEXT PRIMARY KEY, channel TEXT, chat_id TEXT, thread_id INTEGER);
 INSERT INTO sessions VALUES ('$L1','lane-one',$((NOW-3600)),NULL);
@@ -45,7 +50,7 @@ INSERT INTO session_bindings VALUES ('$L1','telegram','$FORUM',1);
 INSERT INTO session_bindings VALUES ('$L2','telegram','-1000000000',1);
 INSERT INTO session_bindings VALUES ('$L4','telegram','$FORUM',2);
 SQL
-chk "fixture-db-created" "$(sqlite3 "$D/db.sqlite" 'SELECT count(*) FROM sessions;')" "8"
+chk "fixture-db-created" "$("$SQLITE" "$D/db.sqlite" 'SELECT count(*) FROM sessions;')" "8"
 
 # ---- fixture ledger ---------------------------------------------------------
 cat > "$D/ledger.json" <<JSON
@@ -97,7 +102,7 @@ chk "work-count"     "$(wc -l < "$D/work.out")" "5"
 chk "classify-rows"  "$(wc -l < "$D/class.out")" "5"
 
 # independent re-derivation of the live set (set-equality, not eyeball)
-sqlite3 "$D/db.sqlite" "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
+"$SQLITE" "$D/db.sqlite" "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
   | sort > "$D/live.expected"
 sort "$D/live.out" > "$D/live.got"
 if diff -q "$D/live.expected" "$D/live.got" >/dev/null; then ok "live-set-equality"; else bad "live-set-equality" "$(diff "$D/live.expected" "$D/live.got" | head -3)"; fi

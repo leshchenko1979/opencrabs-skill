@@ -1734,20 +1734,24 @@ EOF
   OC_LEDGER="$T/bad.json" bash "$ME" roster >/dev/null 2>&1; chk "roster-bad-ledger-rc3" 3 $?
   # --live: same live-session query as oc-notify-fanout law 3 (read-only DB);
   # archived/subagent rows are NOT live. OC_LEDGER_DB keeps it off the real DB.
-  if command -v sqlite3 >/dev/null 2>&1; then
-    local WS="77777777-7777-7777-7777-777777777777"
-    bash "$ME" enroll "$WS" subprobe >/dev/null 2>&1
-    sqlite3 "$T/sessions.db" "CREATE TABLE sessions (id TEXT PRIMARY KEY, archived_at TEXT, title TEXT);
-      INSERT INTO sessions VALUES ('$W2', NULL, NULL);
-      INSERT INTO sessions VALUES ('$WS', NULL, 'subagent: probe');
-      INSERT INTO sessions VALUES ('66666666-6666-6666-6666-666666666666', NULL, NULL);" >/dev/null 2>&1
-    OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role TESTER --live > "$T/roster-live.out" 2>/dev/null; chk "roster-live-rc" 0 $?
-    chk "roster-live-count" "1" "$(grep -c . "$T/roster-live.out")"
-    awk -F'\t' -v u="$W2" '$1==u' "$T/roster-live.out" | grep -q . && ok || bad "roster-live-keeps-live-row"
-    OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live >/dev/null 2>&1; chk "roster-live-subagent-excluded" 1 $?
-    OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live --json >/dev/null 2>&1; chk "roster-live-json-nomatch-rc1" 1 $?
-    OC_LEDGER_DB="$T/nope.db" bash "$ME" roster --live >/dev/null 2>&1; chk "roster-live-db-missing-rc3" 3 $?
-  fi
+  # The fixture DB is built with tools/lib/oc_sqlite, not the `sqlite3` CLI
+  # (#371). This block used to sit behind `command -v sqlite3`, so on a box
+  # without that binary every roster --live leg SKIPPED silently and the
+  # selftest stayed green while the production verb was dead. The legs are now
+  # unconditional, so they assert the path that actually runs.
+  local WS="77777777-7777-7777-7777-777777777777"
+  bash "$ME" enroll "$WS" subprobe >/dev/null 2>&1
+  "$_OC_DIR/lib/oc_sqlite" "$T/sessions.db" "CREATE TABLE sessions (id TEXT PRIMARY KEY, archived_at TEXT, title TEXT);
+    INSERT INTO sessions VALUES ('$W2', NULL, NULL);
+    INSERT INTO sessions VALUES ('$WS', NULL, 'subagent: probe');
+    INSERT INTO sessions VALUES ('66666666-6666-6666-6666-666666666666', NULL, NULL);" >/dev/null 2>&1
+  chk "roster-live-fixture-db-rc" 0 $?
+  OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role TESTER --live > "$T/roster-live.out" 2>/dev/null; chk "roster-live-rc" 0 $?
+  chk "roster-live-count" "1" "$(grep -c . "$T/roster-live.out")"
+  awk -F'\t' -v u="$W2" '$1==u' "$T/roster-live.out" | grep -q . && ok || bad "roster-live-keeps-live-row"
+  OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live >/dev/null 2>&1; chk "roster-live-subagent-excluded" 1 $?
+  OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live --json >/dev/null 2>&1; chk "roster-live-json-nomatch-rc1" 1 $?
+  OC_LEDGER_DB="$T/nope.db" bash "$ME" roster --live >/dev/null 2>&1; chk "roster-live-db-missing-rc3" 3 $?
   # 66b (2026-09-11, ontology fold c586e61f): the HQ role string was
   # `hq-supervisor`, now `hq`. Lanes had `roster --live --role hq-supervisor` in
   # ACTIVE habit (tools.log 11:51:28Z, minutes before the fold was announced),
@@ -2298,12 +2302,16 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   if [ "$live" -eq 1 ]; then
     local db; db="${OC_LEDGER_DB:-$(dirname "$(STATE_DIR)")/opencrabs.db}"
     [ -f "$db" ] || die 3 "roster --live: session DB not found: $db (override with OC_LEDGER_DB)"
-    command -v sqlite3 >/dev/null 2>&1 || die 3 "roster --live: sqlite3 not on PATH"
     livef="$(mktemp)" || die 3 "roster --live: mktemp failed"
     # archived_at IS NULL AND non-subagent — the oc-notify-fanout law-3 query,
     # one read-only handle; a DB that will not answer is a HARD fail (rc 3),
     # never an empty roster that reads as "no such lane".
-    sqlite3 "file:${db}?mode=ro" \
+    # The reader is tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). The CLI is
+    # absent from this box and never was a package here, so gating on it made
+    # this verb — the one every lane uses to resolve a role to a session uuid —
+    # fail rc 3 against a perfectly readable DB. The helper reads through
+    # python3's built-in sqlite3 module: the same engine, without the binary.
+    "$_OC_DIR/lib/oc_sqlite" "file:${db}?mode=ro" \
       "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
       > "$livef" 2>/dev/null || { rm -f "$livef"; die 3 "roster --live: session DB unreadable: $db"; }
   fi
