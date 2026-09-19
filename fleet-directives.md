@@ -363,14 +363,6 @@ All observed runtime events, anomalies, proposals, and feature ideas MUST follow
 2. **Never send Duty 4 proposals via `session_notify` to HQ**: Writing to disk or stamping the ledger preserves the findings across context compactions and protects HQ from message floods.
 3. **No Idea or Anomaly is Lost**: Because items are written to filesystem artifacts or appended to git-backed ledger state immediately, they survive crashes, reboots, and compactions automatically.
 
-## HQ does not execute lane work — refuse and reroute (owner order 2026-09-09 ~10:4xZ: "you should refuse work that should be done by the triage lane and tell the requesting lane to reroute")
-
-When a lane sends HQ work that belongs to an executing lane — editor-lane fixes/rebases/carrier chains, Triage-lane intake verification, TOOLSMITH tool code — HQ REFUSES execution and tells the requesting lane to reroute to the owning lane (`session_notify` back to sender, one line: refused per HQ-no-execute law, reroute to <owning lane>). HQ executes ONLY: rulings, skill authoring (via the Triage intake channel), verdicts/gates with same-turn receipts, dispatch GOs, and its own duties (Duty 4/6, patrols, board reporting). Origin: the #129 carrier rebase landed on HQ via session-notify and was half-executed before the owner order arrived — lane worktree restored byte-exact, chain rerouted. If ownership is genuinely ambiguous, HQ rules on ownership (that IS HQ work), then reroutes.
-
-## Cadence boundary is stamped at review consolidation
-
-`oc-ledger cadence` = count of `skill-bump` events since the last boundary event (`review-battery`; query also accepts legacy `skill-review*` kinds the v1.1 KINDS vocabulary can no longer produce — known drift, do not stamp those). Lesson 2026-09-01: the Duty 4+6 verdict was consolidated but never stamped → counter read 24/5 FIRE on stale data. Rule: every consolidated review verdict ends with `oc-ledger stamp review-battery "<summary>"` BEFORE reporting the cadence state; never narrate a cadence reading without checking the boundary event exists.
-
 <!-- source: MEMORY parked-issues -->
 ## Parked issues — owner standdown (2026-08-28 16:17Z)
 
@@ -765,13 +757,6 @@ re-run fresh OUTSIDE that window — a compat check performed during the
 truncated window counts as unverified, not as evidence (2026-09-05 #1398:
 compat check in a truncated window missed the subject function was deleted
 upstream; restoration shipped E0432, retracted same day).
-
-## Rule-text provenance — CHANGELOG at ship time (F13 resolution, owner "Approve all" 2026-09-06)
-
-Rule text carries NO biography — provenance (date, origin quote, war story)
-lives in CHANGELOG.md, written at ship time of the version carrying the
-rule. This resolves the Duty-1 "every rule carries its war story" clause in
-favor of lens A: rules stay lean, history stays in CHANGELOG.
 
 ## Daemon no-reap — ruling 1273 (landed in skill 2026-09-06, brain-scrub F5; law previously only in MEMORY.md)
 
