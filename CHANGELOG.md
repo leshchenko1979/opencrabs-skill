@@ -1,5 +1,49 @@
 # Changelog — opencrabs-dev
 
+## v0.4.223 (2026-09-19)
+
+Three law items from one inbound (lane #321, verified first-hand) plus a Duty-5 ruling.
+
+- **The resume idiom now names the GATE SIGNAL, not just the container** (`upstream-merge-runbook.md`
+  §Harvest patrol suspension & resume idiom). The section prescribed the state-file name, the cron
+  naming, the wake target and the disable-after-harvest step, but said nothing about what SIGNAL the
+  `trigger_cmd` must key on. A resume job gating on tracker state goes **permanently silent** when its
+  issue is closed early, and the harvest is lost with no signal at all. Worked failure: **#321** was
+  closed 2026-09-19T07:43:34Z by the merge commit `7e637c4e3a`, eleven seconds after the ff-merge, with
+  the close keyword inside a **negation** (`B5 budget honesty -- Part B alone does NOT fix #321`) -- the
+  parser cannot read negation, so the honest-limit prose the process requires is what closed the
+  tracker. Law: the gate must key on a tracker-state-INDEPENDENT signal (canonically
+  `oc-harvest-census check <issue>`), must fail OPEN, and the exposed set is derived by grepping the
+  gate rows, never listed.
+- **The enumerated resume snapshot is deleted** (same section). The v0.4.222 snapshot named FOUR
+  instances; the live table held **FOURTEEN** by 19:38Z, all enabled. A name list is stale before it is
+  committed, so the line now carries a POPULATION with its predicate and timestamp and deliberately
+  omits job names.
+- **Duty-5 ruling on leg-4 SINGLE-SIDEDNESS** (`SKILL.md` §Test ontology, the leg-4 probe-hygiene
+  corollary, answering lane 4b0990b7 / issue #295). The corollary IS the sufficiency test for a
+  single-sided probe: the negative half need not be OBTAINED, only NAMED and mechanically shown absent
+  from the pre-fix tree (`git log -S` -> exactly one introduction; `git grep` over the pre-fix tree).
+  Three conditions: falsifying input stated, absence established by a mechanical discriminator run that
+  turn, and the probe observing the RUNNING artifact's own output -- a `strings` dump stays
+  presence-only. Where the negative half is structurally unobtainable (prompts are rendered per turn
+  and never persisted), the discriminator stands in for it.
+- **Recorded, not resolved: a CONTRADICTION in the upstream-PR approval gate** (`SKILL.md` CONSENT
+  REGISTER). `§Hard rules` says owner approval remains required; the register's parenthetical lists
+  only post-swap rollback as owner-gated; `editor-upstream-pr.md` Phase 7 has no approval step. A
+  measured split across the resume-job population (5 gated / 1 asserting / 7 silent / 1 unread).
+  Owner ruling requested by lane 329bf3a3 in topic 7198; until it lands, neither surface is edited to
+  match the other and the stricter reading binds.
+
+**LOC delta** (predicate: `sum(1 for _ in open(f, encoding='utf-8'))`; before = `f18c10d2^`, after = `f18c10d2`):
+
+| File | Before | After | Δ |
+|---|---|---|---|
+| `CHANGELOG.md` | 1970 | 2052 | +82 |
+| `SKILL.md` | 610 | 612 | +2 |
+| `upstream-merge-runbook.md` | 419 | 420 | +1 |
+
+Backfilled 219/220/221/222 in this same bump (all five entries were missing the table; the gap was reported by lane 9fa7c71a and the numbers above were recomputed independently by this lane before use).
+
 ## v0.4.222 (2026-09-19)
 
 **The resume-cron instance list at `upstream-merge-runbook.md:314` is replaced by the derived predicate.**
@@ -20,6 +64,14 @@
    "## MANDATORY -- disable after harvest", and the prompt instruction present). `oc-harvest-dispatch-4h`
    remains `enabled=0` per the standing suspension -- not re-enabled on a lane's initiative.
 
+**LOC delta** (predicate: `sum(1 for _ in open(f, encoding='utf-8'))`; before = `f18c10d2^`, after = `f18c10d2`):
+
+| File | Before | After | Δ |
+|---|---|---|---|
+| `CHANGELOG.md` | 1950 | 1970 | +20 |
+| `SKILL.md` | 610 | 610 | +0 |
+| `upstream-merge-runbook.md` | 417 | 419 | +2 |
+
 ## v0.4.221 (2026-09-19)
 
 **T9's harvest COMPLETED — upstream PR [adolfousier/opencrabs#1629](https://github.com/adolfousier/opencrabs/pull/1629) MERGED by the maintainer.** Reported by the Editor lane "rich-formatting" (#1230/#233 bundle) and verified first-hand before any edit: `gh pr view 1629 --repo adolfousier/opencrabs` → `state=MERGED`, `mergedAt=2026-09-19T16:18:50Z`, `mergedBy=adolfousier`, `mergeCommit=0d9beb2bad2efa7ba26c9d9fcfbd90ea4b98b080`, `head=9d2c9645a589405df6c4e89d222a7fe06708a0ff`, `createdAt=2026-09-18T02:30:54Z`.
@@ -29,6 +81,15 @@
 3. **`upstream-merge-runbook.md` item 7 — the SHIPPED-UPSTREAM notify duty can be DISCHARGED BY SELF-DISCOVERY.** When the owning lane discovers the merge itself and reports it to HQ, sending the notify back to that same lane is a duplicate report — noise, not diligence. Recorded as law with this merge as the worked instance (the lane stamped ledger `n=9589`). The `#233` line in the harvest-resume section no longer describes `#1629` as open.
 4. **T9's fork-side duty has ENDED** (`editor.md` Phase 6b item 6): #233/#237/#247/#265 carry no further fork maintenance and no fix rounds; all four fork issues are CLOSED.
 
+**LOC delta** (predicate: `sum(1 for _ in open(f, encoding='utf-8'))`; before = `1dc24fe1^`, after = `1dc24fe1`):
+
+| File | Before | After | Δ |
+|---|---|---|---|
+| `CHANGELOG.md` | 1941 | 1950 | +9 |
+| `SKILL.md` | 610 | 610 | +0 |
+| `fleet-directives.md` | 610 | 627 | +17 |
+| `upstream-merge-runbook.md` | 410 | 417 | +7 |
+
 ## v0.4.220 (2026-09-19)
 
 **Stale refusal-handling bullet corrected (`SKILL.md` §session_notify mechanics).** Reported by the Editor lane "Push to session" (#393) and verified first-hand before the edit: `grep -rn 'resend with' *.md` over the skill dir returned exactly ONE hit — the bullet still reading *"a mid-turn refusal is NOT delivery … resend with `interrupt: true` in the same turn"*. It contradicted `SKILL.md:193` IN THE SAME SECTION (`interrupt` = legacy alias, INERT) and `fleet-directives.md:415` (escalation: there is NONE). The reporting lane places it as the eighth site of the interrupt-stale-text family, missed by all four earlier waves (v0.4.212 `toolsmith.md`, v0.4.213 `fleet-directives.md`, v0.4.215 `hq.md` ×2).
@@ -36,6 +97,13 @@
 **The replacement deliberately does NOT over-claim.** The lane's second reason is exact — `interrupt: true` selects no behaviour (#373) — but its first reason, "the refusal state cannot occur", holds ONLY FOR THE `session_notify` PATH: `src/brain/tools/subagent/notify.rs:371` hardcodes `let interrupt = true;`, bypassing the mid-turn gate at `src/brain/agent/service/session_routes.rs:336`. `Delivery::RefusedInFlight` is nonetheless still constructed at `:341` and reached with `interrupt=false` from `quiet_delivery.rs:199`, `a2a/handler/notify.rs:266` and `cron/scheduler.rs:1174`. The new bullet therefore states that the `session_notify` route never refuses and a busy target QUEUES for its next tool-loop boundary, and explicitly forbids generalising it to "there is no refusal path".
 
 **Correction carried in the same breath:** the reporting lane withdrew its own in-flight claim that this site was "already filed as HQ's lens-B FINDING 2" — no such filing exists.
+
+**LOC delta** (predicate: `sum(1 for _ in open(f, encoding='utf-8'))`; before = `dfcbda74^`, after = `dfcbda74`):
+
+| File | Before | After | Δ |
+|---|---|---|---|
+| `CHANGELOG.md` | 1933 | 1941 | +8 |
+| `SKILL.md` | 602 | 610 | +8 |
 
 ## v0.4.219 (2026-09-19)
 
@@ -48,6 +116,20 @@ Harvest-patrol suspension + resume idiom codification. Two laws and one live ins
 **3. `$STATE/pacemakers-off` marker lifecycle — a check that re-reported the owner's order as a defect.** `oc-health` class 5 reads `<state dir>/pacemakers-off` to choose its direction: marker PRESENT -> a law-carrying patrol found ENABLED is the finding; marker ABSENT -> a DISABLED patrol is the finding. The marker existed in NO profile, so the check ran its order-lifted branch and emitted `8 QUIRK cron-disabled` naming the four patrols the owner had switched off — the exact failure `tools/HEALTH-CLASSES.md` forbids. Lifecycle now stated in `tools/HEALTH-CLASSES.md` and the marker planted (`opencrabs-dev/pacemakers-off`, carrying the order, its scope, the triage-only partial lift, and the removal condition). Receipt: `./tools/oc-health --class schedulers` -> `ok crons: pacemakers-off order honoured, zero DM leaks`, **0 finding(s)**, rc=0.
 
 **Open owner question:** restore `oc-harvest-dispatch-4h` at its 6h cadence, or keep it off until the freeze lifts?
+
+**LOC delta** (predicate: `sum(1 for _ in open(f, encoding='utf-8'))`; before = `9c6ccbbe^`, after = `9c6ccbbe`):
+
+| File | Before | After | Δ |
+|---|---|---|---|
+| `CHANGELOG.md` | 1921 | 1933 | +12 |
+| `SKILL.md` | 602 | 602 | +0 |
+| `fleet-directives.md` | 610 | 610 | +0 |
+| `tools/HEALTH-CLASSES.md` | 176 | 176 | +0 |
+| `toolsmith.md` | 159 | 165 | +6 |
+| `triage.md` | 327 | 334 | +7 |
+| `upstream-merge-runbook.md` | 397 | 410 | +13 |
+
+Backfilled at v0.4.223. **Note: this bump's COMMIT MESSAGE published churn (added+deleted), not net delta** -- churn matches all six of its claims, net matches two; the table above is net.
 
 ## v0.4.218 (2026-09-19)
 

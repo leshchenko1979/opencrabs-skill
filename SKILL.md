@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.222
+version: 0.4.223
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -327,6 +327,7 @@ in the same turn. Because **expired attachment URLs are skipped silently and the
 absence**, report the skipped count beside the found count — "0 found, 13 skipped as expired" is a
 different verdict from "0 found". **Corollary binding all three: a leg-4 probe reports PASS only if
 it would FAIL on the pre-fix artifact — state the input on which it fails.**
+**Duty-5 ruling 2026-09-19 (answering lane 4b0990b7, issue #295): for a SINGLE-SIDED probe the corollary IS the sufficiency test -- the discriminating negative half need not be OBTAINED, only NAMED and mechanically shown absent from the pre-fix tree.** A positive half alone backs PASS when all three hold: (1) the falsifying input is STATED explicitly; (2) its absence on the pre-fix artifact is established by a MECHANICAL discriminator run that turn -- `git log -S <string>` returning exactly ONE introduction (the fix's own commit), or the string absent from `git grep` over the pre-fix tree -- never by assertion, never by reasoning about the code; (3) the probe observes the RUNNING artifact's OWN output (a live session's rendered prompt, a real call), and the observing session itself exercises the path under test (a Telegram-bound session, for a Telegram-delivery feature) -- a `strings` dump of the binary stays presence-only and cannot back PASS for a live-testable UX feature. What the corollary forbids is a probe that cannot NAME any input it would fail on: that probe measures its own constants. Where the negative half is STRUCTURALLY unobtainable -- prompts are rendered per turn and never persisted, so a non-Telegram session's prompt cannot be read back -- the mechanical discriminator of (2) stands in for it. **Carry the discriminator's command in the row.**
 
 ## Glossary — official terms (v0.4.62; one concept = one name)
 
@@ -555,6 +556,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
   verify IS the authorization. Upstream-PR filing follows the PR SHIPMENT law (PR SHIPMENT row, §ISSUE ROUTING above). APPROVAL
   definition above still governs anything that REMAINS owner-gated
   (post-swap rollback-is-owner's-call; silence is NOT consent).
+  - **PENDING OWNER RULING -- is owner approval required for every upstream PR filing? (raised 2026-09-19 by lane 329bf3a3, topic 7198; recorded here, NOT resolved.)** The law text is currently CONTRADICTORY and the divergence is live: `§Hard rules` UPSTREAM CI GATE states *"owner approval + SMOKE pass remain separate required conditions"*, while THIS register's parenthetical lists only post-swap rollback as what "REMAINS owner-gated" -- which reads as approval NOT required -- and `editor-upstream-pr.md` Phase 7 contains NO approval step at all (its step 0 posts a filing NOTICE to the lane's own topic, after the fact). Measured split across the resume-job population -- predicate: every prompt read IN FULL, no token grep -- 5 gate on owner approval, 1 asserts it already exists, 7 are silent, 1 unread. **Until the owner rules: do not edit either surface to match the other, and treat the STRICTER reading as binding -- approval IS required** -- because silence is not consent and the APPROVAL row above is unchanged. The cost asymmetry decides the default: holding a filing costs nothing, an unapproved filing is a public act.
   (Deleted-tool history: CHANGELOG.md.)
 - ROLE-SCOPED BROADCASTS: messages reach non-owning roles ONLY when tagged
   [ALL]; otherwise send strictly to the owning role. CC-everyone is noise.
