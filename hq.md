@@ -260,7 +260,7 @@ Legacy references to "hq.md Duty 7" are retired.
 
 ## Upstream sync — watch & governance (sync execution delegated to Triage)
 
-Sync execution is DELEGATED TO TRIAGE (owner order 2026-09-11: "You should not do these merges - delegate to triage"; HQ does not execute syncs). **SYNC LAW canonical = `fleet-directives.md §Remotes & sync` (REBASE model); executing procedure: `upstream-merge-runbook.md` (managed by Triage via `triage.md §Duty T7`).**
+Sync execution is DELEGATED TO TRIAGE (owner order 2026-09-11: "You should not do these merges - delegate to triage"; HQ does not execute syncs). **SYNC LAW canonical = `upstream-merge-runbook.md §Remotes & sync` (REBASE model); executing procedure: `upstream-merge-runbook.md` (managed by Triage via `triage.md §Duty T7`).**
 
 HQ retains watch and governance authority only:
 - **Watch**: Monitor upstream delta (`./tools/oc-upstream-delta`) and notify Triage to execute rebase sync when upstream advances.

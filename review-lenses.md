@@ -3,7 +3,7 @@
 Full briefs for the eleven Duty-6 review lenses (A–J + standing brain-scrub; regrouped v0.4.81 with C joining TOOLS and D sole in ARTIFACTS — H later joined D in ARTIFACTS, v0.4.113/115; the MECHANICAL family + Reviewer J added v0.4.161 on owner order). hq.md §Duty 6 owns the
 method (read-only sub-agents, verbatim-quote verification, oc-review-persist
 persistence, poll triple-check, verdict table) and keeps only the family map
-there; this file owns the per-lens scope briefs (brain-scrub brief lives at fleet-directives.md § Review lens brain-scrub). Letters keep chronological
+there; this file owns the per-lens scope briefs (brain-scrub brief lives at review-lenses.md § Review lens brain-scrub). Letters keep chronological
 birth order (stable report/persist keys, not an ordering). Reviewer-performance
 loop lessons (hq.md step 7) fold INTO these briefs at ship time,
 attributed to the reviewer that produced the evidence. Family identity is the

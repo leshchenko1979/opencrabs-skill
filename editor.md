@@ -77,7 +77,7 @@ editor-facing duties:
 
 *(Waiter-discipline items — poll floor, --wait ceiling, invocation
 verify, notify wiring, log-window cuts, REST casing — live canonically in:
-fleet-directives.md §CI-wait discipline & actor attribution.)*
+editor.md §CI-wait discipline & actor attribution.)*
 
 **Direct dispatch (owner order 2026-09-10, fleet-directives §Direct dispatch):
 work orders go sender → resource-owner directly — never through an intermediary
@@ -195,7 +195,7 @@ pull-check is YOUR duty; HQ notifies stay targeted per Duty 3.
 
 ## Decision Rollcall duty — owner decisions post direct, in YOUR topic (owner order 2026-09-08, topic 42487, ruling n=1994)
 
-When Triage announces a **Decision Rollcall** (full law: fleet-directives.md
+When Triage announces a **Decision Rollcall** (full law: triage.md
 §Decision Rollcall), each editor answers in ITS OWN LANE TOPIC, addressed to
 the owner directly:
 
@@ -250,7 +250,7 @@ dir; actor derived automatically from ambient `$OPENCRABS_SESSION_ID`):
 
 Rules that outlive any table: journal read-back after every `oc-ledger`
 claim/stamp (Phase 1 step 4); terminal truth = `gh run view --json conclusion`, never
-a tool's exit code alone; the ≥30s detached-poll floor (fleet-directives.md §CI-wait discipline & actor attribution).
+a tool's exit code alone; the ≥30s detached-poll floor (editor.md §CI-wait discipline & actor attribution).
 
 ## Phase 0 — Fresh base
 
@@ -579,7 +579,7 @@ resolves there (law home: SKILL.md §ISSUE ROUTING, PR SHIPMENT row).
 
 ## CI Watcher Discipline & Throttling (v0.4.143)
 
-- **`gh run watch` throttling**: Mandatory `--interval 30` (or `60`) on raw `gh run watch` invocations per `fleet-directives.md §CI Watcher Discipline`. Prefer `tools/oc-prchecks wait`, which throttles mechanically.
+- **`gh run watch` throttling**: Mandatory `--interval 30` (or `60`) on raw `gh run watch` invocations per `editor.md §CI Watcher Discipline`. Prefer `tools/oc-prchecks wait`, which throttles mechanically.
 
 ## No auto-rollback on smoke FAIL (owner 2026-08-28 18:50Z)
 

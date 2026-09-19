@@ -29,7 +29,7 @@ deputization. Expected reply shape: "routed to <lane>", not done-work.
 
 ## Duty T3 — Create a new editor (standing authority, transferred from HQ at v0.4.86)
 
-Procedure = fleet-directives.md §Creating new editors, unchanged: topic FIRST
+Procedure = triage.md §Creating new editors, unchanged: topic FIRST
 (messages.CreateForumTopic), THEN spawn the session with a task-seed spawn
 prompt ("Load opencrabs-dev skill. You are an editor." + task), brief the lane
 via `session_notify` ONLY (never the spawn prompt), and enroll the roster row
@@ -48,7 +48,7 @@ per that section. Owner veto overrides retroactively, as with rulings.
      - Upstream baseline verification: Verify target code path on live `adolfousier/main` to ensure work is not already clean or differently structured upstream.
   3. Verify target editor lane availability using `tools/oc-harvest-dispatch dispatch <issue> <commits> [--to <uuid>]`. If target lane is busy with an active claim, the tool refuses dispatch (rc 4); Triage must select an idle editor or commission a dedicated harvest worker.
   4. **Landed-term gate (v0.4.204, HQ ruling 2026-09-18):** before wiring, confirm the issue is NOT already landed — a `done`/`close` row addressing it, or a commit referencing it on fork `main`. This patrol runs from a cron (`oc-harvest-dispatch-4h`) that wired #302 while #302 carried Triage's own `done` row (n=8267) and zero claims: `done` + zero claims satisfied the old two-term predicate. A landed-but-unharvested issue is HARVEST-queue work, never a fresh editor dispatch. Canon: `fleet-directives.md §Dispatch Eligibility — the 4-bucket predicate`.
-  5. Never dispatch unvetted candidates or busy editors. (Worktree creation belongs to the Editor lane per `fleet-directives.md §PHOP`).
+  5. Never dispatch unvetted candidates or busy editors. (Worktree creation belongs to the Editor lane per `upstream-merge-runbook.md §PHOP`).
 
 - **Stale-branch sweep patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** run
@@ -170,7 +170,7 @@ git grep -c "<S>" adolfousier/main        # 0  =>  the subject is fork-only
 ```
 
 - **Subject PRESENT upstream** → standalone `fix/*`; zero soak per HARVEST LAW
-  (`fleet-directives.md §Upstream-merge cadence · HARVEST LAW · NO-HOLD`); the
+  (`upstream-merge-runbook.md §Upstream-merge cadence · HARVEST LAW · NO-HOLD`); the
   fork issue closes right after **ITS OWN** upstream PR files.
 - **Subject ABSENT upstream** → the fix is a **CHILD** of the fork-only parent:
   link it (`gh issue edit <n> --parent <parent>`), it is barred from standalone
@@ -226,7 +226,7 @@ rows, event notes, roster enrollment (T3), `confirmed` flags.
 
 **Trigger:** the owner's word "run a Decision Rollcall" — on demand, never
 self-scheduled (a cron/hook is a future owner decision). Full law:
-fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
+triage.md §Decision Rollcall; editor-side duty: editor.md
 §Decision Rollcall duty.
 
 **Your role is coverage + stamp, NOTHING more:**
@@ -235,7 +235,7 @@ fleet-directives.md §Decision Rollcall; editor-side duty: editor.md
    own topic, direct to the owner."
 2. Verify coverage: every holding lane either posted its list in its own
    topic or is sanctioned-silent — the checkable criterion (single home:
-   fleet-directives.md §Decision Rollcall item 3) is a same-turn
+   triage.md §Decision Rollcall item 3) is a same-turn
    lane-targeted chase receipt, or the lane's own zero-decision statement on
    the ledger; a bare non-post is neither. A lane failing that criterion gets
    one targeted chase — to the lane, not a board complaint.

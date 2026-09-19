@@ -99,7 +99,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-ledger <verb>` | workers-ledger: stamp/sync/check-version/cadence/ack/enroll/roster/commit-pending/claim-ref/confirm/events — `--verbs` lists registered subcommands; unrecognized verbs emit vocabulary hints; `roster --live --role <role>` is the ROLE-RESOLUTION verb (it works; `oc-roster --role` does NOT — see the `oc-roster` row below) |
 | `./tools/oc-shadow-rotate [--dry-run]` | INTERNAL tail step of `oc-ledger sync` (standalone = manual fallback) |
 | `./tools/oc-review-persist <lens> <text\|@file\|-> [--dir DIR]` | persist a Duty-6 review report — the index line IS the "persisted" receipt |
-| `./tools/oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2] [--negative-control <bin>] [--append-log [<path>]]` | mechanical identity + presence evidence for a Phase 6b smoke verdict; behavioral judgment stays human; `--append-log` is the SANCTIONED writer of the **IDENTITY EVIDENCE BLOCK** in the canonical `smoke-verdicts.log` — the VERDICT ROWS are LANE-AUTHORED (see `fleet-directives.md` §Canonical smoke log); bare = the canonical absolute, a wrong path is unrepresentable (M2-2) |
+| `./tools/oc-smoke-evidence [--unit opencrabs-ops] [--strings m1,m2] [--negative-control <bin>] [--append-log [<path>]]` | mechanical identity + presence evidence for a Phase 6b smoke verdict; behavioral judgment stays human; `--append-log` is the SANCTIONED writer of the **IDENTITY EVIDENCE BLOCK** in the canonical `smoke-verdicts.log` — the VERDICT ROWS are LANE-AUTHORED (see `upstream-merge-runbook.md` §Upstream-merge cadence · HARVEST LAW · NO-HOLD); bare = the canonical absolute, a wrong path is unrepresentable (M2-2) |
 | `./tools/oc-issue-log <issue-n> <sha> [--state <text>] [--repo <slug>] [--dry-run]` | per-commit implementation comment via gh `--body-file` ONLY |
 | `./tools/oc-commit -m <msg> [--issue N] [--no-comment] [--state <dir>] [--repo <path>]` | gated commit wrapper: derives `Issue-Ref` from the actor's latest ledger claim, adds Session-Id + Issue-Ref trailers, folds in the post-commit comment |
 | `./tools/oc-ship-audit [--hours N] [--log f] [--journal-dir d] [--grace min]` | dispatch-WITHOUT-swap alarm |
@@ -459,10 +459,10 @@ Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
 |---|---|---|---|
 | **1. Upstream Delta Watch** | Triage | `./tools/oc-upstream-delta` | `triage.md §Duty T4` |
 
-| **2. Sync Model (REBASE)** | Triage | `upstream-merge-runbook.md` | `fleet-directives.md §Remotes & sync` |
+| **2. Sync Model (REBASE)** | Triage | `upstream-merge-runbook.md` | `upstream-merge-runbook.md §Remotes & sync` |
 | **3. Absorption & Dropping** | Triage / HQ | Auto-classify DROPPABLE patch-ids | `upstream-merge-runbook.md` |
 | **4. Upstream PR Lifecycle** | Editor | Phase 7b / Phase 7c (`oc-harvest-dispatch`) | `editor-upstream-pr.md` |
-| **5. Maintainer Interaction** | HQ / Alexey | Track PR comments via gh API & OC Dev chat heads-up | `fleet-directives.md §Deep Core Advance Heads-Up Gate` |
+| **5. Maintainer Interaction** | HQ / Alexey | Track PR comments via gh API & OC Dev chat heads-up | `editor-upstream-pr.md §Deep Core Advance Heads-Up Gate` |
 | **6. Fork-local CI (`ci/*`)** | HQ | Carrier namespace `ci/quick-build-linux` | `hq.md §Parity` |
 | **7. Fork Branch Lifecycle** | Triage | `./tools/oc-branch-sweep` (archive before delete) | `triage.md §Duty T4` |
 
@@ -509,7 +509,7 @@ HQ-only). Skill markdown + fleet-directives stay HQ-only.
 | Upstream receives PRs ONLY — body = detailed description ending `Original issue: <full fork URL>`; NEVER `Closes #N` (wrong issue space) | `adolfousier/opencrabs` PR bodies | owner 2026-08-27 |
 | Fork issue closed by US right after the PR is filed | fork issue tracker | — |
 | Fork issues NEVER claimed on GitHub: no tackling comments, assignment, labels/reactions by any lane — claiming = `Issue-Ref` trailer + workers-ledger `claim` row (kind `claim`, v1.1 vocabulary since v0.4.48); uniqueness sweeps stay read-only search | ledger | owner 2026-08-27 17:07Z |
-| PR SHIPMENT — **PR SHIPMENT LAW (single home): feature COMPLETE + smoke PASS (v0.4.104 four-leg rubric) → Editor harvests fork-only commits, posts smoke evidence to forum topic, and files the upstream PR. All other references to this law are pointers to THIS row — procedure: `editor-upstream-pr.md` Phase 7; fleet-directives §Upstream-merge cadence (harvest census); triage.md T4.** | mechanical gates | standing process |
+| PR SHIPMENT — **PR SHIPMENT LAW (single home): feature COMPLETE + smoke PASS (v0.4.104 four-leg rubric) → Editor harvests fork-only commits, posts smoke evidence to forum topic, and files the upstream PR. All other references to this law are pointers to THIS row — procedure: `editor-upstream-pr.md` Phase 7; upstream-merge-runbook.md §Upstream-merge cadence (harvest census); triage.md T4.** | mechanical gates | standing process |
 | APPROVAL = Alexey's reply or a positive Telegram reaction to the explicit request in the forum topic; silence is NOT consent; spontaneous / ad-hoc PRs remain forbidden | owner word | v0.4.1 |
 
 *Pre-2026-08-27 upstream issues stay readable for uniqueness sweeps and legacy
