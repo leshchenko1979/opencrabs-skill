@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.216
+version: 0.4.217
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -88,7 +88,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-job-verify <run-id> <source-ref> [--features] [--identity-only]` | standalone run-identity gate (provenance of RED runs) |
 | `./tools/oc-artifact-verify <artifact-path> [--source <sha>] [--run-id <id>] [--markers m1,m2] [--expect-sha <sha256>] [--expect-version <v>] [--repo R] [--json]` | EXECUTION SANITY SIGNAL + FEATURE-PRESENCE CHECK |
 | `./tools/oc-seal-state [--sha S] [...]` | baseline/orders seal (flag-based interface — no positional `<sha>`) |
-| `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>] [--contributors]` | commit-range → worker-lane attribution; `--contributors` projects the 3-col TSV (SINGLE SHAPE); `--deployed` composes the range from `deployed.sha` + `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) |
+| `./tools/oc-attrib --repo <path> (--range <A..B> or --deployed) [--ledger <f>] [--contributors] [--novel\|--no-novel]` | commit-range → worker-lane attribution; `--contributors` projects the 3-col TSV (SINGLE SHAPE); `--deployed` composes the range from `deployed.sha` + `prev_sha` (fan-out compute backend for [issue #24](https://github.com/leshchenko1979/opencrabs/issues/24)) and IMPLIES `--novel` (#407: drops re-sha'd + empty commits; `--no-novel` restores the raw range) |
 | `./tools/oc-deploy <mode>` | the ship path itself — `ship` / `poll` / `swap-execute` / `status [--json]` / `watch [--with-delta]` / `fanout` / `contributors` RETIRED (use `oc-attrib --contributors`). Editor S3 path: `editor.md` §Ship. Verdict codes + wait semantics: RC-CONTRACT.md |
 | `./tools/oc-deploy fanout --run <id> [--dry-run]` | mechanical notify fan-out for one carrier run ([#24](https://github.com/leshchenko1979/opencrabs/issues/24)); auto-fired at `swap_execute` tail + on `poll` RED-scan; `OC_DEPLOY_NOFANOUT=1` suppresses — mechanics + journal vocabulary in `s2-swap-journal-spec.md` §Fan-out legs |
 | `./tools/oc-carrier-features [--fetch] [--repo <path>] [--ref <branch>]` | reads the carrier-yml `features` default at `origin/<ref>`; `oc-deploy ship/poll` resolves EMPTY `--features` through this — carrier read failure aborts the ship loudly |

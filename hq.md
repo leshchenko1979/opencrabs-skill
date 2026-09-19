@@ -55,6 +55,15 @@ stay here. Expected reply shape: "routed to <worker>", not done-work.
 - Provenance = the `## v<v>` CHANGELOG entry, written at ship time (fleet-
   directives §Rule-text provenance, F13 — rule text carries NO biography).
 - **Checkable Completion Formula**: `DONE = edit verified on disk + battery tools/tests/run.sh PASS + CHANGELOG.md entry present + git commit in skill repo + oc-ledger sync --version <v> returns rc=0.`
+- **The version bump is the LAST edit and sync runs in the SAME turn (v0.4.217).**
+  `oc-drift-check` resolves the live version from the **on-disk** canonical
+  `SKILL.md`, never the ledger — so a bumped-but-unsynced frontmatter is already
+  fleet-visible, and every lane acking in that window stamps the new version while
+  `current_skill_version` still reads the old one. Read it correctly: **"acked
+  version > ledger version" is an author-window artifact, NOT evidence that the
+  acking lane jumped ahead** — never file it as lane misbehaviour. Order: law
+  edits → CHANGELOG entry → version bump → commit → sync, with nothing left
+  uncommitted across a turn boundary.
 
 ## Duty 2 — Worker registry: identity + versions, NEVER live status
 

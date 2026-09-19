@@ -1,5 +1,45 @@
 # Changelog — opencrabs-dev
 
+## v0.4.217 (2026-09-19)
+
+Three items: two law-text corrections filed by active lanes, and one defect found while preparing this very bump.
+
+**1. D1's git arm has TWO ref forms — my v0.4.216 tightening was NARROWER than the code (filed by the Triage lane).** v0.4.216 replaced D1's "a commit referencing the issue on fork `main`" with "a commit on fork `main` carrying an `Issue-Ref: #N` trailer (git arm — trailer-based, NEVER commit-message prose)". That is over-narrow. `tools/oc-issue-dispatch:463-465` carries a SECOND arm inside arm A:
+
+```python
+m = re.search(r"\(#([0-9]+)\)\s*$", subj.strip())
+if m: landed.add(int(m.group(1)))
+```
+
+— a trailing `(#N)` in the commit SUBJECT, fork-scoped by the same `Session-Id` discriminator (`:401-408`), lands the issue with NO `Issue-Ref` trailer required. The tool's own battery proves it fires: selftest 61 = "arm A POSITIVE CONTROL: a fork commit lands (#29)", fixture `_mk("fix: fork landing (#29)", ["Session-Id: 1111…"])` at `:1370`, assertion `29 in _armA`; `--selftest` → rc=0, 64/64 OK. D1 now names both forms and keeps the load-bearing half (NEITHER is commit-message prose).
+
+**Scope: this does NOT disturb the #199 root cause.** `b10ca242f`'s subject ends "…near-match loop detection" with no trailing `(#N)`, so the subject arm never fired there — the `Issue-Ref: #199` trailer did, and ledger claim `n=4683` remains the single point of corruption. The v0.4.216 close-identity guard's rationale ("a trailer or auto-link naming #N is an ATTRIBUTION, not identity") already covers both arms; only D1's description of the surface understated it.
+
+**2. Two law sites under-described the fan-out sweep (filed by Toolsmith; the `tools/` half had already landed).** `oc-attrib --deployed` now IMPLIES `--novel`: the sweep additionally drops re-sha'd twins (patch-id equivalence, `git cherry`) and empty commits; merges pass through unfiltered; a zero-row sweep is **rc 0 GREEN**, never rc 3. Measured on live range run 35441550360 (`74a64245b..b2823127a`): 310 raw → 276 replayed + 11 empty dropped → 34 novel; contributor rows 32 → 2.
+- `s2-swap-journal-spec.md` §Post-swap notify — the v0.4.133 `--first-parent` paragraph named the sweep's ONLY filter; the novelty filter is a SECOND, independent exclusion, and it is the one that covers the REBASE case that paragraph never mentioned.
+- `SKILL.md` tool register — the `oc-attrib` row omitted `--novel` / `--no-novel`; `--no-novel` is the escape hatch back to the raw range.
+
+**3. NEW DEFECT — an uncommitted version bump is already fleet-visible, and it had silently misattributed an anomaly to a lane.** `tools/oc-drift-check:78` resolves the live version by grepping **the on-disk canonical `SKILL.md`**, not the ledger:
+
+```sh
+cur="$(grep -E '^version:' "$SKILL_DIR/SKILL.md" 2>/dev/null | head -1 | awk '{print $2}')"
+```
+
+So the moment the author writes `version: 0.4.217`, before any commit or sync, every lane running `oc-drift-check --ack` stamps **0.4.217** — a version with no `skill-bump` ledger event, while `current_skill_version` still reads 0.4.216. Observed live during THIS bump: acks `n=9474/9475/9477/9478` all name 0.4.217, while the last `skill-bump` event is `n=9462` = 0.4.216.
+
+**This retroactively corrects a misattribution.** The sixth checkpoint recorded "lane `d18ce16a` acked 0.4.215 while the ledger read 0.4.214 — a lane acked an unsynced version" as lane misbehaviour. It was not: at that moment `SKILL.md` on disk already read 0.4.215 from an in-flight author edit. **"Acked version > ledger version" is an author-window artifact, never evidence against the acking lane** — the same class as the standing law that an attribution taken from a name or from row adjacency is not a read of the object. Law added to `hq.md` Duty 1: the version bump is the LAST edit and sync runs in the SAME turn, nothing left uncommitted across a turn boundary. Routed to Toolsmith as well, since `tools/oc-drift-check` is their surface (a "no skill-bump event for the on-disk version" warning is theirs to judge).
+
+**LOC before/after** (owner order: the LOC check is part of every law change):
+
+| File | Before | After | Δ |
+|---|---|---|---|
+| `fleet-directives.md` | 598 | 598 | 0 |
+| `s2-swap-journal-spec.md` | 105 | 107 | +2 |
+| `SKILL.md` | 577 | 577 | 0 |
+| `hq.md` | 291 | 300 | +9 |
+
+Both new law bodies landed in **under-budget** files (`s2-swap-journal-spec.md`, `hq.md`) for exactly that reason. Three law files remain over the 500-line budget: `fleet-directives.md` 598, `SKILL.md` 577, `editor.md` 512 — plus the shared ops `AGENTS.md` at 531, which is outside this repo and not versioned here.
+
 ## v0.4.216 (2026-09-19)
 
 **Close identity guard — a close must confirm the cited artifact touches the issue's own surface.** Filed by the Triage lane, verified first-hand, and the ROOT CAUSE turned out to be somewhere neither the filing lane nor the law had looked.

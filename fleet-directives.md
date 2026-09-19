@@ -299,7 +299,7 @@ The churn cure — both operational (Triage-owned; no new tooling, no new class)
 
 ### D1 — "landed" is `LANDED_KINDS`, NEVER `CLOSING_KINDS`
 
-`landed` := a ledger row of kind `done` or `close` addressing the issue, **OR** a commit on fork `main` carrying an `Issue-Ref: #N` trailer (git arm — trailer-based, NEVER commit-message prose). Either arm marks it landed. Implementation: `tools/oc-issue-dispatch` — `ledger_landed_issues()` (imports `oc_claims.LANDED_KINDS`) + `fetch_landed_issues()` (git arm). Tool side: leshchenko1979/opencrabs#337.
+`landed` := a ledger row of kind `done` or `close` addressing the issue, **OR** a fork-space commit on `main` (fork-space = carries a `Session-Id` trailer) naming the issue by EITHER an `Issue-Ref: #N` trailer OR a trailing `(#N)` in the subject — the git arm has TWO ref forms, both fork-scoped by the `Session-Id` discriminator, and NEITHER is commit-message prose. Either arm marks it landed. Implementation: `tools/oc-issue-dispatch` — `ledger_landed_issues()` (imports `oc_claims.LANDED_KINDS`) + `fetch_landed_issues()` (git arm). Tool side: leshchenko1979/opencrabs#337.
 
 `tools/lib/oc_claims.py` is the ONE canonical predicate — no lane re-inlines it. It carries BOTH sets, and their distinction is load-bearing:
 
