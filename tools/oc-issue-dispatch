@@ -15,6 +15,13 @@ Usage:
                       done/close row targeting it.  --allow-landed bypasses.
   ALREADY-DISPATCHED  the issue was wired to a lane within the last 7 days and
   (#337)              not yet acked.  --redispatch bypasses.
+  REOPENED (#414)     an issue GitHub reports with stateReason=REOPENED OVERRIDES
+                      the LANDED and ALREADY-DISPATCHED arms -- both are
+                      INFERENCES about state (an Issue-Ref trailer on
+                      origin/main, or this tool's own past dispatch) and a
+                      reopen is a deliberate act that contradicts them.  No flag
+                      needed; the summary reports each override against the arm
+                      it defeated.
 
 Exit codes:
   0: Success / Approved / Dispatched
@@ -363,7 +370,7 @@ def fetch_open_issues(repo_path, mock_issues=None):
     if mock_issues is not None:
         return mock_issues
 
-    cmd = ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs", "--state", "open", "--limit", "100", "--json", "number,title,labels,body"]
+    cmd = ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs", "--state", "open", "--limit", "100", "--json", "number,title,labels,body,stateReason"]
     rc, stdout, stderr = run_cmd(cmd, cwd=repo_path)
     if rc != 0:
         print(f"ERROR: Failed to fetch issues via gh: {stderr.strip()}", file=sys.stderr)
@@ -775,6 +782,93 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
     return 0
 
 
+def is_reopened(issue):
+    """#414 — did the issue carry GitHub's stateReason=REOPENED?
+
+    `stateReason` is present only for CLOSED issues in gh's `issue list` schema,
+    so on an OPEN issue it is the marker that the issue was closed and later
+    reopened. Absent (or any other value) means "not reopened".
+    """
+    return str(issue.get("stateReason") or "").upper() == "REOPENED"
+
+
+def classify_dispatch_arms(unclaimed, landed, recent):
+    """Partition `unclaimed` across the four dispatch arms, in evaluation order.
+
+    Extracted from cmd_auto so the arm arithmetic is testable without gh, a repo
+    checkout, or a ledger. Evaluation order is claim-gate -> landed -> dedup, and
+    it is load-bearing: an issue skipped by an earlier arm NEVER reaches a later
+    one, so the four arms partition `unclaimed` (they are disjoint, and
+    gated + landed + dedup + dispatchable == len(unclaimed)).
+
+    #414 — a REOPENED issue OVERRIDES the landed arm and the dedup arm. Both are
+    INFERENCES about state: `landed` is derived from artifacts (an `Issue-Ref`
+    trailer on origin/main, or a ledger landing row) and `recent` records only
+    OUR OWN past dispatch. A reopen is a DELIBERATE act that contradicts both, so
+    it wins. Without the landed override the misreferenced close is PERMANENT —
+    the poison that produced the wrong close still sits on origin/main, so the arm
+    re-marks the issue landed on every scan and the sweep never re-wires it (#199
+    was closed on b10ca242f, which touches 0 files under src/a2a/). Without the
+    dedup override the fix merely moves the stranding one arm over (#324 defeats
+    the landed arm and is then suppressed by dedup memory).
+
+    Returns (events, dispatchable):
+      events       ordered list of tuples, one per non-dispatchable issue PLUS
+                   one per REOPENED override that FIRED, in the SAME order
+                   cmd_auto prints them:
+                     ("gated",    issue, reason)
+                     ("landed",   issue, None)
+                     ("dedup",    issue, (lane, ts))
+                     ("reopened", issue, "landed" | "dedup")
+                   An issue reading landed AND present in `recent` yields TWO
+                   "reopened" events — one per arm it defeated.
+      dispatchable the issues that survive every arm, in input order
+    """
+    events = []
+    dispatchable = []
+    for iss in unclaimed:
+        num = iss.get("number")
+        is_gated, reason = check_issue_claim_gate(iss)
+        if is_gated:
+            events.append(("gated", iss, reason))
+            continue
+        reopened = is_reopened(iss)
+        if num in landed and not reopened:
+            events.append(("landed", iss, None))
+            continue
+        if num in landed and reopened:
+            events.append(("reopened", iss, "landed"))
+        if num in recent and not reopened:
+            events.append(("dedup", iss, recent[num]))
+            continue
+        if num in recent and reopened:
+            events.append(("reopened", iss, "dedup"))
+        dispatchable.append(iss)
+    return events, dispatchable
+
+
+def summarize_arms(events, dispatchable):
+    """Tally the arm events into the counters cmd_auto reports.
+
+    Split out so the reported NUMBERS are testable offline, not just the events
+    they come from. A number must travel with its predicate: the two override
+    counts defeat DIFFERENT arms, so they are counted and reported SEPARATELY.
+    Reporting one merged total as "defeated the landed arm" was wrong for the
+    dedup half (measured 2026-09-19: 4 override events, only 3 defeated landed).
+
+    Returns a dict with keys gated/landed/dedup/landed_override/dedup_override.
+    """
+    return {
+        "gated": sum(1 for k, _, _ in events if k == "gated"),
+        "landed": sum(1 for k, _, _ in events if k == "landed"),
+        "dedup": sum(1 for k, _, _ in events if k == "dedup"),
+        "landed_override": sum(1 for k, _, arm in events
+                               if k == "reopened" and arm == "landed"),
+        "dedup_override": sum(1 for k, _, arm in events
+                              if k == "reopened" and arm == "dedup"),
+    }
+
+
 def cmd_auto(args):
     """
     Automatic issue dispatch:
@@ -813,36 +907,49 @@ def cmd_auto(args):
     # to a lane but not yet acked was wired to a SECOND lane.
     recent = {} if args.redispatch else recent_dispatches(ledger_data)
 
-    dispatchable = []
-    gated_count = 0
-    landed_count = 0
-    dedup_count = 0
-    for iss in unclaimed:
-        num = iss.get("number")
-        is_gated, reason = check_issue_claim_gate(iss)
-        if is_gated:
-            gated_count += 1
-            if args.dry_run:
-                print(f"Skipping gated issue #{num}: {iss.get('title')} ({reason})")
-            continue
-        if num in landed:
-            landed_count += 1
-            if args.dry_run:
+    # #414: the arm arithmetic lives in classify_dispatch_arms() so it is testable
+    # offline (see the selftest leg); cmd_auto is now only a printer.
+    events, dispatchable = classify_dispatch_arms(unclaimed, landed, recent)
+
+    counts = summarize_arms(events, dispatchable)
+    gated_count = counts["gated"]
+    landed_count = counts["landed"]
+    dedup_count = counts["dedup"]
+    landed_override_count = counts["landed_override"]
+    dedup_override_count = counts["dedup_override"]
+
+    if args.dry_run:
+        for kind, iss, detail in events:
+            num = iss.get("number")
+            if kind == "gated":
+                print(f"Skipping gated issue #{num}: {iss.get('title')} ({detail})")
+            elif kind == "landed":
                 print(f"Skipping landed issue #{num}: {iss.get('title')} "
                       f"(fix already on origin/main, or closed in the ledger)")
-            continue
-        if num in recent:
-            dedup_count += 1
-            if args.dry_run:
-                lane, ts = recent[num]
+            elif kind == "dedup":
+                lane, ts = detail
                 print(f"Skipping already-dispatched issue #{num}: {iss.get('title')} "
                       f"(wired to {lane[:8]} at {ts.strftime('%Y-%m-%dT%H:%M:%SZ')})")
-            continue
-        dispatchable.append(iss)
+            elif detail == "landed":
+                print(f"REOPENED override on issue #{num}: {iss.get('title')} "
+                      f"(reads landed but stateReason=REOPENED — the landed arm "
+                      f"yields to the reopen)")
+            else:
+                lane, ts = recent[num]
+                print(f"REOPENED override on issue #{num}: {iss.get('title')} "
+                      f"(re-dispatched despite the {lane[:8]} wiring at "
+                      f"{ts.strftime('%Y-%m-%dT%H:%M:%SZ')} — a reopen defeats the "
+                      f"dedup memory)")
 
+    override_note = ""
+    if landed_override_count or dedup_override_count:
+        override_note = (f" ({landed_override_count} REOPENED override(s) defeated "
+                         f"the landed arm, {dedup_override_count} defeated the "
+                         f"dedup arm)")
     print(f"Found {len(open_issues)} open issues: {len(unclaimed)} unclaimed, "
           f"{gated_count} claim-gated/parked, {landed_count} landed/closed, "
-          f"{dedup_count} already-dispatched, {len(dispatchable)} dispatchable.")
+          f"{dedup_count} already-dispatched, {len(dispatchable)} dispatchable."
+          + override_note)
     if not dispatchable:
         print("No dispatchable issues found. All unclaimed issues are claim-gated or claimed.")
         return 0
@@ -1393,6 +1500,114 @@ def run_selftest():
         assert_true("#337 arm A: a qualified fork ref lands (#343)", 343 in _armA)
     finally:
         shutil.rmtree(_armA_repo, ignore_errors=True)
+
+    # Test 13: #414 -- a REOPENED issue OVERRIDES the landed arm AND the dedup arm.
+    #
+    # Both arms are INFERENCES about state: `landed` is derived from artifacts (an
+    # Issue-Ref trailer on origin/main, or a ledger landing row) and `recent`
+    # records only OUR OWN past dispatch. A reopen is a DELIBERATE act that
+    # contradicts both, so it wins. Without the landed override the misreferenced
+    # close is PERMANENT -- the poison that produced the wrong close still sits on
+    # origin/main, so the arm re-marks the issue landed on every scan and the sweep
+    # never re-wires it. Without the dedup override the fix merely moves the
+    # stranding one arm over.
+    #
+    # Live scope measured 2026-09-19 (the three stranded issues this leg pins):
+    # #199 (closed on b10ca242f, which touches 0 files under src/a2a/, and still
+    # carrying Issue-Ref: #199), #253, and #324 (ALSO held by the 7-day dedup
+    # memory -- "wired to aff7ff41 at 2026-09-18T11:24:13Z").
+    _reopen_ts = (_now_utc - datetime.timedelta(days=1))
+
+    def _iss(num, state_reason=None, title=None):
+        d = {"number": num, "title": title or f"issue {num}", "labels": [],
+             "body": ""}
+        if state_reason is not None:
+            d["stateReason"] = state_reason
+        return d
+
+    _r_open = [
+        # 199: REOPENED and reads landed -> must be RELEASED.
+        _iss(199, "REOPENED", "fix(a2a): gateway listener"),
+        # 250: reads landed, NOT reopened -> must stay SKIPPED (negative control).
+        _iss(250, None, "fix: landed and not reopened"),
+        # 253: REOPENED, reads landed -> released.
+        _iss(253, "REOPENED", "fix(test): stale assertions"),
+        # 324: REOPENED, reads landed AND in dedup -> released by BOTH overrides.
+        _iss(324, "REOPENED", "test(utils): image_util non_image_schemes"),
+        # 400: reads landed, COMPLETED (not reopened) -> skipped (negative control
+        # for the value, not just for the absence, of stateReason).
+        _iss(400, "COMPLETED", "fix: closed normally"),
+        # 401: REOPENED but neither landed nor recently dispatched -> ordinary
+        # dispatchable, and it must NOT emit an override event (no false count).
+        _iss(401, "REOPENED", "open work never wired"),
+        # 402: no stateReason, in dedup only -> stays SKIPPED (dedup negative
+        # control: the dedup arm still works for non-reopened issues).
+        _iss(402, None, "wired recently, not reopened"),
+        # 403: no stateReason, neither landed nor dedup -> ordinary dispatchable.
+        _iss(403, None, "plain open work"),
+    ]
+    _r_landed = {199, 250, 253, 324, 400}
+    _r_recent = {324: ("aff7ff41", _reopen_ts), 402: ("63d775f9", _reopen_ts)}
+    _r_events, _r_dispatchable = classify_dispatch_arms(_r_open, _r_landed, _r_recent)
+    _r_nums = [i["number"] for i in _r_dispatchable]
+    _r_landed_skips = {i["number"] for k, i, _ in _r_events if k == "landed"}
+    _r_dedup_skips = {i["number"] for k, i, _ in _r_events if k == "dedup"}
+    _r_overrides = [(i["number"], arm) for k, i, arm in _r_events if k == "reopened"]
+
+    assert_true("#414 POSITIVE: a REOPENED issue reading landed is RELEASED (#199)",
+                199 in _r_nums)
+    assert_true("#414 NEGATIVE CONTROL: a landed issue with NO stateReason is "
+                "still SKIPPED (#250)",
+                250 not in _r_nums and 250 in _r_landed_skips)
+    assert_true("#414 a second REOPENED landed issue is RELEASED (#253)", 253 in _r_nums)
+    assert_true("#414 a non-REOPENED stateReason does NOT override landed (#400 "
+                "stateReason=COMPLETED)",
+                400 not in _r_nums and 400 in _r_landed_skips)
+    assert_true("#414 POSITIVE: a REOPENED issue in dedup is RELEASED by the dedup "
+                "override (#324)",
+                324 in _r_nums)
+    assert_true("#414 NEGATIVE CONTROL: a dedup issue with no stateReason is still "
+                "SKIPPED (#402)",
+                402 not in _r_nums and 402 in _r_dedup_skips)
+    assert_true("#414 a REOPENED issue that is neither landed nor in dedup is "
+                "released WITHOUT emitting an override event (#401)",
+                401 in _r_nums
+                and 401 not in [n for n, _ in _r_overrides])
+    assert_true("#414 an ordinary open issue is unaffected (#403)", 403 in _r_nums)
+    assert_eq("#414 the dispatchable set is exactly the 4 released/plain issues",
+              sorted(_r_nums), [199, 253, 324, 401, 403])
+    assert_eq("#414 #324 fires BOTH overrides (landed then dedup, per-issue order "
+              "follows the input scan order)",
+              _r_overrides,
+              [(199, "landed"), (253, "landed"), (324, "landed"), (324, "dedup")])
+    assert_eq("#414 the override counts are SPLIT by arm (3 landed, 1 dedup) -- a "
+              "merged total carrying one predicate is the defect this fixes",
+              (sum(1 for _, a in _r_overrides if a == "landed"),
+               sum(1 for _, a in _r_overrides if a == "dedup")), (3, 1))
+    assert_eq("#414 the four arms PARTITION the unclaimed set",
+              (sum(1 for k, _, _ in _r_events if k == "gated")
+               + len(_r_landed_skips) + len(_r_dedup_skips) + len(_r_dispatchable)),
+              len(_r_open))
+    assert_true("#414 stateReason is matched case-insensitively (a lower-case "
+                "'reopened' still overrides)",
+                is_reopened({"number": 9, "stateReason": "reopened"})
+                and not is_reopened({"number": 9, "stateReason": "COMPLETED"})
+                and not is_reopened({"number": 9}))
+
+    # The REPORTED numbers, not just the events they come from: a merged override
+    # total printed as "defeated the landed arm" was the defect this fixes, so the
+    # split is asserted directly against the summary the operator reads.
+    _r_counts = summarize_arms(_r_events, _r_dispatchable)
+    assert_eq("#414 reported counts: landed/dedup skips + split overrides "
+              "(of the 5 landed issues, 3 are REOPENED and released; of the 2 "
+              "dedup issues, 1 is REOPENED and released)",
+              (_r_counts["gated"], _r_counts["landed"], _r_counts["dedup"],
+               _r_counts["landed_override"], _r_counts["dedup_override"]),
+              (0, 2, 1, 3, 1))
+    assert_eq("#414 the reported override counts sum to the override EVENTS, "
+              "and each is stated against its OWN arm",
+              _r_counts["landed_override"] + _r_counts["dedup_override"],
+              len(_r_overrides))
 
     total = tests_passed + tests_failed
     print(f"selftest: {tests_passed}/{total} OK")
