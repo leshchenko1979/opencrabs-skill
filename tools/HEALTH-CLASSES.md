@@ -88,7 +88,9 @@ into two tiers:
 ### Class 5: `schedulers`
 - **Objects Audited:** `cron_jobs` table in `opencrabs.db`.
 - **Invariants Checked:**
-  - Law-carrying dev crons enabled (`harvest-watch-4h`, `oc-roster-detached-sweep`, `oc-health-hourly`).
+  - Law-carrying dev crons enabled (`oc-harvest-dispatch-4h`, `oc-roster-detached-sweep`, `oc-health-hourly`, `oc-upstream-delta-watch`).
+    - **NAME CORRECTION (2026-09-19):** the harvest patrol was listed as `harvest-watch-4h` until this date. **No such job has ever existed in `cron_jobs`** — the live name is `oc-harvest-dispatch-4h` (id `73158e43-3b04-4464-bf82-8d9065a191bb`; the `harvest-watch-4h` spelling is the v0.4.203 correction, the live row predates it). A query matching the stale name can never fire on the real job, so the check was blind to the harvest patrol's state for its whole life. The hardcoded query behind this invariant (`tools/oc-health` class 5) carries the same stale name and the shorter 3-name list — `tools/**` is Toolsmith-owned, so that half was reported to them (by the ops lane, 2026-09-19) and is not fixed by this text.
+    - **OWNER-ORDERED OFF (2026-09-18 20:53Z, still standing):** the owner ordered every ops-profile pacemaker switched off (*"Turn off all of your pacemakers for now"*). Executed and read back the same evening: **11 ops-owned crons, 0 enabled** — all four above included. **A disabled state is therefore the EXPECTED reading, not a finding, for as long as that order stands.** A class-5 report flagging these crons as "disabled" is re-reporting the owner's own order back to him; treat it as a stale invariant, not a discovery. The invariant's live purpose inverts until he lifts it: it must fail loudly if one of these crons is **enabled** against the order, and resume flagging disabled ones only after the order is lifted.
   - Dev cron delivery routing: zero leaks to private DMs (positive Telegram chat ID or hardcoded owner ID).
   - Blank `deliver_to` allowed when cron delivers internally via `session_notify`.
 - **Remediation:** Flag disabled crons and DM leaks via `QUIRK`.
