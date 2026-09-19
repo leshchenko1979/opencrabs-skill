@@ -211,13 +211,10 @@ def get_issue_from_commit(commit_sha, repo_path):
     parts = res.stdout.strip().split('\t')
     subject = parts[0]
     issue_ref = parts[1] if len(parts) > 1 else ''
-    m = re.search(r'#?(\d+)', issue_ref)
-    if m:
-        return int(m.group(1))
-    m = re.search(r'#(\d+)', subject)
-    if m:
-        return int(m.group(1))
-    return None
+    # #369: the canonical parse, never a local `#?(\d+)` copy — the optional
+    # hash reads a slug-form trailer as the owner handle's 1979.
+    refs = oc_claims.commit_issue_refs(issue_ref, subject)
+    return refs[0] if refs else None
 
 def get_issue_smoke_pass_ts(issue_num, state_dir=None):
     if not issue_num:
@@ -370,7 +367,11 @@ def get_ahead_commits(repo_path, mock_commits_file=None):
         return []
     cmd = [
         'git', '-C', repo_path, 'log', 'adolfousier/main..origin/main',
-        '--format=%H%x1f%h%x1f%s%x1f%(trailers:key=Issue-Ref,valueonly,separator=)%x1f%ct'
+        # #369: an EMPTY separator CONCATENATES multiple Issue-Ref values
+        # ('#217leshchenko1979/opencrabs#217' on 4692f3ef2), so a two-trailer
+        # commit hands the parser garbage. `%x2c` is the comma
+        # oc_claims.parse_issue_ref_value already splits on.
+        '--format=%H%x1f%h%x1f%s%x1f%(trailers:key=Issue-Ref,valueonly,separator=%x2c)%x1f%ct'
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
@@ -508,8 +509,10 @@ def check_fork_path_provenance(path, repo_path):
         intro_sha = parts[0]
         intro_subj = parts[1] if len(parts) > 1 else ''
         intro_tr = parts[2] if len(parts) > 2 else ''
-        m = re.search(r'#(\d+)', intro_tr) or re.search(r'#(\d+)', intro_subj)
-        intro_iss = int(m.group(1)) if m else None
+        # #369: canonical trailer parse (fork space only) with the
+        # explicit-`#N` subject fallback — never a bare digit run.
+        _refs = oc_claims.commit_issue_refs(intro_tr, intro_subj)
+        intro_iss = _refs[0] if _refs else None
         return intro_sha, intro_iss, intro_subj
     return None, None, None
 
@@ -645,23 +648,24 @@ if action == 'check':
     # refuse rather than approve, so the residual ambiguity is the safe side.
     sha_target = bool(re.fullmatch(r'[0-9a-fA-F]{7,40}', target))
     for c in commits:
-        tr = c.get('trailer', '')
-        m_tr = re.search(r'#?(\d+)', tr)
-        iss_c = int(m_tr.group(1)) if m_tr else None
-        if not iss_c:
-            # Subject fallback: only an EXPLICIT #<n> citation may be adopted
-            # as a commit's issue. The previous pattern took the FIRST number
-            # anywhere in the subject, so the repo's own swap-marker convention
-            # (a subject carrying an 8-hex fragment) attributed that commit to
-            # a two-digit issue, and a date stamp like sync/upstream-20260917-2
-            # to issue 20260917 — both feeding matches_iss, the path behind the
-            # manual-records gate and the 24h soak gate.
-            m_sb = re.search(r'#(\d+)', c.get('subject', ''))
-            iss_c = int(m_sb.group(1)) if m_sb else None
+        # #369: the commit's issues are a SET, not a scalar. The previous
+        # `re.search(r'#?(\d+)', tr)` made the `#` OPTIONAL, so a slug-form
+        # trailer read as 1979 (the owner handle) and the real issue number was
+        # never seen: matching_commits came out EMPTY, and every gate keyed off
+        # it — gate 4 included — was skipped in silence, straight to ELIGIBLE.
+        #
+        # The subject is consulted only when the trailer yields nothing, and
+        # then only for an EXPLICIT #<n>: the previous subject pattern took the
+        # FIRST number anywhere, so the repo's own swap-marker convention (a
+        # subject carrying an 8-hex fragment) attributed that commit to a
+        # two-digit issue, and a date stamp like sync/upstream-20260917-2 to
+        # issue 20260917 — both feeding matches_iss, the path behind the
+        # manual-records gate and the 24h soak gate.
+        iss_set = set(oc_claims.commit_issue_refs(c.get('trailer', ''), c.get('subject', '')))
         c_sha = c.get('sha', '')
         c_short = c.get('short_sha', '')
         matches_sha = bool(sha_target and (c_sha.lower().startswith(target.lower()) or c_short.lower().startswith(target.lower())))
-        matches_iss = bool(target_iss is not None and iss_c == target_iss)
+        matches_iss = bool(target_iss is not None and target_iss in iss_set)
         # Subject matching: an issue-number query requires an explicit #<n>
         # citation, never an unanchored substring — the repo's swap-marker
         # convention puts an 8-hex fragment into every lane's subject, so a bare
@@ -775,12 +779,11 @@ elif action in ('scan', 'sync'):
     unharvested = []
     covered = []
     for c in commits:
-        tr = c['trailer']
-        m = re.search(r'#?(\d+)', tr)
-        iss = int(m.group(1)) if m else None
-        if not iss:
-            m = re.search(r'#?(\d+)', c['subject'])
-            iss = int(m.group(1)) if m else None
+        # #369: canonical parse (fork space only, comma multi-refs, explicit
+        # `#N` subject fallback). The PR map is keyed by ONE issue, so the
+        # pick is deterministic: the lowest number the commit anchors to.
+        _refs = oc_claims.commit_issue_refs(c.get('trailer', ''), c.get('subject', ''))
+        iss = min(_refs) if _refs else None
         
         pr_info = issue_map.get(iss) if iss else None
         if pr_info:

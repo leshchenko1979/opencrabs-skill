@@ -218,13 +218,13 @@ def get_issue_from_commit(commit_sha, repo_path):
     parts = out.strip().split('\t')
     subject = parts[0]
     issue_ref = parts[1] if len(parts) > 1 else ''
-    m = re.search(r'#?(\d+)', issue_ref)
-    if m:
-        return int(m.group(1))
-    m = re.search(r'#(\d+)', subject)
-    if m:
-        return int(m.group(1))
-    return None
+    # #369: the canonical parse, never a local copy with an OPTIONAL hash --
+    # that form reads a slug-form trailer (leshchenko1979/opencrabs#341) as the
+    # owner handle's 1979, so the real issue number is never seen. NOTE: this
+    # engine is a DOUBLE-QUOTED python3 -c string (see the hazard note above),
+    # so a backtick here would run command substitution -- no backticks.
+    refs = oc_claims.commit_issue_refs(issue_ref, subject)
+    return refs[0] if refs else None
 
 def get_issue_smoke_pass_ts(issue_num, state_dir=None):
     if not issue_num:

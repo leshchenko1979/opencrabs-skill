@@ -425,6 +425,39 @@ def parse_issue_ref_value(value, fork_slug=FORK_REPO_SLUG):
             out.append(int(match.group(1)))
     return out
 
+def commit_issue_refs(trailer_value, subject=""):
+    """Issue numbers a COMMIT anchors to: the trailer first, subject as fallback.
+
+    The `Issue-Ref` trailer is the anchored citation and wins outright; the
+    subject is consulted only when the trailer yields nothing, and then only for
+    an EXPLICIT `#<n>` — an unanchored digit run in a subject is not a citation
+    (#323: a swap-marker's 8-hex fragment and a `20260917` date stamp both read
+    as issue numbers under a bare digit search).
+
+    Returns a LIST, never a scalar: one trailer value may carry several refs
+    (`#89,#92,#93`), so a caller matching a target issue must test MEMBERSHIP
+    rather than compare against a single parse.
+
+    Why this lives here and not in each caller (#369): the naive
+    `re.search(r'#?(\\d+)', value)` this replaces makes the `#` OPTIONAL, so the
+    FIRST digit run anywhere in the value wins. A slug-form trailer — the form
+    every lane writes — then reads as `1979` from the owner handle in
+    `leshchenko1979/opencrabs#341`, and the real issue number is never seen.
+    Measured over `git log --all` in the fork (2026-09-19): 9024 commits, 1583
+    carrying a non-empty Issue-Ref, of which 181 parse as 1979 and 191 disagree
+    with the canonical parse. The counts drift as commits land; the PREDICATE is
+    the reproducible part — old = `re.search(r'#?(\\d+)', trailer).group(1)`,
+    new = `commit_issue_refs(trailer, subject)[0]`, compared over every commit
+    carrying an Issue-Ref. Also refuses a reference naming another repository
+    (`adolfousier/opencrabs#901` yields no fork issue), which the old form read
+    as fork issue 901.
+    """
+    refs = parse_issue_ref_value(trailer_value)
+    if refs:
+        return refs
+    match = re.search(r"#(\d+)", str(subject or ""))
+    return [int(match.group(1))] if match else []
+
 def issue_ref_index(repo_path, ref="--all"):
     """``{sha: [issue, ...]}`` for commits carrying a fork-space `Issue-Ref`.
 
