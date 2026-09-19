@@ -126,9 +126,9 @@ daemon/carrier defects (or route to an editor lane via TRIAGE if that's the
 faster path), anything owner-verdict-shaped.
 
 HOW: `session_notify` per fleet-directives.md §Cross-lane message delivery discipline (cadence law
-canonical — quiet DEFAULT, turn-end for boundary-bound, `interrupt=true`
-failsafe only). Batch at turn-end — one notify with
-N items beats N notifies. Receipts, ACKs, and ROUTED stamps NEVER escalate;
+canonical: `turn-end` IS the default (an idle target wakes on it), `quiet` is a deliberate choice
+for batch/fan-out whose ack contract is the ledger, `now` is RETIRED and FAILS the delivery,
+and `interrupt: true` is a legacy alias — accepted but INERT, NOT an escalation. Batch: one notify with N items beats N notifies. Receipts, ACKs, and ROUTED stamps NEVER escalate;
 they live in the ledger.
 
 WHAT comes back: HQ's rulings and version batches absorb here the
@@ -137,7 +137,7 @@ zero-ping (hq.md Duty 3).
 
 ## Tool-problem reports: direct to TOOLSMITH for tools, issues for core (owner order 2026-09-10 ~02:4xZ & 14:3xZ; v0.4.130 Direct Dispatch Law; Finding BS-01 fix v0.4.133)
 
-**Work orders and anomaly reports follow Direct Dispatch — no relay hops.** Tool-use anomaly reports (failed invocations, wrong args, false journal rows, unbacked persistence claims, CLI quirks) in `tools/oc-*` MUST be dispatched directly to the active **TOOLSMITH** lane (`session_notify`; resolve target dynamically via `oc-ledger roster --live --role <role>` — never hardcode ephemeral UUIDs). Core daemon anomalies (e.g. panic, binary faults) go directly to GitHub fork issues. **Role resolution verb (Task-8 correction 2026-09-11):** `oc-ledger roster --live --role <role>` is the working form. `oc-roster` does NOT resolve roles — its `--role` flag is actively rejected (rc 2, directing callers to `oc-ledger roster`), so role resolution MUST use `oc-ledger roster`. Do not substitute `oc-roster` here.
+**Work orders and anomaly reports follow Direct Dispatch — no relay hops.** Tool-use anomaly reports (failed invocations, wrong args, false journal rows, unbacked persistence claims, CLI quirks) in `tools/oc-*` MUST be dispatched directly to the active **TOOLSMITH** lane (`session_notify`; resolve target dynamically via `oc-ledger roster --live --role <role>` — never hardcode ephemeral UUIDs). Core daemon anomalies (e.g. panic, binary faults) go directly to GitHub fork issues. **Role resolution verb (corrected 2026-09-19, TOOLSMITH report):** `oc-ledger roster --live --role <role>` is canonical, and `oc-roster --role <role>` is a SUPPORTED delegation to it — byte-identical output (verified 2026-09-19, `cmp` rc=0). Only the BARE `--role` with no value answers rc 2. Never hardcode an ephemeral UUID.
 
 Triage is an AUDITOR, not a relay hub. Lanes do NOT route tool anomalies through Triage to have Triage forward them to Toolsmith. The HQ of record for semantic rulings and escalating blockers remains **OC DEV HQ**, but executing fixes on CLI tools belongs directly to Toolsmith.
 

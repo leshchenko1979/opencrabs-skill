@@ -1,5 +1,16 @@
 # Changelog — opencrabs-dev
 
+## v0.4.212 (2026-09-19)
+
+**`toolsmith.md` carried two stale laws that steered lanes wrong — both corrected.**
+
+- **Defect (filed by the TOOLSMITH lane, verified first-hand here).** Two sites contradicted the live rulings:
+  1. **§Escalation to HQ** still described the PRE-re-ruling cadence — *"quiet DEFAULT, turn-end for boundary-bound, `interrupt=true` failsafe only"*. The 2026-09-19 03:34:30Z / 03:36:54Z re-ruling inverted both halves: `turn-end` IS the default, `quiet` is a deliberate choice, `now` is RETIRED and FAILS the delivery, and `interrupt: true` is a legacy alias — accepted but INERT. A lane following the file got the inverted default *and* a nonexistent escalation path.
+  2. **§Tool-problem reports** forbade a working form — *"`oc-roster` does NOT resolve roles — its `--role` flag is actively rejected (rc 2)"*. Measured this turn: `oc-roster --role hq` → **rc 0**, and `cmp` against `oc-ledger roster --live --role hq` → **rc 0, byte-identical**. Only the BARE `--role` with no value answers rc 2. The file was steering lanes away from a supported delegation that `SKILL.md`'s own tool table already documents.
+- **Fix.** Both sites state the current law. The canonical `oc-ledger roster --live --role <role>` form and the never-hardcode-a-UUID rule are retained. No other cadence text remains in the file (grep-verified).
+- **LOC delta (mandatory on every law change):** `toolsmith.md` 157 → 157, **net 0** — both fixes are in-line rewrites at identical line count. Stated because a zero delta is still a delta.
+- **What this bump did NOT do.** No `tools/` touch (the battery receipt from 13:23:02Z still covers the tree; no `tools/` file is newer). The four law files remain above the 500-line budget.
+
 ## v0.4.211 (2026-09-19)
 
 **The `mod.rs` declarations-only standard is FORK discipline, not a gate — the enforcement claim was unsupported by upstream's own tree.**
