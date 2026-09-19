@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.217
+version: 0.4.218
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -115,7 +115,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-smoke <issue-N> [--probe <cmd>] [--no-ledger]` | unified 4-leg smoke verification & verdict row logging + automatic ledger done stamp on PASS |
 | `./tools/oc-issue-dispatch [--auto] [--issue N] [--lane U]` | mechanized issue triage dispatch to idle editor lanes |
 | `./tools/oc-lint-laws [--strict]` | mechanical syntax & tool existence lint of skill markdown laws. **`--strict` known limitation (v0.4.207, measured 2026-09-19):** `flag_known` demands the flag BE the whole case arm (`^[[:space:]]*--flag)`), so ALTERNATION arms (`--role\|--role=*)`, `--selftest\|selftest)`), INLINE tests (`[ "${1:-}" = "--bundle" ]`) and comments are not recognised. On this corpus that yields **5 false-positive PHANTOM-FLAG findings** (SKILL.md:99 `oc-roster --role`; SKILL.md:352 + hq.md:31 `oc-deploy --selftest`; hq.md:108 `oc-ledger --bundle`; tools/RC-CONTRACT.md:55 `oc-ledger --issue`), every one a real working flag: `oc-roster --role hq` rc=0 and `oc-deploy --selftest` rc=0 (283 pass/0 fail) checked live, `--bundle`/`--issue` each covered by passing selftest assertions at `tools/oc-ledger:1275` and `:1415`. Non-strict mode finds all five. **Do not "fix" these five as phantoms** — root fix dispatched to Toolsmith. |
-| `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5); `wait <ref> [--budget N] [--poll S]` provides single-invocation blocking gate. Full rc/adoption/lock/fmt-soft-fail register: RC-CONTRACT.md |
+| `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` · `oc-prchecks resume <run-id>` | one-command CI gate on a PR-lane branch (editor.md Phase 5); `wait <ref> [--budget N] [--poll S]` provides single-invocation blocking gate; **`resume <run-id>` RE-ATTACHES to a run this lane WITNESSED** — no dispatch, no adoption (#74 H2) — and is the recovery for a rc-5 in-flight-timeout, whose stdout carries the run id + URL for exactly this (`extra.run_id` in the journal is the same handle). Full rc/adoption/lock/fmt-soft-fail register: RC-CONTRACT.md |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic; READ-ONLY — PROPOSE/WAIT judgment stays human |
 | `./tools/oc-wt add\|remove\|--force` | editor worktree manager (`--force` journals before removal) |
 | `./tools/oc-drift-check <uuid> [--ack]` (omit-arg canonical; legacy `<uuid> <claimed-ver>` accepted) | editor §Mid-cycle skill drift step 1-2, mechanical |
@@ -294,6 +294,31 @@ schemas — so no log line can prove a description string was served. Smoking a
 the shipped constants in source**; any description fragment found in the log is
 self-contamination from the prober's own commands. A "live schema served" receipt from
 the log is a FALSE receipt.
+
+**Leg-4 probe hygiene (lane 212b3c83, Duty-4 cycle `20260919-c21`, 2026-09-19) — three ways a leg-4 probe measures
+nothing and still reports PASS.** (a) **ARTIFACT BINDING:** a criterion binds to a NAMED artifact —
+rendering bytes and delivered bytes are different artifacts, because the delivery path re-encodes
+(Telegram converts renders to JPEG) and a re-encode destroys fine-stroke measurements, so a criterion
+that holds on the lossless render (colour type, alpha, contrast across a 1 px stroke) is **not**
+thereby valid on the delivered artifact. Where both are needed, state **two legs with distinct
+criteria** — the renderer leg proves the wire form is right, the delivered leg proves the user
+receives the corrected output and binds on a **coarse, codec-surviving discriminator** (a large
+contiguous fill region, a presence/absence inversion against a pre-fix control message) — and a
+verdict resting on both must say which criterion binds to which artifact. (b) **MEASURE FROM THE
+ARTIFACT, NOT THE CONSTANTS:** if every argument to the metric is a literal declared beside the
+threshold, the metric measures the source file, not the artifact, and passes on any input — measure
+from the loaded bytes. A **bucketing/matching tolerance must be strictly smaller than the separation
+between the buckets it distinguishes**: with references `d` apart, any tolerance `>= d` merges them
+and the metric silently becomes a count of the union — assign each sample to its NEAREST reference
+rather than testing a radius (a merged bucket shows as a ratio that cannot exist, e.g. two bucket
+counts summing past the population). (c) **SPILL-DIRECTORY COMPLETENESS:** a probe consuming tool
+output must not read the spill directory as if it were complete — results under the inline threshold
+are returned inline and produce **no spill file**, so a spill-only harvest has a hole exactly where
+the newest evidence sits; force the spill by raising the result size, or parse the tool result inline
+in the same turn. Because **expired attachment URLs are skipped silently and the skip reads as
+absence**, report the skipped count beside the found count — "0 found, 13 skipped as expired" is a
+different verdict from "0 found". **Corollary binding all three: a leg-4 probe reports PASS only if
+it would FAIL on the pre-fix artifact — state the input on which it fails.**
 
 ## Glossary — official terms (v0.4.62; one concept = one name)
 

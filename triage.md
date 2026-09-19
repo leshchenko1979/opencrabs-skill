@@ -41,7 +41,7 @@ per that section. Owner veto overrides retroactively, as with rulings.
 
 - **Parallel Harvest Orchestration Patrol (PHOP) & Pre-Dispatch Vetting (v0.4.136, 2026-09-10; Native GitHub Protection 2026-09-16):**
   When orchestrating harvest work, Triage MUST mechanically vet candidate packages before dispatching harvest work orders to editor lanes:
-  1. Run `tools/oc-harvest-dispatch vet <issue-or-commits>` to verify upstream absence (tree-diff non-empty, patch-id unmerged, not already merged upstream, not superseded).
+  1. Run `tools/oc-harvest-dispatch vet <issue-or-commits>` to verify upstream absence (tree-diff non-empty, patch-id unmerged, not already merged upstream, not superseded). **A `#N` named in a commit subject or a PR title is a REFERENCE, not identity** (v0.4.218, filing `530c29ec` P1): the naming commit's changed files must intersect the issue's own surface, or the verdict is poisoned — a `(#N)` corrupted in a squash subject maps a DIFFERENT subsystem's work onto this issue, and the refusal is then PERMANENT because the squash sits in upstream history forever. Canon: `fleet-directives.md §Dispatch Eligibility D1` (IDENTITY leg); live case `#199`.
   2. **Native Sub-Issues & Blockers Check (owner order 2026-09-16; strengthened v0.4.198):** `vet` (item 1) already evaluates BOTH legs and returns the verdict code — read that code; do NOT re-derive either by hand (a hand re-check of a tool verdict is the agent-memory-as-gate-input defect, lens J / F24).
      - Sub-issues / child cleanups → `HELD_PARENT_UNHARVESTED`: parent unmerged, or a touched path introduced by an unharvested fork issue. Issue #188 unharvested-parent refusal.
      - Blockers declared via `gh issue edit <issue> --add-blocked-by <blocker-issue>` → `HELD_BLOCKED_BY_DEPENDENCY` until blockers land upstream.
@@ -52,7 +52,18 @@ per that section. Owner veto overrides retroactively, as with rulings.
 
 - **Stale-branch sweep patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** run
-  `./tools/oc-branch-sweep` (fresh receipt) against the fork; the sweep
+  `./tools/oc-branch-sweep` (fresh receipt); **the sweep's ref source is the
+  LOCAL branch set — `refs/heads/` ONLY** (v0.4.218, filing `530c29ec` P2).
+  The tool enumerates `refs/heads/` and carries no remote leg
+  (`oc-branch-sweep` lines 65-66, 76, 139), so a remote-only head is OUTSIDE
+  this patrol's coverage and the duty must never be read as a whole-fork
+  sweep. Measured 2026-09-19: 379 local heads vs 478 origin heads, of which
+  **191 origin branch NAMES have no same-named local branch (40.0% of origin
+  heads; predicate: set difference of branch NAMES, NOT a raw ref count — the
+  raw counts differ by 99)** — so a lane asked to archive a remote-only branch
+  cannot be served by this patrol. Giving the tool a remote leg is a Toolsmith
+  call (dispatched 15:05:20Z); until it lands, the coverage claim here is the
+  LOCAL set and nothing wider. The sweep
   reports contained/stale branches; deletion of any referenced branch
   (open PR head, lane worktree ref) stays lane-reference-checked — sweep
   SURFACES, owner/deletion law disposes. Closes the ownerless gap: the

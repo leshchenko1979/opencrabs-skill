@@ -176,6 +176,17 @@ Rules:
 - Pre-flight gate (step 2c) is MANDATORY (v0.4.0): read the fmt STEP outcome,
   not just the run conclusion — soft-fail hides failures from the run.
 - **Harvest census pre-flight gate (Cycle 5 / Duty 4, v0.4.143):** before opening an upstream PR or creating a harvest branch, run `tools/oc-harvest-census check <issue-number-or-slug>`. Refuse to file if rc=1 (finding: already MERGED or IN_FLIGHT upstream, or blocked).
+- **Read the ADVISORY drop-list before branching (v0.4.218, finding `63d775f9`, cycle `20260919-c21`):**
+  rc=0 `ELIGIBLE` means the target is **unharvested**, NOT that its feature can travel alone — Gate 4
+  (`#365`) passes when **at least one** derived subject symbol resolves upstream, so an ELIGIBLE unit may
+  still have its whole **substance** inside a fork-only symbol. Read every `ADVISORY: hunk inside
+  fork-only symbol — dropped at packaging (<file> :: <sym>)` line (emitted on the rc=0 path; the ONLY
+  substance-portability signal) and judge whether the dropped symbols are the unit's substance or merely
+  incidental. **If the substance is dropped, the unit is a CHILD of the fork issue that introduced that
+  symbol:** parent-link it (`gh issue edit <child> --parent <parent>`) and do **not** branch until the
+  parent is merged upstream. The v0.4.71 symbol sweep at §Phase 7 Reference Rules is a **POST-branch**
+  check and does **not** substitute for this one. (Incident: `#250` read as "branchable alone" off
+  `ELIGIBLE … clean to branch and gate` with four ADVISORY lines in the same output.)
 - `leshchenko1979/<slug>` is the RESERVED PR-head namespace (`leshchenko1979/…`
   branch names stand out in the upstream branch list): branches with that
   prefix are created ONLY in this phase, never developed on, never merged into
