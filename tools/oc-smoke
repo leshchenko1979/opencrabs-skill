@@ -8,6 +8,9 @@
 #
 # Usage: oc-smoke <issue> [--verdict PASS|FAIL] [--probe <cmd>]
 #                         [--markers m1,m2] [--evidence <text>]
+#   --probe and --evidence are INDEPENDENT and BOTH land in the row (#409:
+#   an elif used to drop the whole --evidence argument whenever a probe was
+#   supplied — i.e. on exactly the rows the 4-leg rubric requires).
 #                         [--target <name>] [--unit <unit>]
 #                         [--no-ledger] [--selftest]
 #
@@ -59,7 +62,8 @@ Options:
   --verdict <V>       Verdict token: PASS (default) or FAIL
   --probe <cmd>       Optional shell command to execute for behavioral proof
   --markers <m1,m2>   Comma-separated presence markers to verify in binary
-  --evidence <text>   Prose summary of verification evidence
+  --evidence <text>   Prose summary of verification evidence (recorded IN
+                      ADDITION to --probe, never instead of it)
   --target <name>     Feature name or target slug (default: derived from issue)
   --unit <unit>       Systemd user unit to check (default: opencrabs-ops)
   --no-ledger         Skip automatic done stamp in workers-ledger.json on PASS
@@ -82,6 +86,35 @@ die() {
 }
 
 # Newline-safe append helper matching oc-smoke-evidence
+# clip <text> <cap> — bound a field for the line-oriented verdict log and MARK
+# any truncation. A silent cut is indistinguishable from a short value: the
+# #409 report's row ends mid-word ("post-#28") and a reader cannot tell a
+# 200-char probe from a truncated one. The cap is overridable so a lane that
+# needs more probe detail does not have to edit the tool.
+SMOKE_PROBE_CAP="${OC_SMOKE_PROBE_CAP:-400}"
+clip() {
+  local txt="$1" cap="$2" len
+  len="${#txt}"
+  if [ "$len" -le "$cap" ]; then
+    printf '%s' "$txt"
+  else
+    printf '%s…[truncated at %s of %s chars]' "$(printf '%s' "$txt" | cut -c1-"$cap")" "$cap" "$len"
+  fi
+}
+
+# flatten <text> — the verdict log is ONE ROW PER LINE, so an embedded newline
+# splits a row in two and every later reader sees a malformed record. The probe
+# path always flattened; the --evidence path did not, so multi-line prose (the
+# normal shape for a by-hand lineage derivation) silently corrupted the log.
+# Returns the flattened text; sets FLATTENED=1 when it actually had to.
+FLATTENED=0
+flatten() {
+  local txt="$1" flat
+  flat="$(printf '%s' "$txt" | tr '\n\r\t' '   ')"
+  [ "$flat" = "$txt" ] || FLATTENED=1
+  printf '%s' "$flat"
+}
+
 append_log_safe() {
   local log_file="$1"
   local line="$2"
@@ -208,6 +241,53 @@ EOF
     t_ok "FAIL verdict does not stamp ledger done -> 1"
   else
     t_bad "FAIL verdict ledger stamp (rc=$rc out=$out)"
+  fi
+
+  # ---- #409: --probe and --evidence are INDEPENDENT (both must land) -------
+  # Before this fix an `elif` made the probe branch win, so --evidence was
+  # discarded whole. --probe is the NORMAL case (leg 4 of the rubric IS a live
+  # probe), so the loss hit exactly the rows that matter. The assertions below
+  # are on the ROW, not on stdout, because the row is the artifact of record.
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 241 --probe "echo probe-ok" --evidence "EVIDENCE-MARKER-409" 2>&1)" || rc=$?
+  row241="$(grep 'issue=#241' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row241" | grep -q "live_behavior=" && printf '%s' "$row241" | grep -q "evidence=EVIDENCE-MARKER-409"; then
+    t_ok "probe AND evidence both land in the row (#409)"
+  else
+    t_bad "probe+evidence both land (rc=$rc row=$row241)"
+  fi
+
+  # A raw newline in --evidence used to split the verdict row across lines,
+  # because the probe path flattened and the evidence path did not.
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 242 --probe "echo p" --evidence "line one
+line two" 2>&1)" || rc=$?
+  n242="$(grep -c 'issue=#242' "$d/state/smoke-verdicts.log" || true)"
+  if [ "$n242" = "1" ] && grep 'issue=#242' "$d/state/smoke-verdicts.log" | grep -q "line one line two"; then
+    t_ok "multi-line --evidence flattened: row stays ONE line (#409)"
+  else
+    t_bad "multi-line evidence (rc=$rc rows_for_242=$n242)"
+  fi
+
+  # Truncation must be MARKED — a silent cut is indistinguishable from a short
+  # value, and the #409 row ends mid-word with no way for a reader to tell.
+  cat > "$d/longprobe" <<'EOF'
+#!/usr/bin/env bash
+head -c 500 /dev/zero | tr '\0' 'y'
+EOF
+  chmod +x "$d/longprobe"
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 243 --probe "$d/longprobe" 2>&1)" || rc=$?
+  if grep 'issue=#243' "$d/state/smoke-verdicts.log" | grep -q "truncated at 400 of 500 chars"; then
+    t_ok "probe truncation is marked with the cap and the true length (#409)"
+  else
+    t_bad "probe truncation unmarked (rc=$rc row=$(grep 'issue=#243' "$d/state/smoke-verdicts.log" | tail -n1))"
   fi
 
   echo "selftest: $pass passed, $fail failed"
@@ -343,10 +423,10 @@ if [ -n "$PROBE_CMD" ]; then
   if [ "$PROBE_RC" -ne 0 ]; then
     echo "$PROG: behavioral probe FAILED (rc=$PROBE_RC)" >&2
     VERDICT="FAIL"
-    PROBE_DETAILS="probe failed (rc=$PROBE_RC): $(printf '%s' "$PROBE_OUT" | tr '\n' ' ' | head -c 200)"
+    PROBE_DETAILS="probe failed (rc=$PROBE_RC): $(clip "$(flatten "$PROBE_OUT")" "$SMOKE_PROBE_CAP")"
   else
     echo "$PROG: behavioral probe PASSED"
-    PROBE_DETAILS="probe passed: $(printf '%s' "$PROBE_OUT" | tr '\n' ' ' | head -c 200)"
+    PROBE_DETAILS="probe passed: $(clip "$(flatten "$PROBE_OUT")" "$SMOKE_PROBE_CAP")"
   fi
 fi
 
@@ -355,11 +435,28 @@ FULL_EVIDENCE="4-leg smoke pass: lineage=true identity=$( [ "$IDENTITY_RC" -eq 0
 if [ -n "$MARKERS" ]; then
   FULL_EVIDENCE="${FULL_EVIDENCE} markers=${MARKERS}"
 fi
+# #409: two INDEPENDENT ifs. The elif dropped the entire --evidence argument
+# whenever --probe was also supplied — and --probe is the NORMAL case, since
+# leg 4 of the 4-leg rubric IS a live behavioral probe. What was lost is the
+# part a reviewer cannot reconstruct: the by-hand lineage computation (the
+# only place a real lineage check can be recorded, given --evidence is how
+# #306's hardcoded lineage=true is overridden), stated limits, non-duplicate
+# provenance, packaging identity.
 if [ -n "$PROBE_DETAILS" ]; then
   FULL_EVIDENCE="${FULL_EVIDENCE} live_behavior=${PROBE_DETAILS}"
-elif [ -n "$EVIDENCE_TEXT" ]; then
-  FULL_EVIDENCE="${FULL_EVIDENCE} evidence=${EVIDENCE_TEXT}"
 fi
+if [ -n "$EVIDENCE_TEXT" ]; then
+  FLAT_EVIDENCE="$(flatten "$EVIDENCE_TEXT")"
+  if [ "$FLATTENED" = "1" ]; then
+    echo "$PROG: NOTE --evidence contained newlines/tabs; flattened to single spaces" >&2
+    echo "$PROG:       so the verdict row stays ONE line (a raw newline would split it)" >&2
+  fi
+  FULL_EVIDENCE="${FULL_EVIDENCE} evidence=${FLAT_EVIDENCE}"
+fi
+# Never silent (#409 ask 2): state the truncation on stderr as well as in the row.
+case "$PROBE_DETAILS" in
+  *'…[truncated at '*) echo "$PROG: NOTE probe output truncated to ${SMOKE_PROBE_CAP} chars — full output was above; raise OC_SMOKE_PROBE_CAP to keep more" >&2 ;;
+esac
 
 # 4. Append canonical 4-leg smoke verdict row
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
