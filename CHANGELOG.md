@@ -1,5 +1,26 @@
 # Changelog — opencrabs-dev
 
+## v0.4.214 (2026-09-19)
+
+Three lane-filed defects, all verified first-hand before the edit; all in `upstream-merge-runbook.md`.
+
+**1. The VERDICT ROW schema taught a field order practice had abandoned (filed by lane c78e78e0).** The schema line read `ts \t VERDICT \t run= \t sha= \t actor= \t issue= \t target= \t evidence=`. Census over the canonical `smoke-verdicts.log` (predicate: non-blank rows, tab-split exactly 8 fields; signature = the key at each of positions 3-8): 146 rows use `issue= sha= run= target= actor=`, 65 use the documented `run= sha= actor= issue= target=`, and the migration is temporal — rows 1-500 hold 60 of the 65 documented-order rows, rows 751+ hold 135 of the 146 majority-order rows. The line now states that field 2 carries the TOKEN and fields 3+ are `key=value` in ANY order. Impact was LOW (every consumer reads by key, nothing miscomputed), but the law was contradicted by the tree it describes — the same class as the mod.rs claim (v0.4.211) and defects A/B/D (v0.4.213).
+
+**2. The sync sequence never reconciled the local `~/opencrabs` main worktree (filed by Triage lane 530c29ec).** Every sync force-pushes fork main, so a local `main` left behind stops being an ancestor of the new tip; `oc-ship-chain` LEG3 then runs its bare `git merge --ff-only $TIP` against that stale local main and reports **NON-FF** for a lane correctly based on the new `origin/main` — and its rc-5 text points that lane at a rebase it does not need. Measured live: two LEG3 NON-FF failures inside one minute (ledger `9345`/`9348`), both a stale local main. Step 8 now carries an explicit reconcile step with an ff-only command (never force). Latent at the time of the fix — local `main` and `origin/main` were both at `2dc302fc6`.
+
+**3. Step 0's cherry test has false NEGATIVES (filed by Triage lane 530c29ec).** The `+` count of 0 proving "absorbed" is sound; the CONVERSE was unstated and false. Patch-id matching is blind to a change already present by another route, so landed work still reports `+`. Verified against `origin/main` @ `2dc302fc6`: 10 of 10 lane-scoped `+` markers on two lanes were content-present (`record_tap_binding`, `BindingOrigin::Callback`, `PREVALIDATE_TIMEOUT_SECS`, `neutralize_prose_media_html`, `format_mermaid_plan_error` and migration `20260912160000_session_bindings_last_origin.sql` all resolve in `origin/main`). A lane obeying step 0 literally rebases already-landed work — the over-replay class the section already warns about, reached from the opposite direction. Step 0 now requires a CONTENT leg before a `+` is treated as pending, and the `ABSORBED|PENDING` verb note states that the verb needs it too.
+
+**LOC — mandatory metric (owner order 2026-09-19).** `git show HEAD:<f>` vs live file:
+
+| File | Before | After | Δ |
+|---|---|---|---|
+| `upstream-merge-runbook.md` | 389 | 391 | +2 |
+| **Total** | **389** | **391** | **+2** |
+
+All three fixes are corrections to verified defects, so the +2 is accepted growth, not sediment. This is the second consecutive bump that adds rather than trims.
+
+**What this bump did NOT do.** No `tools/` file touched. v0.4.213 stands unchanged. The four law files remain above the 500-line budget (`fleet-directives.md` 598, `editor.md` 512, `SKILL.md` 576, ops `AGENTS.md` 531) — this pass did not narrow that gap.
+
 ## v0.4.213 (2026-09-19)
 
 **The verdict-token list was not a closed set — it contradicted three other law sites. Reconciled, and the `interrupt`/escalation contradiction closed.**
