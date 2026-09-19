@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.209
+version: 0.4.210
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -405,10 +405,11 @@ uses them as a licence to fix outside its scope.
 - This box has **no sanctioned Rust toolchain** — CI is the only sanctioned
   compile/test executor (Compiler role RETIRED 2026-08-28). No cargo/rustc/clippy in ANY form —
   install, PATH-prepend, explicit path, even an invocation that exits 0 is a
-  violation. Sanctioned local: `/usr/local/bin/rustfmt` wrapper (fmt only) —
-  **the wrapper is NEWER than CI's rustfmt: cosmetic diffs it flags on
-  CI-green committed code are KEPT AS-IS, not applied; fix only formatting
-  artifacts you introduced yourself**; modum RETIRED 2026-08-28; lint evidence =
+  violation. **No local tool exists at all** — `/root/.rustup` is gone and the
+  `rustfmt` wrapper was RETIRED 2026-09-19 (exits 1 `BLOCKED`), so fmt runs only
+  in CI as the soft-fail leg of `pr-checks.yml`; **cosmetic diffs it reports on
+  CI-green code are KEPT AS-IS, not applied — fix only formatting artifacts you
+  introduced yourself**; modum RETIRED 2026-08-28; lint evidence =
   GREEN pr-checks.yml run. Full ban list: editor.md §Box law (canonical;
   "(box law)" tags elsewhere refer to it).
 - Live binary: `/usr/local/bin/opencrabs`. Daemons run as systemd **user** units

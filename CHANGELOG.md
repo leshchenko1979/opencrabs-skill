@@ -1,5 +1,26 @@
 # Changelog — opencrabs-dev
 
+## v0.4.210 (2026-09-19)
+
+**The local Rust toolchain is gone — the rustfmt-only exception is RETIRED in law — and the smoke-verdict taxonomy gets a token for post-rewrite re-verification.**
+
+- **Stale-law defect, filed same-day by editor lane 1a63f103 (measured, not inferred).** `/usr/local/bin/rustfmt` now exits 1 `BLOCKED`; its own header reads *"the sanctioned fmt-only exception is RETIRED (2026-09-19). It exec'd /root/.rustup/toolchains/... and that tree is absent from this host"*, and both `/root/.rustup` and `/root/toolchain-disabled-20260828` are absent. Yet `editor.md §Box law` still sanctioned the wrapper and asserted *"a working rustup tree survives here (kept for the owner-approved rustfmt wrapper)"*, `SKILL.md §Shared environment facts` repeated the sanction, and `upstream-merge-runbook.md §Process` named *"rustfmt wrapper only"*. An editor following Phase 4 now hits a hard BLOCK mid-loop. All four sites state the truth instead: **no local Rust tool exists at all, fmt included — fmt is the soft-fail leg of `pr-checks.yml` only.** The Duty-4 P7 post-fmt scope audit went with its trigger (there is no local fmt pass left to audit), as did the "wrapper is NEWER than CI" drift mechanics; the surviving rule is *cosmetic diffs CI reports on already-green code are KEEP AS-IS; fix only what you introduced yourself*.
+
+- **Verdict taxonomy ruling (filed by lane aff7ff41).** 12 rows across 12 distinct lanes wrote `RE-VERIFY` into `smoke-verdicts.log` field 2 during the run-35441550360 fan-out wave — a token that exists in zero skill files. Ruled rather than coined: **post-lineage-rewrite re-verification is a `CORRECTION`** (it already carries the `sha=`/`evidence=` semantics), now stated on the taxonomy line in `upstream-merge-runbook.md §Ledger hygiene laws`. A genuinely NEW token still needs the owner's word via the poll format.
+
+- **LOC delta (mandatory on every law change — the v0.4.209 rule), `git show HEAD:<file>` vs the live file:**
+
+  | File | Before | After | Δ |
+  |---|---|---|---|
+  | `editor.md` | 524 | 512 | −12 |
+  | `SKILL.md` | 575 | 576 | +1 |
+  | `upstream-merge-runbook.md` | 389 | 389 | 0 |
+  | **Total** | **1488** | **1477** | **−11** |
+
+  `SKILL.md` is the one file that grew: the retired-sanction replacement is one line longer than the sentence it replaced. Net across the three is −11.
+
+- **What this bump did NOT do.** It did not touch `tools/` (the battery receipt from 13:07:41Z still covers the tree). It did not re-open the v0.4.209 sediment pass — that commit stands. And it did not bring the four law files under the 500-line budget: `fleet-directives.md` 598, `editor.md` 512, `SKILL.md` 576, ops `AGENTS.md` 520 are all still above it, and saying otherwise would be false.
+
 ## v0.4.209 (2026-09-19)
 
 **Lens A/B sediment pass across the four law files, and the LOC metric becomes a MANDATORY part of every law change (owner order 2026-09-19: *"The lines of code check must be a part of every law change. It's one of the main metrics"*).**

@@ -29,11 +29,10 @@ cargo/rustc/clippy are FORBIDDEN on this box in ANY form: PATH, login shell,
 `PATH="$HOME/.cargo/bin:$PATH"` prepends, explicit paths
 (`~/.cargo/bin/*`, `~/.rustup/toolchains/*/bin/*`), `source ~/.cargo/env`, any
 other bypass. The BLOCKED stubs in `/usr/local/bin` are the floor of the rule,
-not the rule — a working rustup tree survives here (kept for the owner-approved
-rustfmt wrapper), and its compile binaries are disabled. A local
-invocation that WORKS is still a ruling violation. Sanctioned local
-tools ONLY: `/usr/local/bin/rustfmt` wrapper (fmt only — `--edition 2024`
-+ entrypoint walk for exact CI parity). CODE TESTS = CI gate (`pr-checks.yml`, run in
+not the rule — and there is nothing left to bypass to: `/root/.rustup` is gone
+from this host and the `rustfmt` wrapper was RETIRED 2026-09-19 (it exits 1
+`BLOCKED`). **There is NO sanctioned local Rust tool, fmt included**; a local
+invocation that WORKS would still be a ruling violation. CODE TESTS = CI gate (`pr-checks.yml`, run in
 Phase 5 via `oc-ship-chain`; Phase 7 step 2c reuses it on upstream PR heads).
 Everything
 else — build, test, clippy — is CI dispatch: `pr-checks.yml` or
@@ -300,31 +299,20 @@ gate or push.
 - No `#[allow(dead_code)]` / `#[allow(unused)]` suppression; unused code must be deleted.
 - If introducing, renaming, or retiring concepts, update `src/docs/reference/ONTOLOGY.md`. Upstream CI strictly enforces these.
 
-**rustfmt = NON-FATAL diagnostic pre-pass (Duty-4 P6, v0.4.80):** run fmt
-before `oc-commit`; a fmt failure is a diagnostic to fix and re-run — never a
-hard abort ahead of git (that forces manual trailers + a hand-posted
-implementation comment).
-
-**Local fmt drift on files you did NOT touch is EXPECTED — and it is not yours to fix (SKILL.md §Box law).** The `/usr/local/bin/rustfmt` wrapper is **NEWER than CI's rustfmt**, so it flags cosmetic diffs on **CI-green committed code**. Rule: **KEEP AS-IS; fix only formatting artifacts you introduced yourself.** Two mechanics that make foreign drift look like your defect — (a) the wrapper **RECURSES through `mod.rs` into child modules**, so `--check src/tests/mod.rs` reports diffs from files your branch never touched; (b) `--skip-children` is **not supported** by this wrapper, and a `mod.rs` copied to /tmp fails to resolve its child modules. Isolation recipe: **check each TOUCHED file as a standalone copy; never `--check mod.rs` itself.** Do not spend three receipts re-deriving this — if fmt reports a file your diff does not contain, the answer is this paragraph.
-
-**Post-fmt scope audit BEFORE staging (Duty-4 P7, v0.4.80):** after any fmt
-pass, audit the diff before staging — rustfmt can reformat unrelated
-pre-existing lines (2026-09-01: flow.rs:418); revert out-of-scope hunks and
-keep the commit pure (atomicity law).
+**No local fmt exists — the fmt leg runs in CI only (v0.4.210).** `/root/.rustup` is gone from this host and `/usr/local/bin/rustfmt` was RETIRED 2026-09-19: it exits 1 `BLOCKED`. Do not invoke it, and do not hunt for a replacement. `pr-checks.yml` runs fmt as a **soft-fail** leg, so a formatting-only diff it reports on code that is already green is **KEEP AS-IS; fix only what you introduced yourself**. There is no local fmt or compile path at all: the first real check of a change is the CI gate.
 
 **fmt-clean ≠ compiles — audit CALL-SITE SHAPE before you chain (v0.4.141).**
 There is no local compile path on this box: `which cargo` prints a path, but
 running it prints `BLOCKED` — *the presence of a path is not evidence of a
 toolchain*, the same family as "an empty result from a wrong path is not a
-verdict". `rustfmt --edition 2024 --check` proves FORMATTING only, so the first
-real compile is CI — a full gate dispatch. Before `oc-ship-chain`, mechanically
+verdict". Nothing local proves a change compiles or is formatted; the first real
+check is CI — a full gate dispatch. Before `oc-ship-chain`, mechanically
 cross-check every NEW or CHANGED call site against the callee's real definition:
 **free fn vs associated fn** (a free-fn path on an associated fn is `E0425`),
 the **receiver** (`&self` / `&mut self` / none), and **`Drop`-impl move rules**
 (moving a field out of `&mut self` in `drop` is `E0507` — take it with
-`Option::take()`). Lane `facd50af` (2026-09-11, #111) burned a whole gate budget
-on exactly these two classes after a clean fmt pre-pass.
-DONE = Target change implemented, formatted via rustfmt, call-site shapes verified, and signed commit landed on branch with Session-Id trailer.
+`Option::take()`).
+DONE = Target change implemented, call-site shapes verified, and signed commit landed on branch with Session-Id trailer.
 
 ## Phase 5 — Ship (`oc-ship-chain`)
 
