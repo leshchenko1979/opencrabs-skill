@@ -26,31 +26,6 @@
 
 **Rationale (owner's own words):** *"I want to review them first"* — the soak groups ARE his live-test surface, and harvesting one before he has exercised it upstreams a feature he has not yet accepted.
 
-## Deep Core Advance Heads-Up Gate (Core vs Integration Rule, Owner Order 2026-09-17)
-
-Maintainer coordination protocol between Alexey (`@leshchenko1979`) and Adolfo (`@adolfodev`):
-1. **Scope Classification**:
-   - **Deep Core:** Runtime scheduler, context compaction algorithms, provider routing/fallbacks, subagent orchestration, and tool execution loop. **The prose scope is OPERATIVE; the path list is a reading aid, never the definition.**
-     - **Real paths (corrected v0.4.204, HQ ruling 2026-09-18):** runtime scheduler `src/cron/` (`scheduler.rs`, `pipeline.rs`, `trigger.rs`, `send_scope.rs`) · tool execution loop `src/brain/agent/service/tool_loop.rs` · context compaction `src/brain/agent/context.rs` · provider routing/fallbacks `src/brain/provider/` · subagent orchestration `src/brain/tools/subagent/`.
-     - **Defect this fixes:** the former list named `src/agent/` and `src/scheduler/`, NEITHER of which exists in the tree (`find src -type d -name 'scheduler*'` → empty). A filer reading the list as exhaustive would conclude a cron-runtime-scheduler change is NOT Deep Core — the wrong direction of error, and exactly the #317 shape.
-   - **Surface Integrations:** Telegram channel handler, rich cards, MTProto/MCP bridge (`src/channels/telegram/`).
-2. **The Advance Heads-Up Protocol (Venues: `OC Dev` Group Chat — `-1003627148483` / `3627148483`, or `Opencrabs Dev Factory` tagging `@adolfodev`):**
-   - For any architectural change, behavior shift, or non-trivial fix touching **Deep Core**, post a concise technical 1-liner heads-up to either the **`OC Dev`** Telegram group chat or the **`Opencrabs Dev Factory`** group chat (tagging `@adolfodev`) *before* or *simultaneously with* opening the upstream PR:
-     > `Core heads-up: <observed symptom/issue> → proposed fix in <subsystem> (PR #<N>)`
-   - This ensures early alignment on core abstractions before or during maintainer review.
-   - **WHO POSTS — HQ posts it, on the filing lane's behalf. There is NO editor carve-out (v0.4.204, HQ ruling 2026-09-18).** An editor lane CANNOT discharge this gate itself: SKILL.md §Telegram surface law forbids editors from invoking ANY telegram send/edit tool, not even into their own topic. Without this assignment the two laws bind the same actor and the obligation has **no executor on the filing side**. So: the filing editor sends HQ the 1-liner text (`session_notify`, `delivery.mode="turn-end"`) in the same turn it stages the PR; HQ posts it to the venue. This is NOT a new carve-out — it is the existing lifecycle assignment, since SKILL.md §Upstream relations item 5 makes **Maintainer Interaction (incl. the OC Dev chat heads-up) HQ's area**. The obligation is on the CHAIN, not the filer: a lane that has put the text in HQ's queue has discharged it, and its harvest may proceed.
-3. **Surface Integrations Autonomy:**
-   - Changes to Telegram, rich card rendering, formatting, and local developer tooling remain under our autonomous maintainer authority; they ship directly to upstream PRs with verified 4-leg smoke receipts without requiring advance group chat discussion.
-
-## Dependent Upstream PRs Law (Maintainer Consensus, 2026-09-14; Draft Mandate 2026-09-16)
-
-When PR B depends on PR A (which is not yet merged upstream):
-1. **Explicit Dependency Notice Permitted:** It is explicitly allowed to file PR B while PR A is open/pending, provided the PR description clearly states:
-   `Depends on #<PR_A> (do not merge before #<PR_A>)`
-2. **Staged Upstream Draft PR Mandate (owner order 2026-09-16):** When an upstream PR depends on another in-flight upstream PR or is part of a multi-part staged wave, it MUST be filed with `gh pr create --draft` so upstream maintainers cannot merge out of order before prerequisites land. Once PR A merges upstream, the draft status on PR B is converted to ready for review.
-3. **Maintainer Order of Processing:** Upstream maintainer tackles dependent PRs in commit/chronological sequence (PR A merged before PR B).
-4. **Deferred Automated Publishing:** Alternatively, automated harvest pipelines may hold PR B until PR A merges via harvest watch / cron triggers.
-
 ## Telegram surface law (owner 2026-08-28, skill v0.4.31) [LANE]
 
 Canonical full law: SKILL.md §Telegram surface law (v0.4.31). Editor-facing duties: editor.md §Telegram surface law. session_notify is the ONLY inter-role channel; no editor invokes telegram send/edit tools. Fleet-directives carries no extra text — do not restate the law here.
@@ -61,12 +36,6 @@ Canonical full law: SKILL.md §Telegram surface law (v0.4.31). Editor-facing dut
 2. **Owner gates EVERY implementation design (owner order 2026-09-09 ~20:03Z, supersedes the fix-scoped version).** No implementation of ANY design — fix, feature, tool, refactor, process change, any size — begins code work before the owner approves the design. The design is presented to the owner in CANONICAL TERMS (the project's codified ontology — fleet-directives.md vocabulary, exact codified names, no invented shorthand; owner order 2026-09-07 09:34Z) WITH a process diagram (Mermaid, vertical; multi-actor processes get a sequenceDiagram per item 3; no backticks/angle-brackets in labels). The diagram is part of the gate: a design presented without its diagram is not presented. Implementing an unapproved or un-diagrammed design is a gate violation at any size. Owner's approval must be explicit (message or 👍 reaction); silence is NOT approval. HQ/lane work that produces a design — including Duty-4 accepted proposals that change law or tooling behavior — passes through this gate before implementation.
 3. **Multi-actor processes get a sequence diagram (owner 2026-08-28 17:55Z).** Whenever the process under discussion involves SEVERAL ACTORS (roles, tools, external services, humans), the required diagram is a Mermaid `sequenceDiagram` — one participant per actor, messages as labeled arrows. A flowchart is acceptable only when the flow is genuinely single-track.
 4. **Bare `#N` with fork issue numbers is forbidden on any upstream surface (owner 2026-08-31, skill v0.4.67, fork [#54](https://github.com/leshchenko1979/opencrabs/issues/54)).** Outside a code span, GitHub autolinks `#N` against adolfo's issue space — the tooltip points at the wrong repo's issue. Required form on PR/issue bodies, titles, comments: `leshchenko1979/opencrabs#N` or full URL. Code spans exempt (no autolinking inside backticks). All live upstream offenders patched 2026-08-31; sweep clean.
-
-## Upstream issue filings — report-only (owner 2026-08-28 15:17Z)
-
-**Offload order — CORRECTED (owner 2026-09-01, "Wait, i was talking about prs only. Revert issues"):** "Offload to upstream" applies to **PRs only** (when we fix OpenCrabs-source bugs, the fix ships as an upstream PR per the existing PRs-only rule). **Issue reports NEVER go upstream** — the fork is the issues home, permanently. The 2026-09-01 issue-migration (adolfousier #1279–#1286 for fork 70/33/38/58/35/60/65 + TEXT_ACCUM) was misread, withdrawn same day: all 8 upstream issues closed as withdrawn, all 7 fork issues reopened, #1255 cross-link deleted. #66 remains not-upstream-eligible (upstream #1260 closed pointing back to the fork; needs owner-level follow-up with adolfo).
-
-When the owner tells us to FILE an issue upstream (adolfousier/opencrabs), the editor does NOT fix it: the filed report is the deliverable, and fixing the upstream-reported defect is adolfo's lane. No editor lane writes fix code or opens a fix PR for an upstream-filed issue unless the owner explicitly orders the fix — follow-up REPORTING on the filed thread stays allowed (per the #1255 exception).
 
 ## External lanes — fork issue reporting vs dev non-participation (owner order 2026-09-13) [LANE]
 
@@ -470,13 +439,6 @@ OWNERLESS red files by carrying a sweep commit in the PR itself
 or separate base-repair PRs landing first — the 2026-09-05 #1394/#1393/#1395
 out-of-order merge (fork #103 incident) proved sequencing comments don't
 protect merge order.
-
-## Cross-fork PR inspection — fetch head from the fork remote (Duty-4 proposal, owner-approved 2026-09-06)
-
-Inspecting a cross-fork PR (`gh pr view N -R upstream`): fetch the head branch
-from the FORK remote (`git fetch origin <head>`), never from upstream — a
-fork-namespaced head does not exist there (2026-09-05 #1392 404 incident).
-Same root fact as ledger n=1537's `gh pr create` namespaced-head lesson.
 
 ## Verification during a truncated-output window is not verification (Duty-4 proposal, owner-approved 2026-09-06; sharpens AGENTS.md truncated-output law)
 
