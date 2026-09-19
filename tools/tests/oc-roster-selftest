@@ -32,6 +32,11 @@ L2=22222222-2222-4222-8222-222222222222
 L3=33333333-3333-4333-8333-333333333333
 L4=44444444-4444-4444-8444-444444444444
 L5=55555555-5555-4555-8555-555555555555
+# #404 FIXTURE: a frankenstein author — absent from the fixture session DB AND
+# sorting BEFORE every real uuid, which is exactly the live 119-* shape (phantom
+# 1a63f103-596e-… < real 1a63f103-b899-…). P1 SHADOWS U1's claim on #200, so the
+# pre-fix tie-break handed 200-thing to P1 — the discriminator this file pins.
+P1=00000000-0000-4000-8000-0000000000ff
 FORUM=-1003936827469
 
 # ---- fixture session DB -----------------------------------------------------
@@ -60,10 +65,11 @@ cat > "$D/ledger.json" <<JSON
   {"n":2,"t":"2026-09-11T00:01Z","by":"editor $U2","kind":"claim","what":"CLAIM #201 — closed thing"},
   {"n":3,"t":"2026-09-11T00:02Z","by":"editor $U2","kind":"confirm","what":"confirm #201 shipped"},
   {"n":4,"t":"2026-09-11T00:03Z","by":"editor $U3","kind":"claim","what":"CLAIM #202 — open orphan"},
-  {"n":5,"t":"2026-09-11T00:04Z","by":"editor $U4","kind":"claim","what":"CLAIM #203 — frankenstein author"}
+  {"n":5,"t":"2026-09-11T00:04Z","by":"editor $U4","kind":"claim","what":"CLAIM #203 — frankenstein author"},
+  {"n":6,"t":"2026-09-11T00:05Z","by":"editor $P1","kind":"claim","what":"CLAIM #200 — frankenstein SHADOWING a real claim"}
  ]}
 JSON
-chk "fixture-ledger-parses" "$(jq '.events|length' "$D/ledger.json")" "5"
+chk "fixture-ledger-parses" "$(jq '.events|length' "$D/ledger.json")" "6"
 
 # ---- oc-wt shim -------------------------------------------------------------
 cat > "$D/oc-wt" <<'SH'
@@ -85,7 +91,7 @@ export OC_ROSTER_FORUM_CHAT="$FORUM" OC_ROSTER_NOW="$NOW"
 "$TOOL" live --detail  > "$D/lived.out"  2>/dev/null
 "$TOOL" forum          > "$D/forum.out"  2>/dev/null
 "$TOOL" claims         > "$D/claims.out" 2>"$D/claims.err";  chk "claims-rc" "$?" "0"
-"$TOOL" work           > "$D/work.out"   2>/dev/null
+"$TOOL" work           > "$D/work.out"   2>"$D/work.err"
 "$TOOL" classify       > "$D/class.out"  2>"$D/class.err";   chk "classify-rc" "$?" "0"
 "$TOOL" classify --json > "$D/class.json" 2>/dev/null;       chk "classify-json-rc" "$?" "0"
 "$TOOL" live --json   > "$D/live.json"   2>/dev/null;       chk "live-json-rc" "$?" "0"
@@ -97,7 +103,7 @@ export OC_ROSTER_FORUM_CHAT="$FORUM" OC_ROSTER_NOW="$NOW"
 chk "live-count"     "$(wc -l < "$D/live.out")" "3"
 chk "live-no-subagent" "$(grep -c "$L5" "$D/live.out" || true)" "0"
 chk "forum-count"    "$(wc -l < "$D/forum.out")" "2"
-chk "claims-open-count" "$(wc -l < "$D/claims.out")" "3"
+chk "claims-open-count" "$(wc -l < "$D/claims.out")" "4"
 chk "work-count"     "$(wc -l < "$D/work.out")" "5"
 chk "classify-rows"  "$(wc -l < "$D/class.out")" "5"
 
@@ -107,9 +113,9 @@ chk "classify-rows"  "$(wc -l < "$D/class.out")" "5"
 sort "$D/live.out" > "$D/live.got"
 if diff -q "$D/live.expected" "$D/live.got" >/dev/null; then ok "live-set-equality"; else bad "live-set-equality" "$(diff "$D/live.expected" "$D/live.got" | head -3)"; fi
 
-python3 - "$D" "$U1" "$U2" "$U3" "$U4" <<'PY'
+python3 - "$D" "$U1" "$U2" "$U3" "$U4" "$P1" <<'PY'
 import json, re, sys
-D, U1, U2, U3, U4 = sys.argv[1:6]
+D, U1, U2, U3, U4, P1 = sys.argv[1:7]
 ok = fail = 0
 def chk(name, cond, detail=""):
     global ok, fail
@@ -160,10 +166,10 @@ chk("forum-json-set-matches-tsv", sorted(r["uuid"] for r in fj["rows"]) == sorte
     "%r vs %r" % (sorted(r["uuid"] for r in fj["rows"]), sorted(slurp("/forum.out"))))
 cj = jload("claims.json")
 chk("claims-json-keys", all(set(r) == {"uuid", "issue", "t", "what"} for r in cj["rows"]))
-chk("claims-json-open-set", set(r["uuid"] for r in cj["rows"]) == {U1, U3, U4},
+chk("claims-json-open-set", set(r["uuid"] for r in cj["rows"]) == {P1, U1, U3, U4},
     repr(sorted(r["uuid"] for r in cj["rows"])))
 wj = jload("work.json")
-chk("work-json-keys", all(set(r) == {"task", "path", "branch", "dirty", "attributed"} for r in wj["rows"]))
+chk("work-json-keys", all(set(r) == {"task", "path", "branch", "dirty", "attributed", "phantom"} for r in wj["rows"]))
 chk("work-json-count-matches-tsv", len(wj["rows"]) == len(slurp("/work.out")))
 chk("work-json-attach-200", [r["attributed"] for r in wj["rows"] if r["task"] == "200-thing"] == [U1],
     repr([r["attributed"] for r in wj["rows"] if r["task"] == "200-thing"]))
@@ -172,12 +178,33 @@ chk("work-attach-200", att.get("200-thing") == U1 and att.get("fix-200-prefixed"
 chk("work-attach-201", att.get("201-fix") == U2, repr(att))
 chk("work-attach-202", att.get("202-orph") == U3, repr(att))
 op = set(l.split("\t")[0] for l in open(D + "/claims.out").read().splitlines() if l.strip())
-chk("claims-open-set", op == {U1, U3, U4}, repr(op))
+chk("claims-open-set", op == {P1, U1, U3, U4}, repr(op))
 chk("role-from-ledger", any(r[2] == "editor" for r in rows), repr([r[2] for r in rows]))
-chk("classify-excludes-phantom", all(r[1] != U4 for r in rows))
-chk("json-phantoms-is-u4", j.get("phantoms") == [U4], repr(j.get("phantoms")))
+chk("classify-excludes-phantom", all(r[1] not in (U4, P1) for r in rows))
+chk("json-phantoms-is-p1-u4", j.get("phantoms") == [P1, U4], repr(j.get("phantoms")))
 err = open(D + "/class.err").read()
 chk("phantom-flagged-on-stderr", "PHANTOM" in err and U4 in err, err.strip()[:120])
+
+# ---- #404: `work` must never attribute to a PHANTOM author -----------------
+# The fixture is built so the PRE-FIX code fails here: P1 sorts before U1, so the
+# old `att = u; break` picked P1 for 200-thing. And 203-phantom has NO real claim
+# at all, so it must come back unattributed while still NAMING the phantom.
+ph = {l.split("\t")[0]: l.split("\t")[5]
+      for l in open(D + "/work.out").read().splitlines() if l.strip()}
+chk("work-tsv-col-count",
+    all(len(l.split("\t")) == 6 for l in open(D + "/work.out").read().splitlines() if l.strip()),
+    repr([l for l in open(D + "/work.out").read().splitlines() if l.strip() and len(l.split("\t")) != 6][:2]))
+chk("work-attach-200-real-beats-phantom", att.get("200-thing") == U1, repr(att))
+chk("work-tsv-200-phantom-named", ph.get("200-thing") == P1, repr(ph))
+chk("work-attach-203-phantom-unattributed", att.get("203-phantom") == "-", repr(att))
+chk("work-tsv-203-phantom-named", ph.get("203-phantom") == U4, repr(ph))
+chk("work-tsv-201-no-phantom-is-dash", ph.get("201-fix") == "-", repr(ph))
+wj2 = {r["task"]: r for r in wj["rows"]}
+chk("work-json-200-phantom-field", wj2.get("200-thing", {}).get("phantom") == P1, repr(wj2.get("200-thing")))
+chk("work-json-203-attributed-dash", wj2.get("203-phantom", {}).get("attributed") == "-", repr(wj2.get("203-phantom")))
+werr = open(D + "/work.err").read()
+chk("work-stderr-phantom", "PHANTOM" in werr and P1 in werr and U4 in werr, werr.strip()[:160])
+
 with open(D + "/pycnt", "w") as fh:
     fh.write("%d %d\n" % (ok, fail))
 sys.exit(1 if fail else 0)

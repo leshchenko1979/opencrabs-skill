@@ -27,7 +27,9 @@
 #   oc-roster live [--detail|--json]   canonical full session ids, one per line
 #   oc-roster forum [--detail|--json]  live sessions bound to the forum chat
 #   oc-roster claims [--json]          uuid<TAB>issue<TAB>t<TAB>what (open only)
-#   oc-roster work [--json]            task<TAB>path<TAB>branch<TAB>dirty<TAB>uuid
+#   oc-roster work [--json]            task<TAB>path<TAB>branch<TAB>dirty<TAB>uuid<TAB>phantom
+#                                      (phantom = frankenstein claim authors that were
+#                                       SEEN but never attributed — fork #404)
 #   oc-roster classify [--json]        the roster table; tallies go to stderr
 #
 # --json emits {"rows":[...]} on stdout for EVERY verb above (classify adds
@@ -229,23 +231,44 @@ for c in opens:
 # incident n=2227). Reported separately so no phantom enters a freeze list.
 known_ids = {r[0] for r in con.execute("SELECT id FROM sessions")}
 phantoms = sorted(u for u in issues_by_uuid if u not in known_ids)
+phantom_set = set(phantoms)
+
+def report_phantoms(ps):
+    """#404: ONE reporter, both consumers. A phantom is a ledger claim author
+    the session DB has NEVER seen — a hand-assembled frankenstein id (n=2221
+    class; incident n=2227). It must never enter a freeze list, a class tally,
+    OR a worktree attribution. `work` used to attribute straight out of
+    issues_by_uuid and silently handed worktrees to a uuid that is not a
+    session at all: the 119-* worktrees, whose only open claim was the
+    frankenstein 1a63f103-596e-…, which sorts AHEAD of the real lane
+    1a63f103-b899-… — so the tie-break `break` picked the phantom."""
+    for p in ps:
+        sys.stderr.write("oc-roster: PHANTOM claim author %s — absent from session DB "
+                         "(ledger defect, not a roster row)\n" % p)
 
 if verb == "work":
     rows = []
     for w in sorted(wts, key=lambda x: x["task"]):
         att = "-"
+        ph = []
         for u, iss in sorted(issues_by_uuid.items()):
-            if w["issue"] and w["issue"] in iss:
-                att = u
-                break
+            if not (w["issue"] and w["issue"] in iss):
+                continue
+            if u in phantom_set:
+                ph.append(u)     # SEEN and RECORDED — never attributed (#404)
+                continue         # keep scanning: a real claim may cover it too
+            att = u
+            break
         rows.append({"task": w["task"], "path": w["path"], "branch": w["branch"],
-                     "dirty": w["dirty"], "attributed": att})
+                     "dirty": w["dirty"], "attributed": att,
+                     "phantom": ",".join(ph) or "-"})
     if "--json" in opts:
         print(json.dumps({"rows": rows}, indent=1))
     else:
         for r in rows:
-            print("%s\t%s\t%s\t%s\t%s" % (r["task"], r["path"], r["branch"],
-                                          r["dirty"], r["attributed"]))
+            print("%s\t%s\t%s\t%s\t%s\t%s" % (r["task"], r["path"], r["branch"],
+                                                r["dirty"], r["attributed"], r["phantom"]))
+    report_phantoms(phantoms)
     sys.exit(0)
 
 # ---- classify -------------------------------------------------------------
@@ -310,9 +333,7 @@ else:
     for r in rows:
         print("\t".join([r["class"], r["uuid"], r["role"], r["forum"],
                          r["claims"], r["worktrees"], str(r["dirty"]), r["age_h"]]))
-for p in phantoms:
-    sys.stderr.write("oc-roster: PHANTOM claim author %s — absent from session DB "
-                     "(ledger defect, not a roster row)\n" % p)
+report_phantoms(phantoms)
 sys.stderr.write("oc-roster: rows=%d %s phantoms=%d\n" % (
     len(rows), " ".join("%s=%d" % kv for kv in sorted(tallies.items())), len(phantoms)))
 PY
