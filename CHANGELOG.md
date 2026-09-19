@@ -1,5 +1,13 @@
 # Changelog — opencrabs-dev
 
+## v0.4.220 (2026-09-19)
+
+**Stale refusal-handling bullet corrected (`SKILL.md` §session_notify mechanics).** Reported by the Editor lane "Push to session" (#393) and verified first-hand before the edit: `grep -rn 'resend with' *.md` over the skill dir returned exactly ONE hit — the bullet still reading *"a mid-turn refusal is NOT delivery … resend with `interrupt: true` in the same turn"*. It contradicted `SKILL.md:193` IN THE SAME SECTION (`interrupt` = legacy alias, INERT) and `fleet-directives.md:415` (escalation: there is NONE). The reporting lane places it as the eighth site of the interrupt-stale-text family, missed by all four earlier waves (v0.4.212 `toolsmith.md`, v0.4.213 `fleet-directives.md`, v0.4.215 `hq.md` ×2).
+
+**The replacement deliberately does NOT over-claim.** The lane's second reason is exact — `interrupt: true` selects no behaviour (#373) — but its first reason, "the refusal state cannot occur", holds ONLY FOR THE `session_notify` PATH: `src/brain/tools/subagent/notify.rs:371` hardcodes `let interrupt = true;`, bypassing the mid-turn gate at `src/brain/agent/service/session_routes.rs:336`. `Delivery::RefusedInFlight` is nonetheless still constructed at `:341` and reached with `interrupt=false` from `quiet_delivery.rs:199`, `a2a/handler/notify.rs:266` and `cron/scheduler.rs:1174`. The new bullet therefore states that the `session_notify` route never refuses and a busy target QUEUES for its next tool-loop boundary, and explicitly forbids generalising it to "there is no refusal path".
+
+**Correction carried in the same breath:** the reporting lane withdrew its own in-flight claim that this site was "already filed as HQ's lens-B FINDING 2" — no such filing exists.
+
 ## v0.4.219 (2026-09-19)
 
 Harvest-patrol suspension + resume idiom codification. Two laws and one live instrument fix, from a process contradiction the #421 editor lane filed (ledger n=9566) and an HQ investigation that CONFIRMED its facts while CORRECTING its diagnosis.

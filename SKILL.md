@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.219
+version: 0.4.220
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -195,9 +195,17 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   Escalation ladder canonical: fleet-directives.md §Cross-lane message delivery discipline
   (`turn-end` is the default and there is NO escalation — `interrupt` is inert — lens A5
   v0.4.89: pointer only, no second copy).
-- Refusal handling: a mid-turn refusal is NOT delivery. Operational content →
-  resend with `interrupt: true` in the same turn; deferrable content → ledger
-  skip note + retry at your next boundary.
+- Refusal handling: **the `session_notify` path never refuses.** `interrupt` is
+  hardcoded true on this tool's route (`src/brain/tools/subagent/notify.rs:371`),
+  so the mid-turn gate (`src/brain/agent/service/session_routes.rs:336`) is
+  bypassed and a busy target QUEUES the message for its next tool-loop boundary —
+  send `turn-end` (the default) and do nothing else. `interrupt: true` is a
+  legacy alias, INERT, never an escalation; `now` fails the delivery outright.
+  A `no wake observed` confirm verdict MEANS the target is mid-turn — never
+  re-send on it. Do NOT generalise this to "there is no refusal path": the
+  `Delivery::RefusedInFlight` variant is still constructed and reachable from
+  other callers that pass `interrupt=false` (`quiet_delivery.rs:199`,
+  `a2a/handler/notify.rs:266`, `cron/scheduler.rs:1174`).
 - CLI form carries `--sender "<lane label>" --title "<topic>"` where supported
   (oc-deploy fanout precedent) — the mechanical `from=<uuid>` header is added
   on top and cannot be forged or stripped.
