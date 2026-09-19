@@ -2411,11 +2411,13 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
     # archived_at IS NULL AND non-subagent — the oc-notify-fanout law-3 query,
     # one read-only handle; a DB that will not answer is a HARD fail (rc 3),
     # never an empty roster that reads as "no such lane".
-    # The reader is tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). The CLI is
-    # absent from this box and never was a package here, so gating on it made
-    # this verb — the one every lane uses to resolve a role to a session uuid —
-    # fail rc 3 against a perfectly readable DB. The helper reads through
-    # python3's built-in sqlite3 module: the same engine, without the binary.
+    # The reader is tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). Gating on
+    # that binary made this verb — the one every lane uses to resolve a role to a
+    # session uuid — fail rc 3 against a perfectly readable DB, because until
+    # 2026-09-19 the CLI was not on this box at all (installed that day on owner
+    # order; the absence is history, the routing rule is not). The helper reads
+    # through python3's built-in sqlite3 module: the same engine, no PATH
+    # assumption.
     #
     # TOPIC DERIVATION (2026-09-19, Toolsmith). The liveness predicate still
     # comes from `sessions`, but the row now also carries the session's LIVE

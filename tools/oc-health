@@ -144,9 +144,10 @@ selftest_impl() {
   git -C "$T/fork" commit -qm init >/dev/null 2>&1
 
   # Fixture DB is built through the shared reader, not the `sqlite3` CLI (#371).
-  # The CLI is absent from this box, so every one of these four lines used to
-  # fail with `sqlite3: command not found` — the fixture DB never existed, the
-  # schedulers class read an empty database, and the selftest still passed.
+  # Until 2026-09-19 that binary was not on this box at all, so every one of
+  # these four lines failed with `sqlite3: command not found` — the fixture DB
+  # never existed, the schedulers class read an empty database, and the selftest
+  # still passed.
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "CREATE TABLE cron_jobs (name TEXT, enabled INTEGER, deliver_to TEXT, prompt TEXT);"
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-roster-detached-sweep',1,'','silent; uses session_notify');"
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-harvest-dispatch-4h',1,'','ok');"

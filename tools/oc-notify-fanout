@@ -218,8 +218,10 @@ if [ "${1:-}" = "--selftest" ]; then
   L10="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" # live + forum-bound + dormant editor with claim (law-17)
   FORUM="-1999999999"
   # Fixture DB built through the shared reader, not the `sqlite3` CLI (#371):
-  # the CLI is absent from this box, so this heredoc used to fail outright and
-  # every DB-dependent fanout leg read an empty roster.
+  # before 2026-09-19 that binary was not on this box at all, so this heredoc
+  # failed outright and every DB-dependent fanout leg read an empty roster. The
+  # CLI exists now; the routing rule (tools/ code never gates on it) does not
+  # change.
   "$SKILL_DIR/tools/lib/oc_sqlite" "$T/db.sqlite" <<SQL
 CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, archived_at INTEGER, updated_at INTEGER DEFAULT 0);
 CREATE TABLE session_bindings (session_id TEXT PRIMARY KEY, channel TEXT, chat_id TEXT, thread_id INTEGER, updated_at INTEGER DEFAULT 0);
@@ -884,8 +886,8 @@ ACTIVE_HOLDERS="$(mktemp /tmp/fanout-active.XXXXXX)"
 # the DB is the canonical full-id source (CLI list ≡ archived_at IS NULL AND
 # title NOT LIKE 'subagent:%', set-equality verified 2026-09-09). OC_NOTIFY_DB
 # overrides the path for selftests.
-# The reader is tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). The CLI is
-# absent from this box and never was a package here, so all three reads below
+# The reader is tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). Until
+# 2026-09-19 that binary was not on this box at all, so all three reads below
 # died at `sqlite3: command not found` and every fanout ran with an EMPTY
 # roster. The `|| die 3` guards stay exactly as they were: an unreadable DB must
 # remain a hard fail, never an empty roster that reads as "nothing to notify".

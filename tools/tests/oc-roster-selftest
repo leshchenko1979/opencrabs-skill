@@ -9,8 +9,8 @@ export OC_TOOLS_NOLOG=1
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOOL="$(dirname "$SELF_DIR")/oc-roster"
-# SQLite reader: tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). The CLI is
-# absent from this box and never was a package here, so the fixture DB below was
+# SQLite reader: tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). Until
+# 2026-09-19 the CLI was not on this box at all, so the fixture DB below was
 # never created — every live-DB leg then read "session DB unreadable" while the
 # suite still reported success. One binding, three call sites.
 SQLITE="$(dirname "$SELF_DIR")/lib/oc_sqlite"

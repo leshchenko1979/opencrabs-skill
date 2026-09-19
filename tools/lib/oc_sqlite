@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # tools/lib/oc_sqlite — the sanctioned SQLite reader for this box (#371).
 #
-# WHY THIS EXISTS
-# The `sqlite3` CLI is NOT installed on this host and never was a package here
-# (verified 2026-09-19: not on PATH, not on disk, 0 lines in /var/log/dpkg.log
-# and /var/log/apt/history.log). Tools that shelled out to it did one of two
-# things, and the second is worse than the first:
+# WHY THIS EXISTS — one reader, so a host-binary assumption cannot fork
+# HISTORY (not a live premise): the `sqlite3` CLI was NOT present on this host
+# before 2026-09-19 (verified that morning: not on PATH, not on disk, 0 lines in
+# /var/log/dpkg.log and /var/log/apt/history.log). It was INSTALLED later that
+# same day on owner order (3.45.1 at /usr/bin/sqlite3), so the absence explains
+# why this helper exists but no longer describes the box. Tools that shelled out
+# to it did one of two things, and the second is worse than the first:
 #   - died outright        (oc-ledger roster --live: rc 3, the verb every lane
 #                           uses to resolve a role to a session UUID), or
 #   - degraded SILENTLY    (oc-health guarded the call with `command -v sqlite3`
@@ -15,6 +17,15 @@
 # MODULE is present (SQLite 3.45.1) and is already the production reader in
 # oc-roster and oc-issue-dispatch. This lib makes that ONE implementation, so
 # the next host-binary assumption cannot fork into four private copies.
+#
+# RULE (2026-09-19, Toolsmith — decided when the CLI arrived): tools/ CODE reads
+# through THIS helper, never through the CLI and never behind a
+# `command -v sqlite3` gate. python3 is present by construction (these tools are
+# python3-based); a PATH lookup is a SECOND host assumption, and its failure mode
+# is the silent one above. The raw CLI stays fine for ad-hoc READS in a session
+# (AGENTS.md §Reading daemon state) — only tool code must not depend on it.
+# Same engine either way, one contract: `|`-joined list mode, NULL as empty,
+# rc 3 on unreadable.
 #
 # USAGE — a drop-in for the CLI's common form
 #   oc_sqlite <db-path-or-uri> [<sql>]
