@@ -1360,6 +1360,51 @@ build_gate4_fixture() {
     return 0
   fi
 
+  if [ "$_fx_mode" = "subject_absent" ]; then
+    # #253 shape: every touched FILE exists upstream, but the fix's subject
+    # SYMBOL does not. The fork added the fn in an earlier commit, so the
+    # back-scan over the old file names a symbol upstream has never carried.
+    # Class 2 finds no orphan path (the file is upstream) and class 3 refuses on
+    # POSITIVE evidence -- case (a), where the declared-subject fallback must
+    # stay out of the way.
+    printf 'pub fn keep_fn() -> u8 {\n    1\n}\n' > "$_fx_dir/src/keep.rs"
+    git -C "$_fx_dir" add -A
+    git -C "$_fx_dir" commit -q -m "add keep.rs" --trailer "Issue-Ref: leshchenko1979/opencrabs#900"
+    # Re-point upstream AFTER keep.rs exists: the file must be present upstream
+    # while the fork-only symbol is not, which is the whole shape.
+    git -C "$_fx_dir" update-ref refs/remotes/adolfousier/main "$(git -C "$_fx_dir" rev-parse HEAD)"
+
+    printf 'pub fn keep_fn() -> u8 {\n    1\n}\n\npub fn fork_only_fn() -> u8 {\n    2\n}\n' > "$_fx_dir/src/keep.rs"
+    git -C "$_fx_dir" add -A
+    git -C "$_fx_dir" commit -q -m "fork-only helper" --trailer "Issue-Ref: leshchenko1979/opencrabs#903"
+
+    # Target #904: a line INSIDE fork_only_fn, so the derived symbol is the
+    # fork-only one and every touched file is upstream-present.
+    printf 'pub fn keep_fn() -> u8 {\n    1\n}\n\npub fn fork_only_fn() -> u8 {\n    3\n}\n' > "$_fx_dir/src/keep.rs"
+    git -C "$_fx_dir" add -A
+    git -C "$_fx_dir" commit -q -m "target fix" --trailer "Issue-Ref: leshchenko1979/opencrabs#904"
+    git -C "$_fx_dir" update-ref refs/remotes/origin/main "$(git -C "$_fx_dir" rev-parse HEAD)"
+    return 0
+  fi
+
+  if [ "$_fx_mode" = "orphan_subject" ]; then
+    # #341 shape (the live instance): the fix touches an ORPHAN path AND a
+    # symbol that IS upstream. The orphan is added with NO Issue-Ref, so the
+    # provenance lookup finds no introducing issue and the path can only be
+    # reported as an ADVISORY -- class 2 cannot refuse, and class 3 passes on the
+    # upstream-present subject. Non-blocking is the point of this shape.
+    printf 'pub fn orphan_test_fn() -> u8 {\n    1\n}\n' > "$_fx_dir/src/orphan_test.rs"
+    git -C "$_fx_dir" add -A
+    git -C "$_fx_dir" commit -q -m "add orphan test helper"
+
+    printf 'pub fn base_fn() -> u8 {\n    7\n}\n' > "$_fx_dir/src/base.rs"
+    printf 'pub fn orphan_test_fn() -> u8 {\n    8\n}\n' > "$_fx_dir/src/orphan_test.rs"
+    git -C "$_fx_dir" add -A
+    git -C "$_fx_dir" commit -q -m "target fix" --trailer "Issue-Ref: leshchenko1979/opencrabs#905"
+    git -C "$_fx_dir" update-ref refs/remotes/origin/main "$(git -C "$_fx_dir" rev-parse HEAD)"
+    return 0
+  fi
+
   printf 'pub fn orphan_fn() -> u8 {\n    2\n}\n' > "$_fx_dir/src/orphan.rs"
   git -C "$_fx_dir" add -A
   git -C "$_fx_dir" commit -q -m "add fork-only helper" --trailer "Issue-Ref: leshchenko1979/opencrabs#900"
@@ -1994,6 +2039,106 @@ PROSEEOF
     ok "declared-subject fallback negative control: absent declaration still REFUSED"
   else
     echo "  bad  - nosym absent-declaration expected rc=1, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # --- #365 shape regression (cases 31-32) ------------------------------------
+  # Task 7's four shapes: the two below, plus the parent-harvested shape (case
+  # 25) and the inconclusive shape (cases 27-30). Together they pin every branch
+  # of gate 4: refuse on a fork-only subject, refuse on a held parent, fall
+  # through on a harvested parent, fall through on an orphan path, and fall
+  # through on a declared subject.
+
+  # 31. #253 SHAPE: every touched FILE exists upstream, the subject SYMBOL does
+  #     not -> refuse on POSITIVE evidence (case (a)).
+  #     The negative leg asserts the message reads "tested fork_only_fn" and NOT
+  #     "none derived". That is what separates case (a) (symbols were derived and
+  #     every one is absent upstream -> refuse, fallback never consulted) from
+  #     case (b) (nothing derivable -> the declared-subject fallback, cases
+  #     27-30). A regression that stopped derive_symbols resolving the fork-only
+  #     fn would slide this fixture into (b) and turn this leg RED while case 27
+  #     stayed green.
+  #     NOTE: an "orphan path" assertion would be VACUOUS here -- the class-3
+  #     refusal exits at the subject test, before the file loop runs at all.
+  fx_subj_absent="$selftest_tmp/fx_subj_absent"
+  build_gate4_fixture "$fx_subj_absent" subject_absent
+  rc=0
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_subj_absent" "$selftest_tmp/mock_reg_fx.json" "904" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "UPSTREAM_VOID: tested fork_only_fn" \
+     && ! echo "$out" | grep -q "none derived"; then
+    ok "#253 shape: files upstream + subject absent -> REFUSED UPSTREAM_VOID (case (a))"
+  else
+    echo "  bad  - subject-absent fixture expected rc=1 UPSTREAM_VOID: tested fork_only_fn and NOT 'none derived', got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 32. #341 SHAPE: an orphan path AND an upstream-present subject -> the orphan
+  #     is a non-blocking ADVISORY and the unit is ELIGIBLE. The negative leg
+  #     pins that class 2 did NOT refuse a path whose add commit carries no
+  #     Issue-Ref.
+  fx_orphan_subj="$selftest_tmp/fx_orphan_subj"
+  build_gate4_fixture "$fx_orphan_subj" orphan_subject
+  rc=0
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_orphan_subj" "$selftest_tmp/mock_reg_fx.json" "905" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE" \
+     && echo "$out" | grep -q "ADVISORY: orphan path src/orphan_test.rs" \
+     && ! echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+    ok "#341 shape: orphan path + subject upstream -> ELIGIBLE with orphan ADVISORY"
+  else
+    echo "  bad  - orphan-subject fixture expected rc=0 ELIGIBLE + orphan ADVISORY + no HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # --- #365 four-shape signature pins (cases 33-34) ---------------------------
+  # Cases 25 and 27 already RUN the parent-harvested and inconclusive shapes, but
+  # they assert only the OUTCOME (rc + ELIGIBLE/UPSTREAM_VOID). An outcome can be
+  # reached for the wrong reason, so these two legs pin the DISCRIMINATING TEXT:
+  # the class-2 advisory naming the harvested parent, and the class-3 "tested
+  # none derived" proving the derivation was EMPTY (the derivation_empty branch)
+  # rather than "symbols derived but all absent" (case (a), case 31).
+  #
+  # ENV LEAKAGE GUARD: same reason as cases 25-32 -- the suite EXPORTS
+  # OC_HARVEST_MOCK_COMMITS/_SQUASHED and an exported mock commit list wins over
+  # the fixture repo, leaving matching_commits EMPTY and skipping gate 4, which
+  # makes any leg pass VACUOUSLY.
+  printf '{"manual_records": []}\n' > "$selftest_tmp/mock_reg_fx.json"
+
+  # 33. PARENT-HARVESTED shape: the orphan path's introducing issue IS harvested,
+  #     so class 2 must not refuse -- and it must SAY SO by naming the parent.
+  fx_harv33="$selftest_tmp/fx_harv33"
+  build_gate4_fixture "$fx_harv33" harvested
+  rc=0
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_harv33" "$selftest_tmp/mock_reg_fx.json" "901" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE" \
+     && echo "$out" | grep -q "parent #900 already harvested" \
+     && ! echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+    ok "parent-harvested shape: sub-rule fires and NAMES the harvested parent #900"
+  else
+    echo "  bad  - harvested-parent fixture expected rc=0 ELIGIBLE + 'parent #900 already harvested' + no HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 34. INCONCLUSIVE shape: nothing was derivable, so the refusal must report the
+  #     derivation as EMPTY. That is the only text separating this branch from
+  #     case (a)'s "tested <symbols>" -- without it, case 27 would stay green if
+  #     a regression slid the fixture from (b) into (a).
+  fx_nosym34="$selftest_tmp/fx_nosym34"
+  build_gate4_fixture "$fx_nosym34" nosym
+  rc=0
+  out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
+        OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+        run_engine "check" "mock/repo" "$fx_nosym34" "$selftest_tmp/mock_reg_fx.json" "902" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "tested none derived" \
+     && echo "$out" | grep -q "no declared subject"; then
+    ok "inconclusive shape: derivation reported EMPTY ('tested none derived') + no declared subject"
+  else
+    echo "  bad  - inconclusive fixture expected rc=1 'tested none derived' + 'no declared subject', got rc=$rc ($out)"
     return 1
   fi
 
