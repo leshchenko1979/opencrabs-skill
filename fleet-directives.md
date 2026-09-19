@@ -1,9 +1,33 @@
-# Fleet directives — opencrabs-dev owner rulings
+# Fleet directives — opencrabs-dev cross-role law
 
-**Owns:** binding owner directives for opencrabs-dev work (sync policy, upstream PR law, builds/carriers, cargo prohibition, telegram surface law, tool logging, gates, editors, triage, cadence). Re-homed here from ops AGENTS.md/MEMORY.md per owner order 2026-09-02. Where a ruling's full text already lives canonically in another skill file, this file carries only a pointer — one concept, one home.
+**Owns:** the binding owner directives that apply to EVERY opencrabs-dev lane — the `[LANE]` law every worker reads in full at spawn and at compaction reload, plus a residual of cross-cutting rulings that belong to no single role. Re-homed here from ops AGENTS.md/MEMORY.md per owner order 2026-09-02.
 
-**Thematic index** (lens B-17/G-F9 v0.4.90 — file is flat; jump via section name). **[LANE] tag (v0.4.95):** sections every worker MUST read in full at spawn/compaction reload (editor.md/triage.md/toolsmith.md/hq.md RELOAD LAW v0.4.95). EXCEPTION (v0.4.96, lens B-F1): HQ re-reads THIS ENTIRE FILE IN FULL (~115 kB and growing — exact size varies per cycle; it owns and rules on the directives; the other three roles may use the thematic-index minimum for non-[LANE] sections):
-**Remotes & sync** (remotes, sync policy) · **Seam-resolution shape** (REBASE model; upstream-byte-exact, overlay disposition) · **Upstream-merge cadence · HARVEST LAW · NO-HOLD** (daily patrol, filing gate, port-work ownership, **owner push freeze / harvest hold**) · **Upstream** (issue filings, PR base CI gate, cross-fork PR, PR naming) · **Builds & ships** (S3/oc-deploy, swap-head signature, swap-sha coverage, features-compat gate, hotfix REDs, no auto-rollback) · **Process & verification** (stage-entry consent, attribution guard, inherited-claim pillars, truncated-output rule, post-compaction reload, what-now/next) · **Channels** (telegram surface law, telegram_send addressing law, post-swap notify, cross-lane delivery cadence, tool logging) · **Lanes** (creating new editors, tool-problem reports/Triage, cadence boundary, parked issues, brain-scrub, discussion links, every-turn verdicts, rule-text provenance, daemon no-reap, **early claim at domain recognition**).
+**Shape after the 2026-09-18 split.** Role- and topic-scoped law no longer lives here: 25 sections were relocated byte-exact into the file that owns them, and this file keeps a pointer only — one concept, one home. Read scoped law THERE:
+
+| Kind of law | Canonical file |
+|---|---|
+| sync model & rebase, seam resolution, harvest cadence / HARVEST LAW / NO-HOLD, PHOP, swap-head signature | `upstream-merge-runbook.md` |
+| editor phases, smoke procedure, CI-wait & CI-watcher discipline, carrier hotfix gates, swap-sha coverage, no auto-rollback, inherited-claim pillars | `editor.md` |
+| upstream PR lifecycle, deep-core heads-up gate, dependent PRs law, cross-fork PR inspection, upstream issue filings | `editor-upstream-pr.md` |
+| intake & assignment, dispatch hygiene, topic domain alignment, parked issues, Decision Rollcall, creating new editors | `triage.md` |
+| tool-problem reports, tool logging rule | `toolsmith.md` |
+| HQ duties, cadence boundary, rule-text provenance, refuse-and-reroute | `hq.md` |
+| Duty-6 lens briefs (A–J families + brain-scrub) | `review-lenses.md` |
+| post-swap notify / fan-out vocabulary | `s2-swap-journal-spec.md` |
+
+**Thematic index** (lens B-17/G-F9 v0.4.90 — file is flat; jump via section name). **[LANE] tag (v0.4.95):** sections every worker MUST read in full at spawn/compaction reload (editor.md/triage.md/toolsmith.md/hq.md RELOAD LAW v0.4.95). EXCEPTION (v0.4.96, lens B-F1): HQ re-reads THIS ENTIRE FILE IN FULL — it owns and rules on the directives; the other three roles may use this thematic-index minimum for non-[LANE] sections.
+
+**Owner holds & gates:** **Owner Push Freeze** (soaking groups held from upstream harvest) · **Discussion links + fix-approval gate** · **Stage-entry consent** · **Guard-Flag Escalation Law** · **Full-Gate Pre-PR Testing Law** · **Docs-Only LEG1 Gate Skip** · **Owner-Dependent Smoke Legs**
+
+**Roles & authority:** **Autonomous Priority Authority Law** · **Autonomous Editor Goal & Continuous Phase Execution Law** · **Claim Release & Superseded Plans** · **Early Claim** · **Designated Domain Affinity & Topic Context Focus Law** · **Strict Atomicity & Zero Bundling** · **PR naming convention**
+
+**Channels & messaging:** **Telegram surface law** · **telegram_send addressing rule** · **Cross-lane message delivery discipline** · **Direct dispatch** · **Receiver-side dedupe of reload demands** · **Attribution guard** · **Unified Event Capture**
+
+**Ships & carriers:** **Features-compat gate** · **Carrier Concurrency & Coalescence Law** · **Post-Rewrite Swap Recovery** · **Upstream PR filing — base CI gate pre-claim** · **Upstream Coding & Testing Standards** · **LLM Ergonomics & Efficiency Law**
+
+**Smoke & dispatch:** **Out-of-Feature-Set Issues** · **Dispatch Eligibility** · **Attribution & Goal Hygiene** · **Verification during a truncated-output window is not verification** · **External lanes**
+
+**Reload & orientation:** **Post-compaction skill reload & context manifest curation** · **Every turn ends with a "what now/next?" answer** · **Explain open questions & re-anchor context** · **Daemon no-reap**
 
 ## Owner Push Freeze — soaking groups held from upstream harvest (owner order 2026-09-18) [LANE]
 
