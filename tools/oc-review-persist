@@ -26,8 +26,9 @@
 #   memory -- assigning it to a reviewer is agent-memory-as-gate-input, the exact
 #   defect class lens J exists to kill.
 #   Derives the expected lens set from the CATALOG AT GATE TIME: reviewer letters
-#   from review-lenses.md, standing lenses from the `## Review lens <name>`
-#   headings in fleet-directives.md. Hardcoding A-J + brain-scrub here would be
+#   from review-lenses.md, standing lenses from the `#### STANDING LENS: <name>`
+#   headings in the catalog files (review-lenses.md, else fleet-directives.md).
+#   Hardcoding A-J + brain-scrub here would be
 #   the same rot class as the docs-only 21-path list -- the catalog moves, the
 #   gate must move with it.
 #   A deliberately-skipped lens is a DECISION, not a hole: record it in
@@ -71,10 +72,19 @@ if [ "${1:-}" = "check-cycle" ]; then
   LENSES_MD="$ROOT/review-lenses.md"; FD_MD="$ROOT/fleet-directives.md"
 
   # (a) derive the expected set from the catalog AT GATE TIME
+  # Standing lenses live as `#### STANDING LENS: `<name>`` headings in the lens
+  # catalog (the `brain-scrub` STANDING LENS heading, owner order 2026-09-05).
+  # The OLD form -- `## Review lens `<name>`` in fleet-directives.md -- matches
+  # ZERO headings in either real file, so that arm silently derived nothing and
+  # the gate called a cycle clean with the standing lens never run. One pattern,
+  # applied to BOTH catalog files, so a standing lens placed in either is caught.
   EXP=""
   [ -f "$LENSES_MD" ] && EXP="$(sed -n 's/^ *- \*\*Reviewer \([A-Z]\) .*/\1/p' "$LENSES_MD")"
-  [ -f "$FD_MD" ] && EXP="$EXP
-$(sed -n 's/^## Review lens `\([a-z0-9-]*\)`.*/\1/p' "$FD_MD")"
+  for _cat in "$LENSES_MD" "$FD_MD"; do
+    [ -f "$_cat" ] || continue
+    EXP="$EXP
+$(sed -n 's/^#\{2,6\} *STANDING LENS: *`\([a-z0-9-]*\)`.*/\1/p' "$_cat")"
+  done
   EXP="$(printf '%s\n' "$EXP" | sed '/^[[:space:]]*$/d' | sort -u | tr '\n' ' ')"
   NEXP="$(printf '%s\n' $EXP | sed '/^[[:space:]]*$/d' | wc -l)"
   # An empty expected-set is INDISTINGUISHABLE from a clean cycle, so an
@@ -189,12 +199,28 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   # Fixture is an ISOLATED mock skill root -- the live catalog is never touched.
   CR="$(mktemp -d -t oc-cycle-root.XXXXXX)"
   mkdir -p "$CR/reviews/20260101-cycle/reports"
-  printf '# catalog\n   - **Reviewer A -- REDUNDANCY:** x\n   - **Reviewer B -- EFFICIENCY:** x\n' > "$CR/review-lenses.md"
-  printf '# fd\n## Review lens `brain-scrub` (owner order)\nbody\n' > "$CR/fleet-directives.md"
+  # Fixture mirrors the REAL production shape (verified against the live catalog
+  # 2026-09-19): the standing lens is a `#### STANDING LENS: `<name>`` heading in
+  # review-lenses.md -- NOT a `## Review lens` heading in fleet-directives.md.
+  # The fixture previously planted the stale form in fleet-directives.md, a
+  # heading that exists in NO real file, which is exactly why this suite stayed
+  # GREEN while production derived ZERO standing lenses.
+  printf '# catalog\n   - **Reviewer A -- REDUNDANCY:** x\n   - **Reviewer B -- EFFICIENCY:** x\n#### STANDING LENS: `brain-scrub` -- OUTSIDE the A-J families\nbody\n' > "$CR/review-lenses.md"
+  # Decoy: the OLD form must NOT be read. If a future edit restores the
+  # fleet-directives arm with the stale pattern, `stale-decoy` joins the derived
+  # set and the cycle-derives-catalog leg below reddens.
+  printf '# fd\n## Review lens `stale-decoy` (dead form)\nbody\n' > "$CR/fleet-directives.md"
   CC="$CR/reviews/20260101-cycle"; COUT="$CC/out.txt"
   bash "$ME" check-cycle "$CC" --catalog "$CR" >/dev/null 2>&1; chk "cycle-all-missing" 5 $?
   bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1; grep -qF "missing: lens A -- expected $CC/reports/skill-review-A-<YYYYMMDD>.md" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-names-missing-path" >&2; }
   bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1; grep -qF "expected=3 lens(es): A B brain-scrub" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-derives-catalog" >&2; }
+  # Anti-vacuity pair for the standing-lens source. The leg above passes only when
+  # the standing lens is derived from the REAL heading form in review-lenses.md;
+  # on the pre-fix tool the derived set is "A B stale-decoy" (the dead form in
+  # fleet-directives.md is what the old pattern read), so it reddens. These two
+  # state the two halves separately so a future failure says WHICH half broke.
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1; grep -qF "brain-scrub" "$COUT" && P=$((P+1)) || { F=$((F+1)); echo "  FAIL rp - cycle-standing-lens-derived-from-real-form" >&2; }
+  bash "$ME" check-cycle "$CC" --catalog "$CR" >"$COUT" 2>&1; grep -qF "stale-decoy" "$COUT" && { F=$((F+1)); echo "  FAIL rp - cycle-dead-heading-form-must-not-be-read" >&2; } || P=$((P+1))
   for l in A B brain-scrub; do printf 'r\n' > "$CC/reports/skill-review-$l-20260101.md"; printf 'ts|%s|%s|sha|1\n' "$l" "$CC/reports/skill-review-$l-20260101.md" >> "$CC/reports/skill-review-index.log"; done
   bash "$ME" check-cycle "$CC" --catalog "$CR" >/dev/null 2>&1; chk "cycle-all-present" 0 $?
   rm -f "$CC/reports/skill-review-B-20260101.md"
