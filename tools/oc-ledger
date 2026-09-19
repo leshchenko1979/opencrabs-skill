@@ -1815,17 +1815,47 @@ EOF
   # unconditional, so they assert the path that actually runs.
   local WS="77777777-7777-7777-7777-777777777777"
   bash "$ME" enroll "$WS" subprobe >/dev/null 2>&1
+  # Fallback probe: a LIVE session that is ENROLLED but carries NO
+  # session_bindings row — the topic must then come from the ledger's stored
+  # field. 777 is deliberately different from every binding below, so a leg
+  # that silently read the wrong source cannot pass.
+  bash "$ME" enroll 66666666-6666-6666-6666-666666666666 fallbackprobe --topic 777 >/dev/null 2>&1
   "$_OC_DIR/lib/oc_sqlite" "$T/sessions.db" "CREATE TABLE sessions (id TEXT PRIMARY KEY, archived_at TEXT, title TEXT);
+    CREATE TABLE session_bindings (session_id TEXT PRIMARY KEY, channel TEXT, chat_id TEXT, thread_id INTEGER);
     INSERT INTO sessions VALUES ('$W2', NULL, NULL);
     INSERT INTO sessions VALUES ('$WS', NULL, 'subagent: probe');
-    INSERT INTO sessions VALUES ('66666666-6666-6666-6666-666666666666', NULL, NULL);" >/dev/null 2>&1
+    INSERT INTO sessions VALUES ('66666666-6666-6666-6666-666666666666', NULL, NULL);
+    INSERT INTO session_bindings VALUES ('$W2', 'telegram', '-100', 55555);" >/dev/null 2>&1
   chk "roster-live-fixture-db-rc" 0 $?
   OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role TESTER --live > "$T/roster-live.out" 2>/dev/null; chk "roster-live-rc" 0 $?
   chk "roster-live-count" "1" "$(grep -c . "$T/roster-live.out")"
   awk -F'\t' -v u="$W2" '$1==u' "$T/roster-live.out" | grep -q . && ok || bad "roster-live-keeps-live-row"
+  # TOPIC DERIVATION (2026-09-19, Toolsmith). session_bindings.thread_id is the
+  # daemon-written delivery route; the ledger's workers[].topic_id is a copy
+  # stamped at enroll time that goes stale the moment a topic is REASSIGNED —
+  # measured over the 32 live-bound workers: 28 matched, 4 had drifted, and all
+  # 4 were lanes that had MOVED. So --live must prefer the binding, and the
+  # stored field survives only as the fallback for a session with no binding.
+  # The fixture pins the two sources to DIFFERENT values (ledger 42 vs binding
+  # 55555) so a regression to the stored field reddens here rather than in prod.
+  chk "roster-live-derives-topic-from-binding" "55555" "$(awk -F'\t' -v u="$W2" '$1==u {print $3}' "$T/roster-live.out")"
+  OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role fallbackprobe --live > "$T/roster-fb.out" 2>/dev/null
+  chk "roster-live-fallback-rc" 0 $?
+  chk "roster-live-fallback-uses-stored-topic" "777" "$(awk -F'\t' '$3 != "-" {print $3}' "$T/roster-fb.out")"
+  # ...and WITHOUT --live the stored field is untouched, so the historical
+  # (ledger-order, stored-topic) output stays byte-compatible for every caller
+  # that never asked for a live read.
+  bash "$ME" roster --role TESTER > "$T/roster-nl.out" 2>/dev/null
+  chk "roster-nonlive-keeps-stored-topic" "42" "$(awk -F'\t' -v u="$W2" '$1==u {print $3}' "$T/roster-nl.out")"
   OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live >/dev/null 2>&1; chk "roster-live-subagent-excluded" 1 $?
   OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live --json >/dev/null 2>&1; chk "roster-live-json-nomatch-rc1" 1 $?
   OC_LEDGER_DB="$T/nope.db" bash "$ME" roster --live >/dev/null 2>&1; chk "roster-live-db-missing-rc3" 3 $?
+  # fixture hygiene: the two probe rows leave the roster as they found it (the
+  # WS retire comes AFTER the subagent-exclusion legs above, which assert on a
+  # row that still EXISTS — retiring it first would make them pass for the
+  # wrong reason, a vanished row rather than a subagent-filtered one).
+  bash "$ME" retire 66666666-6666-6666-6666-666666666666 >/dev/null 2>&1
+  bash "$ME" retire "$WS" >/dev/null 2>&1
   # 66b (2026-09-11, ontology fold c586e61f): the HQ role string was
   # `hq-supervisor`, now `hq`. Lanes had `roster --live --role hq-supervisor` in
   # ACTIVE habit (tools.log 11:51:28Z, minutes before the fold was announced),
@@ -2373,7 +2403,7 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   done
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
 
-  local livef=""
+  local livef="" livejson="{}"
   if [ "$live" -eq 1 ]; then
     local db; db="${OC_LEDGER_DB:-$(dirname "$(STATE_DIR)")/opencrabs.db}"
     [ -f "$db" ] || die 3 "roster --live: session DB not found: $db (override with OC_LEDGER_DB)"
@@ -2386,9 +2416,23 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
     # this verb — the one every lane uses to resolve a role to a session uuid —
     # fail rc 3 against a perfectly readable DB. The helper reads through
     # python3's built-in sqlite3 module: the same engine, without the binary.
+    #
+    # TOPIC DERIVATION (2026-09-19, Toolsmith). The liveness predicate still
+    # comes from `sessions`, but the row now also carries the session's LIVE
+    # topic from session_bindings.thread_id, because that column — written by
+    # the daemon at bind time — IS the delivery route, while the ledger's
+    # workers[].topic_id is only a copy stamped at enroll/promote time and goes
+    # stale the moment a topic is REASSIGNED to another lane. Measured over the
+    # 32 live-bound workers: 28 matched, 4 drifted (212b3c83 29947->36841,
+    # a5b34466 30220->30517, and two enrolled with no topic at all) — 12.5%,
+    # and precisely the lanes that MOVED, which is where a wrong topic does the
+    # most damage. The ledger field stays as the FALLBACK for rows with no live
+    # binding (see the jq below), so the non-live path is unchanged.
     "$_OC_DIR/lib/oc_sqlite" "file:${db}?mode=ro" \
-      "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
+      "SELECT s.id, COALESCE(b.thread_id, '') FROM sessions s LEFT JOIN session_bindings b ON b.session_id = s.id WHERE s.archived_at IS NULL AND (s.title IS NULL OR s.title NOT LIKE 'subagent:%');" \
       > "$livef" 2>/dev/null || { rm -f "$livef"; die 3 "roster --live: session DB unreadable: $db"; }
+    livejson="$(jq -Rn '[inputs | split("|") | {key: .[0], value: (.[1] // "")}] | from_entries' < "$livef")" \
+      || { rm -f "$livef"; die 3 "roster --live: live session map unparseable: $db"; }
   fi
 
   local lrole; lrole="$(printf '%s' "$role" | tr 'A-Z' 'a-z')"
@@ -2402,12 +2446,23 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   # resolves, so the pair cannot drift apart.
   [ "$lrole" = "hq-supervisor" ] && lrole="hq"
   local sel rc
+  # $livejson maps a live session uuid -> its live thread_id ("" when the
+  # session has no binding). With --live it is BOTH the liveness filter and the
+  # topic source; without --live it is empty and every row passes, keeping the
+  # historical (ledger-order, stored-topic) output byte-identical.
   sel="$(jq -r --arg lr "$lrole" --argjson ir "$include_retired" \
+    --argjson lv "$live" --argjson live "$livejson" \
     '.workers[]?
      | select(($ir == 1) or ((.state // "") != "RETIRED"))
      | select(($lr == "") or (((.role // "") | ascii_downcase) | contains($lr)))
-     | [(.uuid // ""), (.role // "-"), ((.topic_id // "-") | tostring),
-        ((.feature // "-") | tostring | .[0:60]), (.last_acked.version // "-")]
+     | . as $w
+     | ($w.uuid // "") as $u
+     | ($live[$u] // null) as $lt
+     | select(($lv == 0) or ($lt != null))
+     | [$u, ($w.role // "-"),
+        (if ($lt != null and $lt != "") then $lt
+         else (($w.topic_id // "-") | tostring) end),
+        (($w.feature // "-") | tostring | .[0:60]), ($w.last_acked.version // "-")]
      | @tsv' "$LEDGER")"
   rc=$?
   # RETIRED-exclusion diagnostics (law 9, defect #6, 2026-09-12): when the
@@ -2422,11 +2477,11 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   fi
   [ $rc -eq 0 ] || { [ -n "$livef" ] && rm -f "$livef"; die 3 "roster: jq failed (rc $rc) — ledger unreadable or query error"; }
 
-  local out="" uuid
+  local out=""
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    uuid="${line%%$'\t'*}"
-    if [ "$live" -eq 1 ] && ! grep -qxF "$uuid" "$livef" 2>/dev/null; then continue; fi
+    # No liveness filter here: the jq above already applied it via $livejson,
+    # because the same map also supplies the topic.
     out="${out}${line}"$'\n'
   done <<< "$sel"
   [ -n "$livef" ] && rm -f "$livef"
