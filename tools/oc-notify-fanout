@@ -20,7 +20,7 @@
 #   4. RECEIPTS: one line per lane (uuid role rc detail); summary; ledger
 #      stamp kind=notify-fanout carrying all ids (opt-out --no-stamp).
 #   5. QUIET-60S contract text is embedded in briefs. SENDS DEFAULT TO QUIET:
-#      `--mode now|turn-end|quiet` (default **quiet**) is passed straight
+#      `--mode turn-end|quiet` (default **quiet**) is passed straight
 #      through to `session notify`. hq.md §Duty 3 (owner law 2026-09-07) mandates
 #      delivery=quiet for ANY version bump, so quiet is the default. In the
 #      non-quiet modes a mid-turn rc 3 is re-issued with --interrupt (a
@@ -106,7 +106,7 @@
 #   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
 #     [--text "what changed ..."] [--text-file /path/brief.md] \
 #     [--roles editor,hq] [--exclude "40695,uuid8char"] \
-#     [--mode now|turn-end|quiet] (default quiet) \
+#     [--mode turn-end|quiet] (default quiet) \
 #     [--forum-chat <chat_id>] [--self <uuid>] [--dry-run] [--no-stamp] [--include-self] \
 #     [--verify <wave-id>]
 #
@@ -337,9 +337,17 @@ JSON
   rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
   OC_FANOUT_RUN_DIR="$T/run-mode-default" run_fanout >/dev/null 2>&1
   grep -qF -- '--mode quiet' "$T/fake-notify-log" && chk 0 mode-absent-defaults-quiet || chk 1 mode-absent-defaults-quiet
+  # RETIRED MODE (2026-09-19): `now` is a HARD ERROR in the runtime
+  # (`notify_policy.rs` returns Err for it — fork #373), so a wave launched with
+  # it would fail EVERY send. The old leg (`mode-now-passthrough`) asserted the
+  # tool FORWARDED `now`, which pinned the stale contract: the forwarding was
+  # correct, the ACCEPTANCE was not. Assert BOTH the refusal AND that nothing
+  # reached the binary — an rc-only check would pass on a validator that dies
+  # after the first send.
   rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
-  OC_FANOUT_RUN_DIR="$T/run-mode-now" run_fanout --mode now >/dev/null 2>&1
-  grep -qF -- '--mode now' "$T/fake-notify-log" && chk 0 mode-now-passthrough || chk 1 mode-now-passthrough
+  out="$(OC_FANOUT_RUN_DIR="$T/run-mode-now" run_fanout --mode now 2>&1)" || true
+  echo "$out" | grep -q "invalid --mode 'now'" && chk 0 mode-now-refused || chk 1 mode-now-refused
+  grep -qF -- '--mode' "$T/fake-notify-log" && chk 1 mode-now-never-sends || chk 0 mode-now-never-sends
   rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
   OC_FANOUT_RUN_DIR="$T/run-mode-bogus" run_fanout --mode bogus >/dev/null 2>&1 || true
   grep -qF -- '--mode' "$T/fake-notify-log" && chk 1 mode-invalid-never-sends || chk 0 mode-invalid-never-sends
@@ -750,8 +758,15 @@ SEOF
 fi
 
 title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0 verify_id="" self_uuid=""
-# LAW 5 (fixed 2026-09-12): delivery mode, default QUIET — hq.md §Duty 3 mandates
-# delivery=quiet for ANY version bump. Passed through verbatim to session notify.
+# LAW 5 (fixed 2026-09-12; rationale RE-BASED 2026-09-19): delivery mode, default
+# QUIET. A fan-out wave IS the `quiet` case named in fleet-directives.md
+# §Cross-lane message delivery discipline ("batch/fan-out notices ... a deliberate
+# choice now, never the fall-through") — so this default is a DELIBERATE choice for
+# this tool's traffic class, not the fleet default. The old rationale cited
+# hq.md §Duty 3 as mandating quiet for ANY version bump; the owner re-ruling of
+# 2026-09-19 03:34:30Z superseded that (turn-end is now the fleet default and
+# quiet the deliberate exception), so the citation was stale even though the
+# default itself remains correct. Passed through verbatim to `session notify`.
 mode="quiet"
 forum_chat="${OC_FANOUT_FORUM_CHAT:--1003936827469}"
 while [ $# -gt 0 ]; do case "$1" in
@@ -774,8 +789,8 @@ esac; done
 # LAW 5: the mode must be one the CLI accepts. Validate BEFORE any send — an
 # unrecognised value silently falling back to `now` is the defect this fixes.
 case "$mode" in
-  now|turn-end|quiet) : ;;
-  *) die "invalid --mode '$mode' (want now|turn-end|quiet)" 2 ;;
+  turn-end|quiet) : ;;
+  *) die "invalid --mode '$mode' (want turn-end|quiet; 'now' is RETIRED — notify_policy.rs returns Err for it, so forwarding it would fail EVERY send — fork #373)" 2 ;;
 esac
 
 # LAW 10 — partial-delivery verdict (defect #5, 2026-09-12). Dispatched
