@@ -42,11 +42,39 @@
 | **FROZEN** — no upstream push / harvest | **17 T-groups:** T1 (#299), T2 (#286), T3 (#291), T4 (#295), T5 (#285), T7 (#280/#289/#258), T8 (#234/#155), T9 (#1629/#233), T10 (#317), T11 (#247), T12 (#208/#228), T13 (#278), T14 (#298), T15 (#241), T16 (`[agent] default_provider`), T17 (#256), T18 (#150) · **7 Tier-3 items:** #290, #271, cron per-job in-flight guard, #264, #273, repeated-bash nudge, #345 |
 | **RELEASED** — harvest eligible | **T6 — Telegram flow cluster** (#250 🎯 telemetry marker, 🌐/🧠 tool classes, ⏰ cron icon, compact event labels, #232 telemetry bar, queued-message roll tag) |
 
+**Machine-readable source of truth (the #358 shape — HQ ruling 2026-09-19).** The block below is the ONLY home of the frozen/released data. Tools read it from HERE — never from the prose table, and never from a second file: a separate state-dir copy would be a second home for law data and would drift, which is precisely the contradiction this block exists to end (see the T3 ruling below). **`law_version` = the `SKILL.md` version at which this block last CHANGED; it is not re-stamped on every bump.**
+
+**Reader status (2026-09-19): the fail-loud reader does NOT exist yet — this machinery leg is OPEN, not done.** `tools/**` is Toolsmith-owned, so HQ dispatched the build (`tools/lib/oc_freeze`) instead of writing it here. **Until it lands, the block is read by humans and the freeze rests on this law text plus lane discipline.** Required behaviour when built: extract the block from HERE and fail LOUD (`OWNER_PUSH_FREEZE_UNREADABLE`) when it is absent or malformed — never fall through to "nothing is frozen", because that direction silently releases all 18 groups. A tool that cannot read the block is NOT a tool that found nothing frozen.
+
+```json
+{
+  "law_version": "0.4.207",
+  "owner_order": "2026-09-18 17:33Z",
+  "released": ["T6"],
+  "frozen": {
+    "T1": ["#299"], "T2": ["#286"], "T3": ["#291"], "T4": ["#295"], "T5": ["#285"],
+    "T7": ["#280", "#289", "#258"], "T8": ["#234", "#155"], "T9": ["#1629", "#233"],
+    "T10": ["#317"], "T11": ["#247"], "T12": ["#208", "#228"], "T13": ["#278"],
+    "T14": ["#298"], "T15": ["#241"], "T16": ["[agent] default_provider"],
+    "T17": ["#256"], "T18": ["#150"],
+    "TIER3": ["#290", "#271", "#264", "#273", "#345", "cron per-job in-flight guard", "repeated-bash nudge"]
+  },
+  "disputed_not_released": ["T3"]
+}
+```
+
+**T3 (#291) — a claimed release that is NOT a release (HQ ruling 2026-09-19).** Ledger `n=8670` (lane `63d775f9`, 2026-09-19T01:41:34Z) reads the owner's three-word message *"Overrule T3 release"* (2026-09-18 21:45:27Z) as READING (a) — "the freeze does not apply to T3, #291 released for harvest" — and is contradicted by the table above, which still shows T3 FROZEN. The ruling:
+
+- **The law text is authoritative; a ledger `note` is not.** A release is an OWNER action recorded in law, and Rule 2's bar is an *explicit* owner message naming the group "exactly as T6 did" (*"Telegram flow cluster T6 - release for harvesting"*). A lane's reading of an ambiguous message cannot meet that bar, so `n=8670` is an interpretation, not a release, and **T3 remains FROZEN**.
+- **The message is genuinely ambiguous — it parses two OPPOSITE ways** — and the lane's own note says so ("could be read as 'overrule the T3 release' (i.e. deny the release)"). Parsed as an object, "Overrule **T3 release**" annuls the release; parsed as an imperative, it annuls the freeze. The context cuts both ways: the owner had already approved filing at 10:20Z and pushed back on being asked ("What in the rules makes you ask me?"), yet the 17:33Z freeze came *after* that approval, and the question put to him was framed as a binary in which *silence* was the keep-frozen answer.
+- **Cost asymmetry fixes the standing state while it is open.** A wrongly-frozen group costs a delayed harvest — recoverable. A wrongly-released group files an upstream PR for a group the owner said he wanted to review first — not recoverable in the same sense. **Frozen is the only safe default.** Reinforcing it: T3 is the group the owner himself found defective on 2026-09-18 (the tool-roll header), and its fix is still soaking under lane `2ed8adeb`.
+- **The ambiguity is escalated to the owner** as a one-tap (keep frozen / release), and until he answers, **no harvest of #291 or its 21-target set may be staged or filed** — a green census does not change this (Rule 1: soak maturity elapsing is not a release). Whoever holds the owner's answer updates this block, the table above, and `disputed_not_released` in one commit.
+
 **The rule:**
 
 1. **No upstream push of a frozen group.** No upstream PR is filed for a frozen group's commits, and no lane stages one, until the owner releases that group by name. Soak maturity elapsing is not a release.
-2. **Release is an OWNER action, never a lane decision.** A group leaves the freeze only on an explicit owner message naming it — exactly as T6 did. Silence, a green census, a lane's own confidence, or an idle editor never release a group. The released set grows one named group at a time, and currently holds exactly one member: **T6**.
-3. **The freeze binds the machinery, not just the prose.** Triage's 4h harvest patrol (`oc-harvest-dispatch-4h`, job id `73158e43-3b04-4464-bf82-8d9065a191bb`) must not dispatch a frozen group; `oc-harvest-census` / `oc-harvest-dispatch` must read a frozen group as NOT harvest-eligible; an editor holding a frozen group's work stops short of Phase 7 (upstream PR filing).
+2. **Release is an OWNER action, never a lane decision.** A group leaves the freeze only on an explicit owner message naming it — exactly as T6 did. Silence, a green census, a lane's own confidence, an idle editor, **or a lane's reading of an ambiguous owner message** never release a group. The released set grows one named group at a time, and currently holds exactly one member: **T6**. **The record of that action is the `json` block above, not a ledger `note`** — the T3 ruling below is the worked example of a note claiming a release the law does not grant.
+3. **The freeze binds the machinery, not just the prose.** Triage's 4h harvest patrol (`oc-harvest-dispatch-4h`, job id `73158e43-3b04-4464-bf82-8d9065a191bb`) must not dispatch a frozen group; `oc-harvest-census` / `oc-harvest-dispatch` must read a frozen group as NOT harvest-eligible **by reading the `json` block above through the fail-loud reader — which DOES NOT EXIST YET (see the reader-status note above).** Verified 2026-09-19: neither tool contains any freeze awareness, so **a green `oc-harvest-census check <N>` is NOT evidence that a frozen group may be dispatched** — the census does not read the block, and until the reader lands this leg rests on lane discipline alone. An editor holding a frozen group's work stops short of Phase 7 (upstream PR filing).
 4. **This is NOT the carrier FREEZE of `upstream-merge-runbook.md §Remotes & sync` (2).** That one is mechanical (no sync while a carrier chain sits between dispatch and swap). This one is an owner hold on a feature group's harvest. Same word, different concept — write **owner push freeze (harvest hold)** when you mean this one.
 5. **Scope boundary — the freeze holds HARVEST, not development.** Lanes keep fixing, committing, shipping and smoking inside fork `main`; what is withheld is the upstream push of a frozen group. A defect found in a frozen group (e.g. the owner's 2026-09-18 finding that #291 puts the compaction result, not the latest thought, in the tool-roll header) is fixed and re-soaked normally — it stays frozen only at the harvest boundary.
 
@@ -495,7 +523,7 @@ AND explicit `thread_id` (for forum-enabled chats). Never omit either.
 
 ## Tool logging rule (owner 2026-08-28) [LANE]
 
-Every tool/script we build must be debuggable from its logs alone. Each state-changing step writes a timestamped, append-only journal line (input, action, outcome, exit code) to durable storage BEFORE the next step begins — the journal, not memory, is the record. If a crash or restart can leave a run unreconstructable from durable state (journal line + marker file + ledger event), the tool is NOT DONE. Born from the 03:11Z 71e58ce5 swap: the swap succeeded but left zero receipts because the oc-deploy journal vocabulary stops at `dispatch` (no `swap` line type) and the deployed.sha marker was never written — HQ had to reconstruct the audit trail from binary mtimes and artifact shas. Applies to oc-deploy and every future tool; gap list: swap-leg journal lines + marker write land with S2 wiring.
+Every tool/script we build must be debuggable from its logs alone. Each state-changing step writes a timestamped, append-only journal line (input, action, outcome, exit code) to durable storage BEFORE the next step begins — the journal, not memory, is the record. If a crash or restart can leave a run unreconstructable from durable state (journal line + marker file + ledger event), the tool is NOT DONE. Born from the 03:11Z 71e58ce5 swap: the swap succeeded but left zero receipts because the oc-deploy journal vocabulary stops at `dispatch` (no `swap` line type) and the deployed.sha marker was never written — HQ had to reconstruct the audit trail from binary mtimes and artifact shas. Applies to oc-deploy and every future tool. **The oc-deploy journal VOCABULARY (line types, required fields, per-leg rows) is maintained in `s2-swap-journal-spec.md`** — this section carries the RULE, that file carries the vocabulary. The gap list this sentence used to carry is CLOSED, verified 2026-09-19: `oc-deploy/journal/swap-*.jsonl` carries the swap-leg steps `auto-swap` / `backup` / `guard` / `verify`.
 
 ## CI-wait discipline & actor attribution (owner 2026-08-30 — fix batch) [LANE]
 

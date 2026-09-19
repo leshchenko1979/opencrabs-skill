@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.206
+version: 0.4.207
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -114,7 +114,7 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-start <issue-N> --branch <branch>` | unified entry: claim + branch + worktree initialization |
 | `./tools/oc-smoke <issue-N> [--probe <cmd>] [--no-ledger]` | unified 4-leg smoke verification & verdict row logging + automatic ledger done stamp on PASS |
 | `./tools/oc-issue-dispatch [--auto] [--issue N] [--lane U]` | mechanized issue triage dispatch to idle editor lanes |
-| `./tools/oc-lint-laws [--strict]` | mechanical syntax & tool existence lint of skill markdown laws |
+| `./tools/oc-lint-laws [--strict]` | mechanical syntax & tool existence lint of skill markdown laws. **`--strict` known limitation (v0.4.207, measured 2026-09-19):** `flag_known` demands the flag BE the whole case arm (`^[[:space:]]*--flag)`), so ALTERNATION arms (`--role\|--role=*)`, `--selftest\|selftest)`), INLINE tests (`[ "${1:-}" = "--bundle" ]`) and comments are not recognised. On this corpus that yields **5 false-positive PHANTOM-FLAG findings** (SKILL.md:99 `oc-roster --role`; SKILL.md:352 + hq.md:31 `oc-deploy --selftest`; hq.md:108 `oc-ledger --bundle`; tools/RC-CONTRACT.md:55 `oc-ledger --issue`), every one a real working flag: `oc-roster --role hq` rc=0 and `oc-deploy --selftest` rc=0 (283 pass/0 fail) checked live, `--bundle`/`--issue` each covered by passing selftest assertions at `tools/oc-ledger:1275` and `:1415`. Non-strict mode finds all five. **Do not "fix" these five as phantoms** — root fix dispatched to Toolsmith. |
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` | one-command CI gate on a PR-lane branch (editor.md Phase 5); `wait <ref> [--budget N] [--poll S]` provides single-invocation blocking gate. Full rc/adoption/lock/fmt-soft-fail register: RC-CONTRACT.md |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic; READ-ONLY — PROPOSE/WAIT judgment stays human |
 | `./tools/oc-wt add\|remove\|--force` | editor worktree manager (`--force` journals before removal) |
@@ -182,17 +182,18 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   Neither role can forge or strip identity.
 - Delivery drains at the target's next tool-loop boundary and wakes idle
   sessions — no polling anywhere.
-- DELIVERY MODES (v0.4.69; defaults re-ruled 2026-09-04 22:31Z — fleet-directives
-  §Cross-lane message delivery discipline is CANONICAL: deferred is the default,
-  immediate the exception, "Do not start at `now`"):
+- DELIVERY MODES (v0.4.69; defaults re-ruled 2026-09-19 03:34:30Z — fleet-directives
+  §Cross-lane message delivery discipline is CANONICAL: `turn-end` is THE DEFAULT,
+  `quiet` is a deliberate choice, `now` is RETIRED and hard-errors):
 
   | Mode | Note |
   |---|---|
-  | quiet (DEFAULT) / turn-end / now (EXCEPTION) / redirect / no-route | full table = fleet-directives.md §Cross-lane message delivery discipline (CANONICAL — this row is a failsafe pointer, lens B-F15 v0.4.96) |
-  | failsafe | target mid-turn — `interrupt: true` ("#13 failsafe"): message QUEUES, drains at next boundary; escalation of a stuck quiet/turn-end delivery (~30 min, time-critical) |
+  | `turn-end` (DEFAULT) / `quiet` / redirect / no-route | full table = fleet-directives.md §Cross-lane message delivery discipline (CANONICAL — this row is a failsafe pointer, lens B-F15 v0.4.96) |
+  | `now` | **RETIRED — passing it FAILS the delivery** (`notify_policy.rs` returns `Err`; the schema's `delivery.mode` enum is exactly `[turn-end, quiet]`; #373 landed + deployed). It is NOT an available mode. |
+  | failsafe | target mid-turn — `interrupt: true` is a **LEGACY ALIAS, accepted but INERT** (#373), never an escalation: the message QUEUES for the target's next tool-loop boundary. |
 
   Escalation ladder canonical: fleet-directives.md §Cross-lane message delivery discipline
-  (quiet → turn-end ~30 min if time-critical → interrupt last resort — lens A5
+  (`turn-end` is the default and there is NO escalation — `interrupt` is inert — lens A5
   v0.4.89: pointer only, no second copy).
 - Refusal handling: a mid-turn refusal is NOT delivery. Operational content →
   resend with `interrupt: true` in the same turn; deferrable content → ledger
