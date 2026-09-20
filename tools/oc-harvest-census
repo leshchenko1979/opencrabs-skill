@@ -994,8 +994,8 @@ if action == 'check':
                 age_hours = (now_ts - d_ts) / 3600.0
             else:
                 age_hours = 0.0
-            if age_hours < 24.0:
-                print('REFUSED: Target %s is within 24h feature soak window (age: %.1fh < 24h, commit %s: %s)' % (target, max(0.0, age_hours), mc.get('short_sha', '')[:7], subj[:50]))
+            if age_hours < oc_claims.SOAK_HOURS:
+                print('REFUSED: Target %s is within 24h feature soak window (age: %.1fh < 24h, commit %s: %s) %s' % (target, max(0.0, age_hours), mc.get('short_sha', '')[:7], subj[:50], oc_claims.soak_anchor_fields(c_sha, d_ts)))
                 sys.exit(1)
 
     # 2. SUBSYSTEM COHESION & DEPENDENT SOAK CHECK (HELD_DEPENDENT_SOAK)
@@ -1011,14 +1011,14 @@ if action == 'check':
                 if not oc_d_ts and not swaps and not os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS'):
                     oc_d_ts = oc.get('commit_ts', 0)
                 oc_age_hours = (now_ts - oc_d_ts) / 3600.0 if oc_d_ts > 0 else 0.0
-                if oc_age_hours < 24.0:
+                if oc_age_hours < oc_claims.SOAK_HOURS:
                     # Check file overlap
                     oc_files = set(get_affected_files_for_commits([oc], repo_path))
                     overlap = target_files.intersection(oc_files)
                     substantive_overlap = filter_substantive_overlap(overlap)
                     if substantive_overlap:
                         overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
-                        print('REFUSED: Target %s touches files of soaking feature %s (age: %.1fh < 24h) [HELD_DEPENDENT_SOAK: %s]' % (target, oc.get('short_sha', '')[:7], max(0.0, oc_age_hours), overlap_sample))
+                        print('REFUSED: Target %s touches files of soaking feature %s (age: %.1fh < 24h) [HELD_DEPENDENT_SOAK: %s] %s' % (target, oc.get('short_sha', '')[:7], max(0.0, oc_age_hours), overlap_sample, oc_claims.soak_anchor_fields(oc_sha, oc_d_ts)))
                         sys.exit(1)
 
     # 3. IN-FLIGHT LANE FENCING (HELD_IN_FLIGHT_LANE)
@@ -2407,6 +2407,27 @@ PROSEEOF
     ok "soak anchor: a resolved swap anchor survives a foreign earlier smoke row (smoke fallback only at ts==0, #415)"
   else
     echo "  bad  - anchor fixture expected rc=1 'within 24h feature soak window' 'age: 0.3h', got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 35b. #415 Design B defect 3 (step 7): the refusal is a SCHEDULE. Every
+  #      24h-soak refusal must name the anchor it measured from AND the instant
+  #      the target becomes eligible -- otherwise a refused lane has to
+  #      reverse-engineer the anchor by hand-walking the swap journals (which
+  #      this lane did, 2026-09-19). Reuses leg 35's run: same refusal, no
+  #      extra fixture.
+  #
+  #      The expiry is checked as ARITHMETIC (eligible_at - anchor_deployed_ts
+  #      == 86400) and never against a literal ISO string: a literal I typed
+  #      measures MY arithmetic, not the tool's, and passes on any anchor.
+  _ac="$(echo "$out" | sed -n 's/.*anchor_commit=\([^ ]*\).*/\1/p')"
+  _ad="$(echo "$out" | sed -n 's/.*anchor_deployed_ts=\([^ ]*\).*/\1/p')"
+  _el="$(echo "$out" | sed -n 's/.*eligible_at=\([^ ]*\).*/\1/p')"
+  _delta="$(python3 -c 'import datetime,sys;f=lambda s:int(datetime.datetime.fromisoformat(s).timestamp());print(f(sys.argv[2])-f(sys.argv[1]))' "$_ad" "$_el" 2>/dev/null)"
+  if [ -n "$_ac" ] && [ -n "$_ad" ] && [ -n "$_el" ] && [ "$_delta" = "86400" ]; then
+    ok "soak refusal carries anchor_commit/anchor_deployed_ts/eligible_at, expiry = anchor + 24h (#415)"
+  else
+    echo "  bad  - soak anchor triple expected 3 non-empty fields and eligible_at-anchor_deployed_ts=86400, got anchor_commit='$_ac' anchor_deployed_ts='$_ad' eligible_at='$_el' delta='$_delta' ($out)"
     return 1
   fi
 

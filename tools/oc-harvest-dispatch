@@ -863,10 +863,10 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                     age_hours = (now_ts - d_ts) / 3600.0
                 else:
                     age_hours = 0.0
-                if age_hours < 24.0:
+                if age_hours < oc_claims.SOAK_HOURS:
                     return {
                         'status': 'REJECTED',
-                        'verdict': f'SOAK_GATE_VIOLATION: Feature commit {c[:8]} is within 24h soak window (age: {max(0.0, age_hours):.1f}h < 24h)',
+                        'verdict': f'SOAK_GATE_VIOLATION: Feature commit {c[:8]} is within 24h soak window (age: {max(0.0, age_hours):.1f}h < 24h) {oc_claims.soak_anchor_fields(c, d_ts)}',
                         'issue': issue_num,
                         'commits': commits,
                         'exit_code': 1
@@ -909,10 +909,10 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                             rel_age_hours = (now_ts - r_d_ts) / 3600.0
                         else:
                             rel_age_hours = 0.0
-                        if rel_age_hours < 24.0:
+                        if rel_age_hours < oc_claims.SOAK_HOURS:
                             return {
                                 'status': 'REJECTED',
-                                'verdict': f'HELD_DEPENDENT_SOAK: Linked {rel_type} #{rel_num} commit {rc_sha[:8]} is within 24h soak window (age: {max(0.0, rel_age_hours):.1f}h < 24h)',
+                                'verdict': f'HELD_DEPENDENT_SOAK: Linked {rel_type} #{rel_num} commit {rc_sha[:8]} is within 24h soak window (age: {max(0.0, rel_age_hours):.1f}h < 24h) {oc_claims.soak_anchor_fields(rc_sha, r_d_ts)}',
                                 'issue': issue_num,
                                 'commits': commits,
                                 'exit_code': 1
@@ -951,7 +951,7 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                     if not other_d_ts and not swaps and not os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS'):
                         other_d_ts = other_ts
                     other_age_hours = (now_ts - other_d_ts) / 3600.0 if other_d_ts > 0 else 0.0
-                    if other_age_hours < 24.0:
+                    if other_age_hours < oc_claims.SOAK_HOURS:
                         other_files = set(get_affected_files([other_sha], repo_path))
                         overlap = target_files_set.intersection(other_files)
                         substantive_overlap = filter_substantive_overlap(overlap)
@@ -959,7 +959,7 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                             overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
                             return {
                                 'status': 'REJECTED',
-                                'verdict': f'HELD_DEPENDENT_SOAK: Candidate touches files of soaking feature {other_sha[:8]} (age: {max(0.0, other_age_hours):.1f}h < 24h, overlap: {overlap_sample})',
+                                'verdict': f'HELD_DEPENDENT_SOAK: Candidate touches files of soaking feature {other_sha[:8]} (age: {max(0.0, other_age_hours):.1f}h < 24h, overlap: {overlap_sample}) {oc_claims.soak_anchor_fields(other_sha, other_d_ts)}',
                                 'issue': issue_num,
                                 'commits': commits,
                                 'files': affected_files,
@@ -1562,6 +1562,23 @@ EOF
     echo "  bad 4b - vet #300 expected rc=1 SOAK_GATE_VIOLATION, got rc=$rc ($out)"
     return 1
   fi
+
+  # 4b-2. #415 Design B defect 3 (step 7): a soak refusal is a SCHEDULE -- it
+  #       must carry the anchor it measured from AND the expiry, so a rejected
+  #       lane knows WHEN to come back instead of hand-walking the swap
+  #       journals. Reuses 4b's run: same rejection, no extra fixture. The
+  #       expiry is checked as ARITHMETIC, never against a literal ISO string.
+  _ac="$(echo "$out" | sed -n 's/.*anchor_commit=\([^ ]*\).*/\1/p')"
+  _ad="$(echo "$out" | sed -n 's/.*anchor_deployed_ts=\([^ ]*\).*/\1/p')"
+  _el="$(echo "$out" | sed -n 's/.*eligible_at=\([^ ]*\).*/\1/p')"
+  _delta="$(python3 -c 'import datetime,sys;f=lambda s:int(datetime.datetime.fromisoformat(s).timestamp());print(f(sys.argv[2])-f(sys.argv[1]))' "$_ad" "$_el" 2>/dev/null)"
+  if [ -n "$_ac" ] && [ -n "$_ad" ] && [ -n "$_el" ] && [ "$_delta" = "86400" ]; then
+    echo "  ok 4b-2 - soak refusal carries anchor_commit/anchor_deployed_ts/eligible_at, expiry = anchor + 24h (#415)"
+  else
+    echo "  bad 4b-2 - soak anchor triple expected 3 non-empty fields and delta=86400, got anchor_commit='$_ac' anchor_deployed_ts='$_ad' eligible_at='$_el' delta='$_delta' ($out)"
+    return 1
+  fi
+
   unset OC_HARVEST_MOCK_DEPLOYED_TS
 
   # 4c/4d. Rebase twin resolution (#276): after a history rewrite, the soak clock must

@@ -102,9 +102,49 @@ does not merely mis-report — it lets the tool write a claim the scanner cannot
 see, or derive an issue the scanner never wrote. Agreement is the point.
 """
 
+import datetime
 import os
 import re
 import subprocess
+
+#: The 24h feature soak window, in seconds — THE single source for both the
+#: refusal predicate and the expiry that predicate prints. Two spellings of the
+#: same window (a `24.0` here, an `86400` there) drift the moment one is tuned.
+SOAK_SECONDS = 24 * 3600
+SOAK_HOURS = SOAK_SECONDS / 3600.0
+
+
+def fmt_iso_ts(ts):
+    """A unix timestamp as ISO8601 UTC, or ``none`` when unresolved.
+
+    ``ts <= 0`` renders as ``none`` and never as 1970-01-01: an unresolved
+    anchor is a fact the reader must see, and an epoch date hides it behind a
+    plausible-looking deployment time.
+    """
+    if not ts or int(ts) <= 0:
+        return "none"
+    return datetime.datetime.fromtimestamp(
+        int(ts), datetime.timezone.utc).isoformat()
+
+
+def soak_anchor_fields(anchor_commit, anchor_ts):
+    """The anchor triple carried by EVERY 24h-soak refusal (#415).
+
+    ``anchor_commit``/``anchor_deployed_ts`` name the instant the soak clock
+    started and ``eligible_at`` is that instant plus the window — a schedule,
+    so a refused lane knows WHEN to come back instead of reverse-engineering
+    the anchor from the swap journals by hand (the defect a Duty-6 review
+    routed here, 2026-09-19).
+
+    Rendering it in ONE place is what keeps ``eligible_at`` arithmetically
+    equal to ``anchor + 24h`` at every refusal site rather than re-derived —
+    and mis-derived — at each.
+    """
+    ts = int(anchor_ts) if anchor_ts else 0
+    return "anchor_commit=%s anchor_deployed_ts=%s eligible_at=%s" % (
+        anchor_commit, fmt_iso_ts(ts),
+        fmt_iso_ts(ts + SOAK_SECONDS if ts > 0 else 0))
+
 
 #: The only event kinds that can close a claim (v1 vocabulary).
 CLOSING_KINDS = ("close", "confirm", "reject", "done", "unclaim")
