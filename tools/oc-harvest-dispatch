@@ -82,10 +82,14 @@ run_engine() {
   python3 -c "
 import sys, os, json, re, subprocess, argparse, time, datetime, glob
 
-# The claim-CLOSURE and claim-FOOTPRINT predicates are NOT local to this tool
-# (#307). tools/lib/oc_claims.py owns both; a copy here is a drift, and this
-# file carried an unanchored git-log -n 10 --grep=#N that read upstream commit
-# PROSE as fork work on an issue it never touched.
+# The claim-CLOSURE, claim-TARGET and claim-FOOTPRINT predicates are NOT local
+# to this tool (#307, #425). tools/lib/oc_claims.py owns all three; a copy here
+# is a drift, and this file carried (a) an unanchored git-log -n 10 --grep=#N
+# that read upstream commit PROSE as fork work on an issue it never touched, and
+# (b) a closure copy whose author arm ignored the issue, so a lane's later row
+# about a DIFFERENT issue closed this claim. What stays LOCAL: resolve_actor_uuid
+# and its two actor regexes (_ACTOR_FULL_RE / _ACTOR_SHORT_RE), used only for
+# busy-set comparison.
 _TOOLS_DIR = os.environ.get('OC_TOOLS_DIR') or os.path.dirname(os.path.abspath(sys.argv[0]))
 sys.path.insert(0, os.path.join(_TOOLS_DIR, 'lib'))
 try:
@@ -607,62 +611,12 @@ def check_upstream_pr(issue_num, upstream_repo, mock_prs=None):
 # lane labels ('lamp-lane', 'editor-14', 'supervisor').
 _ACTOR_FULL_RE = re.compile(r'([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})', re.IGNORECASE)
 _ACTOR_SHORT_RE = re.compile(r'([0-9a-f]{8})(?![0-9a-f-])', re.IGNORECASE)
-# NB: a single character class, NOT '[-:/]?'. The alternation form mis-parses
-# 'editor-1a63f103' by consuming the uuid into the role and losing the identity.
-_ACTOR_ROLE_RE = re.compile(
-    r'^(unrostered-actor|editor|triage|supervisor|hq|toolsmith|carrier|lane)\s*[-:/]?\s*',
-    re.IGNORECASE)
-_CLOSING_KINDS = ('close', 'confirm', 'reject', 'done', 'unclaim')
-
-def actor_key(by):
-    # Collapse a free-text ledger actor into a comparable key.
-    # ('uuid', <hex>) when any identity token is present, else ('label', <slug>).
-    # Short 8-hex forms are kept short and compared by prefix (see actor_match),
-    # so no roster lookup is needed here.
-    s = str(by or '').strip()
-    m = _ACTOR_FULL_RE.search(s)
-    if m:
-        return ('uuid', m.group(1).lower())
-    shorts = _ACTOR_SHORT_RE.findall(s)
-    if shorts:
-        return ('uuid', shorts[-1].lower())   # last token: '<role> <uuid>'
-    return ('label', _ACTOR_ROLE_RE.sub('', s).strip().lower())
-
-def actor_match(a, b):
-    # True when two ledger actor strings denote the SAME lane.
-    # uuid-vs-uuid compares by prefix (an 8-hex short form is a prefix of the
-    # full uuid); label-vs-label compares by exact slug. A uuid never matches a
-    # label: 'editor-14' and a bare 8-hex token are different lanes, and guessing
-    # between them is exactly what let a foreign lane close another lane's claim.
-    ka, kb = actor_key(a), actor_key(b)
-    if ka[0] == 'uuid' and kb[0] == 'uuid':
-        return ka[1] == kb[1] or ka[1].startswith(kb[1]) or kb[1].startswith(ka[1])
-    if ka[0] == 'label' and kb[0] == 'label':
-        return ka[1] != '' and ka[1] == kb[1]
-    return False
-
-def claim_is_closed(events, idx, claim_actor, iss):
-    # Has the claim at events[idx] been closed by a LATER row?
-    # Two independent signals, both AUTHOR-QUALIFIED (issue #305):
-    #   1. a closing-kind row authored by the SAME lane, or
-    #   2. a closing-kind row ADDRESSED to this issue -- its 'what' begins '#<N>'.
-    # Signal 2 is what keeps the administrative
-    # '#<N> -- closed-issue stale claim sweep' rows and a lane's own
-    # '#<N> COMPLETE' row working: those are authored by whoever swept, not
-    # necessarily by the claimant.
-    #
-    # A foreign lane's closing row that merely MENTIONS #N in prose no longer
-    # closes the claim. 'UNCLAIM #N -- stood down in favour of editor lane X' is
-    # the sharp case: that row releases the AUTHOR's own claim on N, and by
-    # naming X it in fact confirms that X still holds it.
-    for later_ev in events[idx+1:]:
-        if later_ev.get('kind') not in _CLOSING_KINDS:
-            continue
-        if actor_match(claim_actor, later_ev.get('by', '')):
-            return True
-        if iss and re.match(r'^\s*#%d\b' % iss, str(later_ev.get('what', '')).strip()):
-            return True
-    return False
+# claim_is_closed / actor_key / actor_match / _ACTOR_ROLE_RE / _CLOSING_KINDS
+# were DELETED here (#425): tools/lib/oc_claims.py owns the canonical closure
+# predicate, and a local copy is a drift. The copy this replaced checked the
+# AUTHOR arm WITHOUT asking whether the closing row referenced THIS issue, so a
+# lane's later row about a DIFFERENT issue closed this claim -- reporting an
+# ACTIVE lane as IDLE and bypassing the in-flight fencing (#305).
 
 def resolve_actor_uuid(by, roster):
     # Best-effort full uuid for a claim author, for busy-set comparison.
@@ -683,6 +637,12 @@ def resolve_actor_uuid(by, roster):
     return s.replace('editor ', '').strip()
 
 def get_active_claims(ledger_file, repo_path=None):
+    # The claim-CLOSURE predicate AND the target extraction are DELEGATED to
+    # tools/lib/oc_claims.py (#425). This function used to carry a private copy
+    # of both, and its closure copy checked the AUTHOR arm WITHOUT asking
+    # whether the closing row referenced THIS issue -- so a lane's later row
+    # about a DIFFERENT issue closed this claim, which reported an ACTIVE lane
+    # as IDLE and bypassed the in-flight fencing (#305).
     if not os.path.exists(ledger_file):
         return []
     try:
@@ -692,38 +652,44 @@ def get_active_claims(ledger_file, repo_path=None):
         return []
     events = data.get('events', [])
     roster = [str(w.get('uuid', '')).lower() for w in data.get('workers', [])]
+    rows = oc_claims.parse_events(events)
     claims = []
-    for idx, ev in enumerate(events):
-        if ev.get('kind') == 'claim':
-            by = ev.get('by', '')
-            # An AUTHOR-LESS claim row (legacy artifacts carry by:null) names no
-            # lane: it can never occupy a lane in the busy set, and under the
-            # author-qualified predicate no signal could ever close it, so it
-            # would sit in the active list forever. Skip it instead of reporting
-            # a phantom claim owned by the empty uuid.
-            if not str(by or '').strip():
+    for idx, row in enumerate(rows):
+        if row['kind'] != 'claim' or not row['targets']:
+            continue
+        by = row['by']
+        # An AUTHOR-LESS claim row (legacy artifacts carry by:null) names no
+        # lane: it can never occupy a lane in the busy set, and under the
+        # author-qualified predicate no signal could ever close it, so it
+        # would sit in the active list forever. Skip it instead of reporting
+        # a phantom claim owned by the empty uuid.
+        if not by.strip():
+            continue
+        uuid = resolve_actor_uuid(by, roster)
+        # One row per TARGET: oc_claims answers 'is THIS claim closed for THIS
+        # issue', so a multi-issue claim contributes each still-open target.
+        # The emitted keys stay exactly {'uuid','issue','what','files'} --
+        # the selftest greps them out of this JSON.
+        for iss in sorted(row['targets']):
+            if oc_claims.claim_is_closed(rows, idx, by, iss):
                 continue
-            uuid = resolve_actor_uuid(by, roster)
-            what = ev.get('what', '')
-            m_iss = re.search(r'#(\d+)', what) or re.search(r'issue\s*=?\s*(\d+)', what, re.IGNORECASE)
-            iss = int(m_iss.group(1)) if m_iss else None
-            if not claim_is_closed(events, idx, by, iss):
-                files = []
-                if 'files' in ev and isinstance(ev['files'], list):
-                    files = ev['files']
-                elif iss and repo_path and os.path.isdir(repo_path):
-                    # #307: anchored footprint. This leg used to be an
-                    # unanchored git log -n 10 --grep=#N, so a commit that merely
-                    # MENTIONED the issue in prose contributed its files to the
-                    # claim and fenced an unrelated harvest. oc_claims owns the
-                    # predicate; an empty list means no evidence of overlap.
-                    files = oc_claims.resolve_issue_files(repo_path, iss, index=_issue_ref_index(repo_path))
-                claims.append({
-                    'uuid': uuid,
-                    'issue': iss,
-                    'what': what,
-                    'files': files
-                })
+            files = []
+            raw = events[idx]
+            if 'files' in raw and isinstance(raw['files'], list):
+                files = raw['files']
+            elif repo_path and os.path.isdir(repo_path):
+                # #307: anchored footprint. This leg used to be an
+                # unanchored git log -n 10 --grep=#N, so a commit that merely
+                # MENTIONED the issue in prose contributed its files to the
+                # claim and fenced an unrelated harvest. oc_claims owns the
+                # predicate; an empty list means no evidence of overlap.
+                files = oc_claims.resolve_issue_files(repo_path, iss, index=_issue_ref_index(repo_path))
+            claims.append({
+                'uuid': uuid,
+                'issue': iss,
+                'what': row['what'],
+                'files': files
+            })
     return claims
 
 def get_available_editors(ledger_file, target_uuid=None):
@@ -2110,7 +2076,7 @@ EOF
     {"n": 5, "kind": "claim", "by": "editor dddd4444-4444-4444-4444-444444444444", "what": "CLAIM #305 — administrative-sweep probe"},
     {"n": 6, "kind": "unclaim", "by": "triage eeee5555-5555-5555-5555-555555555555", "what": "#305 — closed-issue stale claim sweep (H-5 batch)"},
     {"n": 7, "kind": "claim", "by": "editor-ffff6666", "what": "CLAIM #306 — short-form author probe"},
-    {"n": 8, "kind": "close", "by": "editor ffff6666-6666-6666-6666-666666666666", "what": "probe resolved and closed"},
+    {"n": 8, "kind": "close", "by": "editor ffff6666-6666-6666-6666-666666666666", "what": "COMPLETE #306 \u2014 short-form author resolved"},
     {"n": 9, "kind": "claim", "by": "", "what": "CLAIM #307 — author-less phantom probe (legacy by:null row)"}
   ]
 }
@@ -2218,6 +2184,43 @@ print("NO_CLAIM")
       echo "  bad 11f - #307 anchored-trailer positive twin must resolve anchored.rs, got ($fence_anchor; out: $fence_out)"
       return 1 ;;
   esac
+
+  # 11g/11h. The canonical closure predicate checks the AUTHOR arm against THIS
+  # issue (#425). The deleted private copy closed a claim on lane identity
+  # ALONE, so a lane's later row about a DIFFERENT issue closed this claim --
+  # reporting an ACTIVE lane as IDLE. Fixture C: lane aaaa1111 claims #510 then
+  # COMPLETEs #999 (a different issue); lane bbbb2222 claims #511 then COMPLETEs
+  # #511. The #511 half is the POSITIVE CONTROL: a predicate that never closed
+  # anything would satisfy the #510 half on its own.
+  local diff_ledger="$st_dir/diff-ledger.json"
+  cat << 'EOF' > "$diff_ledger"
+{
+  "workers": [
+    {"uuid": "aaaa1111-1111-1111-1111-111111111111", "role": "editor", "topic_id": 201},
+    {"uuid": "bbbb2222-2222-2222-2222-222222222222", "role": "editor", "topic_id": 202}
+  ],
+  "events": [
+    {"n": 1, "kind": "claim", "by": "editor aaaa1111-1111-1111-1111-111111111111", "what": "CLAIM #510 — different-issue close probe"},
+    {"n": 2, "kind": "done",  "by": "editor aaaa1111-1111-1111-1111-111111111111", "what": "COMPLETE #999 — an unrelated probe by the same lane"},
+    {"n": 3, "kind": "claim", "by": "editor bbbb2222-2222-2222-2222-222222222222", "what": "CLAIM #511 — same-issue self-close control"},
+    {"n": 4, "kind": "done",  "by": "editor bbbb2222-2222-2222-2222-222222222222", "what": "COMPLETE #511 — landed"}
+  ]
+}
+EOF
+  local diff_out=""
+  diff_out="$(run_engine "test-active-claims" "$diff_ledger" "none" 2>&1)"
+  if printf '%s' "$diff_out" | grep -q '"issue": 510'; then
+    echo "  ok 11g - #425: a same-lane close of a DIFFERENT issue leaves this claim OPEN"
+  else
+    echo "  bad 11g - #425 expected #510 to stay ACTIVE (the same lane closed a different issue), got ($diff_out)"
+    return 1
+  fi
+  if printf '%s' "$diff_out" | grep -q '"issue": 511'; then
+    echo "  bad 11h - #425 same-issue self-close control: #511 must be CLOSED, got ($diff_out)"
+    return 1
+  else
+    echo "  ok 11h - #425: same-issue self-close still closes (#511 gone - positive control)"
+  fi
 
   # Leg count is DERIVED, never hardcoded: this line is only reached when every
   # leg passed, so the ok-count equals the total. A hardcoded total drifts the
