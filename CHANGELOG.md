@@ -1,5 +1,25 @@
 # Changelog — opencrabs-dev
 
+## v0.4.230 (2026-09-20)
+
+**One CORRECTION to law shipped minutes earlier, raised by the lane that executed the reap. v0.4.229's reap clause named the adoption mechanism but not its SWITCH — so a reaper who follows it and stops at the disk move leaves the daemon holding the home.**
+
+**The correction (the reason for this bump).** v0.4.229 §Throwaway probe homes told a reaper to reap the home's sessions, goals and CRON ROWS. It did not say that a profile still listed in `profiles.toml` remains ADOPTED after its directory moves. The reaping lane measured exactly that: default-profile daemon pid 169358 held BOTH `smoke300`/`smoke300neg` scheduler lock inodes AND six fds on the quarantined DBs, because both profiles were still registered. Reproduced first-hand here before amending: `/proc/169358/fd` → 12/15 (locks) + 17/20/21 and 25/27/28 (DB/-wal/-shm); the registry now reads 4 entries (`ops`, `family`, `oc348probe`, `oc134probe`), the live lock dir holds neither smoke lock, and both sit in `db-quarantine/smoke300-rig-20260920/locks-scheduler/`. **HQ's own dispatch note to that lane asserted the locks were unattached — false, and this entry records the falsification rather than quietly replacing the claim.**
+
+**A second gap fell out of the same read:** the CLI cannot unregister a profile whose directory is already gone — `delete_profile` bails on a missing dir (`src/config/profile.rs:493-495`) and `--force` only skips the confirmation prompt (`src/cli/commands.rs:2318-2322`), leaving the registry write at `:505` unreachable. Order therefore matters: **unregister BEFORE moving**, or the only route is the empty-placeholder dance the lane had to perform. Filed as fork #452.
+
+**Law changed (`fleet-directives.md` §Throwaway probe homes):**
+1. The reap clause now states **the REGISTRY is the switch, not the disk** — unregister as part of the reap, before the move; only a daemon restart releases the held inodes.
+2. A verification paragraph records the `/proc` receipt, the registry delta, the owner-gated restart, and that the correction came from the reaping lane rather than from HQ.
+
+**Not done, owner-gated:** the default-profile daemon still holds the two lock inodes and six DB fds. Restart scope is `opencrabs-ops` only, so releasing them needs the owner's word. Consequence stated in the law: the quarantined DBs are not frozen while it runs (mtimes unchanged at 07:05Z and 07:12Z — no write observed).
+
+**Files:** `fleet-directives.md` §Throwaway probe homes (reap clause + verification paragraph).
+
+**LOC:** SKILL.md 623 · editor.md 533 · hq.md 318 · triage.md 370 · toolsmith.md 165 · fleet-directives.md 644 · editor-upstream-pr.md 335 · upstream-merge-runbook.md 420 · **total 3408** (+2 on v0.4.229). Count = lines read from the file, so a final line without a trailing newline still counts; `SKILL.md` and `upstream-merge-runbook.md` both end unterminated, which is why `wc -l` reads 622/419 on the same bytes.
+
+**Verification:** `The REGISTRY is the switch, not the disk` → 1 hit · registry-switch verification paragraph present · `/proc/169358/fd` receipt reproduced first-hand · registry 4 entries · battery `tools/tests/run.sh` green · `oc-ledger sync --version 0.4.230` rc 0.
+
 ## v0.4.229 (2026-09-20)
 
 **One CORRECTION to law shipped hours earlier, plus two filed gaps folded in. v0.4.228's "inert" framing was FALSIFIED by the lane that raised the residue — the footgun had already fired.**
