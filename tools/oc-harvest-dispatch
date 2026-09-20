@@ -312,13 +312,18 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps, state_dir=None):
         if twin_ts and (ts == 0 or twin_ts < ts):
             ts = twin_ts
     # #292: minor context shifts during conflict resolution change the patch-id,
-    # defeating twin searches. Fall back to smoke-verdicts.log issue-ref anchoring.
-    st_dir_use = state_dir or os.environ.get('STATE_DIR', '')
-    iss_num = get_issue_from_commit(commit_sha, repo_path)
-    if iss_num:
-        smoke_ts = get_issue_smoke_pass_ts(iss_num, st_dir_use)
-        if smoke_ts and (ts == 0 or smoke_ts < ts):
-            ts = smoke_ts
+    # defeating twin searches. Fall back to smoke-verdicts.log issue-ref anchoring
+    # ONLY when the swap path yielded nothing (Design B defect 1, #415): a smoke
+    # row is a weaker anchor than a resolved swap, and the fallback can only ever
+    # move the anchor EARLIER, so letting it override a correct swap value can
+    # only ever shorten a soak: a one-directional failure toward a false APPROVE.
+    if ts == 0:
+        st_dir_use = state_dir or os.environ.get('STATE_DIR', '')
+        iss_num = get_issue_from_commit(commit_sha, repo_path)
+        if iss_num:
+            smoke_ts = get_issue_smoke_pass_ts(iss_num, st_dir_use)
+            if smoke_ts:
+                ts = smoke_ts
     return ts
 
 def run_cmd(cmd, cwd=None):
@@ -1651,6 +1656,47 @@ EOF
     echo "  bad 4e - vet rebased feat with changed patch-id expected rc=0 APPROVED via smoke-verdicts.log (#292), got rc=$rc ($out)"
     return 1
   fi
+  # 4f. Design B defect 1 (#415): the #292 smoke fallback is a WEAKER anchor than a
+  # resolved swap and may fire ONLY when the swap path yielded nothing. It can only
+  # ever move the anchor EARLIER, so letting it override a correct swap value can
+  # only ever shorten a soak: a one-directional failure toward a false APPROVE.
+  # Here the candidate IS an ancestor of the swap that carried it, so the sha walk
+  # resolves a 0.3h-old anchor; a FOREIGN 7-day-old PASS row for the same issue must
+  # not re-anchor it. The leg asserts the reported AGE, so a fixture whose swap lookup
+  # silently returns 0 (which also refuses, at age 0.0h) fails instead of passing vacuously.
+  local anchor_state="$st_dir/anchor-state"
+  local anchor_repo="$st_dir/anchor-repo"
+  mkdir -p "$anchor_state/oc-deploy/journal" "$anchor_repo"
+  git -C "$anchor_repo" init -q -b main
+  git -C "$anchor_repo" config user.email "test@example.com"
+  git -C "$anchor_repo" config user.name "Test Runner"
+  echo "anchor base" > "$anchor_repo/base.txt"
+  git -C "$anchor_repo" add base.txt
+  git -C "$anchor_repo" commit -q -m "base commit"
+  git -C "$anchor_repo" branch adolfousier/main
+  echo "anchor feature" > "$anchor_repo/anchor.txt"
+  git -C "$anchor_repo" add anchor.txt
+  git -C "$anchor_repo" commit -q -m "feat(anchor): fresh feature (#9904)" --trailer "Issue-Ref: leshchenko1979/opencrabs#9904"
+  local anchor_sha
+  anchor_sha="$(git -C "$anchor_repo" rev-parse HEAD)"
+  echo "swap marker" > "$anchor_repo/swap-marker.txt"
+  git -C "$anchor_repo" add swap-marker.txt
+  git -C "$anchor_repo" commit -q -m "release: swap marker for anchor tree"
+  local anchor_swap_sha
+  anchor_swap_sha="$(git -C "$anchor_repo" rev-parse HEAD)"
+  printf '{"step":"auto-swap","sha":"%s","ts":"2026-09-17T08:10:00Z"}\n' "$anchor_swap_sha" > "$anchor_state/oc-deploy/journal/swap-300.jsonl"
+  printf '2026-09-10T00:00:00Z\tPASS\tissue=#9904\tsha=oldsha123\trun=12345\ttarget=live-ops\tevidence="smoke pass"\n' > "$anchor_state/smoke-verdicts.log"
+  export STATE_DIR="$anchor_state"
+
+  rc=0
+  out="$(run_engine "vet" "$anchor_sha" "$anchor_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "SOAK_GATE_VIOLATION" && echo "$out" | grep -q "age: 0.3h"; then
+    echo "  ok 4f - a resolved swap anchor survives a foreign earlier smoke row (smoke fallback only at ts==0, #415)"
+  else
+    echo "  bad 4f - swap anchor must outrank a foreign earlier smoke row (want rc=1 SOAK_GATE_VIOLATION age: 0.3h), got rc=$rc ($out)"
+    return 1
+  fi
+
   unset OC_HARVEST_NOW_TS
   unset STATE_DIR
 

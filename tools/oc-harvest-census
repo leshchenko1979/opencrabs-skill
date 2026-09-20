@@ -305,13 +305,18 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps, mock_deployed_ts=None, st
         if twin_ts and (ts == 0 or twin_ts < ts):
             ts = twin_ts
     # #292: minor context shifts during conflict resolution change the patch-id,
-    # defeating twin searches. Fall back to smoke-verdicts.log issue-ref anchoring.
-    st_dir_use = state_dir or os.environ.get('STATE_DIR', '')
-    iss_num = get_issue_from_commit(commit_sha, repo_path)
-    if iss_num:
-        smoke_ts = get_issue_smoke_pass_ts(iss_num, st_dir_use)
-        if smoke_ts and (ts == 0 or smoke_ts < ts):
-            ts = smoke_ts
+    # defeating twin searches. Fall back to smoke-verdicts.log issue-ref anchoring
+    # ONLY when the swap path yielded nothing (Design B defect 1, #415): a smoke
+    # row is a weaker anchor than a resolved swap, and the fallback can only ever
+    # move the anchor EARLIER, so letting it override a correct swap value can
+    # only ever shorten a soak: a one-directional failure toward a false APPROVE.
+    if ts == 0:
+        st_dir_use = state_dir or os.environ.get('STATE_DIR', '')
+        iss_num = get_issue_from_commit(commit_sha, repo_path)
+        if iss_num:
+            smoke_ts = get_issue_smoke_pass_ts(iss_num, st_dir_use)
+            if smoke_ts:
+                ts = smoke_ts
     return ts
 
 def get_prs(upstream_repo, mock_prs_file=None):
@@ -2299,6 +2304,78 @@ PROSEEOF
     ok "inconclusive shape: derivation reported EMPTY ('tested none derived') + no declared subject"
   else
     echo "  bad  - inconclusive fixture expected rc=1 'tested none derived' + 'no declared subject', got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 35. #415 Design B defect 1 (CENSUS twin of dispatch leg 4f): the #292 smoke
+  #     fallback is a WEAKER anchor than a resolved swap and may fire ONLY when
+  #     the swap path yielded nothing. It can only ever move the anchor EARLIER,
+  #     so letting it override a correct swap value can only ever SHORTEN a
+  #     soak -- a one-directional failure toward a false APPROVE. The candidate
+  #     here IS an ancestor of the swap that carried it (anchor
+  #     2026-09-17T08:10:00Z), so the swap path resolves age 0.3h; a FOREIGN
+  #     7-day-old PASS row for the same issue must NOT re-anchor it. Both the
+  #     refusal TEXT and the reported AGE are asserted, so a fixture whose swap
+  #     lookup silently returns 0 (which refuses too, at age 0.0h) fails
+  #     instead of passing vacuously. Issue 9904 is synthetic by design: a
+  #     foreign anchor with zero chance of colliding with a real log row.
+  local fx_anchor="$selftest_tmp/fx_anchor"
+  local fx_anchor_state="$selftest_tmp/fx_anchor_state"
+  # BOTH dirs: the fixture repo must EXIST before `git -C "$fx_anchor" init`,
+  # or every git call fails silently and $anchor_sha comes back empty -- the
+  # mock commit then carries sha="" and the swap journal row is dropped by
+  # load_swap_history's `data.get('sha')` guard, leaving swaps=0. The leg then
+  # refuses via the commit_ts fallback instead of the swap anchor, and passes
+  # against BOTH the fixed and the mutated code (measured 2026-09-20).
+  mkdir -p "$fx_anchor" "$fx_anchor_state/oc-deploy/journal"
+  git -C "$fx_anchor" init -q -b main
+  git -C "$fx_anchor" config user.name fixture
+  git -C "$fx_anchor" config user.email fixture@example.invalid
+  git -C "$fx_anchor" config commit.gpgsign false
+  printf 'anchor base\n' > "$fx_anchor/base.txt"
+  git -C "$fx_anchor" add -A
+  git -C "$fx_anchor" commit -q -m "base"
+  git -C "$fx_anchor" update-ref refs/remotes/adolfousier/main "$(git -C "$fx_anchor" rev-parse HEAD)"
+  printf 'anchor feature\n' > "$fx_anchor/anchor.txt"
+  git -C "$fx_anchor" add -A
+  git -C "$fx_anchor" commit -q -m "feat(anchor): fresh feature (#9904)" \
+    --trailer "Issue-Ref: leshchenko1979/opencrabs#9904"
+  local anchor_sha anchor_short anchor_swap_sha
+  anchor_sha="$(git -C "$fx_anchor" rev-parse HEAD)"
+  anchor_short="$(git -C "$fx_anchor" rev-parse --short=7 HEAD)"
+  printf 'swap marker\n' > "$fx_anchor/swap-marker.txt"
+  git -C "$fx_anchor" add -A
+  git -C "$fx_anchor" commit -q -m "release: swap marker for anchor tree"
+  anchor_swap_sha="$(git -C "$fx_anchor" rev-parse HEAD)"
+  git -C "$fx_anchor" update-ref refs/remotes/origin/main "$anchor_swap_sha"
+  printf '{"step":"auto-swap","sha":"%s","ts":"2026-09-17T08:10:00Z"}\n' "$anchor_swap_sha" > "$fx_anchor_state/oc-deploy/journal/swap-300.jsonl"
+  printf '2026-09-10T00:00:00Z\tPASS\tissue=#9904\tsha=oldsha123\trun=12345\ttarget=live-ops\tevidence="smoke pass"\n' > "$fx_anchor_state/smoke-verdicts.log"
+  printf '{"manual_records": []}\n' > "$fx_anchor_state/mock_reg_anchor.json"
+  # deployed_ts is DELIBERATELY absent: a positive value short-circuits
+  # get_commit_deploy_ts before the swap walk and the leg would prove nothing.
+  # commit_ts is DELIBERATELY far from the swap ts (2026-09-10 vs 2026-09-17):
+  # it feeds the soak gate's fallback arm `if not d_ts and not swaps ...`, so if
+  # the swap history ever fails to load the leg refuses at 176.5h -- NOT at 0.3h
+  # -- and fails loudly instead of counterfeiting the expected age. An earlier
+  # fixture set commit_ts to the SAME epoch as the swap ts (1789632600), which
+  # made the broken and the working paths numerically identical (measured
+  # 2026-09-20; this collision is why the leg survived its own mutation).
+  printf '[{"sha":"%s","short_sha":"%s","subject":"feat(anchor): fresh feature (#9904)","trailer":"leshchenko1979/opencrabs#9904","commit_ts":1788998400,"files":["anchor.txt"]}]\n' \
+    "$anchor_sha" "$anchor_short" > "$fx_anchor_state/mock_commits_anchor.json"
+
+  # The registry lives INSIDE the fixture state dir: the soak gate takes `swaps`
+  # from dirname(registry_file) while get_commit_deploy_ts resolves its smoke log
+  # from STATE_DIR, and both must point at the FIXTURE -- otherwise the smoke
+  # lookup silently reads the LIVE smoke-verdicts.log.
+  rc=0
+  out="$(STATE_DIR="$fx_anchor_state" OC_HARVEST_NOW_TS=1789633800 \
+        OC_HARVEST_MOCK_COMMITS="$fx_anchor_state/mock_commits_anchor.json" \
+        run_engine "check" "mock/repo" "$fx_anchor" "$fx_anchor_state/mock_reg_anchor.json" "9904" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window" \
+     && echo "$out" | grep -q "age: 0.3h"; then
+    ok "soak anchor: a resolved swap anchor survives a foreign earlier smoke row (smoke fallback only at ts==0, #415)"
+  else
+    echo "  bad  - anchor fixture expected rc=1 'within 24h feature soak window' 'age: 0.3h', got rc=$rc ($out)"
     return 1
   fi
 
