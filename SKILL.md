@@ -498,7 +498,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
 | **3. Absorption & Dropping** | Triage / HQ | Auto-classify DROPPABLE patch-ids | `upstream-merge-runbook.md` |
 | **4. Upstream PR Lifecycle** | Editor | Phase 7b / Phase 7c (`oc-harvest-dispatch`) | `editor-upstream-pr.md` |
 | **5. Maintainer Interaction** | HQ / Alexey | Track PR comments via gh API & OC Dev chat heads-up | `editor-upstream-pr.md §Deep Core Advance Heads-Up Gate` |
-| **6. Fork-local CI (`ci/*`)** | HQ | Carrier namespace `ci/quick-build-linux` | `hq.md §Parity` |
+| **6. Fork-local CI (`ci/*`)** | HQ | Carrier namespace `ci/quick-build-linux` | `hq.md §Upstream sync — watch & governance` |
 | **7. Fork Branch Lifecycle** | Triage | `./tools/oc-branch-sweep` (archive before delete) | `triage.md §Duty T4` |
 
 ## Hard rules (all roles)

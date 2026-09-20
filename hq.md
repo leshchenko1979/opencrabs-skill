@@ -52,8 +52,8 @@ stay here. Expected reply shape: "routed to <worker>", not done-work.
   toolsmith" 2026-09-06): tool fixes / extensions / new tools execute THERE with
   battery receipts; HQ keeps skill markdown, CHANGELOG, version
   bumps, and fleet-directives (single-writer law for skill text unchanged).
-- Provenance = the `## v<v>` CHANGELOG entry, written at ship time (fleet-
-  directives §Rule-text provenance, F13 — rule text carries NO biography).
+- Provenance = the `## v<v>` CHANGELOG entry, written at ship time (this file,
+  §Rule-text provenance — CHANGELOG at ship time, F13 — rule text carries NO biography).
 - **Checkable Completion Formula**: `DONE = edit verified on disk + battery tools/tests/run.sh PASS + CHANGELOG.md entry present + git commit in skill repo + oc-ledger sync --version <v> returns rc=0.`
 - **The version bump is the LAST edit and sync runs in the SAME turn (v0.4.217).**
   `oc-drift-check` resolves the live version from the **on-disk** canonical
@@ -74,7 +74,7 @@ the registry answers "who exists and which version are they on"; discovery
 answers "who is alive right now".
 
 - **LIVE STATUS IS NEVER STORED:** whenever liveness or freshness matters,
-  DISCOVER it in the same turn: `oc-roster live` for sessions (the DERIVED roster — ledger claims + worktree state + session-DB liveness + forum bindings; `oc-roster classify` for ACTIVE/IDLE/UNKNOWN, `oc-roster work`/`claims` for the other two signals). Role resolution is NOT `oc-roster` — use `oc-ledger roster --live --role <role>`; `oc-roster`'s `--role` flag is rejected with rc 2,
+  DISCOVER it in the same turn: `oc-roster live` for sessions (the DERIVED roster — ledger claims + worktree state + session-DB liveness + forum bindings; `oc-roster classify` for ACTIVE/IDLE/UNKNOWN, `oc-roster work`/`claims` for the other two signals). Role resolution is NOT `oc-roster` — use `oc-ledger roster --live --role <role>`; `oc-roster`'s `--role` flag is a supported delegation to `oc-ledger roster --live --role <role>` (verified live 2026-09-20: `--role hq` returns the row; only the BARE `--role` fails, rc 2 `--role needs a value`),
   `gh run list` for CI, `git ls-remote` for refs.
 - Seed/update ONLY from proven facts (full schema + write rules now live in
   triage.md §Duty T6 — lens B-F10 v0.4.96 cross-role move).
