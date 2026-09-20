@@ -29,12 +29,21 @@ tool()  { [ -x "$TOOLS_DIR/$1" ] || { bad "missing tool: $1"; return 1; } }
 section() { note ""; note "== $1 =="; }
 # Fork #453 (2026-09-20): a failing --selftest used to be a dead end — the
 # tool's own output went to /dev/null, so a flake left a bare tool name and
-# nothing to diagnose. Capture it and surface a BOUNDED tail under the FAIL
-# row. The success path prints NOTHING extra: parallel mode re-counts rows by
-# prefix (grep -c '^  ok ' / '^  FAIL '), and a green transcript must stay
+# nothing to diagnose. Capture it and surface a bounded window of it under the
+# FAIL row. The success path prints NOTHING extra: parallel mode re-counts rows
+# by prefix (grep -c '^  ok ' / '^  FAIL '), and a green transcript must stay
 # byte-identical. Continuation lines are indented under a '| ' marker, which
-# matches neither prefix. tail (not head) because a selftest names its failing
-# assertion on the way out.
+# matches neither prefix.
+#
+# THE WINDOW MUST NOT GUESS WHERE THE FAILURE IS. A tail-only window was
+# measured losing the failing assertion outright: oc-watcher-audit prints its
+# assertions in order and its summary last, so its one FAIL sat in the first 7
+# lines while tail -20 showed the 19 PASSes that followed — a live flake whose
+# diagnosis was thrown away (2026-09-20, on the very run that was to be this
+# fix's own receipt). So up to 40 lines are shown in FULL, and beyond that the
+# head AND the tail are shown with the elided middle counted: a selftest marks
+# the failure at the start (assertion order) or at the end (named on the way
+# out), and which end it is cannot be known in advance.
 run_capture() { # $1 = label, $2.. = command
   local label="$1"; shift
   local out rc n
@@ -45,8 +54,14 @@ run_capture() { # $1 = label, $2.. = command
   else
     bad "$label"
     n="$(wc -l < "$out")"
-    [ "$n" -gt 20 ] && note "       | ... $((n - 20)) earlier line(s) omitted"
-    tail -n 20 "$out" | sed 's/^/       | /'
+    if [ "$n" -le 40 ]; then
+      sed 's/^/       | /' "$out"
+    else
+      note "       | ... $((n - 40)) line(s) omitted from the middle"
+      head -n 20 "$out" | sed 's/^/       | /'
+      note "       | ..."
+      tail -n 20 "$out" | sed 's/^/       | /'
+    fi
   fi
   rm -f "$out"
   return "$rc"
