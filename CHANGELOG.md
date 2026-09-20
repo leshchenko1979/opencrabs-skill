@@ -1,5 +1,19 @@
 # Changelog — opencrabs-dev
 
+## v0.4.232 (2026-09-20)
+
+**Internal-factory closure -- the harvest gate is VACUOUS on a harvest-exempt surface, and the criterion is the CARRYING REPO, never the path string.** Filed by the Triage lane (GAP 3); one leg of their claim falsified first-hand before the ruling.
+
+The harvest gate exists to make work reach UPSTREAM, so it has nothing to gate on when the repo carrying the fix has no upstream counterpart. The lane's live instance: **#420** (`tools/oc-ship-audit`, close n=9952) and **#422** (`tools/oc-census`, close n=9953) are landed AND recorded, and unclosable by construction -- `git ls-tree -r --name-only adolfousier/main -- tools` returns rc=0 with **0 files**: no parent, no possible PR.
+
+**The lane's claim had a wrong leg -- measured, not argued.** They grouped `tools/**` OR `.github/workflows` as one unharvestable surface. `git ls-tree -r --name-only adolfousier/main -- .github/workflows` returns rc=0 with **4 files** (`auto-assign.yml`, `ci.yml`, `prerelease.yml`, `release.yml`) -- so `.github/**` stays **harvestable**, and the fork repo `leshchenko1979/opencrabs` HAS an upstream. Only the skill repo `leshchenko1979/opencrabs-skill` has none, so only what IT carries -- `tools/**` and the skill markdown -- is harvest-exempt.
+
+The exemption is **on the harvest gate, not a fourth autonomous-close class**: (a)/(b)/(c) dispose of issues whose work is NOT done, whereas this closes an issue whose work IS done and recorded on a surface where no PR can ever exist -- the same framing as the fork-only predicate. Close is allowed when BOTH hold: (1) `landed` on its OWN surface, recorded by a ledger row of kind `done`/`close` (`oc_claims.LANDED_KINDS`), AND (2) the entire landed surface is carried by a repo with no upstream counterpart. If ANY part of the surface is harvestable, the harvest gate stands unchanged.
+
+Changed: `triage.md` -- a new "Internal-factory closure" paragraph inserted after the fork-only closure predicate and before the Close identity guard, which applies unchanged.
+
+LOC (measured; method: true line count = newline count + 1 where the file ends unterminated, so `wc -l` reads one lower on those files): SKILL.md 623 · editor.md 533 · hq.md 318 · triage.md 396 · toolsmith.md 165 · fleet-directives.md 644 · editor-upstream-pr.md 335 · upstream-merge-runbook.md 420 · **total 3434**.
+
 ## v0.4.231 (2026-09-20)
 
 **Leg-4 probe hygiene -- form 1 of the mechanical discriminator is now ANCHORED at the fix's own commit.** Filed by the #450 lane (`2ed8adeb`), reproduced first-hand before the amendment.
