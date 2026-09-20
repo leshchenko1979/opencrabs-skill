@@ -1,5 +1,26 @@
 # Changelog — opencrabs-dev
 
+## v0.4.229 (2026-09-20)
+
+**One CORRECTION to law shipped hours earlier, plus two filed gaps folded in. v0.4.228's "inert" framing was FALSIFIED by the lane that raised the residue — the footgun had already fired.**
+
+**The correction (the reason for this bump).** v0.4.228's Origin paragraph called the two probe homes carrying an ENABLED cron row "inert while no daemon runs them". That is FALSE for `oc134probe`. Infra Factory HQ corrected it, and the correction was verified first-hand here: `daemon.adopt_profiles` defaults true (`src/config/types.rs:333`), so the running default daemon spawns a cron-only scheduler for every REGISTERED non-active profile (`src/cli/ui.rs:131-140`) — it holds `locks/scheduler/oc134probe.lock` stamped at its own start (02:56Z) and an open fd on that home's DB. **Its row ran 2026-09-20T04:00:28Z** (`cron_job_runs.status = delivery_failed`) and wrote `reports/brain-dedup-2026-09-20.md` (17,103 B). `code-spike` is the genuinely dormant one: absent from `profiles.toml`, never adopted. Infra's own words: *"right about what you measured (bindings, crons in the two smoke homes) and wrong about the adoption mechanism that reaches a home with no daemon of its own."*
+
+**The rows are NOT rig residue — they are an unreconciled framework retirement.** Both are `__opencrabs_dedup_scan__`, seeded by `507c539eb` (#765) and retired by `5dbcccc7c` (#1593), which deleted `src/brain/dedup_scan.rs`, the scheduler special-case and the job-name string. `strings /usr/local/bin/opencrabs` returns **0** occurrences of the retired name against **4** of `__opencrabs_rebuild__` (the only name still special-cased, `src/cron/scheduler.rs:797`), and `5dbcccc7c` is an ancestor of deployed `6b1548a3`. No migration removed the rows, so a rig-teardown hook would NOT have prevented this. The surviving prompt is a 58-char PLACEHOLDER — *"reserved: weekly cross-file brain dedup scan (report-only)"* — and with the special-case gone it **reaches a full agent session as its work order** (verified: the cron session's first user message is that placeholder verbatim). 4 of 10 DB homes still carry the row ENABLED (default, family, oc134probe, code-spike); the 04:00Z fire cost ~2.2M tokens / ~$0.63 across three homes, two of them `delivery_failed`. Filed by Infra as fork #448.
+
+**Law changed:**
+1. `fleet-directives.md` §Throwaway probe homes — the reap now explicitly covers the home's **CRON ROWS**, not only its sessions and goals, and the section states the adoption mechanism that makes an enabled row live.
+2. Same section, Origin — **corrected in place and marked as corrected**: the falsified clause is quoted inside the correction rather than silently deleted, so the record shows what was believed and why it was wrong.
+3. The backstop property is restated: not "the home is unused" but **"no ENABLED cron job in any home carries a framework-reserved name the deployed binary no longer recognises"** — derivable as `strings <binary>` vs `cron_jobs.name`.
+4. `triage.md` §Duty T5 LANDED TERM — the commit leg is now **surface-scoped**: fork `main` for `src/**`, the SKILL repo (`skills/opencrabs-dev`) for `tools/**`. Fork `main` carries **no `tools/` directory at all**, so a tools-surface leg read against it returned FALSE NOT-LANDED for already-shipped work — the INVERSE of the v0.4.226 false-LANDED, and the same defect: one leg, two repos. Filed by Triage (`530c29ec`, GAP 1).
+5. `triage.md` §Duty T4 Stale-branch sweep — the v0.4.218 caveat that remote-only heads sit OUTSIDE the patrol's coverage is **retired**: the REMOTE LEG landed 2026-09-20T05:28Z at `ed4d65a0` (#415 step 8; markers at `oc-branch-sweep` lines 24/156/293), read-and-classify only. Live receipt: `--repo /root/opencrabs --dry-run` rc=0, **866 rows, 483 of them `origin/`**. Filed by Triage (GAP 2).
+
+**Files:** `fleet-directives.md` §Throwaway probe homes · `triage.md` §Duty T4 stale-branch sweep + §Duty T5 LANDED TERM.
+
+**LOC:** SKILL.md 623 · editor.md 533 · hq.md 318 · triage.md 370 · toolsmith.md 165 · fleet-directives.md 642 · editor-upstream-pr.md 335 · upstream-merge-runbook.md 420 · **total 3406**. Count = lines read from the file, so a final line without a trailing newline still counts; `SKILL.md` and `upstream-merge-runbook.md` both end unterminated, which is why `wc -l` reads 622/419 on the same bytes — the method is stated so the next reading is comparable.
+
+**Verification:** `inert while no daemon runs them` → 0 hits · corrected clause + restated backstop property present · remote-leg and surface-scope clauses present · battery `tools/tests/run.sh` green · `oc-ledger sync --version 0.4.229` rc 0.
+
 ## v0.4.228 (2026-09-20)
 
 **One HQ ruling codified: a throwaway probe home is reaped at rig teardown, and the class that produced the residue is now visible.**
