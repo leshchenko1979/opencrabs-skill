@@ -394,11 +394,46 @@ def get_fork_issue_hierarchy(issue_num, repo_path=None, mock_hierarchy=None):
     except Exception:
         return None
 
+def fork_issue_is_reopened(issue_num, mock_file=None):
+    # #415: the target fork issue's OWN stateReason. A harvest inference is drawn
+    # from upstream PRs and branch names, and either can name an issue that was
+    # later REOPENED -- so the live state is the authority, never the inference.
+    # stateReason is present only for CLOSED issues in the gh issue schema, so on
+    # an OPEN issue it is the marker that the issue was closed and later reopened.
+    # Absent, unreadable, or any other value means NOT reopened: absence of
+    # evidence must never turn a refusal into an approval.
+    if mock_file is None:
+        mock_file = os.environ.get('OC_HARVEST_MOCK_ISSUE_STATE')
+    if mock_file:
+        if not os.path.exists(mock_file):
+            return False
+        try:
+            with open(mock_file) as f:
+                loaded = json.load(f)
+        except Exception:
+            return False
+        rec = loaded.get(str(issue_num)) or loaded.get(issue_num)
+        if not isinstance(rec, dict):
+            return False
+        return str(rec.get('stateReason') or '').upper() == 'REOPENED'
+    rc, out, _ = run_cmd(['gh', 'issue', 'view', str(issue_num), '--repo', 'leshchenko1979/opencrabs', '--json', 'state,stateReason'])
+    if rc != 0 or not out.strip():
+        return False
+    try:
+        return str(json.loads(out).get('stateReason') or '').upper() == 'REOPENED'
+    except Exception:
+        return False
+
 def is_issue_harvested_upstream(issue_num, upstream_repo, repo_path, base_ref, swaps=None, mock_prs=None):
     # 1. Check if upstream PR exists
     pr = check_upstream_pr(issue_num, upstream_repo, mock_prs=mock_prs)
     if pr and pr.get('state') == 'MERGED':
-        return True
+        # #415: a MERGED inference is not the fork issue's own state. When the
+        # issue reads REOPENED the merge did not land it, so this leg must not
+        # answer True. The live state is read only on the hit path -- the miss
+        # path already returns False and a call there buys nothing.
+        if not fork_issue_is_reopened(issue_num):
+            return True
     
     # 2. Check if base_ref already has a commit mentioning this issue
     if repo_path and os.path.isdir(repo_path):
@@ -520,8 +555,13 @@ def check_upstream_pr(issue_num, upstream_repo, mock_prs=None):
         if re.search(rf'(?:^|/)(?:fix|feat|up|harvest)[/-]{issue_num}(?:-|$)', head) or \
            re.search(rf'/{issue_num}(?:-|$)', head):
             return p
-        if re.search(rf'(?:\(|^|\s)(?:fix|fixes|feat|close|closes)?\s*#{issue_num}\b', title, re.IGNORECASE) and not re.search(rf'(?:follow-up to|reverts?|related to)\s*#{issue_num}\b', title, re.IGNORECASE):
-            return p
+        # #415: a bare trailing PR reference is PR-NUMBER space, never the fork
+        # issue space. GitHub appends the PR number to a squashed subject, so an
+        # upstream PR titled with a trailing parenthesised number mapped into a
+        # FORK issue of the same number and refused a unit that has no PR of its
+        # own. The fork-qualified title route above is the only title route in;
+        # the two head arms are fork space by the branch-namespace law, so no
+        # fork-qualified reference is lost by removing this arm.
     return None
 
 # --- issue #305: author-qualified claim closure ------------------------------
@@ -749,13 +789,19 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
         if pr:
             pr_num = pr.get('number')
             pr_st = pr.get('state')
-            return {
-                'status': 'REJECTED',
-                'verdict': f'ALREADY_MERGED_UPSTREAM_PR: Issue #{issue_num} covered by upstream PR #{pr_num} ({pr_st})',
-                'issue': issue_num,
-                'commits': commits,
-                'exit_code': 1
-            }
+            # #415: a MERGED upstream PR on a fork issue that reads REOPENED did
+            # not land the work -- the merge inference is stale, so this gate
+            # falls through to the remaining gates. An OPEN PR is an in-flight
+            # harvest and still refuses: nothing was merged, so nothing can have
+            # been reopened over.
+            if not (pr_st == 'MERGED' and fork_issue_is_reopened(issue_num)):
+                return {
+                    'status': 'REJECTED',
+                    'verdict': f'ALREADY_MERGED_UPSTREAM_PR: Issue #{issue_num} covered by upstream PR #{pr_num} ({pr_st})',
+                    'issue': issue_num,
+                    'commits': commits,
+                    'exit_code': 1
+                }
 
     # Gate 2b: 24h feature soak gate across entire relationship graph (Owner 2026-09-15 / 2026-09-16)
     now_ts = int(os.environ.get('OC_HARVEST_NOW_TS') or time.time())
@@ -1082,6 +1128,22 @@ if action == 'test-check-pr':
         print('FOUND:' + str(pr.get('number')))
     else:
         print('NOT_FOUND')
+    sys.exit(0)
+
+elif action == 'test-harvested':
+    # #415 regression hook: expose is_issue_harvested_upstream() to the selftest
+    # so the live-state leg can be asserted against fixture PRs + a fixture
+    # issue-state file. repo_path is a path that does not exist, so the two
+    # git legs inside the function are skipped and the merged arm is the only
+    # one under test.
+    issue_num = int(sys.argv[2])
+    mock_prs_file = sys.argv[3]
+    mock_state_file = sys.argv[4]
+    os.environ['OC_HARVEST_MOCK_ISSUE_STATE'] = mock_state_file
+    with open(mock_prs_file) as f:
+        mock_prs = json.load(f)
+    got = is_issue_harvested_upstream(issue_num, 'mock/repo', '/nonexistent-repo-path', 'adolfousier/main', mock_prs=mock_prs)
+    print('HARVESTED' if got else 'NOT_HARVESTED')
     sys.exit(0)
 
 elif action == 'test-active-claims':
@@ -1685,6 +1747,82 @@ EOF
     echo "  ok 8 - check_upstream_pr ignores prose follow-up to #999 -> exit 0"
   else
     echo "  bad 8 - check_upstream_pr #999 expected NOT_FOUND, got ($out)"
+    return 1
+  fi
+
+  # 8h. #415 numbering-space leg: a bare trailing `(#N)` in a PR title is
+  # PR-NUMBER space -- GitHub appends the PR number to a squashed subject -- so
+  # it must never key the FORK issue N. Fixture PR 1990 carries title `... (#199)`
+  # (PR space) and body `Fixes leshchenko1979/opencrabs#211` (fork space), so fork
+  # issue 199 has no PR of its own while 211 does.
+  local mock_pr_space_file="$st_dir/mock_pr_space.json"
+  cat << 'EOF' > "$mock_pr_space_file"
+[
+  {
+    "number": 1990,
+    "state": "MERGED",
+    "title": "fix(a2a): wire the gateway (#199)",
+    "headRefName": "leshchenko1979/harvest-a2a-gateway",
+    "body": "Fixes leshchenko1979/opencrabs#211"
+  }
+]
+EOF
+
+  out="$(run_engine "test-check-pr" "199" "$mock_pr_space_file")"
+  if [ "$out" = "NOT_FOUND" ]; then
+    echo "  ok 8h - #415: a PR-space title reference does not key fork issue #199 -> exit 0"
+  else
+    echo "  bad 8h - #415: fork issue #199 expected NOT_FOUND, got ($out)"
+    return 1
+  fi
+
+  out="$(run_engine "test-check-pr" "211" "$mock_pr_space_file")"
+  if [ "$out" = "FOUND:1990" ]; then
+    echo "  ok 8i - #415: a fork-qualified reference still routes (positive twin) -> exit 0"
+  else
+    echo "  bad 8i - #415: fork issue #211 expected FOUND:1990, got ($out)"
+    return 1
+  fi
+
+  # 8j. #415 live-state leg: a MERGED upstream PR on a fork issue that reads
+  # REOPENED did not land the work, so is_issue_harvested_upstream must answer
+  # NOT_HARVESTED and let vet proceed. Fixture PR 1557 keys fork issue 199
+  # through its fork-qualified head, and the state fixture is injected via
+  # OC_HARVEST_MOCK_ISSUE_STATE so no selftest case reaches the network.
+  local mock_reopen_prs="$st_dir/mock_reopen_prs.json"
+  cat << 'EOF' > "$mock_reopen_prs"
+[
+  {
+    "number": 1557,
+    "state": "MERGED",
+    "title": "fix(harvest): identity leg",
+    "headRefName": "leshchenko1979/fix/199-harvest-identity",
+    "body": "Closes leshchenko1979/opencrabs#199"
+  }
+]
+EOF
+  local mock_reopened_file="$st_dir/mock_issue_reopened.json"
+  cat << 'EOF' > "$mock_reopened_file"
+{"199": {"state": "OPEN", "stateReason": "REOPENED"}}
+EOF
+  local mock_completed_file="$st_dir/mock_issue_completed.json"
+  cat << 'EOF' > "$mock_completed_file"
+{"199": {"state": "CLOSED", "stateReason": "COMPLETED"}}
+EOF
+
+  out="$(run_engine "test-harvested" "199" "$mock_reopen_prs" "$mock_reopened_file")"
+  if [ "$out" = "NOT_HARVESTED" ]; then
+    echo "  ok 8j - #415: a REOPENED fork issue overrides the MERGED inference -> exit 0"
+  else
+    echo "  bad 8j - #415: REOPENED fork issue #199 expected NOT_HARVESTED, got ($out)"
+    return 1
+  fi
+
+  out="$(run_engine "test-harvested" "199" "$mock_reopen_prs" "$mock_completed_file")"
+  if [ "$out" = "HARVESTED" ]; then
+    echo "  ok 8k - #415: negative control -- a COMPLETED fork issue still refuses -> exit 0"
+  else
+    echo "  bad 8k - #415: COMPLETED fork issue #199 expected HARVESTED, got ($out)"
     return 1
   fi
 
