@@ -28,6 +28,19 @@
 #   last_acked recorded gets NO-HISTORY (rc 1, same required action as DRIFT),
 #   NEVER NO-DRIFT — a lane with no history must not read as compliant.
 #
+# Source naming (F, fork #447): every verdict names the SOURCE of both sides.
+#   The live side is the ON-DISK skill file (its path is printed); the claimed
+#   side is argv (legacy form) or the ledger roster's last_acked (omit-arg). The
+#   on-disk read is correct by design — an author's frontmatter edit is
+#   fleet-visible before any commit or sync — but the verdict never SAID so, so
+#   "acked version > ledger version" read as lane misbehaviour when it is an
+#   AUTHOR-WINDOW artifact (v0.4.217: acks n=9474/9475/9477/9478 named 0.4.217
+#   while the last skill-bump event was n=9462 at 0.4.216; lane d18ce16a was
+#   exonerated retroactively). When the on-disk version has NO matching
+#   skill-bump ledger event the verdict carries an explicit note saying so —
+#   advisory only: it never changes the verdict or the rc, and a ledger that
+#   cannot be read leaves the note silent rather than inventing one.
+#
 # Exit: 0 no-drift (proceed under current rules) · 1 DRIFT (re-read required;
 #       ack stamped when --ack) · 2 usage · 3 ledger/skill-dir failure.
 # Env:  OC_ACTOR, OC_LEDGER, OC_SKILL_DIR (overrides canonical default).
@@ -74,9 +87,17 @@ cmd_drift() {
   else
     SKILL_DIR="$CANONICAL_SKILL"
   fi
-  local cur
+  local cur live_src
   cur="$(grep -E '^version:' "$SKILL_DIR/SKILL.md" 2>/dev/null | head -1 | awk '{print $2}')"
   [ -n "$cur" ] || die 3 "cannot read version from $SKILL_DIR/SKILL.md"
+  # F (fork #447): NAME THE SOURCE OF EACH SIDE. The live side is read from the
+  # ON-DISK skill file and never from the ledger — correct by design (an author's
+  # frontmatter edit is fleet-visible before any commit or sync), but the verdict
+  # never said so, so "acked version > ledger version" read as lane misbehaviour
+  # when it is an author-window artifact. Path is printed, not just named: the
+  # skill dir is overridable (--skill-dir / OC_SKILL_DIR), so "on-disk" alone
+  # would not say WHICH file was read.
+  live_src="on-disk skill file $SKILL_DIR/SKILL.md"
   # Omit-arg mode (D-5, HQ d72bd52d, 2026-09-13): no argv version means there
   # is nothing to echo — read the lane's RECORDED last_acked from the roster
   # and compare THAT to live. Reviewer J: the verdict must be a pure function
@@ -85,11 +106,12 @@ cmd_drift() {
   # argv == live always, so NO-DRIFT always, and the sensor could not fire on
   # the exact invocation the brief prescribes. The roster read goes through
   # oc-ledger (the schema owner) rather than re-implementing the ledger shape.
-  local claimed_bare="" no_history=0
+  local claimed_bare="" claimed_src="argv" no_history=0
   if [ -n "$claimed" ]; then
     claimed_bare="${claimed#v}"
   else
     local rj rrc acked
+    claimed_src="ledger roster last_acked"
     rj="$(OC_LEDGER="$LEDGER" "$_OC_DIR/oc-ledger" roster --json 2>/dev/null)"; rrc=$?
     [ "$rrc" -eq 0 ] || die 3 "omit-arg mode: cannot read the roster (oc-ledger roster rc=$rrc, ledger=$LEDGER)"
     acked="$(printf '%s' "$rj" | jq -r --arg u "$uuid" \
@@ -110,6 +132,40 @@ cmd_drift() {
         claimed_bare="${acked#v}" ;;
     esac
   fi
+  # F (fork #447): ADVISORY bump-state lookup — does the ledger carry a
+  # skill-bump event for the version read off disk? It does NOT when an author
+  # has written a new version into frontmatter and not yet synced, and in that
+  # window every lane's ack naming that version reads as "ahead of the ledger"
+  # i.e. as lane misbehaviour (the v0.4.217 misattribution). Lookup shape is
+  # chosen so the THREE rc meanings stay distinguishable — the tool's own rc
+  # contract, read live 2026-09-20:
+  #   rc 0 -> JSON array on stdout (match present or absent, both authoritative)
+  #   rc 1 -> NO-MATCH verdict, empty stdout: no skill-bump events exist at all,
+  #           so the on-disk version provably has none -> absent
+  #   rc 3 -> ledger missing/unparseable -> UNKNOWN, and the note stays SILENT
+  #           (absence of evidence must not be rendered as evidence)
+  # The lookup never touches rc or the verdict; it only decides whether a NOTE
+  # line is printed. `what` is written by oc-ledger sync as "v<version> — <text>"
+  # (tools/oc-ledger cmd_sync), so the version is matched as a "v<ver> " PREFIX
+  # rather than a substring — a substring test would let v0.4.2 match v0.4.20.
+  local bump_state="unknown"
+  if [ "$no_history" = "0" ]; then
+    local bj brc
+    bj="$(OC_LEDGER="$LEDGER" "$_OC_DIR/oc-ledger" events --kind skill-bump --n 20 --json 2>/dev/null)"; brc=$?
+    case "$brc" in
+      0) if printf '%s' "$bj" | jq -e --arg p "v$cur " 'any(.[]; (.what // "") | startswith($p))' >/dev/null 2>&1; then
+           bump_state="present"
+         else
+           bump_state="absent"
+         fi ;;
+      1) bump_state="absent" ;;
+      *) bump_state="unknown" ;;
+    esac
+  fi
+  local bump_note=""
+  if [ "$bump_state" = "absent" ]; then
+    bump_note="NOTE: no skill-bump ledger event for $cur — the on-disk version is ahead of the last sync (author window); advisory only, verdict unchanged"
+  fi
   # --ack stamps on BOTH paths (defect fix 2026-09-11, lanes d18ce16a + a5b34466).
   # This block used to sit AFTER the no-drift early return, so --ack fired ONLY on
   # DRIFT — the inverse of the promise in the header and of every RELOAD brief,
@@ -123,15 +179,19 @@ cmd_drift() {
     echo "ack stamped for $uuid at $cur"
   fi
   if [ "$no_history" = "1" ]; then
-    echo "NO-HISTORY: no last_acked recorded for $uuid — treat as DRIFT, re-read SKILL.md + editor.md IN FULL before next phase boundary"
+    echo "NO-HISTORY: no last_acked recorded for $uuid (claimed side: $claimed_src) — treat as DRIFT, re-read SKILL.md + editor.md IN FULL before next phase boundary"
+    echo "  live side: $cur from $live_src"
+    if [ -n "$bump_note" ]; then echo "$bump_note"; fi
     oc_log_extra verdict NO-HISTORY
     return 1
   fi
   if [ "$claimed_bare" = "$cur" ]; then
-    echo "NO-DRIFT: claimed $claimed_bare == live $cur"
+    echo "NO-DRIFT: claimed $claimed_bare (claimed side: $claimed_src) == live $cur (live side: $live_src)"
+    if [ -n "$bump_note" ]; then echo "$bump_note"; fi
     oc_log_extra verdict NO-DRIFT; return 0
   fi
-  echo "DRIFT: claimed $claimed_bare != live $cur — re-read SKILL.md + editor.md IN FULL before next phase boundary"
+  echo "DRIFT: claimed $claimed_bare (claimed side: $claimed_src) != live $cur (live side: $live_src) — re-read SKILL.md + editor.md IN FULL before next phase boundary"
+  if [ -n "$bump_note" ]; then echo "$bump_note"; fi
   oc_log_extra verdict DRIFT
   return 1
 }
@@ -235,6 +295,64 @@ EOF
   RC=0; OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" "$AU" --ack --skill-dir "$T/skill" >/dev/null 2>&1 || RC=$?
   chk "omit-arg-drift-rc1" 1 "$RC"
   chk "omit-arg-ack-stamps-live" "0.4.58" "$(jq -r '.workers[] | select(.uuid=="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") | .last_acked.version // "none"' "$T/state-ledger.json")"
+  # ---- F (fork #447): source naming + advisory author-window note -----------
+  # Every verdict must name the SOURCE of each side. The claimed-side paths
+  # (argv vs recorded) must be DISTINGUISHABLE in the text: before this fix a
+  # live DRIFT line was byte-identical whichever path produced it, so an
+  # "acked version ahead of the ledger" read as lane misbehaviour.
+  jq '.workers[0].last_acked = {version:"0.4.57", at:"2026-01-01T00:00:00Z"}' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT_ARGV="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" 0.4.57 --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "src-argv-rc1" 1 "$RC"
+  case "$OUT_ARGV" in *"claimed side: argv"*) S1=yes ;; *) S1=no ;; esac
+  chk "src-argv-names-argv" "yes" "$S1"
+  case "$OUT_ARGV" in *"live side: on-disk skill file $T/skill/SKILL.md"*) S2=yes ;; *) S2=no ;; esac
+  chk "src-argv-names-the-live-file" "yes" "$S2"
+  RC=0; OUT_REC="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "src-recorded-rc1" 1 "$RC"
+  case "$OUT_REC" in *"claimed side: ledger roster last_acked"*) S3=yes ;; *) S3=no ;; esac
+  chk "src-recorded-names-the-roster" "yes" "$S3"
+  # the killer arm: same claimed version, same live version, DIFFERENT text.
+  # An implementation that prints a constant source label fails here.
+  if [ "$OUT_ARGV" = "$OUT_REC" ]; then bad "src-argv-vs-recorded-differ (both outputs identical)"; else ok; fi
+  # NO-DRIFT names both sides
+  jq '.workers[0].last_acked = {version:"0.4.58", at:"2026-01-01T00:00:00Z"}' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "src-no-drift-rc0" 0 "$RC"
+  case "$OUT" in *"claimed 0.4.58 (claimed side: ledger roster last_acked) == live 0.4.58 (live side: on-disk skill file"*) S4=yes ;; *) S4=no ;; esac
+  chk "src-no-drift-names-both" "yes" "$S4"
+  # NO-HISTORY names the claimed-side source too (it is a claim ABOUT that source)
+  jq '.workers[0].last_acked = null' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" --skill-dir "$T/skill" 2>&1)" || RC=$?
+  case "$OUT" in *"NO-HISTORY: no last_acked recorded for $AU (claimed side: ledger roster last_acked)"*) S5=yes ;; *) S5=no ;; esac
+  chk "src-no-history-names-claimed" "yes" "$S5"
+  # ADVISORY author-window note. Fixture ledger carries NO skill-bump event, so
+  # the on-disk 0.4.58 is provably ahead of the last sync -> note appears.
+  jq '.workers[0].last_acked = {version:"0.4.58", at:"2026-01-01T00:00:00Z"}' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" 0.4.58 --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "bump-absent-rc-unchanged" 0 "$RC"
+  case "$OUT" in *"NOTE: no skill-bump ledger event for 0.4.58"*) B1=yes ;; *) B1=no ;; esac
+  chk "bump-absent-note" "yes" "$B1"
+  # ... and with a matching skill-bump event present, the note DISAPPEARS.
+  jq '.events = [{"n":1,"t":"2026-01-01T00:00:00Z","by":"oc-ledger sync","kind":"skill-bump","what":"v0.4.58 — fixture"}]' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" 0.4.58 --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "bump-present-rc-unchanged" 0 "$RC"
+  case "$OUT" in *"NOTE: no skill-bump ledger event"*) B2=yes ;; *) B2=no ;; esac
+  chk "bump-present-no-note" "no" "$B2"
+  # PREFIX, not substring: the pattern carries a TRAILING SPACE so an event for
+  # v0.4.580 cannot satisfy cur=0.4.58. Dropping that space is exactly the mutant
+  # this arm kills (pattern "v0.4.58" prefix-matches "v0.4.580 — fixture").
+  # NOTE: contains() would NOT be caught here — with the space it is equivalent
+  # for this fixture — so this arm is scoped to the space, not to the operator.
+  jq '.events = [{"n":1,"t":"2026-01-01T00:00:00Z","by":"oc-ledger sync","kind":"skill-bump","what":"v0.4.580 — fixture"}]' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" 0.4.58 --skill-dir "$T/skill" 2>&1)" || RC=$?
+  case "$OUT" in *"NOTE: no skill-bump ledger event for 0.4.58"*) B3=yes ;; *) B3=no ;; esac
+  chk "bump-near-miss-version-is-absent" "yes" "$B3"
+  # an UNREADABLE ledger leaves the note SILENT (absence of evidence is not
+  # evidence) and still never changes the verdict
+  RC=0; OUT="$(OC_LEDGER="$T/missing-ledger.json" bash "$ME" "$AU" 0.4.58 --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "bump-unknown-rc-unchanged" 0 "$RC"
+  case "$OUT" in *"NOTE: no skill-bump ledger event"*) B4=yes ;; *) B4=no ;; esac
+  chk "bump-unknown-no-note" "no" "$B4"
   rm -rf "$T"
   echo "oc-drift-check selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
