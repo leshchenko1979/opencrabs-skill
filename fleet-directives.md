@@ -284,6 +284,14 @@ Every `smoke-verdicts.log` verdict row's `sha=` MUST be the sha actually under t
 
 Worked example: the #172 row at 01:56:01Z cited `3b095f27` while the packaging tip was `f45d6323` — the stamp never covered the candidate, so a fresh row was required after the full gate. When the packaging sha moves, the row is SUPERSEDED: append a new row, never edit the old one.
 
+## Throwaway probe homes — reap at rig teardown (HQ ruling 2026-09-20) [LANE]
+
+A behavioral probe that creates a throwaway profile home (`profiles/<name>`) **reaps it when the rig is done** — daemon stopped, rig dir removed, home removed — in the same shift that writes its verdict row. A home kept as a **reusable rig** is DECLARED in that row (name + why), so a later sweep reads it as intentional rather than as residue. Probe rigs are ad-hoc shell/python: neither `oc-smoke` nor `oc-smoke-evidence` creates a profile home, so no tool enforces this for you.
+
+**Origin:** the infra-surveys-daily self-audit flagged 3 `active` goal rows in `profiles/smoke300` + `profiles/smoke300neg` — the fork-#300 behavioral smoke's rig, built 2026-09-18, never torn down. Verified first-hand: both homes declare themselves disposable in their own `config.toml` header, both read `session_bindings=0` and `cron_jobs=0` total (inert), and the residue is the WHOLE home rather than those rows (smoke300: 12 goal rows + 11 sessions; smoke300neg: 2 + 2). Box sweep over all 11 profile homes found two further throwaway homes carrying an ENABLED cron row (`oc134probe`, `code-spike`) — inert while no daemon runs them, a footgun the moment a rig reuses a home and starts one. Infra's own gate `test_cron_targets.py` covers sessions titled `Cron:%` only and will never see `CLI Run` fixtures.
+
+**Dispatched, not absorbed (HQ does not execute lane work):** the reap-or-declare call goes to the rig's OWNER lane in the same turn it is found; a mechanical backstop for orphan probe homes belongs in `oc-health` (no existing class reaches `profiles/*` — class 2 is worktrees, class 4 is the dev state dir) and is the Toolsmith's design call.
+
 ## Out-of-Feature-Set Issues — Dispatchable, Ceiling Labeled (v0.4.202, HQ ruling 2026-09-18) [LANE]
 
 **Origin:** Triage asked whether an issue whose deliverable lies outside the carrier feature set is dispatchable at all under the 4-leg rubric — raised after #319 was wired 3× across two lanes with zero claims at the time of the read (ledger n=8161, n=8234, n=8261). The churn was real. The answer is YES: the defect was an **unlabeled smoke ceiling**, not an undispatchable issue.
