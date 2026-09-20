@@ -244,6 +244,32 @@ autonomous-close class: neither branch satisfies (a) superseded-by,
 `git grep -c FlowEvent adolfousier/main -- src/` → empty; no upstream PR carries
 #253's work) and #324 **reopen stands** (child of fork-only #286, OPEN).
 
+**Internal-factory closure — the harvest gate is VACUOUS on a harvest-exempt
+surface (HQ ruling 2026-09-20, v0.4.232).** The harvest gate exists to make work
+reach UPSTREAM, so it has nothing to gate on when the repo CARRYING the fix has
+no upstream counterpart. The criterion is the **carrying repo**, never the path
+string: the fork repo `leshchenko1979/opencrabs` HAS an upstream
+(`adolfousier/opencrabs`), so `src/**` AND `.github/**` stay harvestable
+(upstream carries `.github/workflows/{auto-assign,ci,prerelease,release}.yml`),
+while the skill repo `leshchenko1979/opencrabs-skill` has NONE, so everything it
+carries — `tools/**` and every skill markdown file — is **harvest-exempt**. An
+open fork issue MAY be closed autonomously when BOTH hold: (1) `landed` on its OWN
+surface (the SKILL repo for `tools/**`, per the LANDED TERM surface-scoping),
+recorded by a ledger row of kind `done`/`close` addressing the issue
+(`oc_claims.LANDED_KINDS`), AND (2) its entire landed surface is carried by a repo
+with no upstream counterpart. The close comment names the ledger row(s) and the
+commit sha(s); the close identity guard below applies unchanged. If ANY part of the
+surface is harvestable, the harvest gate STANDS unchanged.
+
+This is an **exemption on the harvest gate, not a fourth autonomous-close class**:
+(a)/(b)/(c) dispose of issues whose work is NOT done, whereas this closes an issue
+whose work IS done AND recorded on a surface where no PR can ever exist — the same
+framing as the fork-only predicate above. Receipts: #420 (close n=9952,
+tools/oc-ship-audit) and #422 (close n=9953, tools/oc-census), landed + recorded
+and unclosable by construction; `git ls-tree -r --name-only adolfousier/main --
+tools` → 0 files, `… -- .github/workflows` → 4 files. Filed by Triage lane GAP 3
+(topic "OpenCrabs Dev Triage").
+
 **Close identity guard — the cited artifact must touch the issue's own surface
 (HQ ruling 2026-09-19, v0.4.216).** Every close resting on a commit or PR
 reference — autonomous (a)/(b)/(c) and harvest-gated alike — MUST confirm the
