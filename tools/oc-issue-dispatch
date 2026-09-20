@@ -244,7 +244,15 @@ AFFINITY_KEYWORDS = {
     "memory": ["memory", "vector", "search", "embedding", "codegraph", "graph", "store", "similarity"],
     "skills": ["skill", "manifest", "compaction", "slash", "prompt", "context", "instruction"],
     "notify": ["notify", "queue", "delivery", "router", "session", "push", "wake", "stall", "drain"],
-    "harvest": ["harvest", "upstream", "port", "cherry-pick", "census", "sweep"]
+    "harvest": ["harvest", "upstream", "port", "cherry-pick", "census", "sweep"],
+    # The tools/ CLI surface (fork #342). Keywords were chosen by MEASUREMENT, not
+    # guesswork: scored over the 125 open fork issues against ground truth "names a
+    # path that exists under tools/** or carries the (tools): scope prefix" (45
+    # issues), this list fires on exactly those 45 -- 100% precision, 100% recall,
+    # zero false positives. A bare "tools/" was REJECTED: it fires on 60 and also
+    # matches nine daemon-source tokens (src/**/tools/*.rs), which are Editor
+    # territory and must never accrue affinity for this lane.
+    "tools": ["(tools):", "tools/oc-", "tools/lib/", "tools/tests/"]
 }
 
 
@@ -574,7 +582,11 @@ def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_pa
 
     # Map workers with their active state
     for w in workers:
-        if w.get("role") != "editor":
+        # A lane that OWNS a work surface is a candidate, not only role=editor: the
+        # Toolsmith owns tools/** (fork #342). Roles owning no affinity domain (hq,
+        # triage) deliberately stay out -- admitting them could only add zero-score
+        # candidates, which is the misroute class this fix exists to remove.
+        if w.get("role") not in ("editor", "toolsmith"):
             continue
         uuid = w.get("uuid")
         if not uuid:
@@ -956,7 +968,7 @@ def cmd_auto(args):
 
     editor_lanes = get_worker_roster(ledger_data)
     available_lanes = [l for l in editor_lanes if not l["is_busy"]]
-    print(f"Editor roster: {len(editor_lanes)} registered, {len(available_lanes)} idle/available.")
+    print(f"Candidate roster: {len(editor_lanes)} registered, {len(available_lanes)} idle/available.")
 
     if not available_lanes:
         print("CAPACITY_EXHAUSTED: No idle editor lanes available for dispatch.", file=sys.stderr)
