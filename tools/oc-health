@@ -307,16 +307,22 @@ print(m.group(1) if m else "none")
   case "$OUT" in *"cron-leak"*) ok ;; *) bad "schedulers-leak: $OUT" ;; esac
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='' WHERE name='oc-roster-detached-sweep';"
 
-  # 10b. Class: schedulers — law-carrying cron liveness (issue #339).
-  #      The pre-fix query matched name IN ('harvest-watch-4h',...) — a spelling
-  #      that has NEVER existed in cron_jobs — so the harvest patrol could go
-  #      dead in silence and the class still printed "law-carrying enabled".
-  #      This leg disables the LIVE job and demands the finding: it is the exact
-  #      defect, and it fails on the old query.
+  # 10b. Class: schedulers — law-carrying cron liveness (issue #339) AND the
+  #      unset-direction channel (issue #426). The pre-fix query matched name IN
+  #      ('harvest-watch-4h',...) — a spelling that has NEVER existed in
+  #      cron_jobs — so the harvest patrol could go dead in silence and the class
+  #      still printed "law-carrying enabled". This leg disables the LIVE job and
+  #      demands it be NAMED. With the pacemakers-off marker absent the direction
+  #      is UNSET — the marker EXISTS in the ops profile (524 B, 2026-09-19 18:25Z)
+  #      and in no other profile, so this is the production state everywhere else
+  #      and it returns here too the moment the owner lifts the order — so the
+  #      observation is a NOTE naming the job — not the old cron-disabled finding,
+  #      which asserted a direction the check cannot read from an absent file.
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=0 WHERE name='oc-harvest-dispatch-4h';"
   RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
-  chk "schedulers-lawcron-rc1" 1 "$RC"
-  case "$OUT" in *"cron-disabled"*"oc-harvest-dispatch-4h"*) ok ;; *) bad "schedulers-lawcron: $OUT" ;; esac
+  chk "schedulers-lawcron-rc0" 0 "$RC"
+  case "$OUT" in *"scheduler-direction-unset"*"oc-harvest-dispatch-4h"*) ok ;; *) bad "schedulers-lawcron-note-names-live-job: $OUT" ;; esac
+  case "$OUT" in *"cron-disabled"*) bad "schedulers-lawcron-asserts-unread-direction: $OUT" ;; *) ok ;; esac
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name='oc-harvest-dispatch-4h';"
 
   # 10c. Rename-proof. The 2026-09-18 namespacing law RENAMES these jobs, so a
@@ -343,9 +349,27 @@ print(m.group(1) if m else "none")
   RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
   chk "schedulers-against-order-rc1" 1 "$RC"
   case "$OUT" in *"cron-enabled-against-order"*"oc-roster-detached-sweep"*) ok ;; *) bad "schedulers-against-order: $OUT" ;; esac
-  # Restore: all four enabled, order lifted (marker absent).
+  # Restore: all four enabled, marker removed (direction unset again).
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name IN ('oc-roster-detached-sweep','oc-harvest-dispatch-4h','oc-health-hourly','oc-upstream-delta-watch');"
   rm -f "$T/state/pacemakers-off"
+
+  # 10e. Unset direction with ALL FOUR patrols off (issue #426 acceptance).
+  #      This is the production state in every profile BUT ops, which carries the
+  #      marker (524 B, 2026-09-19 18:25Z); it is reachable in ops too, the moment
+  #      the owner lifts the order. The check must OBSERVE: exactly one
+  #      note naming the marker's path and the unset direction, ZERO findings
+  #      (so rc 0, no hourly page), and no cron-disabled finding — the old bug
+  #      was re-reporting the owner's own 2026-09-18 order back to him as an
+  #      8 QUIRK defect on every run.
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=0 WHERE name IN ('oc-roster-detached-sweep','oc-harvest-dispatch-4h','oc-health-hourly','oc-upstream-delta-watch');"
+  RC=0; OUT="$(run --class schedulers --json 2>/dev/null)" || RC=$?
+  chk "schedulers-unset-direction-rc0" 0 "$RC"
+  case "$OUT" in *'"findings":[]'*) ok ;; *) bad "schedulers-unset-direction-findings-empty: $OUT" ;; esac
+  case "$OUT" in *'"notes":1'*'"slug":"scheduler-direction-unset"'*) ok ;; *) bad "schedulers-unset-direction-note: $OUT" ;; esac
+  case "$OUT" in *'"cron-disabled"'*) bad "schedulers-unset-direction-legacy-finding: $OUT" ;; *) ok ;; esac
+  case "$OUT" in *'pacemakers-off'*) ok ;; *) bad "schedulers-unset-direction-marker-path: $OUT" ;; esac
+  case "$OUT" in *'"oc-roster-detached-sweep"'*|*'oc-roster-detached-sweep'*) ok ;; *) bad "schedulers-unset-direction-lists-job: $OUT" ;; esac
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name IN ('oc-roster-detached-sweep','oc-harvest-dispatch-4h','oc-health-hourly','oc-upstream-delta-watch');"
 
   # 11. Class: logs — malformed lines detection
   printf '2026-08-31T04:11:21Z prose evidence line\n' >> "$T/tools.log"
@@ -437,6 +461,9 @@ REAPED=0          # count of remediations applied
 FAILED=0          # measurement failures
 F_JSON=""         # accumulated JSON finding objects
 F_TEXT=""         # accumulated human finding lines
+N_JSON=""         # accumulated JSON note objects (observations, never findings)
+N_TEXT=""         # accumulated human note lines
+NOTES=0           # count of low-severity notes — NEVER affects rc (#426)
 
 add_finding() { # <check-no> <severity> <slug> <message>
   FINDINGS=$((FINDINGS + 1))
@@ -447,6 +474,19 @@ add_finding() { # <check-no> <severity> <slug> <message>
 clean_line() { # never writes to stdout in --json mode
   if [ "$QUIET" = "1" ] || [ "$JSON" = "1" ]; then return 0; fi
   printf '  ok   %s\n' "$1"
+}
+
+add_note() { # <slug> <message> — a LOW-SEVERITY observation: visible, never a finding
+  # A third output channel beside findings and measurement failures (#426): an
+  # observation the check cannot turn into a verdict. It reaches BOTH consumers —
+  # the human line in text mode, and a JSON object in --json mode (the machine
+  # contract) — while leaving FINDINGS and rc untouched, so an unset direction is
+  # never reported back to the owner as his own defect. Same shape as the
+  # pre-existing measure_failures channel: observed, counted, not a finding.
+  NOTES=$((NOTES + 1))
+  N_TEXT="${N_TEXT}  note $1 — $2"$'\n'
+  [ -n "$N_JSON" ] && N_JSON="$N_JSON,"
+  N_JSON="$N_JSON{\"slug\":\"$1\",\"message\":\"$(printf '%s' "$2" | sed 's/"/\\"/g')\"}"
 }
 
 is_class_active() {
@@ -827,7 +867,15 @@ if is_class_active "schedulers"; then
     # (HEALTH-CLASSES.md class 5). While it stands, a disabled law-carrying cron
     # is the owner's own order and flagging it only reports his decision back to
     # him; what is worth failing on is then one ENABLED AGAINST the order.
-    # Absent marker = the order was lifted, and the original direction resumes.
+    # Absent marker = the direction is UNSET — NOT "the order was lifted" (#426).
+    # Those two states are byte-identical to this check, and resolving toward the
+    # old direction reports the owner's own order back to him as a defect
+    # (measured 2026-09-19: an 8 QUIRK cron-disabled finding with the marker absent
+    # — reproduced against an empty state dir, the shape every profile but ops is
+    # in). So with the marker absent a disabled patrol is OBSERVED —
+    # a note naming the marker path and the unset direction — never asserted as a
+    # finding. The failing direction is live ONLY while the marker is present and
+    # one of these patrols is ENABLED against the standing order.
     # The marker is state-dir scoped, so it is hermetic in the selftest.
     #
     # The name list is deliberately NOT a hardcoded `name IN (...)`: a liveness
@@ -851,7 +899,7 @@ if is_class_active "schedulers"; then
         if [ -f "$STATE/pacemakers-off" ]; then
           add_finding 8 QUIRK cron-enabled-against-order "law-carrying cron(s) ENABLED while the 2026-09-18 pacemakers-off order stands: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
         else
-          add_finding 8 QUIRK cron-disabled "law-carrying cron(s) disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
+          add_note scheduler-direction-unset "direction UNSET — the marker $STATE/pacemakers-off is absent, so the 2026-09-18 pacemakers-off order reads as neither standing nor lifted, and a disabled law-carrying cron is observed here rather than reported as a defect. Write the marker to assert the order still stands, or leave it absent deliberately if the order was lifted. Disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
         fi
       fi
       [ -n "$leak_bad" ] && add_finding 8 QUIRK cron-leak "dev cron(s) delivering outside forum (DM-routed): $(printf '%s' "$leak_bad" | tr '\n' ' ')"
@@ -1033,13 +1081,14 @@ fi
 # =============================================================================
 classes_str="$(IFS=,; echo "${ACTIVE_CLASSES[*]}")"
 if [ "$JSON" = "1" ]; then
-  printf '{"findings":[%s],"reaped":%d,"measure_failures":%d,"state_dir":"%s","rotation":{"current_class":"%s","next_class":"%s","classes_run":[%s],"cycle_count":%d}}\n' \
-    "$F_JSON" "$REAPED" "$FAILED" "$STATE" \
+  printf '{"findings":[%s],"reaped":%d,"measure_failures":%d,"notes":%d,"notes_detail":[%s],"state_dir":"%s","rotation":{"current_class":"%s","next_class":"%s","classes_run":[%s],"cycle_count":%d}}\n' \
+    "$F_JSON" "$REAPED" "$FAILED" "$NOTES" "$N_JSON" "$STATE" \
     "$CURRENT_ROTATION_CLASS" "$NEXT_ROTATION_CLASS" \
     "$(printf '"%s",' "${ACTIVE_CLASSES[@]}" | sed 's/,$//')" "$CYCLE_COUNT"
 else
-  printf 'oc-health [%s]: %d finding(s), %d remediation(s), %d measurement failure(s)\n' \
-    "$classes_str" "$FINDINGS" "$REAPED" "$FAILED"
+  printf 'oc-health [%s]: %d finding(s), %d remediation(s), %d measurement failure(s), %d note(s)\n' \
+    "$classes_str" "$FINDINGS" "$REAPED" "$FAILED" "$NOTES"
+  [ -n "$N_TEXT" ] && printf '%s' "$N_TEXT"
   [ -n "$F_TEXT" ] && printf '%s' "$F_TEXT"
 fi
 
