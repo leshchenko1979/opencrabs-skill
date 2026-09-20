@@ -193,10 +193,23 @@ Cadence: after every FIVE shipped version bumps, on owner request, or when an
 incident suggests drift.
 
 Method:
-0. **Cycle State Durability & Step-0 Recovery** (v0.4.170, owner order 2026-09-13):
+0. **Cycle State Durability & Step-0 Recovery** (v0.4.170, owner order 2026-09-13; **instrumentation schema FROZEN v0.4.227**, HQ ruling 2026-09-20 answering lane `ef83024b`):
    Every Duty 4+6 cycle maintains a machine-readable state file at `reviews/<cycle-id>/state.json` (under `$OC_DEV_STATE`).
-   Schema:
-   `{ "cycle_id": "<id>", "cadence": "<cadence-string>", "started_at": "<ts>", "status": "IN_PROGRESS|COMPLETED", "proposals": [...], "lenses": { "<lens>": { "status": "PENDING|COMPLETED", "report_path": "...", "verdict": "..." } }, "codification_plan": [...], "updated_at": "<ts>" }`
+   **FROZEN SCHEMA — these five field names are law. Instrument against them; do NOT invent parallel spellings.**
+   `{ "cycle_id": "<id>", "cadence": "<cadence-string>", "started_at": "<ts>", "ended_at": "<ts|null>", "duration_review_min": <num|null>, "duration_cycle_min": <num|null>, "status": "IN_PROGRESS|COMPLETED", "proposals": [...], "lenses": { "<lens>": { "status": "PENDING|COMPLETED", "report_path": "...", "verdict": "..." } }, "codification_plan": [...] }`
+
+   | Field | Rule it encodes |
+   |---|---|
+   | `cycle_id` | **ONE canonical id, minted ONCE at cycle init and written into BOTH stores** — `state.json` AND a ledger row at cycle open — validated on write so the two cannot diverge. Kills the disk-vs-ledger id drift (`20260919-c21` vs `20260919-cycle`) and the negative span that id normalisation manufactured. |
+   | `duration_review_min` | Review start → reports persisted. **This is the number the owner asked for.** |
+   | `duration_cycle_min` | Cycle start → cadence close stamp. What existed before, previously mislabelled as *the* duration. |
+   | `ended_at` | Explicit terminal timestamp. **NEVER `updated_at`** — 6 of 13 state files never advanced it and two showed a 0.0-min span, so a reader could not tell "finished" from "untouched". |
+   | `status` | Terminal ENUM, exactly `IN_PROGRESS \| COMPLETED`. Never free text (`COMPLETED` / `VALIDATED` / `reports_persisted` / `intake_complete` were all observed, plus a contradiction where `state.json` read `IN_PROGRESS` while the ledger close row already existed). |
+
+   **Two matching rules bind the step-8 close stamp** (same ruling):
+   - The cadence-reset stamp is matched as an **ANCHORED whole-row pattern** — `^v<digits>.<digits>.<digits> ACCEPTED` — never a loose substring.
+   - A note that withholds an END for a cycle **must BEGIN with the literal token `WITHHELD:`**, so a loose grep cannot harvest an END from a row whose whole point is that no END was written.
+
    Before spawning reviewers or codifying findings, HQ initializes `state.json`.
    **Step-0 Recovery Mandate:** After ANY context compaction or session restart during Duty 4+6, HQ must first check for an existing `reviews/<cycle-id>/state.json` before re-querying proposals, re-spawning reviewers, or re-drafting plans. Reading `state.json` restores the exact cycle state, preventing redundant tool calls or loss of completed work across compactions.
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),

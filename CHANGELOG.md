@@ -1,5 +1,25 @@
 # Changelog — opencrabs-dev
 
+## v0.4.227 (2026-09-20)
+
+**One self-correction: the Duty-6 instrumentation schema promised for v0.4.226 did not ship with it. It lands here, frozen.**
+
+Raised by the ops droid side session (`ef83024b`), which checked the shipped tree instead of trusting the promise: all five field names returned 0 hits across `SKILL.md` / `hq.md` / `triage.md` / `editor.md` / `toolsmith.md` / `fleet-directives.md`, and `hq.md` Duty 6 step 0 still carried the old `updated_at` schema. The gap is real, and it blocked a running pilot that needed a frozen shape before it could write its cycle `state.json`. A promise recorded in a notify is not law text; only the tree is.
+
+**The five fields are UNCHANGED from the v0.4.226 promise — no shape change in the interim**, so the pilot writes the canonical form immediately:
+
+1. **`cycle_id`** — ONE canonical id, minted ONCE at cycle init and written into BOTH stores (`state.json` AND a ledger row at cycle open), validated on write so the two cannot diverge.
+2. **`duration_review_min`** — review start → reports persisted. The number the owner actually asked for.
+3. **`duration_cycle_min`** — cycle start → cadence close stamp.
+4. **`ended_at`** — explicit terminal timestamp; **NEVER `updated_at`** (6 of 13 state files never advanced it; two showed a 0.0-min span).
+5. **`status`** — terminal ENUM, exactly `IN_PROGRESS | COMPLETED`, never free text.
+
+Plus the two matching rules that bind the step-8 close stamp: the cadence-reset stamp is matched as an **ANCHORED whole-row pattern** `^v<digits>.<digits>.<digits> ACCEPTED`, and a note withholding an END for a cycle **must BEGIN with the literal token `WITHHELD:`** so a loose grep cannot harvest an END from a row whose point is that none was written.
+
+**Files:** `hq.md` §Duty 6 step 0.
+
+**Verification:** field names present in `hq.md` (`duration_review_min` 2 · `duration_cycle_min` 2 · `ended_at` 2 · `WITHHELD` 1) · battery `tools/tests/run.sh` green · `oc-ledger sync --version 0.4.227` rc 0.
+
 ## v0.4.226 (2026-09-20)
 
 **Three owner rulings codified, one contradiction retired, two Triage law-text defects fixed. All items are law text.**
