@@ -24,6 +24,40 @@ WHY (runbook Step 7 step 0, v0.4.170 + v0.4.214)
   SPLITS the aggregate into its three arms instead of trusting it, and it never
   prints a cut sha — it reports the counts and the base the branch sits on.
 
+CLASSIFICATION (spec §4 — the wording rule must survive into the OUTPUT)
+  A lane-scoped 0 NEVER means "the branch is absorbed": it means none of the
+  UNABSORBED commits carry that lane's Session-Id.  Every row therefore carries
+  a `class`, worded so a reader cannot invert it:
+
+    ALREADY_ABSORBED   the tip is reachable from the base AND lane-scoped
+                       pending is 0 -> nothing here is pending for ANYONE
+                       (a terminal state, so it is tested FIRST)
+    UNATTRIBUTABLE     no Session-Id on the tip; may or may not be yours
+                       -> verify by CONTENT
+    MALFORMED_TRAILER  the tip's Session-Id is not a UUID (the real `7198` on
+                       feat/notify-on-roll) -> its own class, NEVER a lane, so
+                       it cannot inflate the rollup's lane count
+    NOT_YOURS          (--lane) the tip belongs to another lane; its lane-scoped
+                       commits are THAT lane's, not yours
+    YOUR_PENDING_ZERO  (--lane) your tip is already in the base by patch-id
+                       match -- the AGGREGATE counted other lanes' and
+                       untrailered commits
+    YOUR_PENDING       (--lane) corrected DOWNWARD from the aggregate
+    LANE_PENDING / LANE_ZERO_OWN   the same two facts with no asker given
+    ERROR              the cherry leg failed for this branch (plus_total -1)
+
+  LANE KEY = the branch TIP's `Session-Id` trailer.  NEVER the issue number
+  embedded in the branch NAME, and never a roster uuid column: both were proven
+  wrong on 2026-09-19 (spec §4).
+
+  ROLLUP  `meta.rollup` sums `plus_own` per lane key, keyed on the tip_lane
+  values actually OBSERVED (a lane that tips no branch is absent, not a phantom
+  zero), and holds non-UUID keys in a SEPARATE map so a garbage trailer can
+  never be counted as a lane.  A lane whose own total is 0 across every branch
+  it tips is exactly the population an AGGREGATE-based advisory names falsely
+  (`zero_own`): the tool reports that population -- it cannot know what a given
+  advisory actually said, and does not pretend to.
+
 READ-ONLY
   Only `rev-parse` / `cherry` / `for-each-ref` / `log --format` / `merge-base`.
   No ref is written, no store is touched, no cut is computed.
@@ -82,6 +116,23 @@ DEFAULT_JOBS = 4
 # tool grows next cannot mistake them for malformed keys).
 LANE_A = "1a63f103-0000-4000-8000-00000000000a"
 LANE_B = "2fbfb2f8-0000-4000-8000-00000000000b"
+LANE_C = "3c0d5e17-0000-4000-8000-00000000000c"
+
+# The REAL malformed key observed on feat/notify-on-roll (spec §4): a bare
+# issue number where a Session-Id belongs.  Kept verbatim -- it is the fixture's
+# proof that a garbage trailer becomes a class instead of a 13th lane.
+LANE_MALFORMED = "7198"
+
+# The Session-Id trailer is a UUID in every commit this fleet writes; anything
+# else is MALFORMED_TRAILER (the real `7198` on feat/notify-on-roll).  That is a
+# CLASS, never a lane -- keying the rollup on it would report a garbage trailer
+# as a worker (spec §4).
+UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+def is_lane(key):
+    """True when a Session-Id trailer value is a well-formed lane UUID."""
+    return bool(UUID_RE.match(key or ""))
 
 # ============================================================================
 # Unified tools log (parity with tools/lib/oc-log.sh; see RC-CONTRACT.md
@@ -254,7 +305,63 @@ def cherry_plus(repo, base, branch):
     return plus
 
 
-def census(repo, base, glob, jobs):
+def classify(r, asker=""):
+    """The spec §4 class for one row.  Never inverts a lane-scoped 0.
+
+    ALREADY_ABSORBED is tested FIRST because it is terminal: a tip reachable
+    from the base with nothing lane-scoped pending is absorbed for EVERYONE,
+    whoever is asking.  A lane-scoped 0 on a branch still out says something
+    different -- that the unabsorbed commits are not that lane's -- so it must
+    never be reported as "absorbed" (the whole point of the wording rule).
+    """
+    if r.get("plus_total", 0) < 0:
+        return "ERROR"
+    tip_lane = r["tip_lane"]
+    if r["tip_in_base"] == 0 and r["plus_own"] == 0:
+        return "ALREADY_ABSORBED"
+    if not tip_lane:
+        return "UNATTRIBUTABLE"
+    if not is_lane(tip_lane):
+        return "MALFORMED_TRAILER"
+    if asker:
+        if tip_lane != asker:
+            return "NOT_YOURS"
+        return "YOUR_PENDING" if r["plus_own"] else "YOUR_PENDING_ZERO"
+    return "LANE_PENDING" if r["plus_own"] else "LANE_ZERO_OWN"
+
+
+def rollup(rows):
+    """Per-lane sums of plus_own + the malformed-key hygiene list.
+
+    Keyed on the tip_lane values actually OBSERVED, so a lane that tips no
+    branch is ABSENT rather than a phantom 0; and non-UUID keys go to their own
+    map, so a garbage trailer can never be counted as a worker (spec §4: `7198`
+    is a class, not a 13th lane).
+
+    `zero_own` names every real lane whose own total is 0 across every branch it
+    tips -- exactly the population an aggregate-based advisory names falsely.
+    The tool cannot know what a given advisory actually SAID, so it reports the
+    population and does not claim a false-advisory verdict it cannot support.
+    """
+    lanes, malformed = {}, {}
+    for r in rows:
+        if r.get("plus_total", 0) < 0:
+            continue
+        tl = r["tip_lane"]
+        if not tl:
+            continue
+        if not is_lane(tl):
+            malformed[tl] = malformed.get(tl, 0) + 1
+            continue
+        lanes[tl] = lanes.get(tl, 0) + r["plus_own"]
+    return {"lanes": lanes,
+            "malformed_keys": malformed,
+            "lanes_total": len(lanes),
+            "sum_plus_own": sum(lanes.values()),
+            "zero_own": sorted(k for k, v in lanes.items() if v == 0)}
+
+
+def census(repo, base, glob, jobs, lane=""):
     """Return (rows, meta).  Raises CensusRefused on an unresolvable repo/base."""
     rc, _, err = git(repo, "rev-parse", "--git-dir")
     if rc != 0:
@@ -328,9 +435,14 @@ def census(repo, base, glob, jobs):
                      "plus_other": oth})
 
     rows.sort(key=lambda r: r["branch"])
+    # The class is derived from the row's OWN fields, never from the asker's
+    # expectation -- classify() is the single home of that rule, and the error
+    # row (plus_total -1) lands there as ERROR like any other.
+    for r in rows:
+        r["class"] = classify(r, lane)
     meta = {"repo": repo, "base": base, "base_sha": base_sha,
-            "branch_glob": glob or "*", "jobs": jobs,
-            "branches": len(rows)}
+            "branch_glob": glob or "*", "jobs": jobs, "lane": lane,
+            "branches": len(rows), "rollup": rollup(rows)}
     return rows, meta
 
 
@@ -351,15 +463,20 @@ def check_invariant(rows):
 
 def render(rows, meta):
     w = max([len(r["branch"]) for r in rows] + [6])
+    wc = max([len(r.get("class", "")) for r in rows] + [len("CLASS")])
     out = []
-    out.append("%-*s  %-8s  %5s %5s %5s %5s  %s"
-               % (w, "BRANCH", "IN-BASE", "TOT", "OWN", "UNTR", "OTHER", "TIP_LANE"))
+    out.append("%-*s  %-*s  %-8s  %5s %5s %5s %5s  %s"
+               % (w, "BRANCH", wc, "CLASS", "IN-BASE",
+                  "TOT", "OWN", "UNTR", "OTHER", "TIP_LANE"))
     for r in rows:
         if r.get("plus_total", 0) < 0:
-            out.append("%-*s  %-8s  %s" % (w, r["branch"], "?", r.get("err", "error")))
+            out.append("%-*s  %-*s  %-8s  %s"
+                       % (w, r["branch"], wc, r.get("class", "ERROR"), "?",
+                          r.get("err", "error")))
             continue
-        out.append("%-*s  %-8s  %5d %5d %5d %5d  %s"
-                   % (w, r["branch"], "yes" if r["tip_in_base"] == 0 else "no",
+        out.append("%-*s  %-*s  %-8s  %5d %5d %5d %5d  %s"
+                   % (w, r["branch"], wc, r.get("class", ""),
+                      "yes" if r["tip_in_base"] == 0 else "no",
                       r["plus_total"], r["plus_own"], r["plus_untrailered"],
                       r["plus_other"], r["tip_lane"] or "-"))
     tot = {k: sum(r[k] for r in rows if r.get("plus_total", 0) >= 0)
@@ -371,6 +488,27 @@ def render(rows, meta):
     out.append("sum(plus_total)=%d = own %d + untrailered %d + other %d"
                % (tot["plus_total"], tot["plus_own"], tot["plus_untrailered"],
                   tot["plus_other"]))
+
+    # The rollup: per-lane sums, keyed on the lane keys OBSERVED.  A lane that
+    # tips no branch is absent here, not a phantom 0 -- the difference between
+    # "this lane has nothing out" and "this lane does not exist".
+    rl = meta.get("rollup") or {}
+    lanes = rl.get("lanes") or {}
+    out.append("%d lanes observed · sum(plus_own)=%d"
+               % (rl.get("lanes_total", 0), rl.get("sum_plus_own", 0)))
+    for k in sorted(lanes):
+        out.append("  %s  %d" % (k, lanes[k]))
+    if rl.get("zero_own"):
+        out.append("lanes whose lane-scoped pending is 0 across EVERY branch "
+                   "they tip (an aggregate advisory names these falsely): %d"
+                   % len(rl["zero_own"]))
+        for k in rl["zero_own"]:
+            out.append("  %s" % k)
+    mk = rl.get("malformed_keys") or {}
+    if mk:
+        out.append("MALFORMED_TRAILER keys — a CLASS, never a lane: %d" % len(mk))
+        for k in sorted(mk):
+            out.append("  %s  on %d tip(s)" % (k, mk[k]))
     out.append("base %s @ %s" % (meta["base"], meta["base_sha"]))
     return "\n".join(out)
 
@@ -389,6 +527,13 @@ def _fixture_repo(root):
         feat/mixed          m1 LANE_B, m2 LANE_A (tip)         -> own=1 other=1
         feat/tipbare        b1 LANE_B, b2 NO TRAILER (tip)     -> unt=2
         feat/absorbed       c1              ff-merged into main-> plus=0
+        feat/malformed      x1, x2          tip lane `7198`    -> own=2, MALFORMED
+        feat/peer           p1, p2          both LANE_B (tip)  -> own=2, NOT_YOURS
+                                                                 when asking as LANE_A
+        feat/dup            d1              same PATCH as c1   -> plus=0 (cherry says
+                                            tip lane LANE_C       `-`), tip NOT an
+                                                                 ancestor -> the
+                                                                 YOUR_PENDING_ZERO case
     """
     def g(*a, **kw):
         p = subprocess.run(["git", "-C", root] + list(a),
@@ -421,6 +566,20 @@ def _fixture_repo(root):
     commit("f_b2.txt", "bare 2")            # TIP carries NO trailer
     g("checkout", "-q", "-b", "feat/absorbed", "main")
     commit("f_c1.txt", "absorbed 1")
+    g("checkout", "-q", "-b", "feat/malformed", "main")
+    commit("f_x1.txt", "malformed 1", LANE_MALFORMED)
+    commit("f_x2.txt", "malformed 2", LANE_MALFORMED)   # TIP's lane is `7198`
+    g("checkout", "-q", "-b", "feat/peer", "main")
+    commit("f_p1.txt", "peer 1", LANE_B)
+    commit("f_p2.txt", "peer 2", LANE_B)                # TIP belongs to LANE_B
+    # feat/dup replays the SAME patch as feat/absorbed's c1 (same file, same
+    # content, same diff) on a DIFFERENT parent, so it gets a new sha but a
+    # matching patch-id: once c1 is in main, `git cherry` reports `-` and plus
+    # is empty -- while the tip is still NOT an ancestor.  That is the
+    # YOUR_PENDING_ZERO case, and the lane it tips is the population an
+    # aggregate-based advisory names falsely.
+    g("checkout", "-q", "-b", "feat/dup", "main")
+    commit("f_c1.txt", "absorbed 1", LANE_C)
     g("checkout", "-q", "main")
     g("merge", "-q", "--ff-only", "feat/absorbed")
 
@@ -469,7 +628,7 @@ def selftest():
         ck(bool(doc["meta"].get("base_sha")), "meta.base_sha pins that ref's sha")
 
         rows = {r["branch"]: r for r in doc["rows"]}
-        ck(len(rows) == 5, "5 fixture branches censused (got %d: %s)"
+        ck(len(rows) == 8, "8 fixture branches censused (got %d: %s)"
            % (len(rows), sorted(rows)))
 
         # ---- 2. THE INVARIANT, every row -----------------------------------
@@ -480,11 +639,14 @@ def selftest():
 
         # ---- 3. decomposition values ---------------------------------------
         exp = {
-            "feat/alpha":    (2, 2, 0, 0, LANE_A),
-            "feat/mixed":    (2, 1, 0, 1, LANE_A),
-            "feat/tipbare":  (2, 0, 2, 0, ""),
-            "feat/absorbed": (0, 0, 0, 0, ""),
-            "main":          (0, 0, 0, 0, ""),
+            "feat/alpha":     (2, 2, 0, 0, LANE_A),
+            "feat/mixed":     (2, 1, 0, 1, LANE_A),
+            "feat/tipbare":   (2, 0, 2, 0, ""),
+            "feat/absorbed":  (0, 0, 0, 0, ""),
+            "main":           (0, 0, 0, 0, ""),
+            "feat/malformed": (2, 2, 0, 0, LANE_MALFORMED),
+            "feat/peer":      (2, 2, 0, 0, LANE_B),
+            "feat/dup":       (0, 0, 0, 0, LANE_C),
         }
         for b, (tot, own, unt, oth, lane) in sorted(exp.items()):
             r = rows.get(b)
@@ -523,8 +685,8 @@ def selftest():
 
         # ---- 8. --branch glob narrows the sweep ----------------------------
         rc4, out4, _ = run("--json", "--branch", "feat/*")
-        ck(rc4 == 0 and len(json.loads(out4)["rows"]) == 4,
-           "--branch 'feat/*' narrows to the 4 feat/ branches")
+        ck(rc4 == 0 and len(json.loads(out4)["rows"]) == 7,
+           "--branch 'feat/*' narrows to the 7 feat/ branches")
 
         # ---- 9. refusal contract -------------------------------------------
         rc5, _, _ = run("--repo", os.path.join(root, "nope"), "--json")
@@ -536,6 +698,60 @@ def selftest():
         rc7, out7, _ = run()
         ck(rc7 == 0 and "sum(plus_total)=" in out7,
            "default output is the human table with the decomposition line")
+
+        # ---- 11. MALFORMED_TRAILER is a CLASS, never a lane ----------------
+        ck(rows["feat/malformed"]["class"] == "MALFORMED_TRAILER",
+           "a non-UUID Session-Id on the tip is MALFORMED_TRAILER (got %s)"
+           % rows["feat/malformed"]["class"])
+        rl = doc["meta"]["rollup"]
+        ck(LANE_MALFORMED not in rl["lanes"],
+           "the malformed key NEVER inflates the lane count (absent from rollup.lanes)")
+        ck(rl["malformed_keys"].get(LANE_MALFORMED) == 1,
+           "it is held in its own map, keyed on the tips that carry it (got %s)"
+           % rl["malformed_keys"])
+        ck(rl["lanes_total"] == 3,
+           "rollup counts the 3 real fixture lanes, not 4 (got %d)" % rl["lanes_total"])
+        ck(rl["lanes"] == {LANE_A: 3, LANE_B: 2, LANE_C: 0},
+           "per-lane sums of plus_own (got %s)" % rl["lanes"])
+
+        # ---- 12. ALREADY_ABSORBED is terminal, tested FIRST ----------------
+        ck(rows["feat/absorbed"]["class"] == "ALREADY_ABSORBED",
+           "a tip reachable from the base with zero lane-scoped pending is ALREADY_ABSORBED")
+        ck(rows["main"]["class"] == "ALREADY_ABSORBED",
+           "tested FIRST: a trailless in-base row is not misfiled as UNATTRIBUTABLE")
+        ck(rows["feat/tipbare"]["class"] == "UNATTRIBUTABLE",
+           "a trailless tip that is NOT in base is UNATTRIBUTABLE")
+
+        # ---- 13. the four --lane classes -----------------------------------
+        rc8, out8, _ = run("--json", "--lane", LANE_A)
+        c8 = {r["branch"]: r["class"] for r in json.loads(out8)["rows"]}
+        ck(rc8 == 0 and c8["feat/alpha"] == "YOUR_PENDING",
+           "--lane LANE_A: feat/alpha is YOUR_PENDING (got %s)" % c8.get("feat/alpha"))
+        ck(c8["feat/peer"] == "NOT_YOURS",
+           "--lane LANE_A: a branch tipping LANE_B is NOT_YOURS (got %s)" % c8.get("feat/peer"))
+        ck(c8["feat/malformed"] == "MALFORMED_TRAILER",
+           "a malformed tip stays MALFORMED_TRAILER even when asked as a lane")
+        ck(c8["feat/tipbare"] == "UNATTRIBUTABLE",
+           "a trailless tip stays UNATTRIBUTABLE even when asked as a lane")
+        ck(c8["feat/absorbed"] == "ALREADY_ABSORBED",
+           "an absorbed branch stays ALREADY_ABSORBED whatever the asker")
+
+        # ---- 14. the wording rule: a lane-scoped 0 is NOT "absorbed" -------
+        rc9, out9, _ = run("--json", "--lane", LANE_C)
+        c9 = {r["branch"]: r["class"] for r in json.loads(out9)["rows"]}
+        ck(c9["feat/dup"] == "YOUR_PENDING_ZERO",
+           "--lane LANE_C: feat/dup (patch-id match, tip NOT an ancestor) is "
+           "YOUR_PENDING_ZERO, never ALREADY_ABSORBED (got %s)" % c9.get("feat/dup"))
+        ck(rows["feat/dup"]["tip_in_base"] == 1 and rows["feat/dup"]["plus_total"] == 0,
+           "feat/dup is the live case: tip NOT in base, yet plus is 0 by patch-id match")
+        ck(rl["zero_own"] == [LANE_C],
+           "the lane-scoped-0 population is named (got %s)" % rl["zero_own"])
+
+        # ---- 15. a malformed --lane is refused, not silently misread -------
+        rc10, _, err10 = run("--json", "--lane", LANE_MALFORMED)
+        ck(rc10 == 2, "a non-UUID --lane is refused with rc 2 (got %d)" % rc10)
+        ck("--lane must be a Session-Id UUID" in err10,
+           "the refusal names the argument it rejected")
 
         if fails:
             print("  %d FAILED" % len(fails))
@@ -554,6 +770,8 @@ def main(argv):
     ap.add_argument("--base", default=DEFAULT_BASE, help="base ref (default %s)" % DEFAULT_BASE)
     ap.add_argument("--branch", default="", help="only branches matching this glob (short name)")
     ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS, help="cherry workers (default %d)" % DEFAULT_JOBS)
+    ap.add_argument("--lane", default="", help="asker's Session-Id (a lane UUID); classifies "
+                    "each row YOUR_PENDING / YOUR_PENDING_ZERO / NOT_YOURS")
     ap.add_argument("--json", action="store_true", help="emit JSON object {meta, rows, totals}")
     ap.add_argument("--selftest", action="store_true", help="run the built-in fixture test")
     ap.add_argument("--no-log", action="store_true", help="suppress the unified tools log")
@@ -562,11 +780,19 @@ def main(argv):
     if args.selftest:
         return selftest()
 
+    if args.lane and not is_lane(args.lane):
+        # A malformed --lane would classify EVERY row NOT_YOURS and read as
+        # "you owe nothing" -- a wrong answer wearing a confident face.
+        sys.stderr.write("%s: --lane must be a Session-Id UUID (got %r)\n"
+                         % (TOOL, args.lane))
+        return 2
+
     oc_log_init()
     rc = 0
     try:
         try:
-            rows, meta = census(args.repo, args.base, args.branch, args.jobs)
+            rows, meta = census(args.repo, args.base, args.branch, args.jobs,
+                                args.lane)
         except CensusRefused as e:
             sys.stderr.write("%s: REFUSED — %s\n" % (TOOL, e))
             oc_log_extra("verdict", "refused")
