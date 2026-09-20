@@ -12,7 +12,11 @@
 # per the /opencrabs-dev skill) — EXCEPT via the EXPLICIT --create flag (E8
 # v0.4.78 escape hatch: PR-head branches off a foreign base; the lane still
 # names the branch, oc-wt only executes creation).
-# Worktree paths stay located at $HOME/opencrabs-wt/<task>.
+# Worktree paths: `add` creates at $HOME/opencrabs-wt/<task> (OC_WT_BASE wins);
+# every verb RESOLVES a task through lib/oc-wt-resolve.sh — ONE predicate shared
+# with oc-start, accepting every shape `list` can emit (bare, oc-wt-prefixed,
+# legacy $HOME/oc-wt-<task>, foreign base). #429: `list` strips the oc-wt-
+# prefix, so the task name it prints is the name every other verb must accept.
 #
 # Usage:
 #   oc-wt add <task> <branch> [--base origin/main] [--create [--from REF]] [--force] [--repo P] [--no-log]
@@ -28,9 +32,21 @@
 # =============================================================================
 set -u
 set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
-_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+# $0 may be the archive alias (tools/archive/oc-worktree -> ../oc-wt), so the lib
+# dir is derived from the SYMLINK-RESOLVED path: `dirname "$0"` alone looks for
+# tools/archive/lib/ and degrades to silence.
+_SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+_SELF_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
+_OC_LIB="$_SELF_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-wt" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
+# #429: the shared task -> path predicate. Load-bearing for add/remove/list, so a
+# missing lib is a HARD stop: oc-log may degrade (it is telemetry), this one
+# decides which tree gets removed.
+_OC_WT_LIB="$_SELF_DIR/lib/oc-wt-resolve.sh"
+if [ -f "$_OC_WT_LIB" ]; then source "$_OC_WT_LIB"; else
+  echo "oc-wt: $_OC_WT_LIB not found — the tool ships beside its lib/ (broken install)" >&2; exit 5
+fi
 
 PROG="$(basename "$0")"
 GIT_BIN="${OC_GIT:-git}"
@@ -47,6 +63,8 @@ Usage: $PROG add <task> <branch> [--base origin/main] [--create [--from REF]] [-
        $PROG list [--repo P] [--no-log]   # TSV: task path branch dirty-n
        $PROG --selftest
 Exit: 0 ok / 2 usage / 3 path-exists-or-dirty / 5 repo-or-branch-missing / 6 behind-base
+#429: column 1 of list is the task name remove accepts — every shape list can
+print (bare, oc-wt-prefixed, legacy home-level, foreign base) resolves.
 EOS
 }
 usage() { [ -n "${1:-}" ] && echo "oc-wt: $1" >&2; help >&2; exit 2; }   # lens C MED-2 (v0.4.79): diagnostics, not bare rc 2
@@ -61,6 +79,7 @@ do_selftest() {
   t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
   D="$(mktemp -d)"; trap '_rc=$?; rm -rf "$D"; oc_log_finish "$_rc"' EXIT
   export HOME="$D/home"; mkdir -p "$HOME"
+  unset OC_WT_BASE   # the shape legs depend on the BASE being the fixture HOME
 
   # fixture: bare origin + clone repo with main/feat-x/feat-behind
   git init -q --bare -b main "$D/origin.git" || { echo "fixture fail"; exit 1; }
@@ -172,6 +191,85 @@ do_selftest() {
   env OC_TOOLS_NOLOG=1 "$SELF" add t14 feat-behind2 --from alt --repo "$D/repo" >/dev/null 2>&1; RC=$?
   [ "$RC" -eq 6 ] && t_ok "n=1747: --from without --create does NOT alter gate (still 6 behind origin/main)" || t_bad "n=1747 no-create guard (rc=$RC)"
 
+  # 15. #429: `list` column 1 MUST round-trip into `remove` — for EVERY shape the
+  #     list predicate can emit, not just the canonical one. Four trees, one per
+  #     shape measured live 2026-09-20 (143 prefixed-under-base, 48 bare-under-base,
+  #     1 legacy home-level, 1 foreign base):
+  git -C "$D/repo" branch f-rt1 main; git -C "$D/repo" worktree add -q "$HOME/opencrabs-wt/oc-wt-rt1" f-rt1
+  git -C "$D/repo" branch f-rt2 main; git -C "$D/repo" worktree add -q "$HOME/oc-wt-rt2" f-rt2
+  mkdir -p "$HOME/oc-work"
+  git -C "$D/repo" branch f-rt3 main; git -C "$D/repo" worktree add -q "$HOME/oc-work/oc-wt-rt3" f-rt3
+  env OC_TOOLS_NOLOG=1 "$SELF" add rt4 f-rt4 --create --from main --repo "$D/repo" >/dev/null 2>&1
+  LST="$(env OC_TOOLS_NOLOG=1 "$SELF" list --repo "$D/repo" 2>&1)"
+  RT_BAD=""
+  for pair in "rt1|$HOME/opencrabs-wt/oc-wt-rt1" "rt2|$HOME/oc-wt-rt2" "rt3|$HOME/oc-work/oc-wt-rt3" "rt4|$HOME/opencrabs-wt/rt4"; do
+    want="${pair%%|*}"; tree="${pair#*|}"
+    got="$(printf '%s\n' "$LST" | awk -F'\t' -v p="$tree" '$2==p {print $1}')"
+    if [ "$got" != "$want" ]; then RT_BAD="$RT_BAD [$tree col1='$got' want='$want']"; continue; fi
+    env OC_TOOLS_NOLOG=1 "$SELF" remove "$got" --repo "$D/repo" >/dev/null 2>&1 \
+      || RT_BAD="$RT_BAD [$tree remove '$got' rc=$?]"
+  done
+  [ -z "$RT_BAD" ] && t_ok "#429: list col1 round-trips into remove, all 4 shapes" || t_bad "#429 round-trip:$RT_BAD"
+
+  # 16. #429 mutation legs — BOTH jurisdictions are load-bearing, and each is
+  #     mutated ALONE so neither can mask the other. The resolver partitions by
+  #     jurisdiction: the CANONICAL base by name (candidate ladder), every OTHER
+  #     base by registry (the rows `list` reads). Without these legs the round
+  #     trip in 15 could pass for some other reason entirely.
+  #     Each sub-leg gets its OWN trees: a mutation that resolves REMOVES the
+  #     tree, so reusing a fixture would make the next leg read the wreckage.
+  mkwt() { git -C "$D/repo" branch "$2" main 2>/dev/null; git -C "$D/repo" worktree add -q "$1" "$2"; }
+  mkdir -p "$D/mut/lib" "$HOME/oc-work"
+  cp "$SELF" "$D/mut/oc-wt"; chmod +x "$D/mut/oc-wt"
+  cp "$(dirname "$SELF")/lib/oc-wt-resolve.sh" "$D/mut/lib/oc-wt-resolve.sh"
+  cp "$(dirname "$SELF")/lib/oc-log.sh" "$D/mut/lib/oc-log.sh" 2>/dev/null || true
+  cp "$D/mut/lib/oc-wt-resolve.sh" "$D/mut/lib/oc-wt-resolve.sh.orig"
+
+  # 16a. drop the $WT_BASE/oc-wt-<task> candidate: the PREFIXED shape — what
+  #      `list` prints for 143 of 193 rows — must stop resolving (rc 5), so the
+  #      round trip leg 15 proves goes RED. The foreign-base shape must still
+  #      resolve (registry jurisdiction untouched), and so must the bare
+  #      canonical one: the mutation must be surgical, not a blunt break.
+  cat >> "$D/mut/lib/oc-wt-resolve.sh" <<'MUTEOF'
+
+oc_wt_candidates() {
+  local t="${1:-}" b
+  b="${WT_BASE:-$(oc_wt_base)}"
+  printf '%s\n' "$b/$t" "$HOME/oc-wt-$t"
+}
+MUTEOF
+  mkwt "$HOME/opencrabs-wt/oc-wt-c1" f-c1
+  mkwt "$HOME/oc-work/oc-wt-c2" f-c2
+  mkwt "$HOME/opencrabs-wt/c3" f-c3
+  env OC_TOOLS_NOLOG=1 "$D/mut/oc-wt" remove c1 --repo "$D/repo" >/dev/null 2>&1; C1=$?
+  env OC_TOOLS_NOLOG=1 "$D/mut/oc-wt" remove c2 --repo "$D/repo" >/dev/null 2>&1; C2=$?
+  env OC_TOOLS_NOLOG=1 "$D/mut/oc-wt" remove c3 --repo "$D/repo" >/dev/null 2>&1; C3=$?
+  if [ "$C1" -eq 5 ] && [ "$C2" -eq 0 ] && [ "$C3" -eq 0 ]; then
+    t_ok "#429 no-prefixed-candidate: round trip reddens (5), other shapes still 0"
+  else t_bad "#429 no-prefixed-candidate (prefixed=$C1 foreign=$C2 bare=$C3; want 5/0/0)"; fi
+
+  # 16b. neuter the registry: the FOREIGN-base shape must stop resolving (rc 5)
+  #      while the canonical ladder still carries its three shapes.
+  cp "$D/mut/lib/oc-wt-resolve.sh.orig" "$D/mut/lib/oc-wt-resolve.sh"
+  printf '\noc_wt_lookup() { :; }\n' >> "$D/mut/lib/oc-wt-resolve.sh"
+  mkwt "$HOME/opencrabs-wt/oc-wt-n1" f-n1
+  mkwt "$HOME/oc-work/oc-wt-n2" f-n2
+  mkwt "$HOME/opencrabs-wt/n3" f-n3
+  env OC_TOOLS_NOLOG=1 "$D/mut/oc-wt" remove n1 --repo "$D/repo" >/dev/null 2>&1; N1=$?
+  env OC_TOOLS_NOLOG=1 "$D/mut/oc-wt" remove n2 --repo "$D/repo" >/dev/null 2>&1; N2=$?
+  env OC_TOOLS_NOLOG=1 "$D/mut/oc-wt" remove n3 --repo "$D/repo" >/dev/null 2>&1; N3=$?
+  if [ "$N1" -eq 0 ] && [ "$N2" -eq 5 ] && [ "$N3" -eq 0 ]; then
+    t_ok "#429 no-registry: foreign base stops resolving (5), canonical ladder still 0"
+  else t_bad "#429 no-registry (prefixed=$N1 foreign=$N2 bare=$N3; want 0/5/0)"; fi
+
+  # 16c. control: the REAL tool resolves the shapes BOTH mutants failed on.
+  mkwt "$HOME/opencrabs-wt/oc-wt-r1" f-r1
+  mkwt "$HOME/oc-work/oc-wt-r2" f-r2
+  env OC_TOOLS_NOLOG=1 "$SELF" remove r1 --repo "$D/repo" >/dev/null 2>&1; R1=$?
+  env OC_TOOLS_NOLOG=1 "$SELF" remove r2 --repo "$D/repo" >/dev/null 2>&1; R2=$?
+  [ "$R1" -eq 0 ] && [ "$R2" -eq 0 ] \
+    && t_ok "#429 real tool resolves both non-canonical shapes" \
+    || t_bad "#429 real resolve (prefixed=$R1 foreign=$R2; want 0/0)"
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }
@@ -202,24 +300,27 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$REPO" in "~"|"~/"*) REPO="${HOME}${REPO#\~}" ;; esac
-WT_BASE="${OC_WT_BASE:-$HOME/opencrabs-wt}"
+WT_BASE="$(oc_wt_base)"
 mkdir -p "$WT_BASE" 2>/dev/null || true
-WT="$WT_BASE/$TASK"
-# Backward-compatibility fallback for existing worktrees at legacy location
-if [ ! -d "$WT" ] && [ -d "$HOME/oc-wt-$TASK" ]; then
-  WT="$HOME/oc-wt-$TASK"
-fi
+# #429: ONE resolver (lib/oc-wt-resolve.sh) for every verb. `list` prints the task
+# with the oc-wt- DIRECTORY PREFIX STRIPPED, so a task whose tree lives at
+# $WT_BASE/oc-wt-<task> (the 143-of-193 common shape), at the legacy
+# $HOME/oc-wt-<task>, or under a foreign base must resolve to THAT path — not to
+# "$WT_BASE/$TASK" blind, which is what made `remove` answer rc 5 for the tool's
+# own listing. A task with no tree yet still resolves to the canonical path, so
+# `add` keeps its target (and refuses a task that already has a tree anywhere).
+WT=""
+[ -n "$TASK" ] && WT="$(oc_wt_resolve "$TASK")"
 oc_log_extra "verb" "$VERB"; [ -n "$TASK" ] && oc_log_extra "task" "$TASK"
 [ -d "$REPO" ] && "$GIT_BIN" -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || {
   echo "$PROG: repo not found: $REPO" >&2; exit 5; }
 
 if [ "$VERB" = "list" ]; then
   # lens C10 (v0.4.65): TSV of this repo's oc-wt worktrees — task, path, branch, dirty-n
-  "$GIT_BIN" -C "$REPO" worktree list --porcelain | awk '
-    /^worktree /  { wt=substr($0,10) }
-    /^branch /    { br=substr($0,8)
-                    if (wt ~ /\/oc-wt-/ || wt ~ /\/opencrabs-wt\//) { print wt "\t" br; wt=""; br="" } }' | while IFS="$(printf '\t')" read -r wpath wbranch; do
-    task="$(basename "$wpath")"; task="${task#oc-wt-}"
+  # #429: the rows come from lib/oc-wt-resolve.sh — the SAME source oc_wt_resolve
+  # reads — so column 1 is exactly the task name every verb accepts. The round
+  # trip is a property of the shared predicate, not of two matching guesses.
+  oc_wt_rows | while IFS="$(printf '\t')" read -r task wpath wbranch; do
     dirty="$("$GIT_BIN" -C "$wpath" status --porcelain 2>/dev/null | wc -l)"
     printf '%s\t%s\t%s\t%s\n' "$task" "$wpath" "${wbranch#refs/heads/}" "$dirty"
   done

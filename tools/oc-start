@@ -35,6 +35,17 @@ _OC_LIB="$_SELF_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-start" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
+# #429: the shared task -> path predicate, sourced by BOTH carriers (oc-wt and
+# here). oc-start REPORTS the resolved path, and printing $WT_BASE/<task> blind
+# sends the lane to a directory that does not hold its tree for the COMMON shape
+# (`list` strips the oc-wt- prefix; 143 of 193 live rows are oc-wt-<task> dirs).
+# Load-bearing, so a missing lib is a HARD stop: oc-log may degrade (telemetry),
+# this one decides where the editor is told to work.
+_OC_WT_LIB="$_SELF_DIR/lib/oc-wt-resolve.sh"
+if [ -f "$_OC_WT_LIB" ]; then source "$_OC_WT_LIB"; else
+  echo "oc-start: $_OC_WT_LIB not found — the tool ships beside its lib/ (broken install)" >&2; exit 5
+fi
+
 PROG="$(basename "$0")"
 GIT_BIN="${OC_GIT:-git}"
 REPO="${HOME}/opencrabs"
@@ -46,6 +57,8 @@ usage() { [ -n "${1:-}" ] && echo "oc-start: $1" >&2; cat >&2 <<EOS
 usage: $0 <issue-N> --branch <type>/<slug> [--task <task>] [--base REF] [--repo P]
        $0 --selftest
 Exit: 0 STARTED / 2 usage / 3 claim-refused / 4 branch-fail / 5 worktree-fail
+STARTED names the tree resolved by lib/oc-wt-resolve.sh — the same predicate
+oc-wt uses, so the path printed is the path oc-wt add/remove/list agree on.
 EOS
   exit "${2:-2}"; }
 
@@ -61,6 +74,7 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
   D="$(mktemp -d)"; trap '_rc=$?; rm -rf "$D"; oc_log_finish "$_rc"' EXIT
   export HOME="$D/home"; mkdir -p "$HOME"
+  unset OC_WT_BASE   # the #429 legs depend on the BASE being the fixture HOME
   git init -q --bare -b main "$D/origin.git" || { echo "fixture fail"; exit 1; }
   git clone -q "$D/origin.git" "$D/repo" 2>/dev/null
   git -C "$D/repo" config user.email t@t; git -C "$D/repo" config user.name t
@@ -104,6 +118,25 @@ if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   R 127 --branch feat/other --task custom-t >/dev/null 2>&1; RC=$?
   [ "$RC" -eq 0 ] && [ -d "$HOME/opencrabs-wt/custom-t" ] \
     && t_ok "explicit task dir" || t_bad "explicit task (rc=$RC)"
+
+  # 8. #429: oc-start resolves through the SAME predicate oc-wt uses. A task whose
+  #    tree lives at $WT_BASE/oc-wt-<task> — what `list` PRINTS, 143 of the 193
+  #    live rows — must be REPORTED at that path, not at $WT_BASE/<task>, or the
+  #    lane is sent to a directory that is not its worktree (oc-wt's own leg 15
+  #    covers the remove half of the same predicate). `oc-wt add` is stubbed so
+  #    only the REPORT is under test: here the resolver names an existing tree.
+  mkdir -p "$HOME/opencrabs-wt/oc-wt-mirror-t"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$D/wt-stub"; chmod +x "$D/wt-stub"
+  OUT="$(OC_START_WT_BIN="$D/wt-stub" R 128 --branch feat/mirror-t 2>&1)"; RC=$?
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "worktree=$HOME/opencrabs-wt/oc-wt-mirror-t"; then
+    t_ok "#429 mirror: STARTED names the oc-wt-prefixed tree"
+  else t_bad "#429 mirror (rc=$RC; want worktree=$HOME/opencrabs-wt/oc-wt-mirror-t)"; fi
+  # 9. #429 control: a task with NO tree anywhere still reports the path `add`
+  #    creates — widening the resolver must not displace the ordinary case.
+  OUT="$(OC_START_WT_BIN="$D/wt-stub" R 129 --branch feat/fresh-two 2>&1)"; RC=$?
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "worktree=$HOME/opencrabs-wt/fresh-two"; then
+    t_ok "#429 control: untracked task reports the create path"
+  else t_bad "#429 control (rc=$RC; want worktree=$HOME/opencrabs-wt/fresh-two)"; fi
 
   echo "selftest: $pass passed, $fail failed"
   [ "$fail" -eq 0 ]; _rc=$?
@@ -173,11 +206,14 @@ if ! "$WT_BIN" add "$TASK" "$BRANCH" --repo "$REPO" 2>&1; then
   exit 5
 fi
 
-WT_BASE="${OC_WT_BASE:-$HOME/opencrabs-wt}"
-WT="$WT_BASE/$TASK"
-if [ ! -d "$WT" ] && [ -d "$HOME/oc-wt-$TASK" ]; then
-  WT="$HOME/oc-wt-$TASK"
-fi
+# #429: ONE resolver (lib/oc-wt-resolve.sh) shared with oc-wt. `oc-wt list`
+# prints the task with the oc-wt- DIRECTORY PREFIX STRIPPED, so the tree for a
+# task can live at $WT_BASE/oc-wt-<task> (the 143-of-193 common shape), at the
+# legacy $HOME/oc-wt-<task>, or under a base a later `add` never learned — the
+# same three-plus-one shapes oc-wt accepts. Reporting "$WT_BASE/$TASK" blind
+# sends the editor to a directory that is not its worktree.
+WT_BASE="$(oc_wt_base)"
+WT="$(oc_wt_resolve "$TASK")"
 echo "STARTED issue=#$ISSUE branch=$BRANCH worktree=$WT"
 echo "  next: edit in $WT, commit via oc-commit, then ship:"
 echo "  oc-ship-chain --sha <head-sha> --branch $BRANCH --issue $ISSUE"
