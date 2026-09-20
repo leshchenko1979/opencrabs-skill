@@ -44,6 +44,7 @@ import datetime
 import tempfile
 import fcntl
 import signal
+import collections
 
 if '__file__' in globals():
     TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -268,23 +269,36 @@ ROLE_DOMAINS = {
 }
 
 
-def check_journal_receipt(target_uuid, start_epoch, journal_path=None, poll_grace_secs=0):
+def check_journal_receipt(target_uuid, start_epoch, journal_path=None, poll_grace_secs=0,
+                          send_budget_secs=0):
     """
     Verify if a delivery receipt for target_uuid exists in session-notify.journal
     since start_epoch. Supports a polling grace window for slow async daemon writes.
+
+    `send_budget_secs` anchors the window to the SEND instead of to the moment
+    this helper runs. That matters because the caller has usually just burned the
+    whole notify timeout: measuring the grace from HERE would add a second,
+    unrelated delay rather than covering the remainder of the send's own budget.
+    A budget already spent yields exactly one pass, so a run that was SIGTERM'd
+    far past its budget does not block here.
     """
     if not journal_path:
         journal_path = os.path.expanduser("~/.opencrabs/profiles/ops/logs/session-notify.journal")
         if not os.path.exists(journal_path):
             journal_path = os.path.expanduser("~/.opencrabs/logs/session-notify.journal")
-    
-    deadline = time.time() + (poll_grace_secs if poll_grace_secs > 0 else 0)
+
+    if send_budget_secs > 0:
+        deadline = start_epoch + send_budget_secs
+        if deadline < time.time():
+            deadline = time.time()
+    else:
+        deadline = time.time() + (poll_grace_secs if poll_grace_secs > 0 else 0)
     while True:
         if os.path.exists(journal_path):
             try:
                 with open(journal_path, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
-                for line in reversed(lines[-60:]):
+                    tail = collections.deque(f, maxlen=JOURNAL_TAIL_LINES)
+                for line in reversed(tail):
                     parts = line.strip().split("\t")
                     if len(parts) >= 5:
                         ts_str, caller, tgt, outcome, exit_str = parts[:5]
@@ -436,6 +450,27 @@ def fetch_open_issues(repo_path, mock_issues=None):
 # ---------------------------------------------------------------------------
 
 DISPATCH_WINDOW_DAYS = 7
+
+#: Wall-clock bound on ONE notify attempt. A notify that hits this bound is
+#: KILLED, not failed: lib/oc-notify.sh runs the CLI with no timeout of its own,
+#: so the child may already have accepted the send when the wrapper dies. That
+#: is why a timeout is reported as UNVERIFIED rather than FAILED (#S).
+NOTIFY_TIMEOUT_SECS = 120
+
+#: How long to keep re-reading the journal for a receipt after the send.
+RECEIPT_GRACE_SECS = 30
+
+#: Journal lines kept while scanning for a receipt. The journal is append-only
+#: and reaches megabytes, so it is streamed through a bounded deque rather than
+#: slurped (host rule: stream, never read() a whole file into a list).
+JOURNAL_TAIL_LINES = 60
+
+#: Exit code for "the send may have landed but no receipt was seen". Deliberately
+#: distinct from 3 (nothing sent) because the two need OPPOSITE operator action:
+#: an unverified dispatch IS recorded and must not be re-sent, a failed one is NOT
+#: recorded and must be retried. Collapsing them is what duplicated dispatches (#S).
+RC_UNVERIFIED = 6
+
 
 _ISSUE_REF_VALUE_RE = re.compile(r"#([0-9]+)")
 
@@ -813,9 +848,78 @@ Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed. If occupie
     return envelope, branch_target
 
 
-def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_path=DEFAULT_LEDGER_FILE):
+def _stamp_dispatch(issue_num, target_uuid, unverified=False, rc=0):
+    """Record a dispatch in the ledger -- on BOTH paths (#S).
+
+    `recent_dispatches()` keys on exactly this row, so a dispatch that is not
+    recorded here is invisible to the 7-day dedup window and the issue is wired
+    to a SECOND lane on the next `--auto`. A send that may have landed must
+    therefore still be recorded; it is marked unverified rather than omitted.
+
+    The text must keep matching `DISPATCH_ROW_RE` (defined above) or the dedup
+    reader cannot see it -- that regex is the reader half of this writer.
+    """
+    ledger_bin = os.path.join(TOOL_DIR, "oc-ledger")
+    if not os.path.exists(ledger_bin):
+        return
+    suffix = (f" \u2014 sent, receipt unverified (rc={rc})" if unverified
+              else " \u2014 wire zero-ack claim-first")
+    stamp_text = f"Triage dispatch issue #{issue_num} to editor {target_uuid[:8]}{suffix}"
+    # A1: inherit the ambient environment so oc-ledger's derive_by() resolves
+    # the ACTUAL dispatching session. Forcing the actor to a bare role label
+    # here was a trap: derive_by() resolves UUIDs only and classifies any
+    # non-hex/non-dash value as a LABEL it never resolves, so every dispatch
+    # row was stamped 'unrostered-actor triage' while OPENCRABS_SESSION_ID
+    # held the resolvable uuid (98 rows measured; issue #328).
+    run_cmd([ledger_bin, "stamp", "note", stamp_text])
+
+
+def classify_notify_rc(receipt_seen, rc):
+    """Pure predicate: what does a notify attempt's rc MEAN? (#S)
+
+    Returns 0 when a journal receipt settles it as delivered, 3 when the send
+    provably did NOT happen, or RC_UNVERIFIED when the transport is ambiguous.
+
+    Non-delivery is the SPECIAL case, not the default -- the allowlist below
+    holds exactly ONE code, because only rc 2 positively asserts "nothing sent,
+    nothing created". Every other non-zero rc is ambiguous about delivery:
+      2   -- `no_route`: the one PROVEN non-delivery. NOT recorded, so a retry
+             is correct.
+      124 -- our own timeout; the wrapper is killed while the CLI child may
+             already have accepted the send (#451).
+      4   -- a CATCH-ALL: a2a disabled, unreachable, bad response, usage errors
+             and retired modes all land here (#418), and it delivered for 2 of 4
+             lanes in a measured wave while reporting failure (#433).
+      <0  -- run_cmd returns the RAW returncode, so a signal-killed wrapper
+             surfaces as a negative rc.
+      1   -- ambiguous: "the wrapper exited 1" or "run_cmd raised".
+
+    The bias is deliberate: a duplicate dispatch is silent and hard to detect,
+    while a 7-day suppression is visible and recoverable.
+    """
+    if receipt_seen:
+        return 0
+    if rc == 2:
+        return 3
+    return RC_UNVERIFIED
+
+def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_path=DEFAULT_LEDGER_FILE,
+                     notify_timeout=NOTIFY_TIMEOUT_SECS):
     """
     Deliver wire envelope to target session via lib/oc-notify.sh and stamp ledger.
+
+    Returns 0 (delivered, receipt seen), RC_UNVERIFIED (the send may have landed
+    but no receipt was seen -- the dispatch IS recorded so the next run does not
+    re-wire it) or 3 (nothing sent -- NOT recorded, so a retry is correct).
+
+    Only rc 2 (`no_route`) counts as proof of non-delivery, because it is the one
+    rc that asserts "nothing sent, nothing created". Every other non-zero rc is
+    ambiguous about delivery, and a timeout is deliberately not a failure:
+    lib/oc-notify.sh runs the CLI with no timeout of its own, so when the wrapper
+    is killed the child may already have accepted the send and the receipt simply
+    lands after the poll window. Reporting that as FAILED produced both
+    duplication vectors (#S): the next `--auto` re-dispatched an already-delivered
+    issue, and an operator reading "nothing delivered" re-sent it by hand.
     """
     if dry_run:
         print(f"[DRY-RUN] Would notify session {target_uuid} for issue #{issue_num}")
@@ -823,45 +927,45 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
 
     notify_script = os.path.join(TOOL_DIR, "lib/oc-notify.sh")
     title = f"[ISSUE DISPATCH: #{issue_num}]"
-    
+
     t0 = time.time()
     if os.path.exists(notify_script):
-        # 120s timeout allows A2A / CLI dispatch to complete even under heavy daemon load
-        rc, out, err = run_cmd([notify_script, target_uuid, envelope, title], timeout=120)
-        if rc != 0:
-            # Fallback receipt check against session-notify.journal with 30s grace window in case wrapper was killed
-            if check_journal_receipt(target_uuid, t0, poll_grace_secs=30):
-                rc = 0
-            else:
-                print(f"ERROR: lib/oc-notify.sh failed (rc={rc}): {err.strip()}", file=sys.stderr)
-                return 3
+        rc, out, err = run_cmd([notify_script, target_uuid, envelope, title], timeout=notify_timeout)
+        label = "lib/oc-notify.sh"
     else:
-        # Direct CLI fallback if lib/oc-notify.sh missing
+        # Direct CLI fallback if lib/oc-notify.sh missing. The subcommand is
+        # `session notify` (two words) and the envelope is a --text payload; the
+        # old `session-notify ... <uuid> <envelope>` form is not a command this
+        # CLI has, so this leg could never deliver (#S).
         notify_bin = os.path.expanduser("~/.cargo/bin/opencrabs")
         if not os.path.exists(notify_bin):
             notify_bin = "/usr/local/bin/opencrabs"
-        cmd = [notify_bin, "session-notify", "--profile", "ops", "--mode", "turn-end", target_uuid, envelope]
-        rc, out, err = run_cmd(cmd, timeout=120)
-        if rc != 0:
-            if check_journal_receipt(target_uuid, t0, poll_grace_secs=30):
-                rc = 0
-            else:
-                print(f"ERROR: session-notify failed (rc={rc}): {err.strip()}", file=sys.stderr)
-                return 3
+        cmd = [notify_bin, "session", "notify", "--profile", "ops", "--mode", "turn-end",
+               "--title", title, "--text", envelope, target_uuid]
+        rc, out, err = run_cmd(cmd, timeout=notify_timeout)
+        label = "session notify"
 
-    # Stamp ledger note
-    ledger_bin = os.path.join(TOOL_DIR, "oc-ledger")
-    if os.path.exists(ledger_bin):
-        stamp_text = f"Triage dispatch issue #{issue_num} to editor {target_uuid[:8]} — wire zero-ack claim-first"
-        # A1: inherit the ambient environment so oc-ledger's derive_by() resolves
-        # the ACTUAL dispatching session. Forcing the actor to a bare role label
-        # here was a trap: derive_by() resolves UUIDs only and classifies any
-        # non-hex/non-dash value as a LABEL it never resolves, so every dispatch
-        # row was stamped 'unrostered-actor triage' while OPENCRABS_SESSION_ID
-        # held the resolvable uuid (98 rows measured; issue #328).
-        run_cmd([ledger_bin, "stamp", "note", stamp_text])
+    if rc != 0:
+        # Fallback receipt check against session-notify.journal in case the
+        # wrapper was killed while the send was already in flight.
+        receipt_seen = check_journal_receipt(
+            target_uuid, t0, send_budget_secs=notify_timeout + RECEIPT_GRACE_SECS)
+        verdict = classify_notify_rc(receipt_seen, rc)
+        if verdict == 0:
+            rc = 0
+        elif verdict == RC_UNVERIFIED:
+            print(f"WARN: {label} failed (rc={rc}) and no receipt for "
+                  f"{target_uuid[:8]} is in session-notify.journal yet -- the send "
+                  f"may still land.", file=sys.stderr)
+            _stamp_dispatch(issue_num, target_uuid, unverified=True, rc=rc)
+            return RC_UNVERIFIED
+        else:
+            print(f"ERROR: {label} failed (rc={rc}): {err.strip()}", file=sys.stderr)
+            return 3
 
+    _stamp_dispatch(issue_num, target_uuid, unverified=False, rc=rc)
     return 0
+
 
 
 def is_reopened(issue):
@@ -1056,6 +1160,16 @@ def cmd_auto(args):
     dispatched_count = 0
     assigned_lanes = set()
 
+    # Wall-clock budget for the whole run (#S). Without one, a hung notify costs
+    # NOTIFY_TIMEOUT_SECS per issue and the operator's outer `timeout N` wrapper
+    # SIGTERMs the run mid-send -- which is exactly how a slow run turns into an
+    # unverified delivery. With one, the per-issue timeout shrinks to what is left
+    # and the loop stops cleanly instead of being killed mid-flight.
+    run_deadline = None
+    if getattr(args, "budget_secs", 0) and args.budget_secs > 0:
+        run_deadline = time.time() + args.budget_secs
+
+
     for issue in dispatchable:
         # Pick candidate lanes that haven't just been assigned in this run
         candidates = [l for l in available_lanes if l["uuid"] not in assigned_lanes]
@@ -1079,9 +1193,21 @@ def cmd_auto(args):
         for line in envelope.splitlines():
             print(f"    | {line}")
 
-        rc = dispatch_to_lane(best_lane["uuid"], envelope, num, dry_run=args.dry_run, ledger_path=ledger_file)
-        if rc != 0:
-            print(f"  Delivery FAILED for issue #{num}")
+        notify_timeout = NOTIFY_TIMEOUT_SECS
+        if run_deadline is not None:
+            remaining = int(run_deadline - time.time())
+            if remaining <= 0:
+                print("Run budget exhausted; stopping before the outer wrapper kills a send mid-flight.")
+                break
+            notify_timeout = max(15, min(NOTIFY_TIMEOUT_SECS, remaining))
+
+        rc = dispatch_to_lane(best_lane["uuid"], envelope, num, dry_run=args.dry_run,
+                              ledger_path=ledger_file, notify_timeout=notify_timeout)
+        if rc == RC_UNVERIFIED:
+            print(f"  Delivery UNVERIFIED for issue #{num} -- sent, receipt not in the journal yet; "
+                  f"RECORDED, so the next run will not re-dispatch it.")
+        elif rc != 0:
+            print(f"  Delivery FAILED for issue #{num} -- nothing sent, not recorded; safe to retry.")
         else:
             dispatched_count += 1
             if args.dry_run:
@@ -1765,6 +1891,74 @@ def run_selftest():
               _r_counts["landed_override"] + _r_counts["dedup_override"],
               len(_r_overrides))
 
+    # Test 13: #S -- a dispatch recorded as UNVERIFIED still defeats the dedup arm.
+    # This is the regression test for the reported defect: a false "Delivery FAILED"
+    # skipped the ledger stamp, so recent_dispatches() could not see the dispatch and
+    # the NEXT --auto run re-wired the issue to a SECOND lane.
+    _unv_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _unv_row = "Triage dispatch issue #459 to editor 40427d4f \u2014 sent, receipt unverified (rc=124)"
+    _unv_m = DISPATCH_ROW_RE.search(_unv_row)
+    assert_true("#S the UNVERIFIED stamp text is readable by DISPATCH_ROW_RE", _unv_m is not None)
+    assert_eq("#S the UNVERIFIED stamp keeps the issue number in group 1", _unv_m.group(1), "459")
+    assert_eq("#S the UNVERIFIED stamp keeps the lane prefix in group 2", _unv_m.group(2), "40427d4f")
+    _unv_recent = recent_dispatches(
+        {"events": [{"kind": "note", "by": "toolsmith 1234", "t": _unv_ts, "what": _unv_row}]})
+    assert_true("#S an unverified dispatch IS remembered by the dedup window (#459)", 459 in _unv_recent)
+    assert_eq("#S ... and to the lane that was actually wired", _unv_recent[459][0], "40427d4f")
+
+    # Test 14: #S -- the two verdict codes are distinct, so cmd_auto can tell
+    # "may have landed" from "nothing sent" (they need OPPOSITE operator action).
+    assert_true("#S RC_UNVERIFIED is distinct from 0 (success) and 3 (nothing sent)",
+                RC_UNVERIFIED not in (0, 3))
+    assert_eq("#S RC_UNVERIFIED is 6", RC_UNVERIFIED, 6)
+
+    # Test 15: #S -- check_journal_receipt: send-anchored budget + streamed tail.
+    # Hermetic: a temp journal, relative offsets only (no clock bomb), no ambient state.
+    with tempfile.TemporaryDirectory() as _jd:
+        _jp = os.path.join(_jd, "session-notify.journal")
+        _now = time.time()
+        _old_ts = datetime.datetime.fromtimestamp(_now - 600, datetime.timezone.utc).isoformat()
+        _new_ts = datetime.datetime.fromtimestamp(_now - 1, datetime.timezone.utc).isoformat()
+        with open(_jp, "w", encoding="utf-8") as _jf:
+            _jf.write(f"{_old_ts}\tcaller=x\ttarget=aaaabbbb\toutcome=delivered\texit=0\n")
+            _jf.write(f"{_new_ts}\tcaller=x\ttarget=ccccdddd\toutcome=delivered\texit=0\n")
+        assert_true("#S a receipt inside the send window is FOUND",
+                    check_journal_receipt("ccccdddd", _now - 5, _jp, send_budget_secs=30))
+        assert_true("#S a receipt for a DIFFERENT target is not a match",
+                    not check_journal_receipt("eeeeffff", _now - 5, _jp))
+        assert_true("#S a receipt OLDER than the send window is not a match",
+                    not check_journal_receipt("aaaabbbb", _now - 5, _jp))
+        _t_spent = time.time()
+        _spent = check_journal_receipt("gggghhhh", _now - 9999, _jp, send_budget_secs=1)
+        _spent_elapsed = time.time() - _t_spent
+        assert_true("#S a spent send budget returns False", not _spent)
+        assert_true("#S a spent send budget does NOT sleep-poll (one pass, <1s)", _spent_elapsed < 1.0)
+        assert_true("#S a missing journal is still False",
+                    not check_journal_receipt("ccccdddd", _now - 9999, os.path.join(_jd, "nope"),
+                                              send_budget_secs=1))
+
+
+    # Test 16: #S -- the notify-rc classifier is a PURE predicate, so its
+    # allowlist is asserted directly instead of through a scratch transport.
+    # This is the hermetic half of the /tmp negative control's ARM 4 / ARM 5.
+    assert_eq("#S classify_notify_rc: a receipt settles it as delivered",
+              classify_notify_rc(True, 124), 0)
+    assert_eq("#S classify_notify_rc: rc 2 is the ONE proven non-delivery",
+              classify_notify_rc(False, 2), 3)
+    assert_eq("#S classify_notify_rc: rc 124 (timeout) is UNVERIFIED",
+              classify_notify_rc(False, 124), RC_UNVERIFIED)
+    assert_eq("#S classify_notify_rc: rc 4 (transport catch-all) is UNVERIFIED (#433)",
+              classify_notify_rc(False, 4), RC_UNVERIFIED)
+    assert_eq("#S classify_notify_rc: a signal-death (negative rc) is UNVERIFIED",
+              classify_notify_rc(False, -9), RC_UNVERIFIED)
+    assert_eq("#S classify_notify_rc: rc 1 is ambiguous, so UNVERIFIED",
+              classify_notify_rc(False, 1), RC_UNVERIFIED)
+    # Set equality, not a count: rc 2 is the ONLY code in the tested population
+    # that may leave the dispatch UNRECORDED (so a retry is correct).
+    assert_eq("#S classify_notify_rc: rc 2 is the ONLY non-delivery verdict",
+              sorted(c for c in (2, 4, 124, 1, -9, 137)
+                     if classify_notify_rc(False, c) == 3), [2])
+
     total = tests_passed + tests_failed
     print(f"selftest: {tests_passed}/{total} OK")
     return 0 if tests_failed == 0 else 1
@@ -1789,6 +1983,9 @@ def main():
                         help="Propose issues whose fix already landed on origin/main or was closed in the ledger (disables the #337 landed filter)")
     parser.add_argument("--redispatch", action="store_true",
                         help=f"Re-propose an issue already dispatched within the last {DISPATCH_WINDOW_DAYS} days (disables #337 dedup memory)")
+    parser.add_argument("--budget-secs", type=int, default=0,
+                        help="Wall-clock budget for an --auto run; each notify's timeout is capped by what remains (0 = 120s per issue, unbounded run)")
+
     parser.add_argument("--selftest", action="store_true", help="Run hermetic offline test suite")
 
     args = parser.parse_args()
