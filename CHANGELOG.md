@@ -1,5 +1,13 @@
 # Changelog — opencrabs-dev
 
+## v0.4.233 (2026-09-20)
+
+**Roster reconciliation — a lane that MOVES leaves its row unreconciled; reconcile against the LIVE binding, and never archive a session to fix a row.** Filed by the editor lane "Compaction visibility" (topic 34653) after an owner `/stop` + `/new` left two editor rows for one topic.
+
+Measured first-hand before ruling: `session_bindings` — not the roster row — is the authoritative live binding, and it exposes **two symptoms of one root cause** (no write re-derives a row when a lane moves). S1, superseded uuid: `d5863180` (topic 34653, 0.4.227) superseded by `cbdfde4a` (0.4.232) after the owner's `/new` at 2026-09-20T02:32:12Z; the claim moved at ledger n=9812. S2, stale `topic_id`: `212b3c83` is bound to 36841 while its row says 29947, and `a5b34466` is bound to 30517 while its row says 30220. Two of the four topics a first read flagged as duplicate rows are NOT defects — 29947 carries two DISTINCT workers/features, and the invariant is **one WORKER = one row**, never one topic = one row.
+
+Fix verbs: `oc-ledger retire <uuid> --topic N --role R` for S1 — the ONLY correction path (`enroll` refuses a dup, `promote` only mutates, neither can drop a row) and it RECORDS the row in a `roster-retire` event, so removal is not destruction; `oc-ledger promote <uuid> <role> --topic <live-id>` for S2. Traps: archiving the superseded session is not the fix (the row survives and the skew-chase continues), and an addressed `unclaim` row must never be used to clear a superseded lane's stale claim — it releases EVERY lane's claim on that issue, the live successor's included.
+
 ## v0.4.232 (2026-09-20)
 
 **Internal-factory closure -- the harvest gate is VACUOUS on a harvest-exempt surface, and the criterion is the CARRYING REPO, never the path string.** Filed by the Triage lane (GAP 3); one leg of their claim falsified first-hand before the ruling.
