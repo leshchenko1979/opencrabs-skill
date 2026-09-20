@@ -1310,6 +1310,18 @@ fi
 section "oc-census (pending-branch census)"
 run_selftest oc-census
 
+# ---- 72. oc-claims-single-source (claim-predicate single-source guard) ------
+# The claim-closure predicate was inlined FIVE times and the copies drifted
+# (#305/#309/#313/#424/#425). Tools 18/19 deleted the last two; this guard is
+# what stops a sixth. It keys on the SHAPE a copy must re-implement - never on
+# a function name - so a rename does not evade it.
+#
+# Placed BEFORE the battery-last.json receipt write on purpose: a section added
+# after that line would run but its legs would never reach the receipt, so the
+# battery would report a total that silently excluded this guard.
+section "oc-claims-single-source (private-copy guard)"
+run_selftest oc-claims-single-source
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \

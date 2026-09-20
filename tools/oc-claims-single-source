@@ -1,0 +1,740 @@
+#!/usr/bin/env python3
+"""oc-claims-single-source - the claim-closure predicate has exactly ONE home.
+
+JOB (JTBD): when a lane re-adds a private copy of the claim-closure predicate
+under tools/, the battery must FAIL on the copy rather than let a second
+implementation drift from tools/lib/oc_claims.py unnoticed.
+
+WHY THIS EXISTS: the predicate was inlined FIVE times and the copies drifted
+apart - two extracted issue tokens as ints and two as strings, so one copy's
+comparison was forever-False; only one asked WHO authored the closing row, so a
+foreign lane's prose mention of #N released a live claim. Every divergence was
+found only after it had already produced wrong claim state:
+
+  #305/#313  oc-ledger (embedded blob)  cross-lane standdown silently no-op'd
+  #309       oc-issue-dispatch          closer-blind: closed issues read claimed
+  #424       oc-roster                  claims_index carried its own copy
+  #425       oc-harvest-dispatch        closed on ANY later closer, same lane
+  #307       oc-harvest-census          unanchored prose grep made an overlap
+  #329/#337  oc-issue-dispatch          target inferred from prose (13 phantoms)
+
+All were fixed by delegation to the canonical module. Nothing mechanically
+prevented a sixth; this tool is that prevention.
+
+WHAT IT KEYS ON - NEVER A NAME. Both names were free to vary and did: the two
+deleted copies were called claims_index (oc-roster) and claim_is_closed
+(oc-harvest-dispatch), and the constant was CLOSERS in oc-roster against
+_CLOSING_KINDS in oc-harvest-dispatch. A name-keyed guard misses both. So it
+keys on what a copy must RE-IMPLEMENT:
+
+  ARM A  closure VERDICT SHAPE (HARD) - a loop over the SUBSEQUENT slice of an
+         event list (X[i + 1:]) that reads the kind dimension and yields a
+         closed/open verdict.  Both deleted bodies match this exactly.
+  ARM B  a canonical predicate CONSTANT declared locally (HARD) - a module-level
+         ALL-CAPS tuple/set literal (optional leading underscore) whose VALUE set
+         reconstructs CLOSING_KINDS or LANDED_KINDS.  Keyed on VALUES, so a
+         rename still fires.  Restricted to module level, which is what excludes
+         every fixture dict and every inline `kind in (...)` comparison.
+  ARM C  an OVERSTATING COMMENT (WARNING) - a comment in file F naming another
+         oc-* tool as sharing the canonical predicate, while that tool actually
+         carries a copy.  A comment is evidence about intent, not a second
+         implementation, so ARM C never fails the run.
+
+SCAN UNITS, i.e. the surface this covers: every PYTHON UNIT under tools/ - a
+whole .py or python oc-* file, AND (for a shell tool) every python blob it
+embeds via `python3 -c '...'` or a `python3 - <<'PY'` heredoc.  The blob form is
+not optional coverage: the sharpest historical copy (#305/#313) lived inside
+oc-ledger's embedded blob, so a whole-file-only scanner would have missed the
+family's centre of gravity.
+
+SCOPE, stated rather than implied: tools/tests/ is EXCLUDED.  A test legitimately
+exercises the predicate, and the test tree is not a runtime consumer - the
+hazard is a copy that ANSWERS claim questions in production.  ARM C reads `#`
+comment blocks; docstrings are not read.
+
+COVERAGE IS REPORTED, NOT ASSUMED.  A unit that fails to parse is SKIPPED - it
+cannot be scanned - so the ok line states BOTH figures, `scanned of declared`,
+and prints one `NOTE rel:start` line per skip.  A green report must never rest
+on a silent skip: measured 2026-09-20, the tools/ tree declared 18 python units
+and this tool scanned 12, so a third of the surface was invisible behind one
+confident number.  Separately, a scanned file's OWN syntax is not a finding:
+whether a unit is well-formed python is a classification question here, so the
+`ast.parse` used to answer it runs with warnings muted and nothing is written
+to stderr.  The syntax of a file under tools/ is never this tool's report.
+
+Usage: oc-claims-single-source [--scan DIR] [--selftest] [-h]
+Exit:  0 clean | 1 HARD finding | 2 usage / IO error
+"""
+
+import ast
+import os
+import re
+import sys
+import warnings
+
+TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+CANONICAL_REL = os.path.join("lib", "oc_claims.py")
+
+# Keyed by VALUE, never by name - see the docstring for why.
+CLOSING_KIND_VALUES = frozenset(("close", "confirm", "reject", "done", "unclaim"))
+LANDED_KIND_VALUES = frozenset(("close", "done"))
+CANONICAL_SETS = (CLOSING_KIND_VALUES, LANDED_KIND_VALUES)
+
+# A CONSTANT declaration: CLOSERS, _CLOSING_KINDS, LANDED_KINDS.  The optional
+# leading underscore is load-bearing - _CLOSING_KINDS is one of the two real
+# deleted copies, and a guard that insisted on a bare-uppercase name would have
+# missed it.
+CONST_NAME_RE = re.compile(r"^_?[A-Z][A-Z0-9_]{2,}$")
+# Verdict VARIABLE names (never function names - those are free to vary).
+VERDICT_NAME_RE = re.compile(r"^(closed|is_closed|closer|is_open|open|opens|landed)$")
+KINDSIDE_RE = re.compile(r"clos|landed|kind", re.I)
+DELEG_RE = re.compile(r"canonical|single implementation|not a local copy|delegat|shared with", re.I)
+TOOLNAME_RE = re.compile(r"\boc[-_][a-z][a-z_-]*")
+RE_PY_C = re.compile(r"\bpython3\s+-c\s*'")
+RE_PY_HEREDOC = re.compile(r"\bpython3\s+-\s*<<-?\s*'?([A-Za-z_][A-Za-z0-9_]*)'?")
+SKIP_DIRS = frozenset(("__pycache__", ".git", "tests"))
+
+MAX_UNIT_BYTES = 400_000
+
+
+def read_text(path):
+    try:
+        if os.path.getsize(path) > MAX_UNIT_BYTES:
+            return None
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _parse(code):
+    """Parse ONE unit. Returns the tree, or None when it cannot parse.
+
+    SyntaxWarnings are MUTED here, and that is deliberate: CPython emits the
+    warning while TOKENIZING, i.e. BEFORE it raises the SyntaxError this
+    function catches, so an unparsed unit would leak its warning onto stderr.
+    Measured 2026-09-20: tools/lib/oc-embed.sh line 15 is a sed pattern holding
+    a literal backslash-paren; scanning it printed
+    `<unknown>:15: SyntaxWarning` while that file yields NO unit at all (it is
+    not python, and it embeds no python). Whether a scanned file's text is
+    well-formed python is a CLASSIFICATION question for this guard, never a
+    finding - the syntax of a scanned file is not the guard's business.
+
+    The second, independent reason to mute: a unit that fails to parse is
+    SKIPPED, so its text is never scanned for copies. That skip is a real
+    coverage gap, and `scan` surfaces it explicitly (see the NOTE lines and the
+    ok-line's two figures) rather than letting a green report sit on it.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            return ast.parse(code)
+        except (SyntaxError, ValueError, RecursionError):
+            return None
+
+def _unparsed_reason(code):
+    """Why one unit failed to parse, for the coverage note. Never raises."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            ast.parse(code)
+        except SyntaxError as exc:
+            return "SyntaxError line %s: %s" % (exc.lineno, exc.msg)
+        except (ValueError, RecursionError) as exc:
+            return "%s: %s" % (type(exc).__name__, exc)
+    return "unknown"
+
+
+def is_python(path):
+    """Is this whole FILE a python unit?
+
+    Deliberately not "does the text mention python": a shell tool's embedded
+    `python3 -c` line would answer yes and the file would then be parsed as
+    python, fail, and its blob would never be reached.
+    """
+    if os.path.basename(path).endswith(".py"):
+        return True
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            first = fh.readline().strip()
+    except OSError:
+        return False
+    if first.startswith("#!"):
+        return "python" in first
+    if "python" in first:
+        return True
+    src = read_text(path)
+    return bool(src) and _parse(src) is not None
+
+
+def iter_source_files(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        for name in sorted(filenames):
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                continue
+            rel = os.path.relpath(path, root)
+            if rel == CANONICAL_REL:
+                continue
+            yield path, rel
+
+
+def extract_blobs(src):
+    """(start_line, code) for each python blob a shell tool embeds.
+
+    Best effort, deliberately: a blob whose closing quote shares a line with
+    trailing shell code will fail to parse and is then SKIPPED, never guessed at.
+    """
+    lines = src.splitlines()
+    out = []
+    i = 0
+    while i < len(lines):
+        m = RE_PY_C.search(lines[i])
+        if m:
+            body = [lines[i][m.end():]]
+            j = i + 1
+            while j < len(lines) and not lines[j].startswith("'"):
+                body.append(lines[j])
+                j += 1
+            out.append((i + 1, "\n".join(body)))
+            i = j + 1
+            continue
+        h = RE_PY_HEREDOC.search(lines[i])
+        if h:
+            delim = h.group(1)
+            body = []
+            j = i + 1
+            while j < len(lines) and lines[j].strip() != delim:
+                body.append(lines[j])
+                j += 1
+            out.append((i + 2, "\n".join(body)))
+            i = j + 1
+            continue
+        i += 1
+    return out
+
+
+def python_units(path, src):
+    """The python units of one file: the whole file, OR its embedded blobs."""
+    if src is None:
+        return []
+    if is_python(path):
+        return [(1, src)]
+    return extract_blobs(src)
+
+
+def _is_step1_slice(node):
+    """X[i + 1:] - the SUBSEQUENT-slice walk a closure verdict needs."""
+    if not isinstance(node, ast.Subscript):
+        return False
+    sl = node.slice
+    if not isinstance(sl, ast.Slice) or sl.lower is None:
+        return False
+    lo = sl.lower
+    return (isinstance(lo, ast.BinOp) and isinstance(lo.op, ast.Add)
+            and isinstance(lo.right, ast.Constant) and lo.right.value == 1)
+
+
+def _reads_kind(node):
+    """The kind dimension: d['kind'], d.get('kind'), or a CLOSING/landed name."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Subscript):
+            k = n.slice
+            if isinstance(k, ast.Constant) and k.value == "kind":
+                return True
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+            if n.func.attr == "get" and n.args:
+                a0 = n.args[0]
+                if isinstance(a0, ast.Constant) and a0.value == "kind":
+                    return True
+        if isinstance(n, ast.Compare):
+            for c in [n.left] + list(n.comparators):
+                if isinstance(c, ast.Name) and KINDSIDE_RE.search(c.id):
+                    return True
+                if isinstance(c, ast.Attribute) and KINDSIDE_RE.search(c.attr):
+                    return True
+    return False
+
+
+def _yields_verdict(node):
+    for n in ast.walk(node):
+        if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant):
+            if isinstance(n.value.value, bool):
+                return True
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name) and VERDICT_NAME_RE.match(t.id):
+                    return True
+        if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
+            if VERDICT_NAME_RE.match(n.target.id):
+                return True
+    return False
+
+
+def arm_a_hits(tree):
+    """Loop over a subsequent slice + kind dimension + verdict == a copy."""
+    hits = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for n in ast.walk(fn):
+            if isinstance(n, (ast.For, ast.comprehension)):
+                it = n.iter
+            else:
+                continue
+            if not _is_step1_slice(it):
+                continue
+            if _reads_kind(n) and _yields_verdict(n):
+                hits.append((fn.name, getattr(n, "lineno", 0) or 0))
+    return hits
+
+
+def _literal_value_set(node):
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        vals = []
+        for e in node.elts:
+            if isinstance(e, ast.Constant) and isinstance(e.value, str):
+                vals.append(e.value)
+            else:
+                return None
+        return frozenset(vals)
+    return None
+
+
+def arm_b_hits(tree):
+    """A MODULE-LEVEL ALL-CAPS literal reconstructing a canonical value set."""
+    hits = []
+    for n in getattr(tree, "body", []):
+        if isinstance(n, ast.Assign):
+            targets, val = n.targets, n.value
+        elif isinstance(n, ast.AnnAssign):
+            targets, val = [n.target], n.value
+        else:
+            continue
+        if val is None:
+            continue
+        vals = _literal_value_set(val)
+        if vals is None or vals not in CANONICAL_SETS:
+            continue
+        for t in targets:
+            if isinstance(t, ast.Name) and CONST_NAME_RE.match(t.id):
+                hits.append((t.id, n.lineno, tuple(sorted(vals))))
+    return hits
+
+
+def comment_blocks(src):
+    """(start_line, text) for each run of consecutive # comment lines."""
+    lines = src.splitlines()
+    block, start = [], 0
+    for i, line in enumerate(lines, 1):
+        s = line.lstrip()
+        if s.startswith("#"):
+            if not block:
+                start = i
+            block.append(s.lstrip("#").strip())
+            continue
+        if block:
+            yield start, " ".join(block)
+            block = []
+    if block:
+        yield start, " ".join(block)
+
+
+def unit_count(units):
+    """How many units were ACTUALLY SCANNED (parsed) across the tree.
+
+    Distinct from the DECLARED count: a unit this tool cannot parse is never
+    inspected for copies, so `scan` also returns the skipped list. Keep the two
+    figures apart - `units` is a map, and reporting len(units) would count
+    FILES while the ok line counts UNITS.
+    """
+    return sum(len(p) for _, p in units.values())
+
+def scan(root):
+    files = list(iter_source_files(root))
+    tool_names = set(os.path.basename(r) for _, r in files
+                     if os.path.basename(r).startswith("oc-"))
+
+    units = {}          # rel -> (whole_file_text, [(blob_start, tree), ...])
+    skipped = []        # (rel, blob_start, reason) - enumerated but NOT parsed
+    for path, rel in files:
+        src = read_text(path)
+        if src is None:
+            continue
+        parsed = []
+        for start, code in python_units(path, src):
+            tree = _parse(code)
+            if tree is not None:
+                parsed.append((start, tree))
+            else:
+                # An enumerated unit that does not parse is never scanned, so
+                # its text is a HOLE in this tool's coverage. Record it: a
+                # count of survivors hides exactly this (measured: 18 declared
+                # units, 12 scanned, 6 dropped with nothing said).
+                skipped.append((rel, start, _unparsed_reason(code)))
+        units[rel] = (src, parsed)
+
+    copies = {}         # basename -> (rel, first hit line)
+    findings = []
+    for rel in sorted(units):
+        _, parsed = units[rel]
+        for start, tree in parsed:
+            for name, ln in arm_a_hits(tree):
+                line = start + ln - 1 if start > 1 else ln
+                desc = ("ARM A  closure-verdict shape: def %s() walks a later-event "
+                        "slice and yields a closed/open verdict" % name)
+                findings.append((rel, line, desc))
+                copies.setdefault(os.path.basename(rel), (rel, line))
+            for name, ln, vals in arm_b_hits(tree):
+                line = start + ln - 1 if start > 1 else ln
+                desc = ("ARM B  local predicate constant %s = %s" % (name, vals))
+                findings.append((rel, line, desc))
+                copies.setdefault(os.path.basename(rel), (rel, line))
+
+    warnings = []
+    for rel in sorted(units):
+        src, _ = units[rel]
+        for start, text in comment_blocks(src):
+            if not DELEG_RE.search(text):
+                continue
+            for m in TOOLNAME_RE.finditer(text):
+                name = m.group(0).rstrip("-_")
+                if name == "oc_claims" or name == os.path.basename(rel):
+                    continue
+                if name in copies and name in tool_names:
+                    warnings.append((rel, start,
+                                     "comment claims %s shares the canonical predicate, but %s "
+                                     "carries a copy (line %d)" % (name, name, copies[name][1])))
+    return findings, warnings, units, skipped
+
+import shutil
+import subprocess
+import tempfile
+
+SELF = os.path.abspath(__file__)
+
+
+
+# --------------------------------------------------------------------------
+# Fixtures.  Frozen world-state, embedded rather than read from git or /tmp: a
+# promoted control that references a scratch path stops working the moment the
+# path is wiped, and the two bodies below are the REAL deleted copies, verbatim
+# apart from an elided roster helper.  Do not "tidy" them - their shape is the
+# thing under test.
+# --------------------------------------------------------------------------
+
+ROSTER_COPY = '''#!/usr/bin/env python3
+import re
+ISSUE_RE = re.compile(r"#(\\d+)")
+UUID_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+CLOSERS = {"close", "confirm", "reject", "done", "unclaim"}
+
+def claims_index(events):
+    opens, issues = [], {}
+    for i, ev in enumerate(events):
+        if ev.get("kind") != "claim":
+            continue
+        m = UUID_RE.search(ev.get("by") or "")
+        if not m:
+            continue
+        uuid = m.group(0)
+        mi = ISSUE_RE.search(ev.get("what") or "")
+        num = mi.group(1) if mi else ""
+        issues.setdefault(uuid, set()).add(num)
+        closed = False
+        for later in events[i + 1:]:
+            if uuid not in (later.get("by") or ""):
+                continue
+            if later.get("kind") not in CLOSERS:
+                continue
+            if ("#" + num) in (later.get("what") or ""):
+                closed = True
+                break
+        if not closed:
+            opens.append({"uuid": uuid, "issue": num})
+    return opens, issues
+'''
+
+HD_COPY = '''#!/usr/bin/env python3
+import re
+_ACTOR_ROLE_RE = re.compile(r"^\\s*(?:editor|triage|hq|toolsmith)\\s+", re.I)
+_CLOSING_KINDS = ('close', 'confirm', 'reject', 'done', 'unclaim')
+
+def actor_match(a, b):
+    return a == b
+
+def claim_is_closed(events, idx, claim_actor, iss):
+    for later_ev in events[idx+1:]:
+        if later_ev.get('kind') not in _CLOSING_KINDS:
+            continue
+        if actor_match(claim_actor, later_ev.get('by', '')):
+            return True
+        if iss and re.match(r'^\\s*#%d\\b' % iss, str(later_ev.get('what', '')).strip()):
+            return True
+    return False
+'''
+
+# Delegating, but carrying the closure-semantics NAME of the deleted copy.  A
+# name-keyed guard fires here; this guard must not.
+WRAPPER_NAMED = '''#!/usr/bin/env python3
+import oc_claims
+
+def claim_is_closed(events, idx, claim_actor, iss):
+    rows = oc_claims.parse_events(events)
+    return oc_claims.claim_is_closed(rows, idx, claim_actor, iss)
+'''
+
+CENSUS_DELEGATE = '''#!/usr/bin/env python3
+import oc_claims
+
+def open_rows(events):
+    # CLOSURE: the canonical predicate (#307), not a local copy.
+    return oc_claims.open_claims(events)
+'''
+
+ISSUE_DELEGATE = '''#!/usr/bin/env python3
+import oc_claims
+
+DISPATCH_WINDOW_DAYS = 30
+
+def extract_claimed_issues(ledger_data):
+    return {tok for claim in oc_claims.open_claims(ledger_data.get("events", []))
+            for tok in claim["tokens"]}
+
+def ledger_landed_issues(ledger_data):
+    rows = oc_claims.parse_events(ledger_data.get("events", []))
+    out = set()
+    for row in rows:
+        if row["kind"] in oc_claims.LANDED_KINDS:
+            out.update(row["targets"])
+    return out
+'''
+
+LEDGER_DELEGATE = '''#!/bin/sh
+# The closure predicate lives in tools/lib/oc_claims.py - THE single
+# implementation, shared with oc-harvest-dispatch (#305) and oc-roster (#314).
+echo ok
+'''
+
+LEDGER_OVERSTATE = '''#!/bin/sh
+# The closure predicate lives in tools/lib/oc_claims.py - THE single
+# implementation, shared with oc-harvest-dispatch (#305) and oc-roster (#314).
+# (this file still carries its own copy below - the comment overstates)
+echo ok
+'''
+
+LEDGER_BLOB_COPY = '''#!/bin/sh
+cmd_claims() {
+  python3 -c '
+import re
+CLOSERS = {"close", "confirm", "reject", "done", "unclaim"}
+
+def claims_index(events):
+    opens = []
+    for i, ev in enumerate(events):
+        if ev.get("kind") != "claim":
+            continue
+        closed = False
+        for later in events[i + 1:]:
+            if later.get("kind") not in CLOSERS:
+                continue
+            closed = True
+            break
+        if not closed:
+            opens.append(ev)
+    return opens
+' "$LEDGER"
+}
+'''
+
+
+def _write_tree(root, files):
+    os.makedirs(root, exist_ok=True)
+    for name, text in files.items():
+        with open(os.path.join(root, name), "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+
+def _run_cli(root):
+    proc = subprocess.run([sys.executable, SELF, "--scan", root],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return proc.returncode, (proc.stdout + proc.stderr)
+
+
+def _arm_counts(findings, rel):
+    a = sum(1 for r, _, d in findings if r == rel and d.startswith("ARM A"))
+    b = sum(1 for r, _, d in findings if r == rel and d.startswith("ARM B"))
+    return a, b
+
+
+def selftest():
+    legs = []
+
+    def ck(name, cond, detail=""):
+        legs.append((name, bool(cond), detail))
+
+    tmp = tempfile.mkdtemp(prefix="oc-css-selftest-")
+    try:
+        # ---- leg group 1: the current, fixed state must be silent -----------
+        clean = os.path.join(tmp, "clean")
+        _write_tree(clean, {
+            "oc-harvest-dispatch": WRAPPER_NAMED,
+            "oc-harvest-census": CENSUS_DELEGATE,
+            "oc-issue-dispatch": ISSUE_DELEGATE,
+            "oc-ledger": LEDGER_DELEGATE,
+        })
+        finds, warns, units, skipped_clean = scan(clean)
+        ck("delegating tree: zero HARD findings", finds == [], repr(finds))
+        ck("delegating tree: zero warnings", warns == [], repr(warns))
+        ck("delegating tree: units were actually scanned", unit_count(units) > 0,
+           "units=%d" % unit_count(units))
+        rc, out = _run_cli(clean)
+        ck("delegating tree: CLI exits 0", rc == 0, "rc=%d %s" % (rc, out.strip()[:100]))
+
+        # ---- leg group 2: the two REAL deleted copies must both be caught --
+        dirty = os.path.join(tmp, "dirty")
+        _write_tree(dirty, {
+            "oc-roster": ROSTER_COPY,
+            "oc-harvest-dispatch": HD_COPY,
+            "oc-harvest-census": CENSUS_DELEGATE,
+            "oc-issue-dispatch": ISSUE_DELEGATE,
+            "oc-ledger": LEDGER_OVERSTATE,
+        })
+        finds, warns, _, _ = scan(dirty)
+        a, b = _arm_counts(finds, "oc-roster")
+        ck("roster copy: ARM A fires on claims_index", a >= 1, "armA=%d" % a)
+        ck("roster copy: ARM B fires on CLOSERS", b >= 1, "armB=%d" % b)
+        a, b = _arm_counts(finds, "oc-harvest-dispatch")
+        ck("dispatch copy: ARM A fires on claim_is_closed", a >= 1, "armA=%d" % a)
+        ck("dispatch copy: ARM B fires on _CLOSING_KINDS", b >= 1, "armB=%d" % b)
+
+        # ---- leg group 3: the false-positive boundary ----------------------
+        a, b = _arm_counts(finds, "oc-harvest-census")
+        ck("delegating oc-harvest-census does NOT fire", a == 0 and b == 0, "a=%d b=%d" % (a, b))
+        a, b = _arm_counts(finds, "oc-issue-dispatch")
+        ck("oc-issue-dispatch does NOT fire (delegates; LANDED_KINDS is a USE)",
+           a == 0 and b == 0, "a=%d b=%d" % (a, b))
+
+        # ---- leg group 4: same name, delegating body -> silent -------------
+        a, b = _arm_counts(scan(clean)[0], "oc-harvest-dispatch")
+        ck("a delegating def named claim_is_closed does NOT fire (name-independence)",
+           a == 0 and b == 0, "a=%d b=%d" % (a, b))
+
+        # ---- leg group 5: ARM C, the overstating comment -------------------
+        named = " ".join(t for _, _, t in warns)
+        ck("ARM C warns on the overstating comment", len(warns) >= 1, repr(warns))
+        ck("ARM C warning names the tool that still carries the copy",
+           "oc-roster" in named, named[:160] or "<no warning text>")
+        ck("ARM C is a WARNING, not a HARD finding",
+           all(not d.startswith("ARM C") for _, _, d in finds), repr(finds[:2]))
+
+        # ---- leg group 6: the embedded-blob surface (oc-ledger's shape) ----
+        blobs = os.path.join(tmp, "blobs")
+        _write_tree(blobs, {"oc-ledger": LEDGER_BLOB_COPY})
+        finds, _, _, _ = scan(blobs)
+        a, b = _arm_counts(finds, "oc-ledger")
+        ck("shell blob: ARM A fires inside a python3 -c blob", a >= 1, repr(finds))
+        ck("shell blob: ARM B fires inside a python3 -c blob", b >= 1, repr(finds))
+        rc, _ = _run_cli(blobs)
+        ck("shell blob: CLI exits 1", rc == 1, "rc=%d" % rc)
+
+        # ---- leg group 7: the CLI contract ---------------------------------
+        rc, out = _run_cli(dirty)
+        ck("dirty tree: CLI exits 1", rc == 1, "rc=%d" % rc)
+        rc, _ = _run_cli(os.path.join(tmp, "no-such-dir"))
+        ck("missing --scan DIR exits 2", rc == 2, "rc=%d" % rc)
+
+        # ---- leg group 8: THE regression assertion -------------------------
+        finds, warns, units, skipped_live = scan(TOOLS_DIR)
+        ck("LIVE tools/ tree: zero HARD findings", finds == [], repr(finds[:3]))
+        ck("LIVE tools/ tree: zero warnings", warns == [], repr(warns[:3]))
+        ck("LIVE tools/ tree: the canonical module was excluded",
+           not any(CANONICAL_REL in r for r, _, _ in finds),
+           "units=%d" % unit_count(units))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+        # ---- leg group 9: the coverage report cannot hide a skipped unit --
+        # The defect this leg pins: the ok-line counted PARSED units while the
+        # ENUMERATED denominator stayed invisible, so six units sat unscanned
+        # behind a green line. Two independent facts must hold - the counts are
+        # reported separately, and a skipped unit is NAMED (not merely counted).
+        whole = unit_count(units) + len(skipped_live)
+        ck("coverage: the live tree declares more units than it parses",
+           whole >= unit_count(units),
+           "declared=%d parsed=%d" % (whole, unit_count(units)))
+        ck("coverage: every unparsed unit carries a non-empty reason",
+           all(r.strip() for _, _, r in skipped_live),
+           repr([r for _, _, r in skipped_live][:3]))
+        a, b2 = _arm_counts(scan(TOOLS_DIR)[0], "oc-ledger")
+        ck("coverage: ARM scan still clean on the live tree", a == 0 and b2 == 0,
+           "a=%d b=%d" % (a, b2))
+
+        # Coverage must be able to FAIL: a tree whose unit cannot parse is
+        # reported as a NOTE, and the ok line states both figures.
+        unparsable = os.path.join(tmp, "unparsable")
+        _write_tree(unparsable, {"oc-unparsable-tool":
+                                 "#!/bin/sh\npython3 -c '\nx = (\n'\n"})
+        rc, out = _run_cli(unparsable)
+        ck("unparsable unit is NAMED in the report, not silently dropped",
+           "oc-unparsable-tool" in out and "1 python unit(s) declared" in out
+           and "NOTE" in out,
+           out.strip()[:200])
+        ck("unparsable unit alone does not fail the run (rc 0)",
+           rc == 0, "rc=%d" % rc)
+
+    failed = [x for x in legs if not x[1]]
+    for name, _, detail in failed:
+        sys.stdout.write("FAIL  %s  %s\n" % (name, detail))
+    sys.stdout.write("selftest: %d/%d OK\n" % (len(legs) - len(failed), len(legs)))
+    return 2 if failed else 0
+
+
+def main(argv):
+    root = TOOLS_DIR
+    args = list(argv[1:])
+    while args:
+        a = args.pop(0)
+        if a == "--selftest":
+            return selftest()
+        if a == "--scan":
+            if not args:
+                sys.stderr.write("--scan needs a DIR\n")
+                return 2
+            root = os.path.abspath(args.pop(0))
+        elif a in ("-h", "--help"):
+            sys.stdout.write(__doc__.strip() + "\n")
+            return 0
+        else:
+            sys.stderr.write("unknown argument: %s (try --help)\n" % a)
+            return 2
+    if not os.path.isdir(root):
+        sys.stderr.write("not a directory: %s\n" % root)
+        return 2
+
+    findings, warnings, units, skipped = scan(root)
+    for rel, line, desc in findings:
+        sys.stdout.write("HARD  %s:%d  %s\n" % (rel, line, desc))
+    for rel, line, text in warnings:
+        sys.stdout.write("WARN  %s:%d  %s\n" % (rel, line, text))
+    for rel, start, reason in sorted(skipped):
+        sys.stdout.write("NOTE  %s:%d  enumerated but NOT scanned (%s) - this unit is a "
+                         "coverage hole; make it parseable, or scan the text another way\n"
+                         % (rel, start, reason))
+    declared = len(skipped) + unit_count(units)
+    if findings:
+        sys.stdout.write(
+            "%d private copy(ies) of the claim-closure predicate under %s - delegate to "
+            "tools/lib/oc_claims.py instead (see tools/skills/opencrabs-dev/SKILL.md)\n"
+            % (len(findings), root))
+        return 1
+    sys.stdout.write("ok: %s: no private copy of the claim-closure predicate in %d of "
+                     "%d python unit(s) declared%s\n"
+                     % (root, unit_count(units), declared,
+                        "" if not skipped else " (%d NOT scanned - see NOTE above)" % len(skipped)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
