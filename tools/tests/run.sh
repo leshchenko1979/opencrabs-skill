@@ -27,6 +27,30 @@ ok()    { PASS=$((PASS+1)); note "  ok   - $*"; }
 bad()   { FAIL=$((FAIL+1)); note "  FAIL - $*"; }
 tool()  { [ -x "$TOOLS_DIR/$1" ] || { bad "missing tool: $1"; return 1; } }
 section() { note ""; note "== $1 =="; }
+# Fork #453 (2026-09-20): a failing --selftest used to be a dead end — the
+# tool's own output went to /dev/null, so a flake left a bare tool name and
+# nothing to diagnose. Capture it and surface a BOUNDED tail under the FAIL
+# row. The success path prints NOTHING extra: parallel mode re-counts rows by
+# prefix (grep -c '^  ok ' / '^  FAIL '), and a green transcript must stay
+# byte-identical. Continuation lines are indented under a '| ' marker, which
+# matches neither prefix. tail (not head) because a selftest names its failing
+# assertion on the way out.
+run_capture() { # $1 = label, $2.. = command
+  local label="$1"; shift
+  local out rc n
+  out="$(mktemp)"
+  "$@" >"$out" 2>&1; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ok "$label"
+  else
+    bad "$label"
+    n="$(wc -l < "$out")"
+    [ "$n" -gt 20 ] && note "       | ... $((n - 20)) earlier line(s) omitted"
+    tail -n 20 "$out" | sed 's/^/       | /'
+  fi
+  rm -f "$out"
+  return "$rc"
+}
 run_selftest() {
   local t="$1"
   if [ ! -x "$TOOLS_DIR/$t" ]; then bad "$t missing or not executable"; return 1; fi
@@ -37,7 +61,7 @@ run_selftest() {
   # marker) once per section, so a prelude-level trap would be set N times.
   local sd
   sd="$(mktemp -d)"
-  if OC_DEPLOY_STATE_DIR="$sd" "$TOOLS_DIR/$t" --selftest >/dev/null 2>&1; then ok "$t --selftest"; else bad "$t --selftest"; fi
+  run_capture "$t --selftest" env OC_DEPLOY_STATE_DIR="$sd" "$TOOLS_DIR/$t" --selftest
   rm -rf "$sd"
 }
 
@@ -790,12 +814,9 @@ section "oc-deploy"
 # `oc-ledger commit-pending`. OC_TOOLS_NOLOG=0 is REQUIRED: the battery exports
 # it as 1 globally (run.sh:21), which would make this assertion vacuous.
 LSE="$(mktemp -d)/selftest.log"
-if OC_TOOLS_NOLOG=0 OC_DEPLOY_STATE_DIR="$(mktemp -d)" OC_TOOLS_LOG="$LSE" \
-     "$TOOLS_DIR/oc-deploy" selftest >/dev/null 2>&1; then
-  ok "oc-deploy selftest (bare subcommand)"
-else
-  bad "oc-deploy selftest (bare subcommand)"
-fi
+run_capture "oc-deploy selftest (bare subcommand)" \
+  env OC_TOOLS_NOLOG=0 OC_DEPLOY_STATE_DIR="$(mktemp -d)" OC_TOOLS_LOG="$LSE" \
+     "$TOOLS_DIR/oc-deploy" selftest
 if [ -s "$LSE" ]; then
   bad "bare selftest leaked $(wc -l < "$LSE") row(s) into OC_TOOLS_LOG (M2-21)"
 else
