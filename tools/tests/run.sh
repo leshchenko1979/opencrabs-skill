@@ -64,6 +64,35 @@ if [ "${1:-}" = "--chunk" ] && [ -n "${2:-}" ] && [ -z "${BATTERY_IN_CHUNK:-}" ]
   source "$C"; rm -f "$C"
   exit $(( FAIL > 0 ? 1 : 0 ))
 fi
+
+# ---- single-flight lock: ONE battery run at a time (#449) -------------------
+# tools/tests/battery-last.json is ONE canonical path shared by every lane, and
+# this script writes it from two sites with no lock — so two concurrent runs
+# clobber each other's receipt (measured 2026-09-20: commit 284b8456 committed a
+# FAIL receipt under a "pass 213, fail 0" message) and the extra load flakes the
+# timing-sensitive oc-ship-chain detach-survival pair. The whole run is
+# serialized here. The canonical path is KEPT because consumers read it — a
+# per-lane receipt path would break them.
+#
+# Placement is load-bearing: this sits AFTER the --chunk branch above and is
+# guarded on BATTERY_IN_CHUNK, because a --chunk child takes its branch and
+# exits before reaching this line, and the prelude sourced INSIDE a child sees
+# BATTERY_IN_CHUNK=1. Locking any earlier would deadlock every child against
+# its own parent. rc 2 = harness condition, never a test verdict.
+if [ -z "${BATTERY_IN_CHUNK:-}" ]; then
+  BATTERY_LOCK="${OC_BATTERY_LOCK:-${TMPDIR:-/tmp}/oc-battery.lock}"
+  BATTERY_LOCK_WAIT="${OC_BATTERY_LOCK_WAIT:-900}"
+  exec 9>"$BATTERY_LOCK" || { note "battery: cannot open lock file $BATTERY_LOCK"; exit 2; }
+  if ! flock -n 9; then
+    note "battery: another run holds $BATTERY_LOCK — waiting up to ${BATTERY_LOCK_WAIT}s"
+    if ! flock -w "$BATTERY_LOCK_WAIT" 9; then
+      note "battery: lock not released within ${BATTERY_LOCK_WAIT}s — NOT a test failure and NOT a verdict."
+      note "battery: re-run once the holder finishes, or raise the budget with OC_BATTERY_LOCK_WAIT=<sec>."
+      exit 2
+    fi
+  fi
+fi
+
 JOBS="${OC_BATTERY_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 if [ "${1:-}" = "--jobs" ] && [ -n "${2:-}" ]; then JOBS="$2"; shift 2; fi
 case "${1:-}" in --jobs=*) JOBS="${1#--jobs=}"; shift ;; esac
