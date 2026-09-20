@@ -113,9 +113,9 @@ chk "classify-rows"  "$(wc -l < "$D/class.out")" "5"
 sort "$D/live.out" > "$D/live.got"
 if diff -q "$D/live.expected" "$D/live.got" >/dev/null; then ok "live-set-equality"; else bad "live-set-equality" "$(diff "$D/live.expected" "$D/live.got" | head -3)"; fi
 
-python3 - "$D" "$U1" "$U2" "$U3" "$U4" "$P1" <<'PY'
-import json, re, sys
-D, U1, U2, U3, U4, P1 = sys.argv[1:7]
+python3 - "$D" "$U1" "$U2" "$U3" "$U4" "$P1" "$TOOL" <<'PY'
+import json, os, re, sys
+D, U1, U2, U3, U4, P1, TOOL_PATH = sys.argv[1:8]
 ok = fail = 0
 def chk(name, cond, detail=""):
     global ok, fail
@@ -205,6 +205,58 @@ chk("work-json-203-attributed-dash", wj2.get("203-phantom", {}).get("attributed"
 werr = open(D + "/work.err").read()
 chk("work-stderr-phantom", "PHANTOM" in werr and P1 in werr and U4 in werr, werr.strip()[:160])
 
+# ---- #424: `claims` MUST delegate closure to lib/oc_claims.py --------------
+# The pre-fix private copy disagreed with the canonical predicate in TWO
+# directions at once, and lib/oc_claims.py's own unit cases stayed GREEN the
+# whole time -- they test the MODULE, never this consumer. So the fixture is
+# built to fail a re-inlined private copy in both directions:
+#   #501 canonical=closed  pre-fix=OPEN    (a foreign ADDRESSED sweep closes)
+#   #504 canonical=OPEN    pre-fix=closed  (pre-fix matched "#504" inside the
+#                                          "#5040" of a later row)
+#   #502 is OPEN in BOTH -- the negative control that stops a close-everything
+#   bug from passing.
+# Both sets were re-derived mechanically before this literal was written
+# (canonical [502,504] vs pre-fix [501,502]); never eyeball this list.
+import subprocess as _sub, tempfile as _tf
+_F = "bbbbbbbb-0000-4000-8000-000000000001"
+_EV = [
+ {"n": 1, "t": "t1", "by": "editor " + U1, "kind": "claim",
+  "what": "CLAIM #501 - live work"},
+ {"n": 2, "t": "t2", "by": "triage " + _F, "kind": "unclaim",
+  "what": "#501 - closed-issue stale claim sweep"},
+ {"n": 3, "t": "t3", "by": "editor " + U2, "kind": "claim",
+  "what": "CLAIM #502 - live work"},
+ {"n": 4, "t": "t4", "by": "triage " + _F, "kind": "unclaim",
+  "what": "note: see #502 for detail"},
+ {"n": 5, "t": "t5", "by": "editor " + U3, "kind": "claim",
+  "what": "CLAIM #503 - live work"},
+ {"n": 6, "t": "t6", "by": "editor " + U3, "kind": "unclaim",
+  "what": "standdown complete; context in #503"},
+ {"n": 7, "t": "t7", "by": "editor " + U4, "kind": "claim",
+  "what": "CLAIM #504 - live work"},
+ {"n": 8, "t": "t8", "by": "editor " + U4, "kind": "unclaim",
+  "what": "#5040 - sweep"},
+]
+_fx = _tf.mkdtemp(prefix="fx424-")
+with open(_fx + "/ledger.json", "w") as _fh:
+    json.dump({"events": _EV}, _fh)
+_env = dict(os.environ, OC_ROSTER_LEDGER=_fx + "/ledger.json",
+            OC_TOOLS_NOLOG="1")
+_p = _sub.run([TOOL_PATH, "claims", "--json"], capture_output=True,
+              text=True, env=_env)
+# NB: the python chk takes a CONDITION (the bash one takes got/want). Passing a
+# bare value here is truthy and passes VACUOUSLY, testing nothing -- so every
+# assertion below is written as an explicit comparison.
+chk("#424 fixture tool rc", _p.returncode == 0,
+    "rc=%d stderr=%s" % (_p.returncode, _p.stderr[:200]))
+try:
+    _live = sorted(int(r["issue"]) for r in json.loads(_p.stdout)["rows"])
+except Exception as _e:
+    _live = ["PARSE-ERROR %s" % _e]
+chk("#424 claims delegates to the canonical predicate", _live == [502, 504],
+    repr(_live))
+chk("#424 negative control: foreign prose mention stays open", 502 in _live, repr(_live))
+chk("#424 discriminating: foreign addressed sweep closes", 501 not in _live, repr(_live))
 with open(D + "/pycnt", "w") as fh:
     fh.write("%d %d\n" % (ok, fail))
 sys.exit(1 if fail else 0)

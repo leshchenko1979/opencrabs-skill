@@ -70,12 +70,25 @@ case "$verb" in
     exec "$SELF_DIR/oc-ledger" roster --live "$verb" "$@"
     ;;
   live|forum|claims|work|classify)
-    python3 - "$verb" "$@" <<'PY'
+    OC_ROSTER_TOOLS_DIR="$SELF_DIR" python3 - "$verb" "$@" <<'PY'
 import json, os, re, sqlite3, subprocess, sys, time
 
+# Claim state is NOT local to this tool. tools/lib/oc_claims.py owns the closure
+# predicate (#313) and four tools had drifted copies; this file's was one of
+# them (fork #424). Its `if uuid not in (later.get("by") or "")` skipped a
+# PEER's discharge row, so an administrative sweep ADDRESSED to #N closed
+# nothing and rows on the long-closed #82/#83/#105 stayed open forever.
+_TOOLS_DIR = os.environ.get("OC_ROSTER_TOOLS_DIR") or ""
+sys.path.insert(0, os.path.join(_TOOLS_DIR, "lib"))
+try:
+    import oc_claims
+except ImportError as _e:  # pragma: no cover - fail loud, never guess
+    sys.stderr.write("oc-roster: cannot import tools/lib/oc_claims.py (%s) -- "
+                     "the canonical claim predicate is missing; refusing to "
+                     "guess claim state\n" % _e)
+    sys.exit(3)
+
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-ISSUE_RE = re.compile(r"#(\d+)")
-CLOSERS = {"close", "confirm", "reject", "done", "unclaim"}
 RECENT_S = 24 * 3600
 
 def env(k, d=""):
@@ -119,33 +132,28 @@ def load_ledger():
         die(3, "ledger parse failed: %s" % e)
 
 def claims_index(events):
-    """-> (open_claims, issues_by_uuid). Open = no later closer by same author."""
+    """-> (open_claims, issues_by_uuid).
+
+    Closure is DELEGATED to tools/lib/oc_claims.py, the ONE implementation of
+    the predicate (#313); this file's private copy disagreed with it, which is
+    what fork #424 reports. `issues_by_uuid` deliberately stays an ALL-claims
+    index -- it records who EVER claimed what, which is what the `work` and
+    `classify` verbs attribute on; it is not a statement of what is still open.
+    """
+    rows = oc_claims.parse_events(events)
     opens, issues = [], {}
-    for i, ev in enumerate(events):
-        if ev.get("kind") != "claim":
+    for idx, claim in enumerate(rows):
+        if claim["kind"] != "claim" or not claim["targets"]:
             continue
-        m = UUID_RE.search(ev.get("by") or "")
+        m = UUID_RE.search(claim["by"] or "")
         if not m:
             continue
         uuid = m.group(0)
-        what = ev.get("what") or ""
-        mi = ISSUE_RE.search(what)
-        if not mi:
-            continue
-        num = mi.group(1)
-        issues.setdefault(uuid, set()).add(num)
-        closed = False
-        for later in events[i + 1:]:
-            if uuid not in (later.get("by") or ""):
-                continue
-            if later.get("kind") not in CLOSERS:
-                continue
-            if ("#" + num) in (later.get("what") or ""):
-                closed = True
-                break
-        if not closed:
-            opens.append({"uuid": uuid, "issue": num,
-                          "t": ev.get("t") or "", "what": what})
+        for num in claim["targets"]:
+            issues.setdefault(uuid, set()).add(str(num))
+            if not oc_claims.claim_is_closed(rows, idx, claim["by"], num):
+                opens.append({"uuid": uuid, "issue": str(num),
+                              "t": claim["t"], "what": claim["what"]})
     return opens, issues
 
 def worktrees():
