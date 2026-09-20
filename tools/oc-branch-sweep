@@ -4,7 +4,8 @@
 # lens C #1: standing HQ duty, zero judgment).
 #
 # Usage: oc-branch-sweep --repo <path> [--base <branch>] [--dry-run] [--keep RE] [--check-absorbed]
-#   Classifies every local branch against <base> (default: repo HEAD branch):
+#   Classifies every local branch AND every origin remote head against <base>
+#   (default: repo HEAD branch):
 #     MERGED   — tip reachable from base  -> DELETE class (history preserved in
 #                base; the 21:56Z owner deletion condition is satisfied by
 #                reachability). Deletion records tip sha in the TSV (archive).
@@ -19,6 +20,19 @@
 #     ACTIVE   — everything else                    -> report only.
 #   Protected (never delete): base, HEAD branch, anything matching --keep regex
 #   (default: 'main|master|carrier|keep|port/').
+#
+#   REMOTE LEG (Design C Phase 1, #415 step 8): the sweep reads refs/heads/ AND
+#   refs/remotes/origin/, so a remote-only head — one that exists on the fork but
+#   not in this clone — produces a row instead of being invisible. It is READ AND
+#   CLASSIFY ONLY, ALWAYS: no remote row is ever a deletion candidate (every one
+#   carries action=report-only, or keep when PROTECTED) and the leg cannot raise
+#   the rc. Phase 2 (remote-head disposal) is WITHDRAWN under the ponytail rung-1
+#   cut — the tool carries no archive path, and disposing would mean
+#   `git push origin --delete` against a SHARED remote. Remote rows are named by
+#   their full short ref (origin/<name>), so the TSV schema is unchanged and each
+#   row's scope is self-evident. Measured before this leg: 478 origin heads vs
+#   378 local branches, 191 (40.0%) invisible — including two of the three #119
+#   residue branches the T4 patrol exists to surface.
 #
 # Exit: 0 nothing deleted/would-delete · 1 deletions performed or pending ·
 #       2 usage · 3 git failure.
@@ -137,6 +151,58 @@ cmd_sweep() {
     fi
     printf '%s\t%s\t%s\t%s\n' "$b" "$cls" "$tip" "$action"
   done < <(git -C "$repo" for-each-ref refs/heads/ --format='%(refname:short)%09%(objectname:short)%09%(committerdate:unix)' 2>/dev/null)
+
+  # ---------------------------------------------------------------------------
+  # REMOTE LEG (Design C Phase 1, #415 step 8) — READ AND CLASSIFY ONLY.
+  #
+  # The sweep classified refs/heads/ only, so a remote-only head could never
+  # produce a row: measured 478 origin heads vs 378 local branches, 191 (40.0%)
+  # invisible, and two of the three #119 residue branches the T4 patrol exists to
+  # surface were remote-only. This leg enumerates refs/remotes/origin/ and applies
+  # the SAME classification rules, so every remote head gets a row.
+  #
+  # It performs NO writes and can NEVER raise the rc: Phase 2 (remote-head
+  # disposal) is WITHDRAWN under the ponytail rung-1 cut — the tool carries no
+  # archive path, and a delete would run `git push origin --delete` against a
+  # SHARED remote. Every remote row therefore carries action=report-only (keep
+  # when PROTECTED), and `deleted` is not touched here, so the rc stays a
+  # statement about LOCAL deletions alone.
+  #
+  # Rows are named by their full short ref (origin/<name>): the TSV schema is
+  # unchanged, and a reader can see at a glance which rows came from the remote.
+  # ---------------------------------------------------------------------------
+  declare -A rmerged_set=()
+  while IFS= read -r mb; do
+    [ -n "$mb" ] && rmerged_set["$mb"]=1
+  done < <(git -C "$repo" for-each-ref --merged="$base" refs/remotes/origin/ --format='%(refname:short)' 2>/dev/null)
+
+  while IFS=$'\t' read -r rb rtip rcommitter_ts; do
+    [ -n "$rb" ] || continue
+    # origin/HEAD is a symbolic alias, not a head: reporting it would duplicate
+    # whichever branch it points at, and it is not a branch a sweep can act on.
+    case "$rb" in */HEAD) continue ;; esac
+    local rbare="${rb#origin/}" rcls raction="report-only"
+    if [ "$rbare" = "$base" ] || printf '%s' "$rbare" | grep -Eq "$keep"; then
+      rcls="PROTECTED"; raction="keep"
+    elif [ -n "${rmerged_set[$rb]:-}" ]; then
+      # Same UNSTARTED guard as the local leg, read on the remote-tracking
+      # reflog. Its fallback direction is the local one's: an unreadable reflog
+      # means an old ref, which stays MERGED.
+      local rrl=""
+      rrl="$(git -C "$repo" reflog show --format='%gs' "refs/remotes/$rb" 2>/dev/null)"
+      if [ -n "$rrl" ] && ! printf '%s\n' "$rrl" | grep -qvE '^branch: Created from '; then
+        rcls="UNSTARTED"
+      else
+        rcls="MERGED"
+      fi
+    elif [ "$check_absorbed" -eq 1 ] && git -C "$repo" cherry "$base" "$rb" >/dev/null 2>&1 && ! git -C "$repo" cherry "$base" "$rb" 2>/dev/null | grep -q '^+'; then
+      rcls="ABSORBED"
+    else
+      if [ -n "$rcommitter_ts" ] && [ "$rcommitter_ts" -gt 0 ] && [ $(( now_ts - rcommitter_ts )) -gt $((14*86400)) ]; then rcls="STALE"; else rcls="ACTIVE"; fi
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$rb" "$rcls" "$rtip" "$raction"
+  done < <(git -C "$repo" for-each-ref refs/remotes/origin/ --format='%(refname:short)%09%(objectname:short)%09%(committerdate:unix)' 2>/dev/null)
+
   oc_log_extra deleted "$deleted"
   [ "$deleted" -eq 0 ] && return 0 || return 1
 }
@@ -223,6 +289,48 @@ cmd_selftest() {
   git -C "$T/r" checkout -qb doomed
   bash "$ME" --repo "$T/r" --keep '[' >/dev/null 2>&1; chk "bad-keep-rc2" 2 $?
   [ -n "$(git -C "$T/r" branch --list doomed)" ]; chk "bad-keep-no-delete" 0 $?
+  # ---------------------------------------------------------------------------
+  # #415 Design C step 8: the REMOTE LEG. A head that exists on origin but not in
+  # this clone produced no row at all — measured 191 remote-only heads (40.0%)
+  # invisible, two of the three #119 residue branches among them. The leg must
+  # emit one row per remote head, classify a remote-only branch, and write
+  # NOTHING (Phase 2 disposal is withdrawn).
+  #
+  # The zero-writes assertion is a byte comparison of the REMOTE's own ref list
+  # before and after the run — the strongest available form, and taken from the
+  # remote rather than from the clone that might have written.
+  # ---------------------------------------------------------------------------
+  local RR="$T/rr" RREMOTE="$T/remote.git"
+  git init -q "$RR" 2>/dev/null
+  git -C "$RR" config user.email t@t; git -C "$RR" config user.name t
+  echo base > "$RR/f"; git -C "$RR" add f; git -C "$RR" commit -q -m "base"
+  local RBASE; RBASE="$(git -C "$RR" symbolic-ref --short HEAD)"
+  git init -q --bare "$RREMOTE" 2>/dev/null
+  git -C "$RR" remote add origin "$RREMOTE"
+  git -C "$RR" push -q origin "HEAD:refs/heads/$RBASE" 2>/dev/null
+  # a remote-only head: pushed, then its local branch removed, so origin/romerged
+  # exists with no local counterpart. Merged into base first, because the class
+  # the T4 patrol needs to see is disposable residue.
+  git -C "$RR" checkout -qb romerged
+  echo x > "$RR/g"; git -C "$RR" add g; git -C "$RR" commit -q -m "romerged commit"
+  git -C "$RR" checkout -q "$RBASE"
+  git -C "$RR" merge -q --no-ff -m "merge romerged" romerged
+  git -C "$RR" push -q origin "romerged:refs/heads/romerged" 2>/dev/null
+  git -C "$RR" branch -qD romerged
+  git -C "$RREMOTE" for-each-ref --format='%(refname) %(objectname)' > "$T/rref.before"
+  git -C "$RR" for-each-ref refs/heads/ --format='%(refname) %(objectname)' > "$T/lref.before"
+  bash "$ME" --repo "$RR" --dry-run > "$T/out-remote.tsv" 2>/dev/null; chk "remote-dry-rc0" 0 $?
+  git -C "$RREMOTE" for-each-ref --format='%(refname) %(objectname)' > "$T/rref.after"
+  git -C "$RR" for-each-ref refs/heads/ --format='%(refname) %(objectname)' > "$T/lref.after"
+  cmp -s "$T/rref.before" "$T/rref.after"; chk "remote-leg-writes-nothing-to-remote" 0 $?
+  cmp -s "$T/lref.before" "$T/lref.after"; chk "remote-leg-writes-nothing-to-local" 0 $?
+  local RH RN
+  RH="$(git -C "$RR" for-each-ref refs/remotes/origin/ --format='%(refname:short)' 2>/dev/null | awk '!/\/HEAD$/{n++} END{print n+0}')"
+  RN="$(awk -F'\t' '$1 ~ /^origin\//{n++} END{print n+0}' "$T/out-remote.tsv")"
+  chk "remote-one-row-per-head" "$RH" "$RN"
+  awk -F'\t' '$1=="origin/romerged" && $2=="MERGED"{f=1} END{exit (f?0:1)}' "$T/out-remote.tsv" && ok || bad "remote-only-classified-MERGED"
+  [ -z "$(git -C "$RR" branch --list romerged)" ]; chk "remote-only-has-no-local-branch" 0 $?
+  awk -F'\t' '$1 ~ /^origin\// && ($4=="would-delete" || $4=="deleted"){f=1} END{exit (f?1:0)}' "$T/out-remote.tsv" && ok || bad "remote-rows-never-deletion-candidates"
   rm -rf "$T"
   echo "oc-branch-sweep selftest: PASS=$P FAIL=$F"
   [ "$F" -eq 0 ]
