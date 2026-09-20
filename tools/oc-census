@@ -762,6 +762,26 @@ def selftest():
                                env=dict(os.environ, OC_TOOLS_NOLOG="1"))
             return p.returncode, p.stdout, p.stderr
 
+        def _repo_state():
+            # The fixture's ref store, HEAD and object store as one comparable
+            # string.  `for-each-ref` is deliberately UNFILTERED: a stray write
+            # outside refs/heads is still a write.
+            out = []
+            for args in (("for-each-ref", "--format=%(refname) %(objectname)"),
+                         ("rev-parse", "HEAD"),
+                         ("count-objects", "-v")):
+                p = subprocess.run(["git", "-C", root] + list(args),
+                                   capture_output=True, text=True)
+                out.append(p.stdout)
+            return "\n".join(out)
+
+        # Pin the fixture's state BEFORE the first census run, so leg 17 can
+        # prove the WHOLE battery left it untouched.  A snapshot taken at leg
+        # 17 would already have absorbed any write made by legs 1-16 -- a
+        # mutant that writes one ref per run would then look idempotent and
+        # the leg would pass while measuring nothing.
+        state_before = _repo_state()
+
         # ---- 1. --json well-formed, rc 0 ------------------------------------
         rc, out, err = run("--json")
         ck(rc == 0, "--json exits 0 (rc=%d, stderr=%r)" % (rc, err.strip()[:120]))
@@ -930,6 +950,21 @@ def selftest():
         ck(doc["meta"]["totals"].get("plus_content_present") == 1,
            "meta.totals.plus_content_present agrees with the per-row sum (got %r)"
            % doc["meta"]["totals"].get("plus_content_present"))
+
+        # ---- 17. THE READ-ONLY PROOF (task 14) ------------------------------
+        # The census is a measurement, so it must leave the repo it measures
+        # exactly as it found it: a run that wrote a ref or an object would
+        # pass every leg above and still be unusable against a live repo.
+        # state_before was pinned before leg 1, so this compares the fixture
+        # across EVERY run this battery made -- not merely the two below.
+        state_after = _repo_state()
+        ck(state_before == state_after,
+           "no census run in this battery wrote a ref or an object (refs + "
+           "HEAD + object store byte-identical before/after)")
+        rc12, _, _ = run("--json")
+        ck(rc12 == 0 and state_before == _repo_state(),
+           "…and a further full sweep on top of it writes nothing either "
+           "(rc=%d)" % rc12)
 
         if fails:
             print("  %d FAILED" % len(fails))
