@@ -1202,6 +1202,14 @@ else
   bad "tools/archive missing"
 fi
 
+# ---- 71. oc-census (READ-ONLY pending-branch census) ------------------------
+# The selftest builds a throwaway 5-branch fixture repo and asserts the
+# decomposition invariant (plus_total == plus_own + plus_untrailered +
+# plus_other) plus the tip-lane resolution rule. It never touches the real
+# repo, so it costs ~1s and is safe to run in the battery.
+section "oc-census (pending-branch census)"
+run_selftest oc-census
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \

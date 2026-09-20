@@ -1,0 +1,603 @@
+#!/usr/bin/env python3
+"""oc-census — READ-ONLY pending-branch census (runbook Step 7 step 0).
+
+WHAT IT ANSWERS
+  For every local branch b: how many of its commits are NOT already in the base
+  (`git cherry <base> <b>` reports `+`), and of those, how many belong to the
+  branch TIP's own lane (its `Session-Id` trailer), carry NO trailer, or carry a
+  DIFFERENT lane's trailer.  Those three arms PARTITION the first:
+
+      plus_total == plus_own + plus_untrailered + plus_other
+
+  The identity is ENFORCED, not merely printed: a row that fails to add up is an
+  internal error (rc 3), never a silently-wrong number.
+
+WHY (runbook Step 7 step 0, v0.4.170 + v0.4.214)
+  The runbook sanctions exactly ONE pending signal:
+
+      pending_lane(b) = commits `git cherry <newbase> <b>` reports as `+`,
+                        whose Session-Id trailer names the BRANCH TIP's lane
+
+  A non-zero AGGREGATE `+` is not proof of pending work: patch-id matching is
+  blind to a change already present by another route (v0.4.214 — 10 of 10
+  lane-scoped `+` markers on two lanes were content-present).  So the census
+  SPLITS the aggregate into its three arms instead of trusting it, and it never
+  prints a cut sha — it reports the counts and the base the branch sits on.
+
+READ-ONLY
+  Only `rev-parse` / `cherry` / `for-each-ref` / `log --format` / `merge-base`.
+  No ref is written, no store is touched, no cut is computed.
+
+NAMING COLLISION (spec §7) — `%oc-census%`, not `%census%`
+  `oc-census` is substring-adjacent to the EXISTING `oc-harvest-census` (the
+  upstream-PR harvest registry, ~100 KB, 30+ fork issues).  `grep -i census` and
+  SQL `LIKE '%census%'` therefore hit BOTH.  Measured 2026-09-19: `%census%`
+  returned 200+ rows, every one of them the OTHER tool; `%oc-census%` returned a
+  clean set.  The name is KEPT (design H ruling) — the mitigation is this
+  predicate, not a rename.
+
+COST (measured 2026-09-20, 383 branches, base origin/main)
+  `git cherry <base> <b>` costs ~1.4 s/branch: the expense is the LEFT side
+  (base commits not in b), whose patch-ids are recomputed per branch.  Serial
+  sweep = ~520 s; a bounded worker pool = ~150 s.  `git cherry <merge-base> <b>`
+  is 20x faster but DEGENERATES to the whole-branch aggregate (plus == right-side
+  count) — the exact wrong answer this tool exists to correct — so it is not
+  used.  Branches whose tip is already reachable from the base skip `cherry`
+  entirely (their plus is 0 by construction; one `for-each-ref --merged` call
+  settles all of them at once).
+
+  MEMORY: the sweep is a pool of SUBPROCESSES (w<=4 default), never threads
+  holding bulk data; peak RSS ~17 MB on the 383-branch sweep.  The ops cgroup
+  caps at MemoryHigh=768M, so no memory-hungry design is admissible here.
+
+OUTPUT
+  Human table by default; `--json` emits an OBJECT carrying the ref-state
+  (repo, base, base_sha) BESIDE `rows`, because a census figure without the
+  ref-state it was taken at is unreproducible (spec §2: the census is a
+  point-in-time measurement, never a constant).
+
+EXIT: 0 census produced · 1 refused (repo or base unresolvable) ·
+      2 usage · 3 invariant break (internal, should be impossible).
+"""
+
+import argparse
+import datetime
+import fcntl
+import fnmatch
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+TOOL = "oc-census"
+DEFAULT_REPO = "/root/opencrabs"
+DEFAULT_BASE = "origin/main"
+TRAILER_CHUNK = 300
+DEFAULT_JOBS = 4
+
+# Fixture lanes for --selftest (UUID-shaped so the MALFORMED_TRAILER class this
+# tool grows next cannot mistake them for malformed keys).
+LANE_A = "1a63f103-0000-4000-8000-00000000000a"
+LANE_B = "2fbfb2f8-0000-4000-8000-00000000000b"
+
+# ============================================================================
+# Unified tools log (parity with tools/lib/oc-log.sh; see RC-CONTRACT.md
+# "Unified tools log").  One JSONL line per invocation, flock-serialized.
+# ============================================================================
+_LOG_ENABLED = False
+_LOG_ARGS = ""
+_LOG_EXTRA = {}
+_LOG_START = 0.0
+_LOG_FINISHED = False
+
+
+def _is_selftest():
+    return "--selftest" in sys.argv[1:]
+
+
+def oc_log_init():
+    global _LOG_ENABLED, _LOG_ARGS, _LOG_EXTRA, _LOG_START, _LOG_FINISHED
+    _LOG_ARGS = " ".join(sys.argv[1:])
+    _LOG_EXTRA = {}
+    _LOG_FINISHED = False
+    if "--no-log" in sys.argv[1:] or _is_selftest():
+        os.environ["OC_TOOLS_NOLOG"] = "1"
+    if os.environ.get("OC_TOOLS_NOLOG", "0") == "1":
+        return
+    _LOG_ENABLED = True
+    _LOG_START = time.time()
+
+    def _sig(signum, _frame):
+        sig_map = {signal.SIGTERM: ("TERM", 143), signal.SIGINT: ("INT", 130),
+                   signal.SIGHUP: ("HUP", 129)}
+        name, code = sig_map.get(signum, ("SIG%d" % signum, 128 + signum))
+        oc_log_extra("signal", name)
+        oc_log_finish(code)
+        sys.exit(code)
+
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(s, _sig)
+        except Exception:
+            pass
+
+
+def oc_log_extra(key, value):
+    if _LOG_ENABLED:
+        _LOG_EXTRA[str(key)] = str(value)
+
+
+def _log_path():
+    return os.environ.get(
+        "OC_TOOLS_LOG",
+        os.path.join(
+            os.environ.get("OC_DEV_STATE",
+                           os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")),
+            "tools.log"))
+
+
+def oc_log_finish(exit_code=0):
+    global _LOG_FINISHED
+    if not _LOG_ENABLED or _LOG_FINISHED:
+        return
+    _LOG_FINISHED = True
+    secs = round(time.time() - (_LOG_START if _LOG_START > 0 else time.time()), 1)
+    entry = {
+        "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "tool": TOOL,
+        "actor": os.environ.get("OC_ACTOR") or os.environ.get("OPENCRABS_SESSION_ID") or "unknown",
+        "args": _LOG_ARGS[:500],
+        "exit": int(exit_code) if isinstance(exit_code, int) else 1,
+        "secs": secs,
+        "extra": _LOG_EXTRA,
+    }
+    logf = _log_path()
+    try:
+        os.makedirs(os.path.dirname(logf), exist_ok=True)
+        with open(logf + ".lock", "a") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            try:
+                with open(logf, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+                    f.flush()
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+
+
+# ============================================================================
+# git helpers (read-only)
+# ============================================================================
+def git(repo, *args):
+    p = subprocess.run(["git", "-C", repo] + list(args),
+                       capture_output=True, text=True)
+    return p.returncode, p.stdout, p.stderr
+
+
+def list_branches(repo, glob):
+    """[(name, tip_sha)] from for-each-ref — the branch list is DERIVED, never
+    read from a scratch file.  --branch matches the SHORT name (feat/x)."""
+    rc, out, err = git(repo, "for-each-ref", "refs/heads",
+                       "--format=%(refname:short) %(objectname)")
+    if rc != 0:
+        return None, err.strip()
+    rows = []
+    for ln in out.splitlines():
+        if " " not in ln:
+            continue
+        name, sha = ln.rsplit(" ", 1)
+        name, sha = name.strip(), sha.strip()
+        if not name or not sha:
+            continue
+        if glob and not fnmatch.fnmatch(name, glob):
+            continue
+        rows.append((name, sha))
+    return rows, ""
+
+
+def merged_branches(repo, base):
+    """Set of branch names whose tip is already reachable from base.
+
+    ONE for-each-ref --merged call replaces N `merge-base --is-ancestor` calls
+    (measured: 25 s -> 0.05 s over 383 branches) and is the same predicate.
+    """
+    rc, out, _ = git(repo, "for-each-ref", "refs/heads", "--merged", base,
+                     "--format=%(refname:short)")
+    if rc != 0:
+        return set()
+    return {l.strip() for l in out.splitlines() if l.strip()}
+
+
+def trailers_batch(repo, shas, chunk=TRAILER_CHUNK):
+    """sha -> Session-Id trailer ('' when absent), batched `chunk` shas per git
+    call.  The naive per-commit form is ~700 invocations on a full sweep.
+
+    A commit carrying MORE THAN ONE Session-Id trailer yields only its FIRST
+    value: `%(trailers:key=...,valueonly)` separates multiple values with a
+    newline, which `splitlines()` turns into a continuation line that does not
+    match the `<sha>\\t` shape and is skipped.  Deterministic, and matches the
+    reference implementation this tool was ported from.
+    """
+    out = {}
+    shas = list(shas)
+    for i in range(0, len(shas), chunk):
+        rc, txt, _ = git(repo, "log", "--no-walk=unsorted",
+                         "--format=%H\t%(trailers:key=Session-Id,valueonly)",
+                         *shas[i:i + chunk])
+        if rc != 0:
+            continue
+        for ln in txt.splitlines():
+            if re.match(r"^[0-9a-f]{40}\t", ln):
+                sha, tr = ln.split("\t", 1)
+                out[sha] = tr.strip()
+    return out
+
+
+def cherry_plus(repo, base, branch):
+    """The `+` shas of `git cherry <base> <branch>` (None on git failure).
+
+    The EXACT form is required: substituting the merge-base as upstream is 20x
+    faster but returns the whole-branch aggregate instead of the lane-scoped
+    set, i.e. the wrong answer.
+    """
+    rc, out, _ = git(repo, "cherry", base, branch)
+    if rc != 0:
+        return None
+    plus = []
+    for ln in out.splitlines():
+        if ln.startswith("+") and len(ln.split()) >= 2:
+            plus.append(ln.split()[1])
+    return plus
+
+
+def census(repo, base, glob, jobs):
+    """Return (rows, meta).  Raises CensusRefused on an unresolvable repo/base."""
+    rc, _, err = git(repo, "rev-parse", "--git-dir")
+    if rc != 0:
+        raise CensusRefused("repo %s is not a git repository (%s)"
+                            % (repo, err.strip().splitlines()[:1] or "no detail"))
+    rc, base_sha, err = git(repo, "rev-parse", base)
+    if rc != 0:
+        raise CensusRefused("base ref %r does not resolve (%s)"
+                            % (base, err.strip().splitlines()[:1] or "no detail"))
+    base_sha = base_sha.strip()
+
+    branches, err = list_branches(repo, glob)
+    if branches is None:
+        raise CensusRefused("cannot list refs/heads (%s)" % (err or "no detail"))
+
+    in_base = merged_branches(repo, base)
+
+    # Phase 2: the exact cherry sweep, bounded worker pool over subprocesses.
+    pending = [n for (n, _) in branches if n not in in_base]
+    plus_by_branch = {}
+    if pending:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
+            for name, plus in ex.map(lambda n: (n, cherry_plus(repo, base, n)),
+                                     pending):
+                plus_by_branch[name] = plus
+
+    # Phase 3: ONE batched trailer lookup for every '+' sha and every tip.
+    all_shas = set()
+    for (_, tip) in branches:
+        all_shas.add(tip)
+    for plus in plus_by_branch.values():
+        if plus:
+            all_shas.update(plus)
+    trailers = trailers_batch(repo, sorted(all_shas))
+
+    # Phase 4: decompose.  The three arms PARTITION the plus set:
+    #   no trailer                      -> untrailered
+    #   trailer == tip_lane (both set)  -> own
+    #   trailer != tip_lane (tip set)   -> other
+    #   trailer present, tip_lane empty -> untrailered   (see docstring)
+    rows = []
+    for (name, tip) in branches:
+        tip_lane = trailers.get(tip, "")
+        plus = plus_by_branch.get(name)
+        if plus is None:
+            # In base -> `base..branch` is empty -> plus is 0 by construction.
+            plus = [] if name in in_base else None
+        if plus is None:
+            rows.append({"branch": name, "tip": tip, "tip_lane": tip_lane,
+                         "tip_in_base": 1, "plus_total": -1, "plus": -1,
+                         "plus_own": -1, "plus_untrailered": -1,
+                         "plus_other": -1, "err": "cherry-failed"})
+            continue
+        own = unt = oth = 0
+        for s in plus:
+            t = trailers.get(s, "")
+            if not t:
+                unt += 1
+            elif tip_lane and t == tip_lane:
+                own += 1
+            elif tip_lane and t != tip_lane:
+                oth += 1
+            else:
+                unt += 1
+        total = len(plus)
+        rows.append({"branch": name, "tip": tip, "tip_lane": tip_lane,
+                     "tip_in_base": 0 if name in in_base else 1,
+                     "plus_total": total, "plus": total,
+                     "plus_own": own, "plus_untrailered": unt,
+                     "plus_other": oth})
+
+    rows.sort(key=lambda r: r["branch"])
+    meta = {"repo": repo, "base": base, "base_sha": base_sha,
+            "branch_glob": glob or "*", "jobs": jobs,
+            "branches": len(rows)}
+    return rows, meta
+
+
+class CensusRefused(Exception):
+    pass
+
+
+def check_invariant(rows):
+    """plus_total == plus_own + plus_untrailered + plus_other, EVERY row."""
+    bad = []
+    for r in rows:
+        if r.get("plus_total", 0) < 0:
+            continue
+        if r["plus_total"] != r["plus_own"] + r["plus_untrailered"] + r["plus_other"]:
+            bad.append(r["branch"])
+    return bad
+
+
+def render(rows, meta):
+    w = max([len(r["branch"]) for r in rows] + [6])
+    out = []
+    out.append("%-*s  %-8s  %5s %5s %5s %5s  %s"
+               % (w, "BRANCH", "IN-BASE", "TOT", "OWN", "UNTR", "OTHER", "TIP_LANE"))
+    for r in rows:
+        if r.get("plus_total", 0) < 0:
+            out.append("%-*s  %-8s  %s" % (w, r["branch"], "?", r.get("err", "error")))
+            continue
+        out.append("%-*s  %-8s  %5d %5d %5d %5d  %s"
+                   % (w, r["branch"], "yes" if r["tip_in_base"] == 0 else "no",
+                      r["plus_total"], r["plus_own"], r["plus_untrailered"],
+                      r["plus_other"], r["tip_lane"] or "-"))
+    tot = {k: sum(r[k] for r in rows if r.get("plus_total", 0) >= 0)
+           for k in ("plus_total", "plus_own", "plus_untrailered", "plus_other")}
+    inb = sum(1 for r in rows if r.get("tip_in_base") == 0)
+    out.append("")
+    out.append("%d branches · %d already in base · %d swept"
+               % (len(rows), inb, len(rows) - inb))
+    out.append("sum(plus_total)=%d = own %d + untrailered %d + other %d"
+               % (tot["plus_total"], tot["plus_own"], tot["plus_untrailered"],
+                  tot["plus_other"]))
+    out.append("base %s @ %s" % (meta["base"], meta["base_sha"]))
+    return "\n".join(out)
+
+
+def _fixture_repo(root):
+    """Build the fixture repo used by --selftest.
+
+    Every commit writes a DISTINCT file: `git cherry` compares PATCH-IDS, so a
+    set of empty (or identical) commits would collapse onto one patch-id and the
+    `+`/`-` classification would be meaningless.
+
+    Graph (base = `main`):
+
+        main                base commit + feat/absorbed's commit (ff-merged)
+        feat/alpha          a1, a2          both LANE_A        -> own=2
+        feat/mixed          m1 LANE_B, m2 LANE_A (tip)         -> own=1 other=1
+        feat/tipbare        b1 LANE_B, b2 NO TRAILER (tip)     -> unt=2
+        feat/absorbed       c1              ff-merged into main-> plus=0
+    """
+    def g(*a, **kw):
+        p = subprocess.run(["git", "-C", root] + list(a),
+                           capture_output=True, text=True)
+        if p.returncode != 0 and not kw.get("allow_fail"):
+            raise RuntimeError("fixture git %s failed: %s" % (" ".join(a), p.stderr.strip()))
+        return p
+
+    g("init", "-q")
+    g("symbolic-ref", "HEAD", "refs/heads/main")
+    g("config", "user.email", "census@selftest.invalid")
+    g("config", "user.name", "oc-census selftest")
+
+    def commit(fname, msg, lane=None):
+        with open(os.path.join(root, fname), "w") as f:
+            f.write(msg + "\n")
+        g("add", fname)
+        body = msg + "\n\nSession-Id: " + lane + "\n" if lane else msg + "\n"
+        g("commit", "-q", "-m", body)
+
+    commit("f_base.txt", "base")
+    g("checkout", "-q", "-b", "feat/alpha")
+    commit("f_a1.txt", "alpha 1", LANE_A)
+    commit("f_a2.txt", "alpha 2", LANE_A)
+    g("checkout", "-q", "-b", "feat/mixed", "main")
+    commit("f_m1.txt", "mixed 1", LANE_B)
+    commit("f_m2.txt", "mixed 2", LANE_A)
+    g("checkout", "-q", "-b", "feat/tipbare", "main")
+    commit("f_b1.txt", "bare 1", LANE_B)
+    commit("f_b2.txt", "bare 2")            # TIP carries NO trailer
+    g("checkout", "-q", "-b", "feat/absorbed", "main")
+    commit("f_c1.txt", "absorbed 1")
+    g("checkout", "-q", "main")
+    g("merge", "-q", "--ff-only", "feat/absorbed")
+
+
+def selftest():
+    import shutil
+    import tempfile
+
+    fails = []
+
+    def ck(cond, msg):
+        print(("  ok   - " if cond else "  FAIL - ") + msg)
+        if not cond:
+            fails.append(msg)
+
+    tool = os.path.abspath(__file__)
+    root = tempfile.mkdtemp(prefix="oc-census-selftest-")
+    try:
+        try:
+            _fixture_repo(root)
+        except Exception as e:
+            print("  FAIL - fixture build failed: %s" % e)
+            return 1
+
+        def run(*args):
+            # Invoke through the shebang (not sys.executable) so the selftest
+            # also exercises the exec bit the battery's run_selftest requires,
+            # and suppress the unified log -- a selftest run is not usage and
+            # must not append ~10 rows to the real tools.log.
+            p = subprocess.run([tool, "--repo", root, "--base", "main"] + list(args),
+                               capture_output=True, text=True,
+                               env=dict(os.environ, OC_TOOLS_NOLOG="1"))
+            return p.returncode, p.stdout, p.stderr
+
+        # ---- 1. --json well-formed, rc 0 ------------------------------------
+        rc, out, err = run("--json")
+        ck(rc == 0, "--json exits 0 (rc=%d, stderr=%r)" % (rc, err.strip()[:120]))
+        try:
+            doc = json.loads(out)
+        except Exception as e:
+            ck(False, "--json is well-formed (%s)" % e)
+            return 1
+        ck(True, "--json is well-formed")
+        ck("rows" in doc and "meta" in doc, "document carries rows + meta (ref-state)")
+        ck(doc["meta"].get("base") == "main", "meta.base names the ref the census was taken at")
+        ck(bool(doc["meta"].get("base_sha")), "meta.base_sha pins that ref's sha")
+
+        rows = {r["branch"]: r for r in doc["rows"]}
+        ck(len(rows) == 5, "5 fixture branches censused (got %d: %s)"
+           % (len(rows), sorted(rows)))
+
+        # ---- 2. THE INVARIANT, every row -----------------------------------
+        bad = [b for b, r in rows.items()
+               if r["plus_total"] != r["plus_own"] + r["plus_untrailered"] + r["plus_other"]]
+        ck(not bad, "plus_total == plus_own + plus_untrailered + plus_other on every row"
+                    + (" (violations: %s)" % bad if bad else ""))
+
+        # ---- 3. decomposition values ---------------------------------------
+        exp = {
+            "feat/alpha":    (2, 2, 0, 0, LANE_A),
+            "feat/mixed":    (2, 1, 0, 1, LANE_A),
+            "feat/tipbare":  (2, 0, 2, 0, ""),
+            "feat/absorbed": (0, 0, 0, 0, ""),
+            "main":          (0, 0, 0, 0, ""),
+        }
+        for b, (tot, own, unt, oth, lane) in sorted(exp.items()):
+            r = rows.get(b)
+            if r is None:
+                ck(False, "%s present in census" % b)
+                continue
+            got = (r["plus_total"], r["plus_own"], r["plus_untrailered"],
+                   r["plus_other"], r["tip_lane"])
+            ck(got == (tot, own, unt, oth, lane),
+               "%s decomposition = total %d / own %d / untrailered %d / other %d, "
+               "tip_lane %s (got %s)" % (b, tot, own, unt, oth, lane or "''", got))
+
+        # ---- 4. in-base branch is NOT reported as pending ------------------
+        ck(rows["feat/absorbed"]["tip_in_base"] == 0,
+           "a branch whose tip is reachable from the base reports tip_in_base=0")
+        ck(rows["feat/alpha"]["tip_in_base"] == 1,
+           "a branch with pending commits reports tip_in_base=1")
+        ck(rows["feat/absorbed"]["plus_total"] == 0,
+           "an already-absorbed branch reports plus_total=0 (cherry skipped, not guessed)")
+
+        # ---- 5. the tip-lane rule: the TIP's trailer names the lane ---------
+        ck(rows["feat/tipbare"]["tip_lane"] == "",
+           "a tip with no Session-Id yields tip_lane='' (unattributable), not a guessed lane")
+        ck(rows["feat/tipbare"]["plus_untrailered"] == 2,
+           "commits with no trailer AND commits whose lane is unknown both land untrailered")
+
+        # ---- 6. determinism (two runs byte-identical) ----------------------
+        rc2, out2, _ = run("--json")
+        ck(rc2 == 0 and out2 == out, "two runs on an unchanged repo are byte-identical")
+
+        # ---- 7. parallelism is EXACTLY equivalent to serial ----------------
+        rc3, out3, _ = run("--json", "--jobs", "1")
+        ck(rc3 == 0 and json.loads(out3)["rows"] == doc["rows"],
+           "--jobs 1 and --jobs %d produce identical rows (pool is equivalence-preserving)"
+           % DEFAULT_JOBS)
+
+        # ---- 8. --branch glob narrows the sweep ----------------------------
+        rc4, out4, _ = run("--json", "--branch", "feat/*")
+        ck(rc4 == 0 and len(json.loads(out4)["rows"]) == 4,
+           "--branch 'feat/*' narrows to the 4 feat/ branches")
+
+        # ---- 9. refusal contract -------------------------------------------
+        rc5, _, _ = run("--repo", os.path.join(root, "nope"), "--json")
+        ck(rc5 == 1, "an unresolvable repo refuses with rc 1 (got %d)" % rc5)
+        rc6, _, _ = run("--base", "no-such-ref-xyz", "--json")
+        ck(rc6 == 1, "an unresolvable base refuses with rc 1 (got %d)" % rc6)
+
+        # ---- 10. human table renders ---------------------------------------
+        rc7, out7, _ = run()
+        ck(rc7 == 0 and "sum(plus_total)=" in out7,
+           "default output is the human table with the decomposition line")
+
+        if fails:
+            print("  %d FAILED" % len(fails))
+            return 1
+        print("  all checks passed")
+        return 0
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(
+        prog=TOOL, add_help=True,
+        description="READ-ONLY pending-branch census (runbook Step 7 step 0).")
+    ap.add_argument("--repo", default=DEFAULT_REPO, help="git repo (default %s)" % DEFAULT_REPO)
+    ap.add_argument("--base", default=DEFAULT_BASE, help="base ref (default %s)" % DEFAULT_BASE)
+    ap.add_argument("--branch", default="", help="only branches matching this glob (short name)")
+    ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS, help="cherry workers (default %d)" % DEFAULT_JOBS)
+    ap.add_argument("--json", action="store_true", help="emit JSON object {meta, rows, totals}")
+    ap.add_argument("--selftest", action="store_true", help="run the built-in fixture test")
+    ap.add_argument("--no-log", action="store_true", help="suppress the unified tools log")
+    args = ap.parse_args(argv)
+
+    if args.selftest:
+        return selftest()
+
+    oc_log_init()
+    rc = 0
+    try:
+        try:
+            rows, meta = census(args.repo, args.base, args.branch, args.jobs)
+        except CensusRefused as e:
+            sys.stderr.write("%s: REFUSED — %s\n" % (TOOL, e))
+            oc_log_extra("verdict", "refused")
+            rc = 1
+            return rc
+
+        bad = check_invariant(rows)
+        oc_log_extra("branches", len(rows))
+        oc_log_extra("invariant", "ok" if not bad else "BROKEN")
+        if bad:
+            sys.stderr.write("%s: INVARIANT BREAK on %d row(s): %s\n"
+                             % (TOOL, len(bad), ", ".join(bad[:10])))
+            rc = 3
+            return rc
+
+        if args.json:
+            tot = {k: sum(r[k] for r in rows if r.get("plus_total", 0) >= 0)
+                   for k in ("plus_total", "plus_own", "plus_untrailered", "plus_other")}
+            meta = dict(meta)
+            meta["totals"] = tot
+            meta["invariant"] = "plus_total == plus_own + plus_untrailered + plus_other"
+            print(json.dumps({"meta": meta, "rows": rows},
+                             indent=1, sort_keys=True))
+        else:
+            print(render(rows, meta))
+        return rc
+    finally:
+        # rc, not a hardcoded 0: a refusal (1) and an invariant break (3) are
+        # the two outcomes an auditor most needs to see in the log.
+        oc_log_finish(rc)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
