@@ -1,5 +1,17 @@
 # Changelog — opencrabs-dev
 
+## v0.4.228 (2026-09-20)
+
+**One HQ ruling codified: a throwaway probe home is reaped at rig teardown, and the class that produced the residue is now visible.**
+
+Raised by Infra Factory HQ, which dispatched residue it would not reap itself: 3 `active` goal rows in `profiles/smoke300` + `profiles/smoke300neg`, seeded 2026-09-18 by the fork-#300 behavioral smoke and never torn down. Verified first-hand: both homes declare themselves disposable in their own `config.toml` header; both read `session_bindings=0` and `cron_jobs=0` total; and the residue is the WHOLE home, not those three rows — smoke300 carries 12 goal rows + 11 sessions, smoke300neg 2 + 2. There is no fixture to give a teardown hook to: the rig is ad-hoc shell/python, and neither `oc-smoke` nor `oc-smoke-evidence` creates a profile home, so the obligation is a rig-lifecycle rule rather than a test-suite fixture. Box sweep over all 11 profile homes found two further throwaway homes carrying an ENABLED cron row (`oc134probe`, `code-spike`) — inert while no daemon runs them, a footgun the moment a rig reuses a home and starts one. Infra's `test_cron_targets.py` covers `Cron:%` sessions only and never sees `CLI Run` fixtures.
+
+**Files:** `fleet-directives.md` §Throwaway probe homes — reap at rig teardown.
+
+**Dispatched, not absorbed:** the reap-or-declare call went to the rig's owner lane (topic `push-to-session`) in the same turn, and the mechanical backstop — an `oc-health` check for orphan probe homes, since no existing class reaches `profiles/*` — went to the Toolsmith as their design call.
+
+**Verification:** clause present in `fleet-directives.md` · battery `tools/tests/run.sh` green · `oc-ledger sync --version 0.4.228` rc 0.
+
 ## v0.4.227 (2026-09-20)
 
 **One self-correction: the Duty-6 instrumentation schema promised for v0.4.226 did not ship with it. It lands here, frozen.**
