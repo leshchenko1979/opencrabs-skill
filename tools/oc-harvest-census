@@ -417,9 +417,14 @@ def parse_issue_map(prs):
             issues.add(int(m.group(1)))
         for m in re.finditer(r'/(\d+)-', head):
             issues.add(int(m.group(1)))
-        for m in re.finditer(r'\(#(\d{1,3})\)', title):
-            if 'leshchenko1979' in body or 'leshchenko1979' in head:
-                issues.add(int(m.group(1)))
+        # #415: a title's trailing `(#N)` is PR-NUMBER space (GitHub appends the
+        # PR number to a squashed subject), so it must never key the fork-issue
+        # map. The old arm was guarded by the bare string `leshchenko1979`
+        # appearing anywhere in the body or head -- a heuristic, not a
+        # reference -- so an upstream PR titled `... (#199)` mapped into fork
+        # issue 199 and made `check 199` refuse a unit that has no PR at all.
+        # The fork-qualified arm below is the only title route in; the two head
+        # arms are fork space by the branch-namespace law.
         for m in re.finditer(r'leshchenko1979/opencrabs#(\d+)', title):
             issues.add(int(m.group(1)))
         
@@ -1477,7 +1482,7 @@ cmd_selftest() {
     "state": "MERGED",
     "headRefName": "leshchenko1979/fix/collapsed-table-reflow",
     "mergedAt": "2026-09-09T21:07:38Z",
-    "body": "Fixes fork issue #132"
+    "body": "Fixes leshchenko1979/opencrabs#132"
   },
   {
     "number": 1456,
@@ -1502,6 +1507,14 @@ cmd_selftest() {
     "headRefName": "port/133-dedup-history",
     "mergedAt": null,
     "body": "Fixes #133"
+  },
+  {
+    "number": 1990,
+    "title": "fix(parser): harden the trailer split (#199)",
+    "state": "MERGED",
+    "headRefName": "port/parser-trailer-split",
+    "mergedAt": "2026-09-10T00:00:00Z",
+    "body": "Fixes leshchenko1979/opencrabs#211"
   }
 ]
 EOF
@@ -1609,6 +1622,15 @@ EOF
     "trailer": "",
     "commit_ts": 100000,
     "files": ["src/tools/shared.rs"]
+  },
+  {
+    "sha": "1990aaa0000000000000000000000000000000",
+    "short_sha": "1990aaa",
+    "subject": "fix(parser): harden the trailer split (#199)",
+    "trailer": "leshchenko1979/opencrabs#199",
+    "commit_ts": 100000,
+    "deployed_ts": 100000,
+    "files": ["src/parser/mod.rs"]
   }
 ]
 EOF
@@ -1678,6 +1700,21 @@ EOF
     ok "check unharvested unit -> ELIGIBLE exit 0"
   else
     echo "  bad  - check unharvested unit expected rc=0, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 3a. NUMBERING SPACE (#415). Fixture PR 1990's TITLE ends `(#199)` -- PR-number
+  #     space -- while its BODY refs fork issue 211 explicitly. It must therefore
+  #     key 211 and never 199.
+  #     MUTATION KILL: restore parse_issue_map's bare title arm and PR 1990 maps
+  #     fork issue 199, so `check 199` refuses
+  #     (`already MERGED upstream in PR #1990`) instead of returning ELIGIBLE.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "199" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+    ok "numbering space: PR-space (#199) title does not key fork issue 199"
+  else
+    echo "  bad  - fork issue 199 expected rc=0 ELIGIBLE, got rc=$rc ($out)"
     return 1
   fi
 
