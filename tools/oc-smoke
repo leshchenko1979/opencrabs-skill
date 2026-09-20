@@ -64,7 +64,7 @@ Options:
   --markers <m1,m2>   Comma-separated presence markers to verify in binary
   --evidence <text>   Prose summary of verification evidence (recorded IN
                       ADDITION to --probe, never instead of it)
-  --target <name>     Feature name or target slug (default: derived from issue)
+  --target <name>     Deployment unit the verdict is about (default: live-ops)
   --unit <unit>       Systemd user unit to check (default: opencrabs-ops)
   --no-ledger         Skip automatic done stamp in workers-ledger.json on PASS
   --selftest          Run internal test battery
@@ -290,6 +290,38 @@ EOF
     t_bad "probe truncation unmarked (rc=$rc row=$(grep 'issue=#243' "$d/state/smoke-verdicts.log" | tail -n1))"
   fi
 
+  # ---- #432: target= carries the DEPLOYMENT UNIT, not the subject ---------
+  # The law (upstream-merge-runbook.md §Ledger hygiene laws, v0.4.218) fixes ONE
+  # meaning for this key — the deployment unit — and ONE default, live-ops. The
+  # seed was `Issue #<n>` — the smoke's own SUBJECT — so every run that omitted
+  # --target wrote the value the ruling says the key must NOT carry, and the
+  # DEFAULT path is the common path: 65 of the 178 non-conforming rows measured
+  # in #432 are this tool's own default rather than lane prose. The override
+  # must still win. (No leg covered the default before this fixture — which is
+  # why the defect lived here unnoticed while oc-smoke-evidence conformed.)
+  local row244 row245
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 244 --probe "echo probe-ok" 2>&1)" || rc=$?
+  row244="$(grep 'issue=#244' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row244" | grep -q "target=live-ops"; then
+    t_ok "no --target writes the deployment unit target=live-ops (#432)"
+  else
+    t_bad "default target= (rc=$rc row=$row244)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 245 --probe "echo probe-ok" --target unit-x 2>&1)" || rc=$?
+  row245="$(grep 'issue=#245' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row245" | grep -q "target=unit-x"; then
+    t_ok "--target still overrides the deployment-unit default (#432)"
+  else
+    t_bad "--target override (rc=$rc row=$row245)"
+  fi
+
   echo "selftest: $pass passed, $fail failed"
   [ "$fail" -eq 0 ] && exit 0 || exit 1
 }
@@ -389,7 +421,7 @@ if [ -z "$ACTOR" ] && [ -f "$STATE_DIR/workers-ledger.json" ]; then
 fi
 ACTOR="${ACTOR:-unknown-actor}"
 
-TARGET="${TARGET:-Issue #$ISSUE}"
+TARGET="${TARGET:-live-ops}"
 
 EVIDENCE_BIN="${OC_SMOKE_EVIDENCE_BIN:-$EVIDENCE_TOOL}"
 
