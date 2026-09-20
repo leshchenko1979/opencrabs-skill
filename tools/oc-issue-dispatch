@@ -255,6 +255,18 @@ AFFINITY_KEYWORDS = {
     "tools": ["(tools):", "tools/oc-", "tools/lib/", "tools/tests/"]
 }
 
+# Role-owned domains (fork #342, Design I step 18 -- sufficiency leg). A lane's
+# registered feature string is free prose and need not name the surface it OWNS,
+# so affinity keyed on keywords alone is one-sided: the toolsmith feature reads
+# "owns tools/ CLI (oc-ledger, oc-deploy, ...)", which contains none of the four
+# tools/ tokens, so the lane never gained the domain its own issues carry and
+# scored 23 against an editor's 63. Binding the domain to the ROLE closes that
+# asymmetry at its source, instead of padding the keyword list until prose
+# happens to match. Only surfaces a lane actually OWNS belong here.
+ROLE_DOMAINS = {
+    "toolsmith": ("tools",),
+}
+
 
 def check_journal_receipt(target_uuid, start_epoch, journal_path=None, poll_grace_secs=0):
     """
@@ -625,11 +637,54 @@ def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_pa
             "claims": c_claims,
             "worktrees": c_worktrees,
             "is_busy": is_busy,
+            # Whether is_busy is a REAL reading. When classify fails every lane
+            # defaults to busy (conservative safety, above); that unknown state must
+            # not be read by the surface-owner override in select_best_lane as
+            # "this owner is merely queued", or a broken classify would re-enable
+            # dispatch exactly when we cannot tell who is free.
+            "busy_known": classify_ok,
             "raw": w
         })
 
     return editor_lanes
 
+
+def detect_issue_domains(issue):
+    """Domains an issue touches, from its title+body prose."""
+    text = (issue.get("title", "") + " " + issue.get("body", "")).lower()
+    return {domain for domain, kws in AFFINITY_KEYWORDS.items()
+            if any(kw in text for kw in kws)}
+
+def role_owned_domains(lane):
+    """Domains a lane OWNS by ROLE (fork #342), independent of its feature prose.
+
+    The role lives on the RAW worker record: get_worker_roster's lane dicts expose
+    uuid/topic/topic_id/feature/class/claims/worktrees/is_busy/raw and carry NO
+    top-level "role" key, so read it from raw -- and degrade to no owned domain
+    when raw is absent, which is the shape of the synthetic lanes in the selftest.
+    """
+    return set(ROLE_DOMAINS.get((lane.get("raw") or {}).get("role"), ()))
+
+def owner_candidate_for(lane, issue_domains):
+    """True when this lane's ROLE owns one of the issue's domains (fork #342).
+
+    Ownership outranks the idle preference: a claim or a dirty tree on the owner
+    means the issue QUEUES for the lane that will actually fix it, which is
+    strictly better than handing it to a zero-affinity editor lane -- the live
+    misroute this exists to close (measured 2026-09-20: the toolsmith lane scored
+    93 on #451 while every editor scored 0-3, yet was excluded as busy and the
+    issue went to a score-0 editor).
+
+    Guarded on busy_known: when oc-roster classify FAILS, get_worker_roster marks
+    every lane busy by conservative default, and that unknown state must never be
+    read as "the owner is merely queued".
+
+    ONE predicate, called from every site that decides candidacy (select_best_lane
+    and both pre-filters) -- a second copy is what let the two disagree.
+    """
+    if not lane.get("busy_known", True):
+        return False
+    return bool(role_owned_domains(lane).intersection(issue_domains))
 
 def score_affinity(issue, lane):
     """
@@ -642,21 +697,24 @@ def score_affinity(issue, lane):
     text = title + " " + body
     feature = lane.get("feature", "").lower()
 
-    # Identify which domains the issue and lane touch
-    issue_domains = set()
-    lane_domains = set()
-    for domain, kws in AFFINITY_KEYWORDS.items():
-        if any(kw in text for kw in kws):
-            issue_domains.add(domain)
-        if any(kw in feature for kw in kws):
-            lane_domains.add(domain)
+    # Identify which domains the issue and lane touch. The issue half is shared
+    # with select_best_lane's owner-candidacy test, so it lives in ONE place.
+    issue_domains = detect_issue_domains(issue)
+    lane_domains = {domain for domain, kws in AFFINITY_KEYWORDS.items()
+                    if any(kw in feature for kw in kws)}
+
+    # Role-owned domains are part of the lane's IDENTITY, not of its prose.
+    owned = role_owned_domains(lane)
+    lane_domains |= owned
 
     # If lane is specialized in domain(s) that directly conflict with the issue
     # e.g., lane is dedicated to mermaid or photo rendering, but issue is pure db/persistence
     # Enforce penalty to avoid dumping mismatched tasks onto specialized feature lanes
     specialized_domains = {"mermaid", "cron", "db", "memory", "bash"}
     lane_specialized = lane_domains.intersection(specialized_domains)
-    if lane_specialized and not lane_specialized.intersection(issue_domains):
+    if (lane_specialized
+            and not lane_specialized.intersection(issue_domains)
+            and not owned.intersection(issue_domains)):
         # Lane is specialized in a domain absent from this issue
         return -50
 
@@ -664,6 +722,14 @@ def score_affinity(issue, lane):
     # Direct token matches
     for domain in issue_domains.intersection(lane_domains):
         score += 20
+
+    # A lane that OWNS a surface wins its own domain outright (fork #342). The 20
+    # above is symmetric and loses to prose: an editor whose feature string merely
+    # mentions three of the issue's domains banks 60, against the surface owner's
+    # 23. Ownership is a stronger signal than vocabulary overlap, so it is weighted
+    # decisively -- large enough to beat the prose accumulation it competes with.
+    if issue_domains.intersection(owned):
+        score += 70
 
     # Specific keyword matching
     for word in re.findall(r'[a-z0-9_-]{4,}', feature):
@@ -680,8 +746,12 @@ def select_best_lane(issue, candidate_lanes, allow_fallback=False):
     Select the best idle lane for an issue respecting designated domain affinity.
     Does not dump mismatched issues onto specialized topic lanes.
     """
-    # Filter only idle/non-busy lanes
-    available = [lane for lane in candidate_lanes if not lane["is_busy"]]
+    issue_domains = detect_issue_domains(issue)
+
+    # Filter idle lanes. A lane that OWNS this issue's domain stays a candidate
+    # even when busy: see owner_candidate_for.
+    available = [lane for lane in candidate_lanes
+                 if not lane["is_busy"] or owner_candidate_for(lane, issue_domains)]
     if not available:
         # Fallback: lanes with class ACTIVE or IDLE but no dirty/worktree
         available = [lane for lane in candidate_lanes if lane["class"] in ("ACTIVE", "IDLE") and not lane["is_busy"]]
@@ -967,7 +1037,16 @@ def cmd_auto(args):
         return 0
 
     editor_lanes = get_worker_roster(ledger_data)
-    available_lanes = [l for l in editor_lanes if not l["is_busy"]]
+    # A lane that OWNS a domain some dispatchable issue touches stays a candidate
+    # even when busy (fork #342). Without this the pre-filter drops the surface
+    # owner BEFORE select_best_lane can score it, which is the live misroute: the
+    # owner lane is busy whenever it has work -- i.e. exactly when its own issues
+    # are the ones needing routing.
+    wanted_domains = set()
+    for _iss in dispatchable:
+        wanted_domains |= detect_issue_domains(_iss)
+    available_lanes = [l for l in editor_lanes
+                       if not l["is_busy"] or owner_candidate_for(l, wanted_domains)]
     print(f"Candidate roster: {len(editor_lanes)} registered, {len(available_lanes)} idle/available.")
 
     if not available_lanes:
@@ -1065,8 +1144,11 @@ def cmd_targeted(args):
                 "is_busy": False
             }
     else:
-        # Auto-select best idle lane
-        available = [l for l in editor_lanes if not l["is_busy"]]
+        # Auto-select best idle lane (a busy lane that OWNS this issue's domain
+        # stays a candidate -- fork #342, same predicate as the --auto path)
+        available = [l for l in editor_lanes
+                     if not l["is_busy"]
+                     or owner_candidate_for(l, detect_issue_domains(target_issue))]
         if not available:
             print("CAPACITY_EXHAUSTED: No idle editor lanes available for dispatch.", file=sys.stderr)
             return 4
@@ -1211,6 +1293,68 @@ def run_selftest():
     # But routes cleanly when db lane or generic lane is present
     assert_eq("Routes to matching domain lane", select_best_lane(issue_db, [lane_mermaid, lane_db])["uuid"], "lane-db-1")
     assert_eq("Routes to generic lane over conflicting specialized lane", select_best_lane(issue_db, [lane_mermaid, lane_generic])["uuid"], "lane-generic-1")
+
+    # Test 3c: role-owned domain beats prose (fork #342 sufficiency leg). A lane that
+    # OWNS tools/** must win a tools/ issue even when its feature prose never names the
+    # surface -- and must still win against an editor whose prose happens to share
+    # domains with the issue. The verbose lane is deliberately FIRST in the candidate
+    # list, so an equal score would hand it the issue on sort stability alone.
+    issue_tools = {
+        "number": 451,
+        "title": "fix(tools): oc-issue-dispatch hangs past 120s",
+        "body": "the culprit is tools/oc-issue-dispatch, with tools/lib/oc-log.sh in the path",
+    }
+    lane_toolsmith = {
+        "uuid": "lane-toolsmith", "class": "ACTIVE", "is_busy": False,
+        "feature": "TOOLSMITH lane: owns tools/ CLI (oc-ledger, oc-deploy, oc-prchecks)",
+        "raw": {"role": "toolsmith"},
+    }
+    lane_editor_verbose = {
+        "uuid": "lane-editor-verbose", "class": "ACTIVE", "is_busy": False,
+        "feature": "harvest upstream port census sweep telegram notify queue delivery router bash cli exec dispatch",
+        "raw": {"role": "editor"},
+    }
+    s_owner = score_affinity(issue_tools, lane_toolsmith)
+    s_verbose = score_affinity(issue_tools, lane_editor_verbose)
+    assert_true("Role-owned domain: surface owner scores positive on its own issue", s_owner > 0)
+    assert_true("Role-owned domain: surface owner outranks a verbose multi-domain editor", s_owner > s_verbose)
+    assert_eq("Role-owned domain: selection picks the surface owner",
+              select_best_lane(issue_tools, [lane_editor_verbose, lane_toolsmith])["uuid"], "lane-toolsmith")
+
+    # Mutation kill: strip the role binding at runtime and the surface owner must LOSE.
+    # Without this the assertions above would still pass on a tie, proving nothing.
+    try:
+        _saved_role_domain = ROLE_DOMAINS.pop("toolsmith")
+        s_unbound = score_affinity(issue_tools, lane_toolsmith)
+    finally:
+        ROLE_DOMAINS["toolsmith"] = _saved_role_domain
+    assert_true("Role-owned domain: unbound surface owner loses its own issue", s_unbound < s_owner)
+    assert_true("Role-owned domain: unbound surface owner does not beat the verbose editor", s_unbound <= s_verbose)
+
+    # Test 3d: the ownership override must survive BUSY (fork #342, live-misroute
+    # leg). Measured 2026-09-20: the toolsmith lane scored 93 on #451 while every
+    # editor scored 0-3, yet select_best_lane dropped it as busy and handed the
+    # issue to a score-0 editor. Ownership must outrank the idle preference, or the
+    # fix is cosmetic on the live box, where the owner lane is busy whenever it has
+    # work -- i.e. always, precisely when its own issues need routing.
+    lane_owner_busy = dict(lane_toolsmith, is_busy=True, busy_known=True)
+    assert_eq("Busy surface owner is still selected for its own domain",
+              select_best_lane(issue_tools, [lane_editor_verbose, lane_owner_busy])["uuid"],
+              "lane-toolsmith")
+
+    # Mutation kill A: an UNKNOWN busy reading (classify failed -> every lane marked
+    # busy by conservative default) must NOT be read as "the owner is merely queued".
+    lane_owner_unknown = dict(lane_toolsmith, is_busy=True, busy_known=False)
+    picked = select_best_lane(issue_tools, [lane_editor_verbose, lane_owner_unknown])
+    assert_true("Unknown busy reading does not re-enable the owner override",
+                picked is None or picked["uuid"] != "lane-toolsmith")
+
+    # Mutation kill B: an idle editor outranks a busy NON-owner, so the override
+    # cannot widen into a general "busy lanes are candidates" change.
+    lane_editor_busy = dict(lane_editor_verbose, is_busy=True, busy_known=True)
+    assert_eq("Busy non-owner does not displace an idle editor",
+              select_best_lane(issue_tools, [lane_editor_busy, dict(lane_editor_verbose, uuid="lane-editor-idle")])["uuid"],
+              "lane-editor-idle")
 
     # Test 4: Selection when lane is busy
     lane_busy = {"uuid": "lane-busy", "feature": "telegram-buttons", "is_busy": True, "class": "ACTIVE"}

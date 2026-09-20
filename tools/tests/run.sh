@@ -1183,6 +1183,70 @@ run_selftest oc-issue-dispatch
 if tool oc-issue-dispatch; then
   "$TOOLS_DIR/oc-issue-dispatch" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
   "$TOOLS_DIR/oc-issue-dispatch" --help >/dev/null 2>&1 && ok "oc-issue-dispatch --help rc=0" || bad "oc-issue-dispatch --help rc!=0"
+  # Edge cases that proved fatal during the role-binding build (fork #342, task
+  # 17). run_selftest above counts ONE case however many asserts the tool makes
+  # internally, so the crash that actually cost a probing cycle is pinned here
+  # against the SHIPPED module: score_affinity must survive a lane dict with no
+  # "raw" key. get_worker_roster builds lanes as {uuid,topic,topic_id,feature,
+  # class,claims,worktrees,is_busy,raw} and carries the role at raw["role"], so
+  # reading lane["role"] raised KeyError. sys.dont_write_bytecode is set BEFORE
+  # the loader runs so the shared checkout stays byte-identical (same reason as
+  # the oc_claims section above).
+  OCT="$(mktemp -d)"
+  cat > "$OCT/edge.py" << 'PYEOF'
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+
+sys.dont_write_bytecode = True
+
+loader = SourceFileLoader("oid_edge", os.path.join(sys.argv[1], "oc-issue-dispatch"))
+spec = importlib.util.spec_from_loader("oid_edge", loader)
+mod = importlib.util.module_from_spec(spec)
+loader.exec_module(mod)
+
+fails = []
+def chk(desc, got, want):
+    if got != want:
+        fails.append("%s (got %r want %r)" % (desc, got, want))
+
+issue = {"number": 451, "title": "fix(tools): oc-issue-dispatch hangs",
+         "body": "the culprit is tools/oc-issue-dispatch"}
+
+# A lane dict that omits raw (or carries raw=None/{}) must score, not crash.
+for desc, lane in (
+    ("no raw key", {"uuid": "e1", "feature": "general editor", "is_busy": False, "class": "ACTIVE"}),
+    ("raw None", {"uuid": "e2", "feature": "general editor", "is_busy": False, "class": "ACTIVE", "raw": None}),
+    ("raw empty", {"uuid": "e3", "feature": "general editor", "is_busy": False, "class": "ACTIVE", "raw": {}}),
+):
+    try:
+        got = mod.score_affinity(issue, lane)
+    except Exception as exc:
+        fails.append("score_affinity raised on lane with %s: %r" % (desc, exc))
+        continue
+    chk("score_affinity int on lane with %s" % desc, isinstance(got, int), True)
+
+# The binding must still be live in the shipped file: the surface owner outranks
+# a verbose editor on its own issue. Delete ROLE_DOMAINS and this goes red.
+lane_owner = {"uuid": "e4", "is_busy": False, "class": "ACTIVE",
+              "feature": "TOOLSMITH lane: owns tools/ CLI (oc-ledger, oc-deploy)",
+              "raw": {"role": "toolsmith"}}
+lane_verbose = {"uuid": "e5", "is_busy": False, "class": "ACTIVE",
+                "feature": "harvest upstream port census sweep notify queue delivery router cli exec",
+                "raw": {"role": "editor"}}
+chk("role-bound owner outranks the verbose editor on a tools/ issue",
+    mod.score_affinity(issue, lane_owner) > mod.score_affinity(issue, lane_verbose), True)
+
+if fails:
+    for f in fails:
+        sys.stderr.write("  edge-fail: %s\n" % f)
+    sys.exit(1)
+PYEOF
+  if python3 "$OCT/edge.py" "$TOOLS_DIR" >/dev/null 2>"$OCT/err"; then
+    ok "oc-issue-dispatch role-binding edge cases (raw-absent lanes; owner outranks prose)"
+  else
+    bad "oc-issue-dispatch role-binding edge cases"; sed 's/^/    /' "$OCT/err" | head -20
+  fi
+  rm -rf "$OCT"
 fi
 
 # ---- 67. oc-lint-laws (markdown law syntax & tool reference linter)
