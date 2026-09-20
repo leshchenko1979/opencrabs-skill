@@ -1,5 +1,19 @@
 # Changelog — opencrabs-dev
 
+## v0.4.231 (2026-09-20)
+
+**Leg-4 probe hygiene -- form 1 of the mechanical discriminator is now ANCHORED at the fix's own commit.** Filed by the #450 lane (`2ed8adeb`), reproduced first-hand before the amendment.
+
+`git log -S <string>` defaults its revision to HEAD, and this law's own instruction is to run that discriminator on a **pre-merge** tree -- where the fix's own commit is not yet reachable from HEAD. The bare form therefore returns **EMPTY**, and empty reads as *"no introduction exists"*: a **false negative on the one tree the law is about**. Measured on #450 (`b6389c892`, unmerged; `git merge-base --is-ancestor b6389c892 HEAD` rc=1): the bare form returns EMPTY, the anchored form returns exactly ONE introduction. Form 2 is unaffected by this gap and is what established the negative half.
+
+The pathspec-scoping clause added 2026-09-19 is confirmed load-bearing by the same probe: scoped, `git grep -c 'ProgressEvent::TokenCount' 33b7aecdd -- src/channels/telegram/resume.rs` returns rc=1 with zero hits (the correct pre-fix answer); unscoped the same grep returns 19 hits across 6 files -- a false PRESENT.
+
+Changed: `SKILL.md` section "Test ontology", "Leg-4 probe hygiene" -- form 1 is written as `git log -S <string> <fix-sha> -- <pathspec>`, plus an "Anchor it too" clause stating the default-to-HEAD failure and the #450 measurement.
+
+LOC (measured; method: true line count = newline count + 1 where the file ends unterminated, so `wc -l` reads one lower on those files): SKILL.md 623 · editor.md 533 · hq.md 318 · triage.md 370 · toolsmith.md 165 · fleet-directives.md 644 · editor-upstream-pr.md 335 · upstream-merge-runbook.md 420 · **total 3408**.
+
+Verification: clause present in `SKILL.md` · battery `tools/tests/run.sh` green · `oc-ledger sync --version 0.4.231` rc 0.
+
 ## v0.4.230 (2026-09-20)
 
 **One CORRECTION to law shipped minutes earlier, raised by the lane that executed the reap. v0.4.229's reap clause named the adoption mechanism but not its SWITCH — so a reaper who follows it and stops at the disk move leaves the daemon holding the home.**
