@@ -53,17 +53,16 @@ per that section. Owner veto overrides retroactively, as with rulings.
 - **Stale-branch sweep patrol (owner 2026-09-08 "Go then duty 4+6",
   v0.4.108 — DAILY, rides the T4 census turn):** run
   `./tools/oc-branch-sweep` (fresh receipt); **the sweep's ref source is the
-  LOCAL branch set — `refs/heads/` ONLY** (v0.4.218, filing `530c29ec` P2).
-  The tool enumerates `refs/heads/` and carries no remote leg
-  (`oc-branch-sweep` lines 65-66, 76, 139), so a remote-only head is OUTSIDE
-  this patrol's coverage and the duty must never be read as a whole-fork
-  sweep. Measured 2026-09-19: 379 local heads vs 478 origin heads, of which
-  **191 origin branch NAMES have no same-named local branch (40.0% of origin
-  heads; predicate: set difference of branch NAMES, NOT a raw ref count — the
-  raw counts differ by 99)** — so a lane asked to archive a remote-only branch
-  cannot be served by this patrol. Giving the tool a remote leg is a Toolsmith
-  call (dispatched 15:05:20Z); until it lands, the coverage claim here is the
-  LOCAL set and nothing wider. The sweep
+  LOCAL branch set AND the remote-tracking set — `refs/heads/` + `origin/`**
+  (v0.4.229, filing `530c29ec` GAP 2). The REMOTE LEG landed 2026-09-20T05:28Z
+  at commit `ed4d65a0` (#415 step 8; markers at `oc-branch-sweep` lines
+  24/156/293) and is **READ AND CLASSIFY ONLY** — it brings remote-only heads
+  into SCOPE, it does not delete them. The v0.4.218 caveat that a remote-only
+  head sat OUTSIDE this patrol's coverage is RETIRED: it was true of the tool
+  then and is false of the tool now, and a stale coverage claim makes a duty
+  look narrower than it is. Live receipt 2026-09-20: `oc-branch-sweep --repo
+  /root/opencrabs --dry-run` rc=0, **866 rows, 483 of them `origin/`** — the
+  remote heads the old text declared unreachable are enumerated. The sweep
   reports contained/stale branches; deletion of any referenced branch
   (open PR head, lane worktree ref) stays lane-reference-checked — sweep
   SURFACES, owner/deletion law disposes. Closes the ownerless gap: the
@@ -159,8 +158,15 @@ below needs a regular cadence to be worth anything.
      `landed` = a ledger row of kind `done`/`close` addressing the issue
      (`oc_claims.LANDED_KINDS` — NEVER `CLOSING_KINDS`, which includes
      `confirm`/`unclaim`/`reject` and starves real work), OR a commit
-     referencing the issue on fork `main` **BY IDENTITY, never by bare reference**
-     (v0.4.226, HQ ruling 2026-09-20). Fork `main` CONTAINS upstream merges, so an
+     referencing the issue **BY IDENTITY, never by bare reference** (v0.4.226,
+     HQ ruling 2026-09-20), **read on the surface the fix lands on** — fork
+     `main` for `src/**`, the SKILL repo (`skills/opencrabs-dev`, remote
+     `leshchenko1979/opencrabs-skill`) for `tools/**` (v0.4.229, filing
+     `530c29ec` GAP 1). Fork `main` carries **NO `tools/` directory at all**, so
+     a tools-surface leg read against it returns FALSE NOT-LANDED for work that
+     already shipped, and the issue reads as dispatchable backlog — the INVERSE
+     of the v0.4.226 false-LANDED and the same defect: one leg, two repos.
+     Fork `main` CONTAINS upstream merges, so an
      upstream PR number collides with a fork issue number: over 17 unclaimed
      in-scope issues the bare-reference form returned a "LANDED-REF" commit for 14
      (82.4%), and on 6 sampled every one touched ZERO `tools/` paths — #432's
