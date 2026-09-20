@@ -255,8 +255,39 @@ def get_issue_smoke_pass_ts(issue_num, state_dir=None):
                 if any(k in prefix for k in ('FAIL', 'DOWNGRADED', 'SUPERSEDED', 'CORRECTION', 'RETRACTED')):
                     continue
                 parts = line_str.split('\t')
+                # #415 (Design B defect 2): on a TAB row the structured issue=
+                # field is AUTHORITATIVE -- it alone decides the anchor. The
+                # prose regex below is a LEGACY FALLBACK only, because it cannot
+                # tell a verdict's own issue from one its evidence merely
+                # CROSS-REFERENCES: measured over the live 1358-row log, 92 of
+                # the 254 field-carrying rows name a second issue in prose
+                # ('the SAME leg already parked under issue #155', 'already on
+                # record for #175 ... and #188', 'that is F3, tracked under
+                # #138'), so a row whose field reads issue=#402 would anchor
+                # #341 merely for citing it.
+                #
+                # The field is a SET, never a scalar: 15 live rows carry comma
+                # lists (issue=#92,#69, issue=#35,#234,#238,#253,#258) and every
+                # member must still anchor -- a scalar == here silently drops
+                # all 15. Non-numeric fields (issue=-, issue=cutover-sync-...) and
+                # empty ones yield the empty set and match NOTHING, which is the
+                # fail-closed direction.
+                #
+                # Structured fields live before evidence=, which is free prose
+                # and may itself contain tabs.
+                issue_field = None
+                for p in parts:
+                    if p.startswith('evidence='):
+                        break
+                    if p.startswith('issue='):
+                        issue_field = {t.lstrip('#').strip()
+                                       for t in p.split('=', 1)[1].split(',')
+                                       if t.lstrip('#').strip().isdigit()}
+                        break
                 matched = False
-                if len(parts) >= 2 and (parts[1] == str(issue_num) or (len(parts) >= 3 and parts[2] == str(issue_num))):
+                if issue_field is not None:
+                    matched = str(issue_num) in issue_field
+                elif len(parts) >= 2 and (parts[1] == str(issue_num) or (len(parts) >= 3 and parts[2] == str(issue_num))):
                     matched = True
                 elif target_pattern.search(line_str):
                     matched = True
@@ -2376,6 +2407,67 @@ PROSEEOF
     ok "soak anchor: a resolved swap anchor survives a foreign earlier smoke row (smoke fallback only at ts==0, #415)"
   else
     echo "  bad  - anchor fixture expected rc=1 'within 24h feature soak window' 'age: 0.3h', got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 36. #415 Design B defect 2 (step 6): on a TAB row the structured issue=
+  #     field is AUTHORITATIVE; the prose regex is a LEGACY FALLBACK only,
+  #     because it cannot tell a verdict's own issue from one its evidence
+  #     merely CROSS-REFERENCES -- measured over the live 1358-row log, 92 of
+  #     the 254 field-carrying rows name a second issue in prose ('the SAME leg
+  #     already parked under issue #155', 'that is F3, tracked under #138').
+  #     Row A below carries field issue=#402 while its prose cites #341 at an
+  #     EARLIER ts, so under the old if/elif it anchors 341 and drags the
+  #     anchor back to 216.0h -- past the 24h soak, i.e. a false APPROVE.
+  #     Row B is the POSITIVE CONTROL and carries a COMMA SET
+  #     (issue=#341,#902), so a scalar-equality regression -- which would
+  #     silently drop all 15 live multi-issue rows -- also goes red.
+  #     Both the refusal TEXT and the reported AGE are asserted: a fixture whose
+  #     smoke path dies refuses too, but at age 0.0h, and fails loudly instead
+  #     of passing vacuously.
+  local fx_sm="$selftest_tmp/fx_smoke"
+  local fx_sm_state="$selftest_tmp/fx_smoke_state"
+  mkdir -p "$fx_sm" "$fx_sm_state/oc-deploy/journal"
+  git -C "$fx_sm" init -q -b main
+  git -C "$fx_sm" config user.name fixture
+  git -C "$fx_sm" config user.email fixture@example.invalid
+  git -C "$fx_sm" config commit.gpgsign false
+  printf 'smoke base\n' > "$fx_sm/base.txt"
+  git -C "$fx_sm" add -A
+  git -C "$fx_sm" commit -q -m "base"
+  printf 'smoke feature\n' > "$fx_sm/feat.txt"
+  git -C "$fx_sm" add -A
+  git -C "$fx_sm" commit -q -m "feat(smoke): fresh feature (#341)" \
+    --trailer "Issue-Ref: leshchenko1979/opencrabs#341"
+  local sm_sha sm_short sm_swap_sha
+  sm_sha="$(git -C "$fx_sm" rev-parse HEAD)"
+  sm_short="$(git -C "$fx_sm" rev-parse --short=7 HEAD)"
+  # The swap marker is a SIBLING of the candidate, not an ancestor: the sha walk
+  # then leaves ts==0 and the smoke fallback is the ONLY possible anchor source.
+  # (One swap row also makes _swap_suffix_start return 0, skipping the twin arm.)
+  git -C "$fx_sm" checkout -q -b swapbranch HEAD~1
+  printf 'swap marker\n' > "$fx_sm/swap-marker.txt"
+  git -C "$fx_sm" add -A
+  git -C "$fx_sm" commit -q -m "release: swap marker for smoke tree"
+  sm_swap_sha="$(git -C "$fx_sm" rev-parse HEAD)"
+  printf '{"step":"auto-swap","sha":"%s","ts":"2026-09-01T00:00:00Z"}\n' "$sm_swap_sha" > "$fx_sm_state/oc-deploy/journal/swap-301.jsonl"
+  {
+    printf '2026-09-01T03:13:20Z\tPASS\tissue=#402\tsha=oldsha123\trun=12345\ttarget=live-ops\tevidence="supersedes #341"\n'
+    printf '2026-09-10T00:00:00Z\tPASS\tissue=#341,#902\tsha=oldsha456\trun=12346\ttarget=live-ops\tevidence="smoke pass"\n'
+  } > "$fx_sm_state/smoke-verdicts.log"
+  printf '{"manual_records": []}\n' > "$fx_sm_state/mock_reg_smoke.json"
+  printf '[{"sha":"%s","short_sha":"%s","subject":"feat(smoke): fresh feature (#341)","trailer":"leshchenko1979/opencrabs#341","commit_ts":1788232400,"files":["feat.txt"]}]\n' \
+    "$sm_sha" "$sm_short" > "$fx_sm_state/mock_commits_smoke.json"
+
+  rc=0
+  out="$(STATE_DIR="$fx_sm_state" OC_HARVEST_NOW_TS=1789010000 \
+        OC_HARVEST_MOCK_COMMITS="$fx_sm_state/mock_commits_smoke.json" \
+        run_engine "check" "mock/repo" "$fx_sm" "$fx_sm_state/mock_reg_smoke.json" "341" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window" \
+     && echo "$out" | grep -q "age: 3.2h"; then
+    ok "smoke field precedence: a field reading issue=#402 does not anchor 341 from its prose (#415)"
+  else
+    echo "  bad  - smoke precedence fixture expected rc=1 'within 24h feature soak window' 'age: 3.2h', got rc=$rc ($out)"
     return 1
   fi
 

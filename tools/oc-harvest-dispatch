@@ -261,8 +261,39 @@ def get_issue_smoke_pass_ts(issue_num, state_dir=None):
                 if any(k in prefix for k in ('FAIL', 'DOWNGRADED', 'SUPERSEDED', 'CORRECTION', 'RETRACTED')):
                     continue
                 parts = line_str.split('\t')
+                # #415 (Design B defect 2): on a TAB row the structured issue=
+                # field is AUTHORITATIVE -- it alone decides the anchor. The
+                # prose regex below is a LEGACY FALLBACK only, because it cannot
+                # tell a verdict's own issue from one its evidence merely
+                # CROSS-REFERENCES: measured over the live 1358-row log, 92 of
+                # the 254 field-carrying rows name a second issue in prose
+                # ('the SAME leg already parked under issue #155', 'already on
+                # record for #175 ... and #188', 'that is F3, tracked under
+                # #138'), so a row whose field reads issue=#402 would anchor
+                # #341 merely for citing it.
+                #
+                # The field is a SET, never a scalar: 15 live rows carry comma
+                # lists (issue=#92,#69, issue=#35,#234,#238,#253,#258) and every
+                # member must still anchor -- a scalar == here silently drops
+                # all 15. Non-numeric fields (issue=-, issue=cutover-sync-...) and
+                # empty ones yield the empty set and match NOTHING, which is the
+                # fail-closed direction.
+                #
+                # Structured fields live before evidence=, which is free prose
+                # and may itself contain tabs.
+                issue_field = None
+                for p in parts:
+                    if p.startswith('evidence='):
+                        break
+                    if p.startswith('issue='):
+                        issue_field = {t.lstrip('#').strip()
+                                       for t in p.split('=', 1)[1].split(',')
+                                       if t.lstrip('#').strip().isdigit()}
+                        break
                 matched = False
-                if len(parts) >= 2 and (parts[1] == str(issue_num) or (len(parts) >= 3 and parts[2] == str(issue_num))):
+                if issue_field is not None:
+                    matched = str(issue_num) in issue_field
+                elif len(parts) >= 2 and (parts[1] == str(issue_num) or (len(parts) >= 3 and parts[2] == str(issue_num))):
                     matched = True
                 elif target_pattern.search(line_str):
                     matched = True
