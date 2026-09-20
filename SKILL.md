@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.225
+version: 0.4.226
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -553,10 +553,19 @@ links; development-time upstream contact is PR-comments only (supersedes the
 - CONSENT REGISTER — **Never rule from codified memory — grep the live record
   (chat / ledger) before denying any permission** (v0.4.17 lesson, 2026-08-26).
   Deploy consent RETIRED 2026-08-28 (owner 18:50Z): GREEN carrier run + artifact
-  verify IS the authorization. Upstream-PR filing follows the PR SHIPMENT law (PR SHIPMENT row, §ISSUE ROUTING above). APPROVAL
-  definition above still governs anything that REMAINS owner-gated
-  (post-swap rollback-is-owner's-call; silence is NOT consent).
-  - **PENDING OWNER RULING -- is owner approval required for every upstream PR filing? (raised 2026-09-19 by lane 329bf3a3, topic 7198; recorded here, NOT resolved.)** The law text is currently CONTRADICTORY and the divergence is live: `§Hard rules` UPSTREAM CI GATE states *"owner approval + SMOKE pass remain separate required conditions"*, while THIS register's parenthetical lists only post-swap rollback as what "REMAINS owner-gated" -- which reads as approval NOT required -- and `editor-upstream-pr.md` Phase 7 contains NO approval step at all (its step 0 posts a filing NOTICE to the lane's own topic, after the fact). Measured split across the resume-job population -- predicate: every prompt read IN FULL, no token grep; population read live as `select ... where name like 'oc-harvest-%-resume'` -- **15 jobs, all enabled, at 2026-09-19T20:41Z: 9 prompts carry a BINDING owner-approval gate, 6 are silent, 0 unread** (the earlier 5/1/7/1 figure was a 14-job read; the population has since grown and the gated count rose as lanes self-remediated). **The count is a MOVING datum -- 5, then 6, then 9 inside one hour -- so the PREDICATE is the stable part and any figure written here is a dated reading, never a target to match.** **Until the owner rules: do not edit either surface to match the other, and treat the STRICTER reading as binding -- approval IS required** -- because silence is not consent and the APPROVAL row above is unchanged. The cost asymmetry decides the default: holding a filing costs nothing, an unapproved filing is a public act.
+  verify IS the authorization. Upstream-PR filing follows the PR SHIPMENT law (PR SHIPMENT row, §ISSUE ROUTING above), GATED BY THE MODE REGISTER below. APPROVAL
+  definition above governs everything that is owner-gated (silence is NOT consent).
+  - **MODE REGISTER — the upstream-PR filing gate is a MODE SWITCH (owner ruling 2026-09-20).** Two modes, ONE declared current, and the switch is the OWNER's alone. Owner's words: *"we basically have two modes: 1. High-trust mode, when I'm sure that the factory is working so that the quality allows autonomous harvesting. 2. Degraded, like now, when I want to gate every PR group."*
+
+    | Dimension | HIGH-TRUST MODE | DEGRADED MODE |
+    |---|---|---|
+    | Condition (owner's words) | "the factory is working ... quality allows autonomous harvesting" | "I want to gate every PR group" |
+    | Upstream PR filing | lane files on the 4-leg smoke PASS; filing NOTICE to its own topic | **the PR GROUP is HELD for explicit owner approval before the PR leaves the lane** |
+    | Approval form | not required — SMOKE PASS is the gate | owner reply, or a positive Telegram reaction to the explicit request; **silence is NOT consent** |
+    | Filing unit | one feature PR, per lane | **PR GROUP** — related PRs approved together |
+    | Smoke rubric / CI gate / rollback | 4 legs / unchanged / owner's call | 4 legs / unchanged / owner's call |
+
+    **CURRENT MODE: DEGRADED.** Resolution is LIVE, never remembered: read the newest `MODE:` row via `oc-ledger events --kind note`; **if NO `MODE:` row exists the default is DEGRADED** (fail closed — holding a filing costs nothing, an unapproved filing is a public act). The owner switches by word, receipted by `oc-ledger stamp note "MODE: <HIGH-TRUST|DEGRADED> — <provenance>" --by "hq <uuid>"`. Procedure: `editor-upstream-pr.md` §Phase 7 step 0a.
   (Deleted-tool history: CHANGELOG.md.)
 - ROLE-SCOPED BROADCASTS: messages reach non-owning roles ONLY when tagged
   [ALL]; otherwise send strictly to the owning role. CC-everyone is noise.
@@ -581,7 +590,9 @@ links; development-time upstream contact is PR-comments only (supersedes the
   editor-upstream-pr.md §Phase 7 step 2c. One red = fix cycle, not a filed
   PR ("PRs that fail CI will not be reviewed" — their words). Receipts ride
   the PR prep beside smoke evidence. Gate covers shipworthiness only;
-  owner approval + SMOKE pass remain separate required conditions.
+  the SMOKE pass remains a required condition in BOTH modes, and owner approval
+  is required under **DEGRADED MODE** and waived under **HIGH-TRUST MODE**
+  (§CONSENT REGISTER — MODE REGISTER).
 - Issue-first, no exceptions (2026-08-25): a DISCOVERED problem gets its issue
   FILED before any fix work starts — on the FORK `leshchenko1979/opencrabs`
   (ALL new issues — upstream-code bugs and fork-only infra alike; upstream

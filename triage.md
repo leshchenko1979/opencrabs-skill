@@ -148,16 +148,27 @@ below needs a regular cadence to be worth anything.
 1. Load this skill (post-compaction law) — then, in the same turn:
 2. `gh issue list -R leshchenko1979/opencrabs --state open` — fresh receipt,
    never from memory.
-3. Diff the OPEN set against the workers-ledger claim-refs
-   (`grep -c '"issue'` or the claim rows) — an OPEN fork issue with NO
-   open claim-ref is unclaimed backlog.
+3. Diff the OPEN set against the workers-ledger claim ROWS — the canonical read is
+   `oc_claims.open_claims` (`tools/oc-ledger claims <N>` for ONE issue; the `claims`
+   projection for the whole set). NEVER the `grep -c '"issue'` scalar: a count over the
+   ledger FILE is not a per-issue predicate and cannot answer "is issue N claimed".
+   An OPEN fork issue with NO open claim row is unclaimed backlog.
    - **LANDED TERM (v0.4.204, HQ ruling 2026-09-18):** the predicate is
      `DISPATCHABLE = unclaimed AND vetted AND NOT landed` — there IS a third
      term and a sweep that omits it re-wires work that already shipped.
      `landed` = a ledger row of kind `done`/`close` addressing the issue
      (`oc_claims.LANDED_KINDS` — NEVER `CLOSING_KINDS`, which includes
      `confirm`/`unclaim`/`reject` and starves real work), OR a commit
-     referencing the issue on fork `main`. Under the harvest-gated closure law
+     referencing the issue on fork `main` **BY IDENTITY, never by bare reference**
+     (v0.4.226, HQ ruling 2026-09-20). Fork `main` CONTAINS upstream merges, so an
+     upstream PR number collides with a fork issue number: over 17 unclaimed
+     in-scope issues the bare-reference form returned a "LANDED-REF" commit for 14
+     (82.4%), and on 6 sampled every one touched ZERO `tools/` paths — #432's
+     "match" was upstream PR #432, while the real #432 has no commit at all.
+     **The naming commit's changed files must INTERSECT the issue's own surface** —
+     the same identity requirement Duty T4 item 1 states for the VET leg (v0.4.218).
+     Without it the verdict is POISONED: a false `landed` routes already-shipped work
+     to the harvest queue, or marks live backlog as done. Under the harvest-gated closure law
      a DONE issue stays OPEN until its upstream PR files, so without this term
      every landed-but-unharvested issue reads as dispatchable backlog.
      **Landed-and-unharvested ⇒ route to the HARVEST QUEUE, never to an editor
@@ -258,7 +269,7 @@ bounded expansion, under the overnight design-gate contract (a dispatched
 editor designs and PARKS at the owner gate; it does NOT open `/goal`). Exit
 line: `triaged=N · dispatched=M · expanded=K · parked=P · waiting=0`.
 
-- **Checkable Completion Formula**: `DONE = open fork issues queried via gh issue list + diffed against ledger claim-refs + all unclaimed issues routed via wire envelope or escalated to HQ.`
+- **Checkable Completion Formula**: `DONE = open fork issues queried via gh issue list + diffed against open ledger claim rows (oc_claims.open_claims / oc-ledger claims <N>) + all unclaimed issues routed via wire envelope or escalated to HQ.`
 
 ## Duty T6 — Registry writes: schema + seed rules (moved from hq.md Duty 2, lens B-F10 v0.4.96)
 

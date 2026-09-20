@@ -13,7 +13,14 @@ evidence, and files the upstream PR. Development-time contact stays issues-only;
 this PR is the ONE sanctioned exception (completed features only).
 
 ```bash
-# 0. FILING NOTICE: post the smoke-test EVIDENCE + the filing report in
+# 0a. MODE GATE (v0.4.226) — resolve the current mode LIVE, never from memory:
+#       tools/oc-ledger events --kind note | grep -o 'MODE: [A-Z-]*' | head -1
+#     NO `MODE:` row => DEGRADED (fail closed).
+#       DEGRADED   -> HOLD the PR GROUP. Request owner approval in YOUR forum topic
+#                     (reply or a positive reaction = approval; silence is NOT consent).
+#                     File only on that approval.
+#       HIGH-TRUST -> proceed to step 0b; the 4-leg smoke PASS is the gate.
+# 0b. FILING NOTICE: post the smoke-test EVIDENCE + the filing report in
 #    YOUR forum topic (what you drove, what you saw, run id + built sha + PR URL).
 
 # 1. list fork-only commits, pick THIS feature's (trailers + touched files)
