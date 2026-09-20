@@ -249,6 +249,14 @@ OC_BUILD_CAND
       fi
       DEPLOYED_SHA=""
       [ -f "$DEPLOYED_META" ] && DEPLOYED_SHA="$(jq -r '.sha // .commit // empty' "$DEPLOYED_META" 2>/dev/null)"
+      # NOTE: compare status "ahead" means MAIN is ahead of the sha, i.e. the
+      # sha is an ANCESTOR of main -- the only status that discharges a
+      # dispatch.  "diverged" is NOT an ancestor (measured 2026-09-20:
+      # ee4f679 read diverged / ahead_by 355 / behind_by 234) and must NOT be
+      # accepted here: that sha's carrier build went RED, which the build leg
+      # above discharges on its own evidence.  Broadening this test to accept
+      # "diverged" would silence genuinely-unmerged dispatches -- the exact
+      # class this tool exists to catch.
       SUPERSEDED=0
       if [ $((NOW - TE)) -gt $((SUPERSEDE_HOURS * 3600)) ] && [ -n "$DEPLOYED_SHA" ] && [ "$sha" != "$DEPLOYED_SHA" ]; then
         if command -v gh >/dev/null 2>&1 && [ -n "${OC_SHIP_AUDIT_REPO:-leshchenko1979/opencrabs}" ]; then
