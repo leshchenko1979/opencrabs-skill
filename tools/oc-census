@@ -21,8 +21,9 @@ WHY (runbook Step 7 step 0, v0.4.170 + v0.4.214)
   A non-zero AGGREGATE `+` is not proof of pending work: patch-id matching is
   blind to a change already present by another route (v0.4.214 — 10 of 10
   lane-scoped `+` markers on two lanes were content-present).  So the census
-  SPLITS the aggregate into its three arms instead of trusting it, and it never
-  prints a cut sha — it reports the counts and the base the branch sits on.
+  SPLITS the aggregate into its three arms AND runs a CONTENT leg over every
+  `+` instead of trusting either, and it never prints a cut sha — it reports
+  the counts and the base the branch sits on.
 
 CLASSIFICATION (spec §4 — the wording rule must survive into the OUTPUT)
   A lane-scoped 0 NEVER means "the branch is absorbed": it means none of the
@@ -59,7 +60,9 @@ CLASSIFICATION (spec §4 — the wording rule must survive into the OUTPUT)
   advisory actually said, and does not pretend to.
 
 READ-ONLY
-  Only `rev-parse` / `cherry` / `for-each-ref` / `log --format` / `merge-base`.
+  Only `rev-parse` / `cherry` / `for-each-ref` / `log --format` / `merge-base`,
+  plus the content leg's two reads: `ls-tree -r -z` (the base tree) and
+  `diff-tree --stdin --raw` (each pending commit's post-image blobs).
   No ref is written, no store is touched, no cut is computed.
 
 NAMING COLLISION (spec §7) — `%oc-census%`, not `%census%`
@@ -305,6 +308,88 @@ def cherry_plus(repo, base, branch):
     return plus
 
 
+def base_tree(repo, base_sha):
+    """path -> blob sha for the base tree -- ONE `ls-tree -r -z` read.
+
+    The content leg's reference set.  A blob sha IS the content hash, so a `+`
+    commit whose post-image blob for a path equals the base's blob for that
+    same path has already landed there -- whatever its sha or patch-id says
+    (the v0.4.214 hazard: patch-id matching is blind to a change already
+    present by another route, so landed work still reports `+`).
+
+    None on git failure: the caller REFUSES rather than degrade, because an
+    unconditional leg that silently reports the pre-leg number is exactly the
+    second code path this design rejected.
+    """
+    rc, out, _ = git(repo, "ls-tree", "-r", "-z", base_sha)
+    if rc != 0:
+        return None
+    tree = {}
+    for ln in out.split("\0"):
+        if "\t" not in ln:
+            continue
+        meta, path = ln.split("\t", 1)
+        parts = meta.split()
+        if len(parts) >= 3:
+            tree[path] = parts[2]
+    return tree
+
+
+def commit_blobs(repo, shas):
+    """sha -> {path: post-image blob sha}, ONE batched `diff-tree --stdin`.
+
+    Batched on purpose: the alternative (a `git cat-file -e` / `git grep` per
+    pending commit) is N subprocesses where N is the whole pending set.
+
+    ponytail: the ceiling is MEASURED, not guessed -- 20 000 commits through
+    this pipeline cost 2 821 ms (11 163 raw rows, ~7 000 commits/s, measured
+    2026-09-20), so the full pending set (~41 000) is ~6 s.  If a per-commit
+    form is ever needed, add `--no-content-leg` as an escape hatch -- on a
+    MEASUREMENT, not before.  Until then the leg runs UNCONDITIONAL: a flag
+    whose off-state is the default is a second code path nobody exercises,
+    and this leg is what makes the headline `+` count truthful.
+    """
+    out = {}
+    shas = list(shas)
+    if not shas:
+        return out
+    p = subprocess.run(["git", "-C", repo, "diff-tree", "-r", "--root",
+                        "--stdin", "--raw"],
+                       input="\n".join(shas) + "\n",
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        return None
+    cur = None
+    for ln in p.stdout.splitlines():
+        if not ln:
+            continue
+        if ln.startswith(":"):
+            if cur is None:
+                continue
+            head, _, path = ln.partition("\t")
+            fields = head.split()
+            if path and len(fields) >= 4:
+                out.setdefault(cur, {})[path] = fields[3]
+        else:
+            cur = ln.strip()
+    return out
+
+
+def content_present(tree, blobs):
+    """True when EVERY path a commit changes already holds that blob in base.
+
+    A deletion (post-image blob all-zeros) can never be present, which is
+    right -- a deletion is a real change.  An empty blob map (a commit that
+    changes nothing) is NOT present either: it carries no content to match.
+    """
+    if not tree or not blobs:
+        return False
+    for path, blob in blobs.items():
+        if tree.get(path) != blob:
+            return False
+    return True
+
+
 def classify(r, asker=""):
     """The spec §4 class for one row.  Never inverts a lane-scoped 0.
 
@@ -398,6 +483,24 @@ def census(repo, base, glob, jobs, lane=""):
             all_shas.update(plus)
     trailers = trailers_batch(repo, sorted(all_shas))
 
+    # Phase 3b: the CONTENT leg -- UNCONDITIONAL, no flag (Design H §7).
+    # `git cherry` reports `+` for work already landed under a rewritten sha
+    # (v0.4.214), so every `+` is checked against the base TREE before it is
+    # allowed to count as pending.  The leg only ever REMOVES false positives,
+    # never adds a commit back, so the three arms still partition the set and
+    # the census invariant survives by construction.
+    pending_shas = set()
+    for plus in plus_by_branch.values():
+        if plus:
+            pending_shas.update(plus)
+    base_blob_map = base_tree(repo, base_sha)
+    blob_map = commit_blobs(repo, sorted(pending_shas))
+    if base_blob_map is None or blob_map is None:
+        raise CensusRefused("content leg could not read the base tree of %s"
+                            % base_sha)
+    present = set(s for s in pending_shas
+                  if content_present(base_blob_map, blob_map.get(s)))
+
     # Phase 4: decompose.  The three arms PARTITION the plus set:
     #   no trailer                      -> untrailered
     #   trailer == tip_lane (both set)  -> own
@@ -414,8 +517,17 @@ def census(repo, base, glob, jobs, lane=""):
             rows.append({"branch": name, "tip": tip, "tip_lane": tip_lane,
                          "tip_in_base": 1, "plus_total": -1, "plus": -1,
                          "plus_own": -1, "plus_untrailered": -1,
-                         "plus_other": -1, "err": "cherry-failed"})
+                         "plus_other": -1, "plus_content_present": 0,
+                         "err": "cherry-failed"})
             continue
+        dropped = 0
+        kept = []
+        for s in plus:
+            if s in present:
+                dropped += 1
+            else:
+                kept.append(s)
+        plus = kept
         own = unt = oth = 0
         for s in plus:
             t = trailers.get(s, "")
@@ -432,7 +544,8 @@ def census(repo, base, glob, jobs, lane=""):
                      "tip_in_base": 0 if name in in_base else 1,
                      "plus_total": total, "plus": total,
                      "plus_own": own, "plus_untrailered": unt,
-                     "plus_other": oth})
+                     "plus_other": oth,
+                     "plus_content_present": dropped})
 
     rows.sort(key=lambda r: r["branch"])
     # The class is derived from the row's OWN fields, never from the asker's
@@ -442,7 +555,8 @@ def census(repo, base, glob, jobs, lane=""):
         r["class"] = classify(r, lane)
     meta = {"repo": repo, "base": base, "base_sha": base_sha,
             "branch_glob": glob or "*", "jobs": jobs, "lane": lane,
-            "branches": len(rows), "rollup": rollup(rows)}
+            "branches": len(rows), "rollup": rollup(rows),
+            "content_leg": "ran"}
     return rows, meta
 
 
@@ -465,22 +579,24 @@ def render(rows, meta):
     w = max([len(r["branch"]) for r in rows] + [6])
     wc = max([len(r.get("class", "")) for r in rows] + [len("CLASS")])
     out = []
-    out.append("%-*s  %-*s  %-8s  %5s %5s %5s %5s  %s"
+    out.append("%-*s  %-*s  %-8s  %5s %5s %5s %5s %5s  %s"
                % (w, "BRANCH", wc, "CLASS", "IN-BASE",
-                  "TOT", "OWN", "UNTR", "OTHER", "TIP_LANE"))
+                  "TOT", "OWN", "UNTR", "OTHER", "CP", "TIP_LANE"))
     for r in rows:
         if r.get("plus_total", 0) < 0:
             out.append("%-*s  %-*s  %-8s  %s"
                        % (w, r["branch"], wc, r.get("class", "ERROR"), "?",
                           r.get("err", "error")))
             continue
-        out.append("%-*s  %-*s  %-8s  %5d %5d %5d %5d  %s"
+        out.append("%-*s  %-*s  %-8s  %5d %5d %5d %5d %5d  %s"
                    % (w, r["branch"], wc, r.get("class", ""),
                       "yes" if r["tip_in_base"] == 0 else "no",
                       r["plus_total"], r["plus_own"], r["plus_untrailered"],
-                      r["plus_other"], r["tip_lane"] or "-"))
+                      r["plus_other"], r.get("plus_content_present", 0),
+                      r["tip_lane"] or "-"))
     tot = {k: sum(r[k] for r in rows if r.get("plus_total", 0) >= 0)
-           for k in ("plus_total", "plus_own", "plus_untrailered", "plus_other")}
+           for k in ("plus_total", "plus_own", "plus_untrailered",
+                     "plus_other", "plus_content_present")}
     inb = sum(1 for r in rows if r.get("tip_in_base") == 0)
     out.append("")
     out.append("%d branches · %d already in base · %d swept"
@@ -488,6 +604,13 @@ def render(rows, meta):
     out.append("sum(plus_total)=%d = own %d + untrailered %d + other %d"
                % (tot["plus_total"], tot["plus_own"], tot["plus_untrailered"],
                   tot["plus_other"]))
+    # The content leg's status is a CONSTANT field, not a branch: the leg is
+    # unconditional (Design H §7), so its report reads the field rather than
+    # deciding whether to mention it.  CP = `+` commits whose post-image
+    # content is already in the base -- dropped, never counted as pending.
+    out.append("content leg: %s (unconditional) · CP %d dropped as already "
+               "present in the base"
+               % (meta.get("content_leg", "?"), tot["plus_content_present"]))
 
     # The rollup: per-lane sums, keyed on the lane keys OBSERVED.  A lane that
     # tips no branch is absent here, not a phantom 0 -- the difference between
@@ -534,6 +657,15 @@ def _fixture_repo(root):
                                             tip lane LANE_C       `-`), tip NOT an
                                                                  ancestor -> the
                                                                  YOUR_PENDING_ZERO case
+        feat/content        k1 LANE_A,     k1's CONTENT is main's -> plus=1: k1 is
+                            k2 LANE_A       f_dup.txt by another    DROPPED by the
+                            (tip)           route, so cherry says  content leg, k2
+                                            `+` (different patch)  is real work
+        main                +1 commit      after the absorbed ff-merge: writes
+                                            f_dup.txt + a SECOND file, so its
+                                            patch-id differs from k1's (identical
+                                            patch-ids would make cherry say `-`
+                                            and the fixture would prove nothing)
     """
     def g(*a, **kw):
         p = subprocess.run(["git", "-C", root] + list(a),
@@ -580,8 +712,24 @@ def _fixture_repo(root):
     # aggregate-based advisory names falsely.
     g("checkout", "-q", "-b", "feat/dup", "main")
     commit("f_c1.txt", "absorbed 1", LANE_C)
+    # feat/content carries TWO `+` commits: k1 writes f_dup.txt with content
+    # main will already hold, by a ONE-file patch, while main lands the same
+    # f_dup.txt content inside a TWO-file commit.  Different patch-ids -> cherry
+    # says `+` for k1 -- while k1's post-image content is already in the base.
+    # That is the v0.4.214 hazard, and it is the content leg's only job.  k2 is
+    # genuinely new work and MUST survive the leg, so the test discriminates
+    # "subtracts" from "zeroes the row".
+    g("checkout", "-q", "-b", "feat/content", "main")
+    commit("f_dup.txt", "landed elsewhere", LANE_A)
+    commit("f_new.txt", "genuinely new", LANE_A)
     g("checkout", "-q", "main")
     g("merge", "-q", "--ff-only", "feat/absorbed")
+    with open(os.path.join(root, "f_dup.txt"), "w") as f:
+        f.write("landed elsewhere\n")
+    with open(os.path.join(root, "f_other.txt"), "w") as f:
+        f.write("other\n")
+    g("add", "f_dup.txt", "f_other.txt")
+    g("commit", "-q", "-m", "landed by another route")
 
 
 def selftest():
@@ -628,7 +776,7 @@ def selftest():
         ck(bool(doc["meta"].get("base_sha")), "meta.base_sha pins that ref's sha")
 
         rows = {r["branch"]: r for r in doc["rows"]}
-        ck(len(rows) == 8, "8 fixture branches censused (got %d: %s)"
+        ck(len(rows) == 9, "9 fixture branches censused (got %d: %s)"
            % (len(rows), sorted(rows)))
 
         # ---- 2. THE INVARIANT, every row -----------------------------------
@@ -647,6 +795,11 @@ def selftest():
             "feat/malformed": (2, 2, 0, 0, LANE_MALFORMED),
             "feat/peer":      (2, 2, 0, 0, LANE_B),
             "feat/dup":       (0, 0, 0, 0, LANE_C),
+            # k1 is `+` by patch-id but its CONTENT is already in the base, so
+            # the content leg drops it; k2 is real work and survives.  A row of
+            # (1, 1, 0, 0) is the only shape that proves the leg SUBTRACTS
+            # rather than zeroing the row or leaving it alone.
+            "feat/content":   (1, 1, 0, 0, LANE_A),
         }
         for b, (tot, own, unt, oth, lane) in sorted(exp.items()):
             r = rows.get(b)
@@ -685,8 +838,8 @@ def selftest():
 
         # ---- 8. --branch glob narrows the sweep ----------------------------
         rc4, out4, _ = run("--json", "--branch", "feat/*")
-        ck(rc4 == 0 and len(json.loads(out4)["rows"]) == 7,
-           "--branch 'feat/*' narrows to the 7 feat/ branches")
+        ck(rc4 == 0 and len(json.loads(out4)["rows"]) == 8,
+           "--branch 'feat/*' narrows to the 8 feat/ branches")
 
         # ---- 9. refusal contract -------------------------------------------
         rc5, _, _ = run("--repo", os.path.join(root, "nope"), "--json")
@@ -711,7 +864,7 @@ def selftest():
            % rl["malformed_keys"])
         ck(rl["lanes_total"] == 3,
            "rollup counts the 3 real fixture lanes, not 4 (got %d)" % rl["lanes_total"])
-        ck(rl["lanes"] == {LANE_A: 3, LANE_B: 2, LANE_C: 0},
+        ck(rl["lanes"] == {LANE_A: 4, LANE_B: 2, LANE_C: 0},
            "per-lane sums of plus_own (got %s)" % rl["lanes"])
 
         # ---- 12. ALREADY_ABSORBED is terminal, tested FIRST ----------------
@@ -752,6 +905,31 @@ def selftest():
         ck(rc10 == 2, "a non-UUID --lane is refused with rc 2 (got %d)" % rc10)
         ck("--lane must be a Session-Id UUID" in err10,
            "the refusal names the argument it rejected")
+
+        # ---- 16. the CONTENT leg (the v0.4.214 rewritten-sha hazard) -------
+        # k1 is `+` by patch-id while its post-image content already sits in
+        # the base by ANOTHER route; only a content check can see that, so a
+        # census trusting the raw `+` reports landed work as pending.
+        r = rows["feat/content"]
+        ck(r["plus_total"] == 1,
+           "a `+` whose content is already in the base is NOT counted as "
+           "pending on a default run (feat/content plus_total=%d, want 1)"
+           % r["plus_total"])
+        ck(r.get("plus_content_present") == 1,
+           "the dropped commit is REPORTED, not silently swallowed "
+           "(plus_content_present=%r, want 1)" % r.get("plus_content_present"))
+        ck(r["plus_total"] == r["plus_own"] + r["plus_untrailered"] + r["plus_other"],
+           "the content leg leaves the three-arm partition intact -- it only "
+           "ever removes false positives")
+        ck(doc["meta"].get("content_leg") == "ran",
+           "content_leg is a CONSTANT output field on a default run (got %r)"
+           % doc["meta"].get("content_leg"))
+        rc11, out11, _ = run("--json", "--lane", LANE_A)
+        ck(rc11 == 0 and json.loads(out11)["meta"].get("content_leg") == "ran",
+           "…and on a --lane run too: a field, never a branch")
+        ck(doc["meta"]["totals"].get("plus_content_present") == 1,
+           "meta.totals.plus_content_present agrees with the per-row sum (got %r)"
+           % doc["meta"]["totals"].get("plus_content_present"))
 
         if fails:
             print("  %d FAILED" % len(fails))
@@ -810,7 +988,8 @@ def main(argv):
 
         if args.json:
             tot = {k: sum(r[k] for r in rows if r.get("plus_total", 0) >= 0)
-                   for k in ("plus_total", "plus_own", "plus_untrailered", "plus_other")}
+                   for k in ("plus_total", "plus_own", "plus_untrailered",
+                             "plus_other", "plus_content_present")}
             meta = dict(meta)
             meta["totals"] = tot
             meta["invariant"] = "plus_total == plus_own + plus_untrailered + plus_other"
