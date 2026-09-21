@@ -1602,6 +1602,30 @@ DOMEOF
   OC_ACTOR="$WC" bash "$ME" stamp done "done #5555 — fixture release" >/dev/null 2>&1
   bash "$ME" claim-ref "$WC" --open >/dev/null 2>&1; chk "claim-ref-open-released-rc3" 3 $?
   chk "claim-ref-plain-ignores-closure" "5555" "$(bash "$ME" claim-ref "$WC" 2>/dev/null)"
+  # #492: `claim-ref --open` resolves the NEWEST STILL-OPEN claim row, not the
+  # newest row. Fixture: $WO claims #8801 and leaves it open, then claims #8802,
+  # which a done row CLOSES. The newest row is therefore closed while an older
+  # one is open — the exact shape that made the verb answer rc 3 for a lane that
+  # DOES hold an open claim, so oc-commit derived no Issue-Ref and refused to
+  # commit (#492's live instance: rc 3 while `claims 318` showed an open row).
+  # MUTATION KILL: restore the latest-row-only selection and
+  # claim-ref-open-older-open-row-wins fails with an empty answer and rc 3.
+  local WO="abcdef01-2345-6789-abcd-ef0123456789"
+  OC_ACTOR="$WO" bash "$ME" stamp claim "CLAIM #8801 — older claim left open" >/dev/null 2>&1
+  OC_ACTOR="$WO" bash "$ME" stamp claim "CLAIM #8802 — newer claim, closed below" >/dev/null 2>&1
+  OC_ACTOR="$WO" bash "$ME" stamp done "done #8802 — closure of the NEWER claim" >/dev/null 2>&1
+  chk "claim-ref-open-older-open-row-wins" "8801" "$(bash "$ME" claim-ref "$WO" --open 2>/dev/null)"
+  bash "$ME" claim-ref "$WO" --open >/dev/null 2>&1; chk "claim-ref-open-older-open-rc0" 0 $?
+  chk "claim-ref-plain-still-latest-row" "8802" "$(bash "$ME" claim-ref "$WO" 2>/dev/null)"
+  OC_ACTOR="$WO" bash "$ME" stamp done "done #8801 — now every claim row is closed" >/dev/null 2>&1
+  out="$(bash "$ME" claim-ref "$WO" --open 2>"$T/wo.err")"; rc=$?
+  if [ "$rc" -eq 3 ] && [ -z "$out" ]; then
+    ok
+  else
+    bad "claim-ref-open-none-left-rc3 (want rc=3 got rc=$rc, out=[$out], err=[$(head -c 200 "$T/wo.err")])"
+  fi
+  grep -q "older claim row(s) by $WO were also scanned and none is open" "$T/wo.err" \
+    && ok || bad "claim-ref-open-none-left-diagnostic"
   # 46-50 (v0.4.97, #129 family): claims <N> — open claim-refs by issue.
   # Fixture: W2 claimed #999 above; W3's claim has no #N. Claim #777 as W4,
   # verify OPEN, close it via a later close event, verify GONE.
@@ -2093,11 +2117,13 @@ _latest_open_claim_issue() { # $1=uuid -> stdout: the lane's latest claim issue
   # implementation comment onto a FINISHED issue (the cross-post the defect
   # report caught).
   #
-  # Row selection mirrors _latest_claim_issue EXACTLY (last claim row whose
-  # `by` contains the uuid) so the two verbs can never disagree about WHICH
-  # claim is the lane's latest. The only difference is the closure filter, and
-  # that predicate is the canonical one (oc_claims.claim_is_closed) — never
-  # re-inlined here: four inlined copies of it had already drifted apart (#305).
+  # Row selection (#492): the lane's NEWEST claim row that is still OPEN, not
+  # simply its newest claim row. The old rule mirrored _latest_claim_issue
+  # exactly, which is correct only while a lane's newest claim is also its
+  # newest OPEN one — closing a newer claim then made this verb answer rc 3
+  # while older open claims existed. The closure predicate stays the canonical
+  # one (oc_claims.claim_is_closed) — never re-inlined here: four inlined copies
+  # of it had already drifted apart (#305).
   python3 -c '
 import sys, os, json
 
@@ -2114,25 +2140,46 @@ except Exception as e:
 
 uuid = sys.argv[3]
 rows = oc.parse_events(events)
-idx = None
-for i, row in enumerate(rows):
-    if row["kind"] == "claim" and uuid in row["by"]:
-        idx = i
-if idx is None:
+idxs = [i for i, row in enumerate(rows)
+        if row["kind"] == "claim" and uuid in row["by"]]
+if not idxs:
     sys.stderr.write("no claim event by %s\n" % uuid)
     sys.exit(3)
-row = rows[idx]
+
+# #492: the selection is the NEWEST claim ROW THAT IS STILL OPEN, not the newest
+# claim row. The two are the same thing only while the newest claim row is also
+# the newest OPEN one; the moment a lane closes a newer claim, a
+# latest-row-only scan finds that closed row, answers rc 3, and HIDES every
+# older claim that is still open. Measured live 2026-09-21: claim-ref --open
+# returned rc 3 ("latest claim ... is CLOSED (#421)") while a claims query
+# showed the SAME lane holding an issue claim with no close row -- still open.
+# The consumer that cannot absorb this is oc-commit, which derives its Issue-Ref
+# from here and hard-fails (rc 3) instead of committing.
+#
+# Newest-first so the answer stays "the most recent claim the lane may act on";
+# the closure predicate is the canonical one (oc.claim_is_closed), never
+# re-inlined. One row per issue is already handled: a multi-target claim
+# contributes whichever of its targets is still open.
+for idx in reversed(idxs):
+    row = rows[idx]
+    for tok in row["targets"]:
+        if not oc.claim_is_closed(rows, idx, row["by"], tok):
+            sys.stdout.write("%d\n" % tok)
+            sys.exit(0)
+
+row = rows[idxs[-1]]
 if not row["targets"]:
     sys.stderr.write("latest claim by %s carries no numeric issue ref: %s\n"
                      % (uuid, row["what"]))
     sys.exit(3)
-for tok in row["targets"]:
-    if not oc.claim_is_closed(rows, idx, row["by"], tok):
-        sys.stdout.write("%d\n" % tok)
-        sys.exit(0)
+older = len(idxs) - 1
 sys.stderr.write(
     "latest claim by %s is CLOSED (#%s — a done/close row for it follows): %s\n"
     % (uuid, ", #".join(str(t) for t in row["targets"]), row["what"]))
+if older:
+    sys.stderr.write(
+        "%d older claim row(s) by %s were also scanned and none is open\n"
+        % (older, uuid))
 sys.exit(3)
 ' "$LEDGER" "$_OC_DIR" "$1"
 }
@@ -2188,17 +2235,23 @@ cmd_claim() { # oc-ledger claim [<uuid>] <issue-number|#N> [text...] | oc-ledger
 }
 
 cmd_claim_ref() { # oc-ledger claim-ref <uuid> [--open] — print the #N from the
-  # worker's latest claim event (E2 finding 4, v0.4.72; derivation shared with
-  # cmd_confirm via _latest_claim_issue since v0.4.77).
-  # --open (#335): require that claim to still be OPEN — the only ref a consumer
-  # may safely ACT on (oc-commit's Issue-Ref + its post-commit comment). Without
-  # it the verb answers with the latest claim row whether open or closed.
+  # worker's latest claim event (E2 finding 4, v0.4.72; the PLAIN form's
+  # derivation is shared with cmd_confirm via _latest_claim_issue since v0.4.77).
+  # --open (#335): the only ref a consumer may safely ACT on (oc-commit's
+  # Issue-Ref + its post-commit comment). PREDICATE (#492): it answers with the
+  # #N of the lane's NEWEST CLAIM ROW THAT IS STILL OPEN — NOT the #N of its
+  # newest claim row. A lane that has closed a newer claim therefore still
+  # resolves to an older open one; rc 3 means NO claim row by that lane is open
+  # (or none of them carries an issue ref), never merely "the latest one is
+  # closed".
+  # Without --open the verb answers with the latest claim row whether open or
+  # closed.
   # Pure read: no existence check, no ledger mutation. rc 0 + "#N" | rc 3.
   local open=0 uuid=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --open) open=1; shift ;;
-      -h|--help) echo "usage: oc-ledger claim-ref <uuid> [--open]   (the composed '<role> <uuid>' is also accepted; for an ISSUE number use: oc-ledger claims <N>)"; exit 0 ;;
+      -h|--help) echo "usage: oc-ledger claim-ref <uuid> [--open]   (--open = the lane's NEWEST claim row that is STILL OPEN; rc 3 = no claim row by that lane is open. The composed '<role> <uuid>' is also accepted; for an ISSUE number use: oc-ledger claims <N>)"; exit 0 ;;
       --*) die 2 "claim-ref: unknown flag '$1'" ;;
       *) [ -z "$uuid" ] || die 2 "claim-ref: unexpected extra argument '$1'"; uuid="$1"; shift ;;
     esac
