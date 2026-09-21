@@ -136,7 +136,7 @@ faster path), anything owner-verdict-shaped.
 HOW: `session_notify` per fleet-directives.md §Cross-lane message delivery discipline (cadence law
 canonical: `turn-end` IS the default (an idle target wakes on it), `quiet` is a deliberate choice
 for batch/fan-out whose ack contract is the ledger, `now` is RETIRED and FAILS the delivery,
-and `interrupt: true` is a legacy alias — accepted but INERT, NOT an escalation. Batch: one notify with N items beats N notifies. Receipts, ACKs, and ROUTED stamps NEVER escalate;
+and `interrupt: true` is the legacy alias for the urgent tier (`delivery.mode: interrupt`) — precedence framing, never deferred, but NOT pre-emption. Batch: one notify with N items beats N notifies. Receipts, ACKs, and ROUTED stamps NEVER escalate;
 they live in the ledger.
 
 WHAT comes back: HQ's rulings and version batches absorb here the

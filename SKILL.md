@@ -189,18 +189,19 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   | Mode | Note |
   |---|---|
   | `turn-end` (DEFAULT) / `quiet` / redirect / no-route | full table = fleet-directives.md §Cross-lane message delivery discipline (CANONICAL — this row is a failsafe pointer, lens B-F15 v0.4.96) |
-  | `now` | **RETIRED — passing it FAILS the delivery** (`notify_policy.rs` returns `Err`; the schema's `delivery.mode` enum is exactly `[turn-end, quiet]`; #373 landed + deployed). It is NOT an available mode. |
-  | failsafe | target mid-turn — `interrupt: true` is a **LEGACY ALIAS, accepted but INERT** (#373), never an escalation: the message QUEUES for the target's next tool-loop boundary. |
+  | `now` | **RETIRED — passing it FAILS the delivery** (`notify_policy.rs` returns `Err`; the schema's `delivery.mode` enum is exactly `[turn-end, interrupt, quiet]`; #373 landed + deployed). It is NOT an available mode. |
+  | `interrupt` (urgent tier) | `interrupt: true` is the **LEGACY ALIAS for `delivery.mode: interrupt`** — the URGENT tier (#393, landed + deployed): the SAME delivery point as `turn-end`, carrying a precedence frame so the target yields its current plan and answers in that turn, and never deferred. It is **NOT pre-emption** — no boundary exists inside a running tool call, so a mid-turn target still QUEUES for its next tool-loop boundary. |
 
   Escalation ladder canonical: fleet-directives.md §Cross-lane message delivery discipline
-  (`turn-end` is the default and there is NO escalation — `interrupt` is inert — lens A5
+  (`turn-end` is the default and `interrupt` is the URGENT tier — same boundary plus precedence framing, never pre-emption — lens A5
   v0.4.89: pointer only, no second copy).
 - Refusal handling: **the `session_notify` path never refuses.** `interrupt` is
   hardcoded true on this tool's route (`src/brain/tools/subagent/notify.rs:371`),
   so the mid-turn gate (`src/brain/agent/service/session_routes.rs:336`) is
   bypassed and a busy target QUEUES the message for its next tool-loop boundary —
   send `turn-end` (the default) and do nothing else. `interrupt: true` is a
-  legacy alias, INERT, never an escalation; `now` fails the delivery outright.
+  legacy alias for the urgent tier (precedence framing, never deferred — but still
+  not pre-emption); `now` fails the delivery outright.
   A `no wake observed` confirm verdict MEANS the target is mid-turn — never
   re-send on it. Do NOT generalise this to "there is no refusal path": the
   `Delivery::RefusedInFlight` variant is still constructed and reachable from
