@@ -47,6 +47,7 @@ TARGET=""
 UNIT="opencrabs-ops"
 NO_LEDGER=0
 SELFTEST=0
+LINEAGE="unverified"
 
 usage() {
   local code="${1:-2}"
@@ -55,6 +56,7 @@ usage() {
   cat <<EOF >&$fd
 usage: $PROG <issue> [--verdict PASS|FAIL] [--probe <cmd>]
                  [--markers m1,m2] [--evidence <text>]
+                 [--lineage verified|failed|unverified]
                  [--target <name>] [--unit <unit>] [--no-ledger] | --selftest
 
 Options:
@@ -64,6 +66,9 @@ Options:
   --markers <m1,m2>   Comma-separated presence markers to verify in binary
   --evidence <text>   Prose summary of verification evidence (recorded IN
                       ADDITION to --probe, never instead of it)
+  --lineage <tok>     Lineage leg status: verified|failed|unverified (default:
+                      unverified — oc-smoke computes no ancestry itself, so it
+                      never claims a lineage it did not check)
   --target <name>     Deployment unit the verdict is about (default: live-ops)
   --unit <unit>       Systemd user unit to check (default: opencrabs-ops)
   --no-ledger         Skip automatic done stamp in workers-ledger.json on PASS
@@ -322,6 +327,72 @@ EOF
     t_bad "--target override (rc=$rc row=$row245)"
   fi
 
+  # ---- #436 + #306: the row must not contradict its own verdict -----------
+  # #436: the opening clause was the literal "4-leg smoke pass:" on EVERY row,
+  # so all 7 FAIL rows in the canonical log asserted a pass in their first five
+  # words — the precise rows a reader consults when something went wrong.
+  # #306: the same clause asserted lineage=true for a leg this tool cannot
+  # compute (it runs no ancestry command at all). Both literals lived on ONE
+  # line, so they are covered by ONE fixture. Assertions are on the ROW, never
+  # on stdout, because the row is the artifact of record. The PASS-side control
+  # is row244, written by the #432 fixture above.
+  local row246 row247 row248 row249 v249
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 246 --probe "echo probe-ok" 2>&1)" || rc=$?
+  row246="$(grep 'issue=#246' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row246" | grep -q 'evidence="4-leg smoke pass: lineage=unverified '; then
+    t_ok "PASS row keeps the pass clause; lineage reads unverified, never true (#306)"
+  else
+    t_bad "PASS default opening clause (rc=$rc row=$row246)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 247 --verdict FAIL --evidence "smoke of a FAIL" 2>&1)" || rc=$?
+  row247="$(grep 'issue=#247' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row247" | grep -q 'evidence="4-leg smoke FAIL: ' \
+     && ! printf '%s' "$row247" | grep -q '4-leg smoke pass'; then
+    t_ok "a FAIL row names its own verdict and never opens by claiming a pass (#436)"
+  else
+    t_bad "FAIL opening clause (rc=$rc row=$row247)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 248 --probe "echo probe-ok" --lineage verified 2>&1)" || rc=$?
+  row248="$(grep 'issue=#248' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row248" | grep -q 'lineage=verified '; then
+    t_ok "a caller-supplied --lineage verified is what the row records (#306)"
+  else
+    t_bad "--lineage verified (rc=$rc row=$row248)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 249 --probe "echo probe-ok" --lineage failed 2>&1)" || rc=$?
+  row249="$(grep 'issue=#249' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  v249="$(printf '%s' "$row249" | awk -F'\t' '{print $2}')"
+  if [ "$rc" -eq 1 ] && [ "$v249" = "FAIL" ] && printf '%s' "$row249" | grep -q 'lineage=failed'; then
+    t_ok "a caller-reported lineage FAIL forces the row to FAIL, not PASS (#306)"
+  else
+    t_bad "--lineage failed (rc=$rc verdict=$v249 row=$row249)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 250 --lineage bogus 2>&1)" || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    t_ok "--lineage rejects a token outside verified|failed|unverified -> 2"
+  else
+    t_bad "--lineage domain check (rc=$rc out=$out)"
+  fi
+
   echo "selftest: $pass passed, $fail failed"
   [ "$fail" -eq 0 ] && exit 0 || exit 1
 }
@@ -360,6 +431,16 @@ while [ $# -gt 0 ]; do
     --evidence)
       [ $# -ge 2 ] || die 2 "--evidence requires description text"
       EVIDENCE_TEXT="$2"
+      shift 2
+      ;;
+    --lineage)
+      [ $# -ge 2 ] || die 2 "--lineage requires a token (verified|failed|unverified)"
+      case "$2" in
+        verified|VERIFIED|failed|FAILED|unverified|UNVERIFIED)
+          LINEAGE="$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ;;
+        *)
+          die 2 "--lineage accepts exactly verified|failed|unverified (got: $2)" ;;
+      esac
       shift 2
       ;;
     --target)
@@ -462,17 +543,40 @@ if [ -n "$PROBE_CMD" ]; then
   fi
 fi
 
+# 2b. The lineage leg (#306). This tool runs no ancestry command — `grep -c
+#     'is-ancestor|merge-base'` over it returns 0 — so it CANNOT compute leg 1 of
+#     the 4-leg rubric; it can only report what the caller checked. The caller
+#     says so with --lineage, and the default is `unverified`: a leg this tool
+#     did not check must not read as a checked one. A caller reporting the leg
+#     FAILED forces the row to FAIL, on the same reasoning that already forces
+#     FAIL on an identity mismatch or a failed probe — a row reading
+#     `PASS ... lineage=failed` is the self-contradiction #436 fixes below.
+if [ "$LINEAGE" = "failed" ]; then
+  echo "$PROG: caller reported the lineage leg FAILED — verdict forced to FAIL" >&2
+  VERDICT="FAIL"
+fi
+
 # 3. Assemble full evidence string
-FULL_EVIDENCE="4-leg smoke pass: lineage=true identity=$( [ "$IDENTITY_RC" -eq 0 ] && echo "MATCH" || echo "MISMATCH" )"
+# #436: the opening clause names the ROW's OWN verdict. It was the literal
+# `4-leg smoke pass:` on every row — including all 7 FAIL rows in the canonical
+# log, which are exactly the rows a reader consults when something went wrong,
+# so the durable record asserted a pass in its first five words while field 2
+# said FAIL. PASS keeps the phrase byte-for-byte (no migration, no lost marker);
+# a FAIL row now opens by naming its own verdict.
+CLAUSE="4-leg smoke ${VERDICT}"
+if [ "$VERDICT" = "PASS" ]; then
+  CLAUSE="4-leg smoke pass"
+fi
+FULL_EVIDENCE="${CLAUSE}: lineage=${LINEAGE} identity=$( [ "$IDENTITY_RC" -eq 0 ] && echo "MATCH" || echo "MISMATCH" )"
 if [ -n "$MARKERS" ]; then
   FULL_EVIDENCE="${FULL_EVIDENCE} markers=${MARKERS}"
 fi
 # #409: two INDEPENDENT ifs. The elif dropped the entire --evidence argument
 # whenever --probe was also supplied — and --probe is the NORMAL case, since
 # leg 4 of the 4-leg rubric IS a live behavioral probe. What was lost is the
-# part a reviewer cannot reconstruct: the by-hand lineage computation (the
-# only place a real lineage check can be recorded, given --evidence is how
-# #306's hardcoded lineage=true is overridden), stated limits, non-duplicate
+# part a reviewer cannot reconstruct: the by-hand lineage computation — now
+# recorded in the lineage= leg by --lineage above, since #306 stopped this tool
+# asserting a leg it never computes — plus stated limits, non-duplicate
 # provenance, packaging identity.
 if [ -n "$PROBE_DETAILS" ]; then
   FULL_EVIDENCE="${FULL_EVIDENCE} live_behavior=${PROBE_DETAILS}"
