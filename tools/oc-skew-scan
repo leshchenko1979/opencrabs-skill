@@ -106,8 +106,7 @@ JSON
 fi
 
 _SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-_DEFAULT_STATE="${OC_DEV_STATE:-${HOME:-/root}/.opencrabs/profiles/ops/opencrabs-dev}"
-: "${LEDGER:=${OC_LEDGER:-$_DEFAULT_STATE/workers-ledger.json}}"
+: "${LEDGER:=$(oc_ledger_path)}"   # ONE literal + ONE precedence: tools/lib/oc-log.sh
 if [ -z "$CURRENT" ]; then
   SKILL="$_SELF_DIR/../SKILL.md"
   if [ ! -f "$SKILL" ]; then

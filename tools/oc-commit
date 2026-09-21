@@ -223,7 +223,6 @@ $G diff --cached --quiet 2>/dev/null \
 # is RELEASED, and deriving the ref from it (the old behaviour) posted the
 # post-commit implementation comment onto a FINISHED issue. An explicit --issue
 # still overrides — that is the lane taking the decision on the record.
-LEDGER="${OC_LEDGER:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/workers-ledger.json}"
 DERIVE_ERR=""
 if [ -z "$ISSUE" ]; then
   OC_LEDGER_BIN="$(cd "$(dirname "$0")" && pwd)/oc-ledger"

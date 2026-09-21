@@ -53,7 +53,7 @@ if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-drift-check" "$@";
 trap 'oc_log_finish $?' EXIT
 
 SKILL_DIR=""   # resolved in cmd_drift (v0.4.130 canonical-resolve, below)
-LEDGER="${OC_LEDGER:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/workers-ledger.json}"
+LEDGER="$(oc_ledger_path)"
 # v0.4.130 (ruling n=2369): canonical skill dir. Worktree copies of the skill
 # repo (oc-wt checkouts) self-resolving from their own tree produced
 # contradicting drift verdicts same-day (2026-09-10) — the default is now the

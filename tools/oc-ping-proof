@@ -59,7 +59,7 @@ fi
 
 [ $# -ge 2 ] || usage
 UUID="$1"; TS="$2"; shift 2
-LEDGER=""
+LEDGER="$(oc_ledger_path)"   # canonical default; --ledger below still overrides
 while [ $# -gt 0 ]; do
   case "$1" in
     --ledger) LEDGER="${2:-}"; shift ;;
@@ -69,7 +69,6 @@ while [ $# -gt 0 ]; do
 done
 echo "$UUID" | grep -Eq '^[^[:space:]]+$' || usage
 PING="$(to_epoch "$TS")" || { echo "unparseable ping-ts: $TS" >&2; exit 4; }
-: "${LEDGER:=${OC_LEDGER:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/workers-ledger.json}}"
 jq -e --arg u "$UUID" '.workers[] | select(.uuid==$u)' "$LEDGER" >/dev/null 2>&1 \
   || { echo "UNREACHABLE $UUID"; exit 3; }
 

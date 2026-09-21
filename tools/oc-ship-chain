@@ -112,7 +112,7 @@
 #   CHAIN-<shortsha>-<UTCstamp>  →  retrieve the whole run with
 #   jq -r '.events[] | select(.kind=="shipchain")
 #          | select(.what | contains("<CHAIN-id>")) | .what' \
-#      ~/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json
+#      <state-dir>/workers-ledger.json
 #   (the old help named an `oc-ledger show` verb that does not exist — fixed
 #    2026-09-11, same defect report as the kind: an auditor following a
 #    non-existent retrieval path reads "no rows" as "chain never ran".)

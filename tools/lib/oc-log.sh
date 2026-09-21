@@ -150,6 +150,15 @@ oc_log_finish() {
   return 0
 }
 
+# oc_ledger_path -- THE canonical workers-ledger.json path (v0.4.38 precedence:
+# OC_LEDGER > OC_DEV_STATE > profile default). Every tool spelled this expression
+# inline, so one literal and one precedence lived in a dozen files and could drift
+# in any one of them. A caller with its own ledger source (a --ledger flag, a
+# fixture) parses that itself and skips this helper.
+oc_ledger_path() {
+  printf '%s\n' "${OC_LEDGER:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/workers-ledger.json}"
+}
+
 # oc_session_trailer <commit-message-text> — Duty-6 lens F task 2 (v0.4.91 batch)
 # ONE Session-Id convention for ALL tools: git interpret-trailers semantics —
 # the LAST Session-Id trailer wins (trailers are an ordered stack; the last one

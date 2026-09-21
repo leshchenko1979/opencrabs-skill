@@ -26,7 +26,7 @@ if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-order-validate" "$
 trap 'oc_log_finish $?' EXIT
 
 REPO="${OC_REPO:-leshchenko1979/opencrabs}"
-LEDGER="${OC_LEDGER:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/workers-ledger.json}"   # v0.4.38: canonical path (skill-dir duplicate deleted 2026-08-29; oc-deploy passes OC_LEDGER explicitly in the ship chain)
+LEDGER="$(oc_ledger_path)"   # v0.4.38: canonical path (skill-dir duplicate deleted 2026-08-29; oc-deploy passes OC_LEDGER explicitly in the ship chain)
 TIP=""
 FEATURES=""
 VERBOSE=0
