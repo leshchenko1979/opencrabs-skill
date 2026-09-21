@@ -86,6 +86,14 @@ SKIP_DIRS = frozenset(("__pycache__", ".git", "tests"))
 
 MAX_UNIT_BYTES = 400_000
 
+#: Stand-in for a shell substitution (`"$T/x.json"`) inside a reconstructed blob.
+#: BARE, never quoted: a substitution in this corpus always sits INSIDE an open
+#: python string (`open("` + value + `")`), so the value is that string's
+#: CONTENT. Emitting a quoted placeholder instead makes the literal quote and the
+#: placeholder's quote collide into an unterminated `"""` — measured, that
+#: produced six holes from a working extractor.
+_SUBST = "__OC_SUBST__"
+
 
 def read_text(path):
     try:
@@ -170,19 +178,114 @@ def iter_source_files(root):
             yield path, rel
 
 
+def _shell_word_python(line, after_quote):
+    """Reconstruct the python a `python3 -c '<seg>'"<seg>"...` shell word carries.
+
+    Returns ``(text, closed_here)`` — ``closed_here`` False means the word runs on
+    to the NEXT line (the multi-line `python3 -c '` form), which the caller must
+    handle by line scanning.
+
+    The problem this solves: a single-line blob is written in MIXED shell quoting,
+    because a `$var` cannot appear inside single quotes. Taking "everything after
+    the opening quote to end-of-line" therefore yields shell text
+    (`...open("'"$T/x.json"'"))`) that is not python, and scanning forward for a
+    line beginning with `'` — the old rule — then swallowed the REST OF THE FILE
+    (measured: 390 and 94 and 324 and 151 lines of shell for four blobs that are
+    each ONE line long). So the quoted segments are concatenated here and a
+    `"$var"` substitution becomes an empty python string, which is the closest
+    well-formed python to what the shell would hand the interpreter. Only the
+    SHELL WORD is consumed; the trailing `"$mock_reg" 2>/dev/null ...` is not.
+    """
+    parts = []
+    buf = []
+    i = after_quote
+    n = len(line)
+    in_literal = True          # inside a single-quoted segment
+    while i < n:
+        c = line[i]
+        if in_literal:
+            if c == "'":
+                parts.append("".join(buf))
+                buf = []
+                in_literal = False
+                i += 1
+                continue
+            buf.append(c)
+            i += 1
+            continue
+        if c in " \t":         # whitespace ENDS the shell word
+            break
+        if c == "'":
+            in_literal = True
+            i += 1
+            continue
+        if c == '"':           # `"$var"` -> a substituted value, never python text
+            j = i + 1
+            while j < n and line[j] != '"':
+                j += 1
+            parts.append(_SUBST)
+            i = j + 1
+            continue
+        if c == "$":           # `'code'$var'code'` — also one word, also a value
+            j = i + 1
+            depth = 0
+            while j < n:
+                ch = line[j]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif depth == 0 and ch in " \t'\"":
+                    break
+                j += 1
+            parts.append(_SUBST)
+            i = j
+            continue
+        # ANYTHING ELSE IS SHELL SYNTAX, not python: the word ended at the
+        # closing quote and what follows is the command's own punctuation. The
+        # corpus's ugliest line (`...open("'"$T/x"'"))["current_class"])\')`) ends
+        # `\')"`, and continuing through it appended two stray placeholders and
+        # produced `...)"current_class"])__OC_SUBST____OC_SUBST__` — invalid syntax
+        # from an otherwise-correct reconstruction.
+        break
+    if buf:
+        parts.append("".join(buf))
+    return "".join(parts), not in_literal
+
+
 def extract_blobs(src):
     """(start_line, code) for each python blob a shell tool embeds.
 
-    Best effort, deliberately: a blob whose closing quote shares a line with
-    trailing shell code will fail to parse and is then SKIPPED, never guessed at.
+    Two fences, because the corpus writes both shapes: a SINGLE-LINE word
+    (`python3 -c 'x' "$arg"`) closes on its own line, and the multi-line form
+    (`python3 -c '` newline code newline `'`) closes on a later one. The line
+    scan is used ONLY for the second, which is what the old rule assumed for
+    both — and assuming it for a single-line blob swallowed every following
+    shell line up to the next one starting with `'`.
+
+    A COMMENT line never opens a blob. `# The python engine runs as 'python3
+    -c'` matched the regex and produced a 2035-line "blob" of shell comments
+    (oc-harvest-dispatch:37), which is a parsing hole that blamed the host file
+    for an extractor artefact.
     """
     lines = src.splitlines()
     out = []
     i = 0
     while i < len(lines):
-        m = RE_PY_C.search(lines[i])
+        line = lines[i]
+        if line.lstrip().startswith("#"):
+            i += 1
+            continue
+        m = RE_PY_C.search(line)
         if m:
-            body = [lines[i][m.end():]]
+            text, closed_here = _shell_word_python(line, m.end())
+            if closed_here:
+                out.append((i + 1, text))
+                i += 1
+                continue
+            body = [text] if text else []
             j = i + 1
             while j < len(lines) and not lines[j].startswith("'"):
                 body.append(lines[j])
@@ -190,7 +293,7 @@ def extract_blobs(src):
             out.append((i + 1, "\n".join(body)))
             i = j + 1
             continue
-        h = RE_PY_HEREDOC.search(lines[i])
+        h = RE_PY_HEREDOC.search(line)
         if h:
             delim = h.group(1)
             body = []
@@ -502,6 +605,36 @@ def _write_tree(root, files):
         with open(os.path.join(root, name), "w", encoding="utf-8") as fh:
             fh.write(text)
 
+#: A copy carried by a SINGLE-LINE `python3 -c '...'` word — the shape that
+#: swallowed the rest of the file under the old fence. The old extractor scanned
+#: forward for a line BEGINNING with a quote, which a one-liner never has, so its
+#: "blob" ran on through every following shell line and parsed as nothing. The
+#: python here is ALL on line 2, and it declares the canonical constant, so ARM B
+#: must fire — which is only possible if the blob was fenced at its own closing
+#: quote and actually scanned.
+SINGLE_LINE_BLOB_COPY = '''#!/bin/sh
+LEDGER="$1"
+n="$(python3 -c 'CLOSERS = ("close", "confirm", "reject", "done", "unclaim"); print(1)' "$LEDGER")"
+echo "$n"
+'''
+
+#: A COMMENT that merely MENTIONS `python3 -c` (the oc-harvest-dispatch:37
+#: shape). It is not python and must open no blob at all — under the old rule it
+#: opened a "blob" that ran to the end of the file.
+COMMENT_MENTION = '''#!/bin/sh
+# The python engine runs as 'python3 -c', so sys.argv[0] is '-c' and cannot
+# locate this tool's own lib/ -- hand it the tools dir explicitly.
+export OC_TOOLS_DIR="$PWD"
+'''
+
+#: The mixed-quoting one-liner (oc-health's shape): a `$var` in the middle of a
+#: single-quoted python blob, written `'"$X"'`. Reconstructed with the
+#: substitution standing in for the value, the python must still PARSE, because
+#: an unparsed blob is an unscanned blob.
+MIXED_QUOTE_ONELINER = '''#!/bin/sh
+first="$(python3 -c 'import json; print(json.load(open("'"$STATE/x.json"'"))["k"])')"
+'''
+
 
 def _run_cli(root):
     proc = subprocess.run([sys.executable, SELF, "--scan", root],
@@ -606,18 +739,66 @@ def selftest():
         ck("coverage: ARM scan still clean on the live tree", a == 0 and b2 == 0,
            "a=%d b=%d" % (a, b2))
 
-        # Coverage must be able to FAIL: a tree whose unit cannot parse is
-        # reported as a NOTE, and the ok line states both figures.
-        unparsable = os.path.join(tmp, "unparsable")
-        _write_tree(unparsable, {"oc-unparsable-tool":
-                                 "#!/bin/sh\npython3 -c '\nx = (\n'\n"})
-        rc, out = _run_cli(unparsable)
-        ck("unparsable unit is NAMED in the report, not silently dropped",
-           "oc-unparsable-tool" in out and "1 python unit(s) declared" in out
-           and "NOTE" in out,
-           out.strip()[:200])
-        ck("unparsable unit alone does not fail the run (rc 0)",
-           rc == 0, "rc=%d" % rc)
+        # ---- leg group 10: the BLOB FENCE (extractor coverage, 2026-09-21) ---
+        # Reported by HQ: the guard ran green while scanning 14 of 19 units and
+        # emitting 5 coverage notes. The host code was fine — the FENCE was not.
+        # Two shapes, both measured live:
+        #   (a) a single-line `python3 -c 'x' "$arg"` has no line beginning with a
+        #       quote, so the forward scan ran to the NEXT such line and swallowed
+        #       94/151/324/390 lines of shell (oc-health:192/796/406,
+        #       oc-harvest-census:2156 — the 324-line one contained a `'` on a
+        #       later line and stopped there by luck);
+        #   (b) a COMMENT mentioning `python3 -c` opened a 2035-line "blob"
+        #       (oc-harvest-dispatch:37).
+        # Both are extractor artefacts that the report BLAMED ON THE HOST FILE.
+        fenced = os.path.join(tmp, "fenced")
+        _write_tree(fenced, {
+            "oc-single-line-copy": SINGLE_LINE_BLOB_COPY,
+            "oc-comment-mention": COMMENT_MENTION,
+            "oc-mixed-quote": MIXED_QUOTE_ONELINER,
+        })
+        finds_f, units_f, skipped_f = scan(fenced)
+        a, b = _arm_counts(finds_f, "oc-single-line-copy")
+        # MUTATION KILL: restore the unconditional forward scan and this fails —
+        # the blob swallows the following shell and parses as nothing, so the
+        # unit is never scanned and ARM B cannot fire.
+        ck("single-line blob: ARM B fires on the constant it carries", b >= 1,
+           "armB=%d finds=%r skipped=%r" % (b, finds_f, skipped_f))
+        # A blob that cannot be fenced is a coverage hole; these three files must
+        # contribute NONE, which is the property the five live notes violated.
+        ck("blob fence: no unit of the fenced tree is a coverage hole",
+           skipped_f == [], "skipped=%r" % (skipped_f,))
+        # MUTATION KILL: let a comment open a blob and this reddens — the mention
+        # swallows the rest of the file (2 shell lines here, 2035 live).
+        # The assertion is about the UNITS the file contributes, not about a count:
+        # `units` carries a row per FILE (parsed units plus, separately, the skips),
+        # and oc-comment-mention is neither python nor blob-bearing — so its row is
+        # correctly EMPTY. Two earlier forms were wrong about the fixture in opposite
+        # directions: `unit_count >= 3` demanded units that must not exist, and a
+        # `name in units_f` test is true of every file. Pin the row.
+        ck("a COMMENT mentioning python3 -c opens no blob",
+           units_f.get("oc-comment-mention", ("", []))[1] == []
+           and not any(r == "oc-comment-mention" for r, _, _ in skipped_f),
+           "row=%r units=%d skipped=%r" % (units_f.get("oc-comment-mention", ("?", "ABSENT"))[1],
+                                           unit_count(units_f), skipped_f))
+        # The mixed-quoting one-liner is reconstructed rather than sliced, so its
+        # python PARSES; before the reconstruction it sliced `...open("'"$X"'"))`
+        # and every live oc-health blob of this shape was a hole.
+        mixed = [(s, c) for s, c in python_units(os.path.join(fenced, "oc-mixed-quote"),
+                                                 MIXED_QUOTE_ONELINER)]
+        ck("mixed-quoting one-liner reconstructs to parseable python",
+           bool(mixed) and all(_parse(c) is not None for _, c in mixed),
+           repr([_unparsed_reason(c) for _, c in mixed][:2]))
+
+        # ---- leg group 11: the LIVE tree has NO coverage hole ---------------
+        # This is the regression assertion for the five notes. The old leg only
+        # required `declared >= parsed`, which a hole SATISFIES — that is how the
+        # defect stayed green. The bar is now full coverage on the real tree.
+        ck("LIVE tools/ tree: every declared unit is scanned (no coverage hole)",
+           skipped_live == [], "skipped=%r" % (skipped_live,))
+        ck("LIVE tools/ tree: declared figure equals parsed figure",
+           whole == unit_count(units),
+           "declared=%d parsed=%d" % (whole, unit_count(units)))
 
     failed = [x for x in legs if not x[1]]
     for name, _, detail in failed:
