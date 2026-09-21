@@ -995,6 +995,28 @@ NSTUB2
   check_rc "status-json-rc" $rc 0
   check_has "status-json-sha" "$out" '"sha": "1111111111111111111111111111111111111111"'
   check_has "status-json-features" "$out" '"features": "telegram,code-graph"'
+  # #470: the status daemon PID must come from the ops unit, never from
+  # `pgrep | head -1` — three daemons share this box and head -1 picks by PID
+  # order, so the tool reported another profile's daemon and its uptime.
+  # A stub PID_CMD makes the assertion deterministic on any host: whatever the
+  # stub prints is what `status` must report, regardless of what is running.
+  # The stub PID must be ALIVE (this shell) — the emitter only prints the PID
+  # line when the process exists, and a dead stub would read as "stopped".
+  _st_live_pid=$$
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_PID_CMD="echo $_st_live_pid" "$SELF_BIN" status 2>&1)"; rc=$?
+  check_rc "status-pid-source-rc" $rc 0
+  check_has "status-pid-from-unit" "$out" "  PID:             $_st_live_pid"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_PID_CMD="echo $_st_live_pid" "$SELF_BIN" status --json 2>&1)"; rc=$?
+  check_rc "status-json-pid-source-rc" $rc 0
+  check_has "status-json-pid-from-unit" "$out" "\"pid\": $_st_live_pid"
+  # An inactive unit reports MainPID=0, and `kill -0 0` SUCCEEDS (it targets
+  # the caller's own process group) — so an unguarded PID 0 would render as
+  # "running" with a garbage uptime. This must read as stopped/null.
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_PID_CMD="echo 0" "$SELF_BIN" status 2>&1)"; rc=$?
+  check_rc "status-pid-zero-rc" $rc 0
+  check_has "status-pid-zero-stopped" "$out" "  Status:          stopped"
+  out="$(OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_PID_CMD="echo 0" "$SELF_BIN" status --json 2>&1)"; rc=$?
+  check_has "status-json-pid-zero-null" "$out" '"pid": null'
 
   out="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$T/remote.git" OC_DEPLOY_GH="$SD/gh" "$SELF_BIN" watch 2>&1)"; rc=$?
   check_rc "watch-alert-rc" $rc 2
@@ -2567,10 +2589,15 @@ status_run() {
   fi
 
   local daemon_pid="" daemon_uptime="" daemon_status="stopped"
-  daemon_pid="$(pgrep -f "opencrabs.*daemon|target/release/opencrabs" 2>/dev/null | head -1 || true)"
-  if [ -z "$daemon_pid" ]; then
-    daemon_pid="$(pgrep -f "opencrabs" 2>/dev/null | grep -v "^$$" | head -1 || true)"
-  fi
+  # #470: the ops unit's MainPID is the ONLY correct source for this daemon.
+  # `pgrep -f opencrabs.*daemon | head -1` grabs whichever daemon sorts first —
+  # three share this box — so `status` reported the DEFAULT profile's PID and
+  # uptime, and uptime is the field a lane reads to tell whether a post-swap
+  # restart actually happened. PID_CMD is the source the swap path already uses.
+  daemon_pid="$($PID_CMD 2>/dev/null || echo 0)"
+  # `kill -0 0` SUCCEEDS (it targets the caller's process group), so an
+  # inactive unit reporting MainPID=0 would read as "running" unguarded.
+  case "$daemon_pid" in ''|0|*[!0-9]*) daemon_pid="" ;; esac
   if [ -n "$daemon_pid" ] && kill -0 "$daemon_pid" 2>/dev/null; then
     daemon_status="running"
     daemon_uptime="$(ps -p "$daemon_pid" -o etime= 2>/dev/null | tr -d ' ' || true)"
