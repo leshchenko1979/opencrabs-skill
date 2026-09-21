@@ -62,6 +62,22 @@ Fleet conventions:
 | oc-watcher-audit | 0 | 2 | `[--since <ts>] [--json] [--dir <dir>] [--notify-orphans] [--dry-run]` · 0 clean / 1 violations-found (alarm) / 3 dir-missing · scans `tmp/detached/*.json` for `UNTHROTTLED_WATCH` (no `--interval`), `OFF_SPEC_INTERVAL` (interval other than 30/60 — the fleet law), `NOHUP_SPAWN`, `HANDROLLED_SLEEP_LOOP` · `--notify-orphans` scans interrupted detached tasks and in-flight checkpoints, resolves workflow run conclusion via `gh run view`, wakes dormant lanes with `session_notify`, and tracks notified tasks in `$LOCK_DIR/orphans_notified.json` to guarantee idempotent single-notification across repeated sweep cycles · `--since` is a rolling window: tasks spawned earlier are skipped, timestamps are parsed as datetimes (fractional seconds and `+00:00` offsets included), and a task with an unparseable timestamp is INCLUDED (age unprovable — never silently dropped) · `--json` emits a JSON **ARRAY** of violation objects carrying `state` + `live`, never an object · `--selftest` = 26 offline fixture assertions |
 | oc-wt | 0 | 2 | 0 ok / 3 path-exists-dirty / 4 index-failed / 5 repo-branch-missing / 6 behind-base · Worktree manager. `add` creates at `$HOME/opencrabs-wt/<task>` (configurable via `OC_WT_BASE`); every verb RESOLVES a task through `lib/oc-wt-resolve.sh` — ONE predicate shared with `oc-start` (#429: the resolution is PARTITIONED — the canonical base by a 3-name ladder `$WT_BASE/<task>`, `$WT_BASE/oc-wt-<task>`, legacy `$HOME/oc-wt-<task>`, and every OTHER base by registry over the rows `list` reads). Column 1 of `list` is therefore exactly the task name `remove` accepts. |
 
+## Carrier CI lane map — one `workflow_call` body behind two thin shells (v0.4.233, 2026-09-21)
+
+The carrier branch `ci/quick-build-linux` carries **three** workflow files where it used to carry two. Both lane entry points are now thin callers of one shared body:
+
+| File | Role | Dispatched as |
+|---|---|---|
+| `ci-lane-impl.yml` | the shared body — `on: workflow_call`; jobs `order-gates` + `build` (mode `build`) and `pr-gates` (mode `gate`) | **never** — no `workflow_dispatch` trigger, not dispatchable |
+| `quick-build-linux.yml` | thin shell, `name: Quick Linux Build`; caller job `ship` → `mode: build` | `gh workflow run quick-build-linux.yml --ref ci/quick-build-linux` |
+| `pr-checks.yml` | thin shell, `name: PR-lane gates`; caller job `gate` → `mode: gate` | `gh workflow run pr-checks.yml --ref ci/quick-build-linux` |
+
+**No tool changes.** Both filenames are unchanged, so `oc-deploy ship` and `oc-prchecks` keep dispatching the same two files by name — the indirection is invisible to them. `--ref ci/quick-build-linux` remains MANDATORY (neither shell is on `main`).
+
+**Job names are now PREFIXED, and the prefix is a SHIP-LANE hazard, not cosmetics.** Under `workflow_call` GitHub renders every called job as `<caller> / <called>`, so the live names read `ship / ORDER gates (<sha>)`, `ship / Linux amd64 (<sha>, <features>)`, `gate / PR-lane gates (<sha>)`. `run_built_sha` (`oc-deploy:1874-1882`) returns the sha from the **FIRST** `.jobs[].name` that decodes to a 40-hex, so a caller name carrying a run sha would SHADOW the real build job and the ship lane would build the wrong tree. Both caller jobs are therefore pinned to a short token (`name: ship` / `name: gate`), deliberately NOT the old `ORDER gates (...)` / `PR-lane gates (...)` expressions. The decode itself is prefix-agnostic — `oc_decode_job_embed` (`lib/oc-embed.sh:13-14`) anchors on the parenthetical — proven live 2026-09-21 on runs `35612234852` / `35612238741`: both resolve to the dispatched sha, and the skipped sibling jobs carry no 40-hex.
+
+**`main` is untouched.** `?ref=main` returns the four main-resident files (`auto-assign.yml`, `ci.yml`, `prerelease.yml`, `release.yml`) and **neither lane file**; `?ref=ci/quick-build-linux` returns those four plus the three carrier files — `ci-lane-impl.yml` included, because a `workflow_call` target must exist on the same ref.
+
 ## Remote topology — `origin` is the single canonical remote (updated 2026-09-15)
 
 `origin` is the sole push and fetch remote for the skill repo (`git@github.com:leshchenko1979/opencrabs-skill.git`, SSH transport).
