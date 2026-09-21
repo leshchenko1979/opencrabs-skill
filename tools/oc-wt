@@ -32,9 +32,9 @@
 # =============================================================================
 set -u
 set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
-# $0 may be the archive alias (tools/archive/oc-worktree -> ../oc-wt), so the lib
-# dir is derived from the SYMLINK-RESOLVED path: `dirname "$0"` alone looks for
-# tools/archive/lib/ and degrades to silence.
+# $0 may be reached through a symlink, so the lib dir is derived from the
+# SYMLINK-RESOLVED path: `dirname "$0"` alone can point at the wrong lib/ and
+# degrade to silence.
 _SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 _SELF_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
 _OC_LIB="$_SELF_DIR/lib/oc-log.sh"

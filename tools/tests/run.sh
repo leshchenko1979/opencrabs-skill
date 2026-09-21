@@ -1273,35 +1273,6 @@ if tool oc-log-search; then
   "$TOOLS_DIR/oc-log-search" --help >/dev/null 2>&1 && ok "oc-log-search --help rc=0" || bad "oc-log-search --help rc!=0"
 fi
 
-# ---- 70. archive alias integrity (HQ 2026-09-19: 16/16 were DANGLING) -------
-section "tools/archive alias integrity"
-if [ -d "$TOOLS_DIR/archive" ]; then
-  # An archived name is an ALIAS: tools/archive/<old> -> ../<new>. Sixteen of
-  # them shipped 2026-09-13 pointing at a BARE name, which the kernel resolves
-  # inside tools/archive/ itself and therefore resolves to NOTHING — a
-  # directory of links that silently resolve to nothing, dead for six days
-  # because nothing ever tested them. Every symlink here must (a) RESOLVE and
-  # (b) point one level up, since its target was left behind in tools/ when
-  # the name moved into archive/. Both legs are checked; `-e` alone would pass
-  # a link that resolved to the wrong thing, and the bare-target leg names the
-  # exact mistake so a regression is self-diagnosing.
-  arch_n=0; arch_dang=0; arch_bare=0
-  for f in "$TOOLS_DIR/archive"/*; do
-    [ -L "$f" ] || continue
-    arch_n=$((arch_n+1))
-    [ -e "$f" ] || { arch_dang=$((arch_dang+1)); note "  dangling: $f -> $(readlink "$f")"; }
-    case "$(readlink "$f")" in
-      ../*) : ;;
-      *) arch_bare=$((arch_bare+1)); note "  bare target: $f -> $(readlink "$f")" ;;
-    esac
-  done
-  [ "$arch_n" -ge 16 ] && ok "archive aliases present ($arch_n)" || bad "only $arch_n archive alias(es); expected >=16"
-  [ "$arch_dang" -eq 0 ] && ok "archive aliases all resolve ($arch_n)" || bad "$arch_dang archive alias(es) DANGLING"
-  [ "$arch_bare" -eq 0 ] && ok "archive aliases point one level up" || bad "$arch_bare archive alias(es) use a BARE target (resolves inside archive/)"
-else
-  bad "tools/archive missing"
-fi
-
 # ---- 71. oc-census (READ-ONLY pending-branch census) ------------------------
 # The selftest builds a throwaway 5-branch fixture repo and asserts the
 # decomposition invariant (plus_total == plus_own + plus_untrailered +
