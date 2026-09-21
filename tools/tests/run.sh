@@ -1322,6 +1322,62 @@ run_selftest oc-census
 section "oc-claims-single-source (private-copy guard)"
 run_selftest oc-claims-single-source
 
+# ---- 73. lib/oc-notify.sh CLI budget (#466) --------------------------------
+# Defect: the CLI leg ran `session notify` with NO timeout of its own, so a hung
+# CLI blocked oc_notify_session() forever -- and the A2A fallback below it is
+# reached only on a NON-zero rc, so the fallback existed for exactly the case
+# that made it unreachable. The fix wraps BOTH CLI calls in `timeout`.
+#
+# Discriminating input: a `bin` stub that HANGS (sleep 30). Pre-fix the function
+# never returns, the outer `timeout 20` kills the whole subshell, and the leg
+# reports FAIL -- measured on the HEAD lib (172 lines): rc=124, empty result,
+# marker `invoked`+`killed` only, NO `a2a`. Post-fix it returns in ~2s with the
+# A2A leg entered. `timeout` exits 124, which is not 0/2/3, so the kill
+# deliberately falls through to the fallback; that passthrough is the contract
+# the rc assertion pins.
+section "lib/oc-notify.sh CLI budget (#466)"
+NFSTUB="$(mktemp -d)"; NFMARK="$NFSTUB/mark"
+cat > "$NFSTUB/bin" <<'NFSTUBEOF'
+#!/bin/sh
+echo "invoked" >> "$MARK"
+trap 'echo killed >> "$MARK"; exit 143' TERM
+sleep 30
+NFSTUBEOF
+chmod +x "$NFSTUB/bin"
+# The A2A fallback is an inline `python3 -c`. Intercepting python3 records ENTRY
+# to that leg without opening a socket to the live gateway -- whose availability
+# is a host fact, not a property of this code, so a real call would make the leg
+# pass or fail for the wrong reason.
+cat > "$NFSTUB/python3" <<'NFPYEOF'
+#!/bin/sh
+echo "a2a" >> "$MARK"
+exit 4
+NFPYEOF
+chmod +x "$NFSTUB/python3"
+NFRES="$(MARK="$NFMARK" NFSTUB="$NFSTUB" TOOLS_DIR="$TOOLS_DIR" timeout 20 bash -c '
+  export MARK PATH="$NFSTUB:$PATH" OC_NOTIFY_CLI_TIMEOUT=2
+  . "$TOOLS_DIR/lib/oc-notify.sh"
+  t0="$(date +%s)"
+  oc_notify_session "$NFSTUB/bin" ops test-runner 00000000-0000-4000-8000-000000000000 t x; rc=$?
+  t1="$(date +%s)"
+  printf "elapsed=%s rc=%s\n" "$((t1-t0))" "$rc"
+' 2>&1)"; nfrc=$?
+NFEL="$(printf '%s' "$NFRES" | sed -n 's/^elapsed=\([0-9]*\).*/\1/p')"
+NFRC="$(printf '%s' "$NFRES" | sed -n 's/.*rc=\([0-9]*\).*/\1/p')"
+[ "$nfrc" -eq 0 ] && [ -n "$NFEL" ] && [ "$NFEL" -le 15 ] \
+  && ok "notify CLI leg bounded by its own budget (${NFEL}s vs a 30s hang, budget 2s)" \
+  || bad "notify CLI leg UNBOUNDED: outer kill rc=$nfrc result='$NFRES' (#466 regression)"
+grep -q '^invoked$' "$NFMARK" 2>/dev/null \
+  && ok "notify CLI leg reached the bin stub" \
+  || bad "notify CLI leg never reached the bin stub"
+grep -q '^a2a$' "$NFMARK" 2>/dev/null \
+  && ok "A2A fallback leg REACHED after the CLI timeout (unreachable by construction pre-#466)" \
+  || bad "A2A fallback leg NOT reached after a hung CLI -- the fallback is still unreachable"
+[ "$NFRC" = "124" ] \
+  && ok "timeout passthrough keeps the ambiguous rc=124 (never read as a delivery verdict)" \
+  || bad "hung CLI returned rc='$NFRC', want 124 (0/2/3 would read as a delivery outcome)"
+rm -rf "$NFSTUB"
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \

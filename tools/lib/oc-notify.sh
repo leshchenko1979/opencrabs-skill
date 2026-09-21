@@ -29,10 +29,17 @@ oc_notify_session() { # $1=bin $2=profile $3=sender $4=uuid $5=title $6=text
   local bin="$1" profile="$2" sender="$3" uuid="$4" title="$5" text="$6"
   local nrc=0 rrc=0 t_start
   t_start="$(date +%s)"
-  "$bin" session notify --profile "$profile" --sender "$sender" \
+  # #466: the CLI leg needs a budget of its OWN. Without one a hung
+  # `session notify` blocks this function forever, and the A2A fallback below
+  # is only reached on a NON-zero rc -- so the fallback exists for exactly the
+  # case that prevents it from ever running. A timeout exits 124, which is not
+  # 0/2/3, so a hung CLI now falls through to the A2A leg as intended.
+  local cli_timeout="${OC_NOTIFY_CLI_TIMEOUT:-90}" tmo=""
+  if command -v timeout >/dev/null 2>&1; then tmo="timeout $cli_timeout"; fi
+  $tmo "$bin" session notify --profile "$profile" --sender "$sender" \
     --title "$title" --text "$text" "$uuid" >/dev/null 2>&1 || nrc=$?
   if [ "$nrc" = 3 ]; then   # refused_in_flight: mid-turn target — MUST be woken
-    "$bin" session notify --profile "$profile" --sender "$sender" \
+    $tmo "$bin" session notify --profile "$profile" --sender "$sender" \
       --title "$title" --text "$text" --interrupt "$uuid" >/dev/null 2>&1 || rrc=$?
     nrc=$rrc
   fi
