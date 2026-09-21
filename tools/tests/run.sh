@@ -1378,6 +1378,83 @@ grep -q '^a2a$' "$NFMARK" 2>/dev/null \
   || bad "hung CLI returned rc='$NFRC', want 124 (0/2/3 would read as a delivery outcome)"
 rm -rf "$NFSTUB"
 
+# ---- 74. oc-issue-dispatch survives SIGKILL with evidence (#451) -------------
+# Defect: a dispatch killed by an outer `timeout` left a 0-BYTE stdout, so the
+# run read as a silent hang "with no output and no side effect" even though it
+# had reached the send. Two causes, both fixed: stdout was block-buffered on a
+# redirected stream (nothing is flushed when SIGKILL lands, and SIGKILL cannot
+# be caught, so there is no exit-time flush either), and the notify-budget
+# announcement was printed only AFTER the blocking send returned.
+#
+# Discriminating input: a `lib/oc-notify.sh` stub that SLEEPS, so the run is
+# still inside the send when an outer `timeout -s KILL` fires. The control is
+# the SAME source with the buffering mechanism inverted
+# (line_buffering=True -> False): identical content, identical kill, and the
+# ONLY difference is whether the announcement survives to the file.
+#
+# The control is DERIVED, never read from history. Pinning a pre-fix sha would
+# go stale the moment the repo is rebased or that object is gc'd, and would then
+# report a FALSE failure against a healthy tool. Inverting the one mechanism
+# keeps this cell a true single-variable discriminator indefinitely.
+section "oc-issue-dispatch SIGKILL evidence (#451)"
+D451STUB="$(mktemp -d)"
+mkdir -p "$D451STUB/tools/lib" "$D451STUB/bin" "$D451STUB/home"
+cp "$TOOLS_DIR/oc-issue-dispatch" "$D451STUB/tools/oc-issue-dispatch"
+chmod +x "$D451STUB/tools/oc-issue-dispatch"
+for f in "$TOOLS_DIR"/lib/*.py; do [ -e "$f" ] && cp "$f" "$D451STUB/tools/lib/"; done
+# The send must BLOCK so the kill lands inside it. A real notify would either
+# reach the live bus or return instantly, and neither reproduces #451. Bounded
+# at 30s: the stub outlives the 10s kill by design, but never permanently.
+printf '#!/bin/sh\nsleep 30\n' > "$D451STUB/tools/lib/oc-notify.sh"
+chmod +x "$D451STUB/tools/lib/oc-notify.sh"
+# gh is stubbed: whether the fork has an open issue #451 is a HOST fact, not a
+# property of this code, so a real call would make the leg pass or fail for the
+# wrong reason.
+printf '#!/bin/sh\necho "[]"\n' > "$D451STUB/bin/gh"
+chmod +x "$D451STUB/bin/gh"
+printf '{"workers":[],"events":[]}\n' > "$D451STUB/ledger.json"
+
+sed 's/line_buffering=True/line_buffering=False/' "$D451STUB/tools/oc-issue-dispatch" \
+  > "$D451STUB/tools/oc-issue-dispatch-nolb"
+[ "$(grep -c 'line_buffering=False' "$D451STUB/tools/oc-issue-dispatch-nolb")" -eq 1 ] \
+  && ok "control derived: the line-buffering mechanism inverted exactly once" \
+  || bad "control derivation did not invert exactly one line_buffering site -- the discriminator is unsound"
+chmod +x "$D451STUB/tools/oc-issue-dispatch-nolb"
+
+d451_run() { # $1 = tool path, $2 = label
+  D451OUT="$D451STUB/out-$2.txt"
+  # OC_TOOLS_NOLOG is re-exported explicitly: env -i drops the battery's own
+  # export, and without it these synthetic runs append to the unified tools log.
+  env -i HOME="$D451STUB/home" PATH="$D451STUB/bin:/usr/bin:/bin" \
+      OC_TOOLS_NOLOG=1 OC_DISPATCH_NOTIFY_TIMEOUT=60 OC_DISPATCH_RECEIPT_GRACE=5 \
+      timeout -s KILL 10 "$1" 451 \
+        --to deadbeef-0000-0000-0000-000000000000 \
+        --ledger "$D451STUB/ledger.json" --repo "$TOOLS_DIR/.." \
+      > "$D451OUT" 2>"$D451STUB/err-$2.txt"
+  D451RC=$?
+  D451BYTES="$(wc -c < "$D451OUT" | tr -d ' ')"
+  D451ANN="$(grep -c 'notify budget' "$D451OUT" 2>/dev/null || true)"
+  if [ -z "$D451ANN" ]; then D451ANN=0; fi
+}
+
+d451_run "$D451STUB/tools/oc-issue-dispatch" postfix
+[ "$D451RC" -eq 137 ] \
+  && ok "post-fix: killed mid-send (rc=137 SIGKILL -- the #451 precondition)" \
+  || bad "post-fix: rc=$D451RC, want 137 -- the kill did not land mid-send"
+[ "$D451BYTES" -gt 0 ] && [ "$D451ANN" -ge 1 ] \
+  && ok "post-fix: the dispatch narrative SURVIVED SIGKILL (${D451BYTES}B, ${D451ANN} budget announcement)" \
+  || bad "post-fix: killed run left ${D451BYTES}B / ${D451ANN} announcements -- the evidence was discarded (#451 regression)"
+
+d451_run "$D451STUB/tools/oc-issue-dispatch-nolb" prefix
+[ "$D451RC" -eq 137 ] \
+  && ok "control: killed mid-send under an identical timeout (rc=137 -- the cells are comparable)" \
+  || bad "control: rc=$D451RC, want 137 -- the cells are not comparable"
+[ "$D451BYTES" -eq 0 ] && [ "$D451ANN" -eq 0 ] \
+  && ok "control: WITHOUT line buffering the same run leaves 0B / 0 announcements (the assertion is discriminating)" \
+  || bad "control: left ${D451BYTES}B / ${D451ANN} announcements -- this cell cannot fail on the pre-fix artifact, so it proves nothing"
+
+rm -rf "$D451STUB"
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
   "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \

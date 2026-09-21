@@ -23,6 +23,20 @@ Usage:
                       needed; the summary reports each override against the arm
                       it defeated.
 
+Environment overrides (liveness, #451):
+  OC_DISPATCH_NOTIFY_TIMEOUT  per-notify wall-clock budget in seconds (default 120).
+                              The tool KILLS a notify at this bound and reports it
+                              as UNVERIFIED, never FAILED -- see dispatch_to_lane.
+  OC_DISPATCH_RECEIPT_GRACE   seconds to keep re-reading session-notify.journal for
+                              a receipt after the send (default 30).
+
+A dispatch's ceiling is therefore the notify budget PLUS the receipt grace (150s
+by default), on top of the gh/roster reads that precede it. An outer `timeout`
+shorter than that kills the run MID-SEND -- which is how a slow run was reported
+as hanging "with no output and no side effect". Two behaviours address that: the
+tool announces its budget before every send, and it line-buffers stdout, so a
+killed run leaves the evidence of where it died instead of a 0-byte file.
+
 Exit codes:
   0: Success / Approved / Dispatched
   1: Rejected / Vetting failed
@@ -451,14 +465,32 @@ def fetch_open_issues(repo_path, mock_issues=None):
 
 DISPATCH_WINDOW_DAYS = 7
 
+def _env_positive_int(name, default):
+    """A positive int from the environment, else `default`. Garbage -> default.
+
+    A malformed override must not take the tool down: an empty value or a typo is
+    a configuration slip, not a reason to refuse to dispatch.
+    """
+    try:
+        value = int(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
 #: Wall-clock bound on ONE notify attempt. A notify that hits this bound is
-#: KILLED, not failed: lib/oc-notify.sh runs the CLI with no timeout of its own,
-#: so the child may already have accepted the send when the wrapper dies. That
-#: is why a timeout is reported as UNVERIFIED rather than FAILED (#S).
-NOTIFY_TIMEOUT_SECS = 120
+#: KILLED, not failed: lib/oc-notify.sh gives its CLI leg its own budget
+#: (OC_NOTIFY_CLI_TIMEOUT, default 90s) and then falls through to an A2A leg that
+#: can still land the message, so a kill at THIS bound does not mean the send
+#: failed. That is why a timeout is reported as UNVERIFIED rather than FAILED
+#: (#S; the lib's own budget is #466).
+#: Overridable (#451): under an outer `timeout N` an operator sets this BELOW N,
+#: or the wrapper kills the run mid-send and the dispatch is neither reported nor
+#: recorded -- the reported "hang with no output and no side effect".
+NOTIFY_TIMEOUT_SECS = _env_positive_int("OC_DISPATCH_NOTIFY_TIMEOUT", 120)
 
 #: How long to keep re-reading the journal for a receipt after the send.
-RECEIPT_GRACE_SECS = 30
+#: Overridable (#451) for the same reason as NOTIFY_TIMEOUT_SECS.
+RECEIPT_GRACE_SECS = _env_positive_int("OC_DISPATCH_RECEIPT_GRACE", 30)
 
 #: Journal lines kept while scanning for a receipt. The journal is append-only
 #: and reaches megabytes, so it is streamed through a bounded deque rather than
@@ -915,9 +947,11 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
     Only rc 2 (`no_route`) counts as proof of non-delivery, because it is the one
     rc that asserts "nothing sent, nothing created". Every other non-zero rc is
     ambiguous about delivery, and a timeout is deliberately not a failure:
-    lib/oc-notify.sh runs the CLI with no timeout of its own, so when the wrapper
-    is killed the child may already have accepted the send and the receipt simply
-    lands after the poll window. Reporting that as FAILED produced both
+    lib/oc-notify.sh gives its CLI leg its own budget (OC_NOTIFY_CLI_TIMEOUT,
+    default 90s -- #466) and then falls through to a direct A2A leg that can
+    still land the message, so a kill at THIS bound leaves the send genuinely
+    ambiguous and the receipt may simply land after the poll window. Reporting
+    that as FAILED produced both
     duplication vectors (#S): the next `--auto` re-dispatched an already-delivered
     issue, and an operator reading "nothing delivered" re-sent it by hand.
     """
@@ -929,6 +963,14 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
     title = f"[ISSUE DISPATCH: #{issue_num}]"
 
     t0 = time.time()
+    # Announce the send and its budget BEFORE blocking on it (#451): this call
+    # can block for notify_timeout, and if the send does not return 0 it is
+    # followed by up to RECEIPT_GRACE_SECS of receipt polling. An outer `timeout`
+    # set below that ceiling kills the run mid-send, and the dispatch is then
+    # neither reported nor recorded -- the reported "hang with no output and no
+    # side effect".
+    print(f"Dispatching issue #{issue_num} -> {target_uuid[:8]} "
+          f"(notify budget {notify_timeout}s + {RECEIPT_GRACE_SECS}s receipt grace)")
     if os.path.exists(notify_script):
         rc, out, err = run_cmd([notify_script, target_uuid, envelope, title], timeout=notify_timeout)
         label = "lib/oc-notify.sh"
@@ -948,8 +990,13 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
     if rc != 0:
         # Fallback receipt check against session-notify.journal in case the
         # wrapper was killed while the send was already in flight.
-        receipt_seen = check_journal_receipt(
-            target_uuid, t0, send_budget_secs=notify_timeout + RECEIPT_GRACE_SECS)
+        grace = notify_timeout + RECEIPT_GRACE_SECS
+        if rc == 124:
+            print(f"NOTE: {label} hit its {notify_timeout}s bound and was killed; "
+                  f"polling for a receipt for another {RECEIPT_GRACE_SECS}s "
+                  f"(window {grace}s) before calling the send unverified.",
+                  file=sys.stderr)
+        receipt_seen = check_journal_receipt(target_uuid, t0, send_budget_secs=grace)
         verdict = classify_notify_rc(receipt_seen, rc)
         if verdict == 0:
             rc = 0
@@ -1199,7 +1246,11 @@ def cmd_auto(args):
             if remaining <= 0:
                 print("Run budget exhausted; stopping before the outer wrapper kills a send mid-flight.")
                 break
-            notify_timeout = max(15, min(NOTIFY_TIMEOUT_SECS, remaining))
+            # The send is followed by up to RECEIPT_GRACE_SECS of receipt polling
+            # (#451), so the notify budget must leave room for that grace INSIDE
+            # the remaining run budget -- otherwise a "budgeted" run still
+            # overshoots its own deadline by the grace.
+            notify_timeout = max(15, min(NOTIFY_TIMEOUT_SECS, remaining - RECEIPT_GRACE_SECS))
 
         rc = dispatch_to_lane(best_lane["uuid"], envelope, num, dry_run=args.dry_run,
                               ledger_path=ledger_file, notify_timeout=notify_timeout)
@@ -1967,6 +2018,16 @@ def run_selftest():
 def main():
     if not _is_selftest():
         oc_log_init("oc-issue-dispatch")
+        # Line-buffer stdout (#451). This tool can block for minutes inside a
+        # notify, and an outer `timeout` kills it, which DISCARDS a block-buffered
+        # stdout: the run then reads as a silent hang with no output and no side
+        # effect, when in fact it had reached the send. Line buffering leaves the
+        # evidence of where it died. Guarded -- reconfigure() needs a real stdout
+        # (not a replaced stream) and Python >= 3.7.
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(
         prog="oc-issue-dispatch",
         description="Mechanized fork issue vetting, lane selection, and dispatch tool.",
@@ -1984,7 +2045,10 @@ def main():
     parser.add_argument("--redispatch", action="store_true",
                         help=f"Re-propose an issue already dispatched within the last {DISPATCH_WINDOW_DAYS} days (disables #337 dedup memory)")
     parser.add_argument("--budget-secs", type=int, default=0,
-                        help="Wall-clock budget for an --auto run; each notify's timeout is capped by what remains (0 = 120s per issue, unbounded run)")
+                        help="Wall-clock budget for an --auto run; each notify's timeout is capped by what "
+                             "remains (0 = one notify budget per issue, unbounded run). A single issue's real "
+                             "ceiling is the notify budget PLUS the receipt grace, and --dry-run is the way to "
+                             "plan a dispatch without sending")
 
     parser.add_argument("--selftest", action="store_true", help="Run hermetic offline test suite")
 
