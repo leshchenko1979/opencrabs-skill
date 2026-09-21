@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.233
+version: 0.4.234
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -115,11 +115,13 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` �
 | `./tools/oc-smoke <issue-N> [--probe <cmd>] [--no-ledger]` | unified 4-leg smoke verification & verdict row logging + automatic ledger done stamp on PASS |
 | `./tools/oc-issue-dispatch [--auto] [--issue N] [--lane U]` | mechanized issue triage dispatch to idle editor lanes |
 | `./tools/oc-lint-laws [--strict]` | mechanical syntax & tool existence lint of skill markdown laws. **`--strict` known limitation (v0.4.207, measured 2026-09-19):** `flag_known` demands the flag BE the whole case arm (`^[[:space:]]*--flag)`), so ALTERNATION arms (`--role\|--role=*)`, `--selftest\|selftest)`), INLINE tests (`[ "${1:-}" = "--bundle" ]`) and comments are not recognised. On this corpus that yields **5 false-positive PHANTOM-FLAG findings** (SKILL.md:99 `oc-roster --role`; SKILL.md:352 + hq.md:31 `oc-deploy --selftest`; hq.md:108 `oc-ledger --bundle`; tools/RC-CONTRACT.md:55 `oc-ledger --issue`), every one a real working flag: `oc-roster --role hq` rc=0 and `oc-deploy --selftest` rc=0 (283 pass/0 fail) checked live, `--bundle`/`--issue` each covered by passing selftest assertions at `tools/oc-ledger:1275` and `:1415`. Non-strict mode finds all five. **Do not "fix" these five as phantoms** — root fix dispatched to Toolsmith. |
+| `./tools/oc-claims-single-source [--scan DIR] [--selftest]` | battery guard: the claim-closure predicate has exactly ONE home (`tools/lib/oc_claims.py`) — fails the battery on a re-added private copy under `tools/`. Keys on the re-implementation SHAPE, never on a name (the two copies it exists to prevent were called `claims_index` and `claim_is_closed`, so a name-keyed guard misses both). Scan units include embedded `python3 -c` / heredoc blobs, not only whole files. rc register: RC-CONTRACT.md |
 | `./tools/oc-prchecks <branch-or-sha> [--wait N] [--repo SLUG-or-PATH] [--carrier C] [--fault-scope PR]` · `oc-prchecks resume <run-id>` | one-command CI gate on a PR-lane branch (editor.md Phase 5); `wait <ref> [--budget N] [--poll S]` provides single-invocation blocking gate; **`resume <run-id>` RE-ATTACHES to a run this lane WITNESSED** — no dispatch, no adoption (#74 H2) — and is the recovery for a rc-5 in-flight-timeout, whose stdout carries the run id + URL for exactly this (`extra.run_id` in the journal is the same handle). Full rc/adoption/lock/fmt-soft-fail register: RC-CONTRACT.md |
 | `./tools/oc-upstream-delta [--repo P] [--fork-origin R] [--upstream R]` | watch-cycle arithmetic; READ-ONLY — PROPOSE/WAIT judgment stays human |
 | `./tools/oc-wt add\|remove\|--force` | editor worktree manager (`--force` journals before removal) |
 | `./tools/oc-drift-check <uuid> [--ack]` (omit-arg canonical; legacy `<uuid> <claimed-ver>` accepted) | editor §Mid-cycle skill drift step 1-2, mechanical |
 | `./tools/oc-branch-sweep --repo <p> [--dry-run]` | branch-death proof + archive-then-delete for MERGED only |
+| `./tools/oc-census` | READ-ONLY pending-branch census (sync runbook Step 7 step 0): decomposes each branch's `git cherry <base> <b>` `+` set into its three arms (own-lane trailer / no trailer / foreign-lane trailer) and ENFORCES the partition identity `plus_total == plus_own + plus_untrailered + plus_other` — a row that fails to add up is an internal error, never a silently-wrong number. A non-zero aggregate `+` is NOT proof of pending work, so it splits the aggregate and runs a CONTENT leg rather than trusting either. Prints counts and the base, never a cut sha. rc register: RC-CONTRACT.md |
 | `./tools/oc-pr-fault-scope <pr#> --run <id>` | failing-files ∩ PR-files = IN-SCOPE/BASE-FAULT |
 | `./tools/oc-ledger confirm <uuid>` | verifies the worker's latest claim then flips workers[].confirmed=true |
 | `gh workflow run pr-checks.yml --ref ci/quick-build-linux -f ref=<branch-or-sha>` | **manual fallback — prefer `./tools/oc-prchecks`** (row above). PR-lane CI gates before an upstream PR; yml lives only on the carrier branch |
