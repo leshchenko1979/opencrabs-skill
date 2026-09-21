@@ -29,6 +29,15 @@ Environment overrides (liveness, #451):
                               as UNVERIFIED, never FAILED -- see dispatch_to_lane.
   OC_DISPATCH_RECEIPT_GRACE   seconds to keep re-reading session-notify.journal for
                               a receipt after the send (default 30).
+  OC_DISPATCH_MOCK_ISSUES     path to a JSON file of issue objects, replacing BOTH
+                              GitHub reads (the open-issue list and the single-issue
+                              lookup). The offline seam for the #483 fetch paths.
+
+The open-issue list is a WINDOW (OPEN_ISSUES_LIMIT), never an exhaustive set: a
+targeted dispatch for a number outside it resolves that ONE issue by direct
+lookup, and REFUSES when even that fails. A stub is never constructed, because a
+fabricated title with an EMPTY body makes the claim gate and the affinity
+scoring evaluate nothing (#483).
 
 A dispatch's ceiling is therefore the notify budget PLUS the receipt grace (150s
 by default), on top of the gh/roster reads that precede it. An outer `timeout`
@@ -39,14 +48,15 @@ killed run leaves the evidence of where it died instead of a 0-byte file.
 
 Exit codes:
   0: Success / Approved / Dispatched
-  1: Rejected / Vetting failed
+  1: Rejected / Vetting failed / a TARGETED issue could not be resolved (#483)
   2: Invalid arguments / CLI error
-  3: Delivery / session_notify failed
+  3: Delivery / session_notify failed, or an upstream gh READ failed
   4: Capacity exhausted / No available idle lane
 """
 
 import os
 import sys
+import io
 import json
 import re
 import argparse
@@ -411,18 +421,114 @@ def check_issue_claim_gate(issue):
     return False, ""
 
 
-def fetch_open_issues(repo_path, mock_issues=None):
+#: How many open issues the fetch may return (#483). gh paginates internally for
+#: any limit above 100, so this is a CEILING on what the tool can see, never a
+#: page size. The old hardcoded 100 was neither: the fork carried 149 open
+#: issues on 2026-09-21, so ~49 sat outside every call and a targeted dispatch
+#: for one of them fell through to a fabricated title with an EMPTY body.
+OPEN_ISSUES_LIMIT = 1000
+
+#: The JSON fields every issue read requests. ONE literal, so the LIST fetch and
+#: the SINGLE-ISSUE fetch cannot drift into different shapes (#483).
+ISSUE_JSON_FIELDS = "number,title,labels,body,stateReason,state"
+
+
+def _env_mock_issues():
+    """Issues from OC_DISPATCH_MOCK_ISSUES (a JSON file), or None when unset.
+
+    The offline seam for the two fetch paths below. The selftest has no gh, so
+    without it a fetch defect can only be tested in production.
     """
-    Fetch open issues from GitHub or mock data.
+    path = os.environ.get("OC_DISPATCH_MOCK_ISSUES")
+    if not path:
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def _warn_if_window_full(issues):
+    """Say so when the returned window may be TRUNCATED (#483).
+
+    A full window and a complete list are indistinguishable at the call site,
+    which is the half of #483 that no amount of pagination removes: the limit is
+    a ceiling, so the honest move is to report hitting it rather than to let a
+    caller read a bounded list as an exhaustive one.
+    """
+    if len(issues) >= OPEN_ISSUES_LIMIT:
+        print(f"WARNING: gh returned {len(issues)} open issues, exactly the "
+              f"{OPEN_ISSUES_LIMIT}-issue window — the list may be TRUNCATED, and an "
+              f"issue outside it cannot be told apart from a missing one. Raise "
+              f"OPEN_ISSUES_LIMIT before trusting this window.", file=sys.stderr)
+
+
+def fetch_open_issues(repo_path, mock_issues=None):
+    """Every OPEN issue on the fork, or None when the fetch itself FAILED.
+
+    None -- never [] -- on failure, because collapsing the two is what let
+    cmd_targeted fabricate metadata for an issue it had simply not fetched
+    (#483): "gh could not answer" and "there are no open issues" lead to
+    opposite decisions and were the same value.
+
+    The window is OPEN_ISSUES_LIMIT, and gh paginates internally for any limit
+    above 100, so this is a CEILING on what the tool can see rather than a page
+    size. The old hardcoded 100 was neither: the fork carried 149 open issues on
+    2026-09-21, so ~49 sat outside every call.
     """
     if mock_issues is not None:
+        _warn_if_window_full(mock_issues)
         return mock_issues
 
-    cmd = ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs", "--state", "open", "--limit", "100", "--json", "number,title,labels,body,stateReason"]
+    try:
+        mocked = _env_mock_issues()
+    except Exception as e:
+        print(f"ERROR: cannot read OC_DISPATCH_MOCK_ISSUES: {e}", file=sys.stderr)
+        return None
+    if mocked is not None:
+        _warn_if_window_full(mocked)
+        return mocked
+
+    cmd = ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs", "--state", "open",
+           "--limit", str(OPEN_ISSUES_LIMIT), "--json", ISSUE_JSON_FIELDS]
     rc, stdout, stderr = run_cmd(cmd, cwd=repo_path)
     if rc != 0:
         print(f"ERROR: Failed to fetch issues via gh: {stderr.strip()}", file=sys.stderr)
-        return []
+        return None
+    try:
+        issues = json.loads(stdout)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Failed to decode gh output: {e}", file=sys.stderr)
+        return None
+    _warn_if_window_full(issues)
+    return issues
+
+
+def fetch_issue(repo_path, number, mock_issues=None):
+    """ONE issue by number, whatever the size of the open-issue list (#483).
+
+    The authoritative lookup for a TARGETED dispatch. The list fetch is a
+    WINDOW, so an absent number means "outside the window" at best -- and the
+    old code answered that absence with a stub (title `Issue #N`, body "") that
+    then fed the claim gate and the affinity scoring. Returns the issue dict, or
+    None when the lookup failed or no such issue exists: NEVER a stub.
+    """
+    if mock_issues is not None:
+        return next((i for i in mock_issues if i.get("number") == number), None)
+
+    try:
+        mocked = _env_mock_issues()
+    except Exception as e:
+        print(f"ERROR: cannot read OC_DISPATCH_MOCK_ISSUES: {e}", file=sys.stderr)
+        return None
+    if mocked is not None:
+        return next((i for i in mocked if i.get("number") == number), None)
+
+    cmd = ["gh", "issue", "view", str(number), "--repo", "leshchenko1979/opencrabs",
+           "--json", ISSUE_JSON_FIELDS]
+    rc, stdout, stderr = run_cmd(cmd, cwd=repo_path)
+    if rc != 0:
+        print(f"ERROR: could not resolve issue #{number} via gh issue view: {stderr.strip()}",
+              file=sys.stderr)
+        return None
     try:
         return json.loads(stdout)
     except json.JSONDecodeError as e:
@@ -1121,8 +1227,13 @@ def cmd_auto(args):
 
     claimed_issues = extract_claimed_issues(ledger_data)
     open_issues = fetch_open_issues(args.repo)
+    if open_issues is None:
+        print("ERROR: could not fetch open issues from gh — refusing to judge eligibility "
+              "against a window that FAILED to load (an empty list and a failed fetch "
+              "lead to opposite decisions).", file=sys.stderr)
+        return 3
     if not open_issues:
-        print("No open issues found or gh query failed.")
+        print("No open issues found.")
         return 0
 
     unclaimed = [iss for iss in open_issues if iss.get("number") not in claimed_issues]
@@ -1270,6 +1381,38 @@ def cmd_auto(args):
     return 0
 
 
+def resolve_target_issue(repo_path, issue_num, open_issues):
+    """The issue a TARGETED dispatch acts on, plus a diagnostic note. (#483)
+
+    Returns ``(issue, note)``. ``note`` is "" when the fetched window answered,
+    else a sentence naming where the issue came from; ``issue`` is None when the
+    number cannot be resolved at all -- NEVER a stub.
+
+    Split out of cmd_targeted so the resolution RULE is testable without a lane,
+    a ledger or a notify: the regression this exists for is not "the fetch is
+    wrong" but "an out-of-window number was answered with a fabricated title and
+    an EMPTY body", which then fed the claim gate and the affinity scoring.
+    """
+    if open_issues is not None:
+        for iss in open_issues:
+            if iss.get("number") == issue_num:
+                return iss, ""
+
+    # The fetched list is a WINDOW: it cannot tell "not in the list" from "no
+    # such issue", so resolve the ONE issue directly instead of guessing.
+    resolved = fetch_issue(repo_path, issue_num)
+    if not resolved:
+        return None, ""
+    window = f"{len(open_issues)} listed" if open_issues is not None else "the list read FAILED"
+    note = (f"NOTE: issue #{issue_num} was outside the fetched open-issue window "
+            f"({window}) and was resolved by a direct lookup.")
+    st = str(resolved.get("state") or "").upper()
+    if st and st != "OPEN":
+        note += (f" NOTE: it resolves with state={st}, not OPEN — dispatching it "
+                 f"anyway because the number was named explicitly.")
+    return resolved, note
+
+
 def cmd_targeted(args):
     """
     Targeted dispatch for a specific issue number.
@@ -1284,19 +1427,24 @@ def cmd_targeted(args):
 
     issue_num = args.issue
     open_issues = fetch_open_issues(args.repo)
-    target_issue = None
-    for iss in open_issues:
-        if iss.get("number") == issue_num:
-            target_issue = iss
-            break
 
+    # #483: an out-of-window number used to be answered with a STUB (title
+    # `Issue #N`, body "") -- so a real, open, labelled issue was dispatched
+    # under a fabricated title, and every downstream consumer of those fields
+    # (the claim gate, the affinity scoring) then evaluated NOTHING. Resolve the
+    # ONE issue by direct lookup instead, and REFUSE when even that fails: an
+    # unresolvable target is a rejection, never a placeholder.
+    target_issue, note = resolve_target_issue(args.repo, issue_num, open_issues)
+    if note:
+        print(note, file=sys.stderr)
     if not target_issue:
-        # If gh query didn't return it or failed, construct minimal issue metadata
-        target_issue = {
-            "number": issue_num,
-            "title": f"Issue #{issue_num}",
-            "body": ""
-        }
+        print(f"ERROR: issue #{issue_num} could not be resolved on "
+              f"leshchenko1979/opencrabs — it was not in the fetched open-issue list "
+              f"and `gh issue view` did not resolve it either. Refusing to dispatch: "
+              f"a fabricated title/body would make the claim gate and affinity "
+              f"scoring run blind. Check the number, and that the issue is OPEN and "
+              f"lives in this repo's issue space.", file=sys.stderr)
+        return 1
 
     is_gated, reason = check_issue_claim_gate(target_issue)
     if is_gated and not args.force:
@@ -1357,6 +1505,10 @@ def cmd_targeted(args):
 
 # --- Hermetic Offline Selftest ---
 def run_selftest():
+    # #483: the window-full warning is asserted by shrinking the module's window
+    # global rather than by fabricating 1000 issues, so the PRODUCTION comparison
+    # (len(issues) >= OPEN_ISSUES_LIMIT) is the thing under test.
+    global OPEN_ISSUES_LIMIT
     print("Running oc-issue-dispatch --selftest battery...")
     tests_passed = 0
     tests_failed = 0
@@ -2009,6 +2161,123 @@ def run_selftest():
     assert_eq("#S classify_notify_rc: rc 2 is the ONLY non-delivery verdict",
               sorted(c for c in (2, 4, 124, 1, -9, 137)
                      if classify_notify_rc(False, c) == 3), [2])
+
+    # Test 17 (#483): the open-issue fetch is a WINDOW with an explicit ceiling,
+    # never a hardcoded page size, and a FAILED fetch is None -- not [].
+    assert_eq("#483 the open-issue window is a ceiling above gh's own page size",
+              OPEN_ISSUES_LIMIT >= 1000, True)
+    # 17a. a FAILED read must not be readable as "no open issues": the two lead
+    #      to opposite decisions (rc 3 vs a clean empty run). Pre-fix the function
+    #      answered [] for both, which is what let the targeted path hand an
+    #      unfetched number to a stub. The mock file is the seam -- an unreadable
+    #      one models gh failing without touching the network.
+    _f483 = tempfile.mkdtemp(prefix="oc483-")
+    _bad = os.path.join(_f483, "bad.json")
+    with open(_bad, "w") as f:
+        f.write("{not json")
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _bad
+    assert_eq("#483 an unreadable issue source reads as a FAILED fetch (None), not []",
+              fetch_open_issues(""), None)
+    assert_eq("#483 unreadable source: the single-issue lookup is also None, never a stub",
+              fetch_issue("", 306), None)
+    # 17b. the window-full WARNING fires exactly when the returned list reaches
+    #      the ceiling, so a truncated window is never read as a complete one.
+    #      MUTATION KILL: delete the _warn_if_window_full call and the
+    #      "WARNING ... TRUNCATED" assertion below fails (the list assertions
+    #      still pass -- the warning is the only thing separating the two).
+    _saved_limit = OPEN_ISSUES_LIMIT
+    OPEN_ISSUES_LIMIT = 3
+    _full = os.path.join(_f483, "full.json")
+    with open(_full, "w") as f:
+        json.dump([{"number": n, "title": f"t{n}", "body": "", "labels": []} for n in (1, 2, 3)], f)
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _full
+    _buf = io.StringIO()
+    _real_stderr = sys.stderr
+    sys.stderr = _buf
+    try:
+        _got = fetch_open_issues("")
+    finally:
+        sys.stderr = _real_stderr
+    assert_eq("#483 a full window still returns every issue it fetched", len(_got), 3)
+    assert_true("#483 a full window WARNS that it may be TRUNCATED",
+                "TRUNCATED" in _buf.getvalue())
+    # 17c. ...and stays SILENT one issue below the ceiling. Without this control,
+    #      an unconditional warning would satisfy 17b.
+    OPEN_ISSUES_LIMIT = 4
+    _buf2 = io.StringIO()
+    sys.stderr = _buf2
+    try:
+        fetch_open_issues("")
+    finally:
+        sys.stderr = _real_stderr
+    assert_eq("#483 a window one below the ceiling does NOT warn", _buf2.getvalue(), "")
+    OPEN_ISSUES_LIMIT = _saved_limit
+
+    # 17d. an out-of-window target is resolved by the DIRECT lookup -- the
+    #      #483 regression. The mock's list holds ONE issue (#306 absent), so
+    #      the window cannot see it; the single-issue path must still answer
+    #      with the REAL title and body. MUTATION KILL: restore the stub
+    #      (title `Issue #306`, body "") and the title assertion fails.
+    _win = os.path.join(_f483, "win.json")
+    with open(_win, "w") as f:
+        json.dump([{"number": 1, "title": "in-window", "body": "b", "labels": []}], f)
+    _direct = os.path.join(_f483, "direct.json")
+    with open(_direct, "w") as f:
+        json.dump([{"number": 306, "title": "real #306 title", "body": "real body",
+                    "labels": [{"name": "tools"}]}], f)
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _win
+    assert_eq("#483 a target outside the window is absent from the list fetch",
+              [i["number"] for i in fetch_open_issues("")], [1])
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _direct
+    _resolved = fetch_issue("", 306)
+    assert_eq("#483 ...and resolves by DIRECT lookup to the real title, not `Issue #306`",
+              (_resolved or {}).get("title"), "real #306 title")
+    assert_eq("#483 ...with the real BODY too (the stub's was empty)",
+              (_resolved or {}).get("body"), "real body")
+
+    # 17g. the RESOLUTION RULE, which is where the regression actually lived --
+    #      the stub was constructed in cmd_targeted, not in the fetch. Three
+    #      arms: in-window answers from the window and says nothing; out-of-window
+    #      resolves by direct lookup and NAMES the window it fell outside; a
+    #      number that resolves nowhere is None and the caller REFUSES.
+    #      MUTATION KILL: restore the stub fallback (return {"number": n,
+    #      "title": f"Issue #{n}", "body": ""}, "") and the real-title assertion
+    #      fails; drop the refusal and the None arm returns a dict instead.
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _win
+    _window = [{"number": 1, "title": "in-window", "body": "b", "labels": []}]
+    _inwin, _inwin_note = resolve_target_issue("", 1, _window)
+    assert_eq("#483 an in-window target answers from the window itself",
+              (_inwin or {}).get("title"), "in-window")
+    assert_eq("#483 ...and carries NO out-of-window note", _inwin_note, "")
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _direct
+    _out_of_win, _note = resolve_target_issue("", 306, _window)
+    assert_eq("#483 an OUT-OF-WINDOW target resolves to the real title, never a stub",
+              (_out_of_win or {}).get("title"), "real #306 title")
+    assert_true("#483 ...and the note names the window it fell outside",
+                "outside the fetched open-issue window (1 listed)" in _note)
+    _none, _none_note = resolve_target_issue("", 424242, [])
+    assert_eq("#483 a target that resolves NOWHERE is None -- the caller then refuses",
+              _none, None)
+    assert_eq("#483 ...with no note to print (there is nothing to explain)",
+              _none_note, "")
+    # 17h. a FAILED list read is not a licence to fabricate either: the target
+    #      still resolves by direct lookup, and the note says the list read
+    #      failed rather than reporting a window size it never had.
+    _withfail, _failnote = resolve_target_issue("", 306, None)
+    assert_eq("#483 a FAILED list read still resolves the target directly",
+              (_withfail or {}).get("title"), "real #306 title")
+    assert_true("#483 ...and says the list read FAILED instead of citing a window",
+                "the list read FAILED" in _failnote)
+    # 17e. an unresolvable target resolves to None -- never a fabricated dict.
+    assert_eq("#483 an unresolvable target returns None, never a stub",
+              fetch_issue("", 999999), None)
+    # 17f. the SAME mock feeds both reads, so they can never disagree about field
+    #      shape (#483): number/title/labels/body are the fields the claim gate
+    #      and the affinity scoring consume.
+    assert_eq("#483 both reads request ONE shared JSON field list",
+              ISSUE_JSON_FIELDS, "number,title,labels,body,stateReason,state")
+    del os.environ["OC_DISPATCH_MOCK_ISSUES"]
+    shutil.rmtree(_f483, ignore_errors=True)
 
     total = tests_passed + tests_failed
     print(f"selftest: {tests_passed}/{total} OK")

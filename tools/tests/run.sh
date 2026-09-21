@@ -1381,7 +1381,22 @@ chmod +x "$D451STUB/tools/lib/oc-notify.sh"
 # gh is stubbed: whether the fork has an open issue #451 is a HOST fact, not a
 # property of this code, so a real call would make the leg pass or fail for the
 # wrong reason.
-printf '#!/bin/sh\necho "[]"\n' > "$D451STUB/bin/gh"
+#
+# The stub answers BOTH reads the targeted path makes (#483). It used to answer
+# "[]" to everything, which was enough while the targeted path read the OPEN LIST
+# alone and stubbed any number that list did not carry. Since #483 an
+# unresolvable number is a REFUSAL, not a stub, so a stub that says "[]" to the
+# single-issue lookup now models a genuinely missing issue and the run exits 1
+# BEFORE the send -- the leg would fail for a reason that has nothing to do with
+# #451. The LIST stays empty here on purpose: the send must be reached through
+# the direct lookup, which is the path #483 added.
+cat > "$D451STUB/bin/gh" <<'D451GH'
+#!/bin/sh
+case "$1 $2" in
+  "issue view") echo '{"number":451,"title":"fix(tools): oc-issue-dispatch hangs","body":"the culprit is tools/oc-issue-dispatch","labels":[{"name":"tools"}],"state":"OPEN","stateReason":null}' ;;
+  *) echo "[]" ;;
+esac
+D451GH
 chmod +x "$D451STUB/bin/gh"
 printf '{"workers":[],"events":[]}\n' > "$D451STUB/ledger.json"
 
