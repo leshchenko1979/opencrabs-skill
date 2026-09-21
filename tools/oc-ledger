@@ -100,7 +100,11 @@
 #                                          per closed issue (deduped — an
 #                                          addressed row releases every lane's
 #                                          claim on that issue). A gh failure is
-#                                          rc 4, never a silent clean.
+#                                          rc 4, never a silent clean. #485: BOTH
+#                                          states are read, so a token resolving
+#                                          to NO fork issue is reported as
+#                                          UNRESOLVED and the clean verdict is
+#                                          withheld (see cmd_sweep_closed_claims).
 #   --selftest                             fixture suite (332 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
@@ -1776,11 +1780,16 @@ DOMEOF
       {n:5, t:"2026-09-12T00:01:00Z", by:"editor 33333333-3333-3333-3333-333333333333", kind:"close", what:"CLOSE #38 — half closed"}]}' > "$UAT/sweep_fixture.json"
   
   # Create a mock gh script to return known closed issues (29, 49, 126, 80)
+  # and the OPEN ones (#485: the sweep now reads BOTH states, because the closed
+  # list alone cannot tell "genuinely open" from "resolves to no issue at all").
   mkdir -p "$T/mock_bin"
   cat << 'EOF' > "$T/mock_bin/gh"
 #!/bin/sh
 if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
-  echo '[{"number":29,"title":"compaction"},{"number":49,"title":"cap"},{"number":52,"title":"row-budget"},{"number":126,"title":"ontology"},{"number":80,"title":"bg-resume"}]'
+  case "$*" in
+    *"--state closed"*) echo '[{"number":29,"title":"compaction"},{"number":49,"title":"cap"},{"number":52,"title":"row-budget"},{"number":126,"title":"ontology"},{"number":80,"title":"bg-resume"}]' ;;
+    *"--state open"*)   echo '[{"number":38,"title":"bg-resume-half"},{"number":63,"title":"open fork issue"}]' ;;
+  esac
   exit 0
 fi
 exit 1
@@ -1796,6 +1805,44 @@ EOF
   grep -q "Issue #80 (CLOSED: bg-resume)" "$T/sweep.out" && ok || bad "sweep-multi-ref-token-extracted"
   # #38 was closed in event 5, so it should NOT be flagged
   grep -q "Issue #38 " "$T/sweep.out" && bad "sweep-closed-half-multi-ref-flagged" || ok
+
+  # 54b2 (#485): a claim token that resolves to NO fork issue is REPORTED, and
+  # the clean verdict is NOT printed. Before this fix the scan compared tokens
+  # against the CLOSED list only, so three states collapsed into one: an OPEN
+  # issue (the intended clean case), an issue that does not exist, and an
+  # upstream-qualified ref read in fork space. All three printed "All open
+  # claims map to OPEN issues." — which is how n=1678 stayed OPEN for 15 days
+  # against work that had shipped, found by a hand census rather than the tool.
+  jq -n '{workers:[], events:[
+      {n:1, t:"2026-09-21T00:00:00Z", by:"editor 11111111-1111-1111-1111-111111111111", kind:"claim", what:"CLAIM #1419 — upstream-qualified ref read in fork space"},
+      {n:2, t:"2026-09-21T00:00:01Z", by:"editor 22222222-2222-2222-2222-222222222222", kind:"claim", what:"CLAIM #63 — a genuinely OPEN fork issue"}]}' > "$UAT/sweep_unres.json"
+  PATH="$T/mock_bin:$PATH" OC_LEDGER="$UAT/sweep_unres.json" bash "$ME" sweep-closed-claims > "$T/sweep-unres.out" 2>/dev/null
+  chk "sweep-unresolved-rc" 0 $?
+  grep -q "UNRESOLVED: 1 claim token(s)" "$T/sweep-unres.out" && ok || bad "sweep-unresolved-class-reported"
+  grep -q "Issue #1419 not in the fork issue space" "$T/sweep-unres.out" && ok || bad "sweep-unresolved-names-the-token"
+  # THE DEFECT ITSELF: the clean verdict must NOT be printable while an
+  # unresolvable token is in the population. MUTATION KILL: restore the
+  # closed-list-only scan and this assertion fails with the false-clean line.
+  grep -q "All open claims map to OPEN issues" "$T/sweep-unres.out" \
+    && bad "sweep-unresolved-false-clean-verdict" || ok
+  # ...and the claim on the genuinely OPEN issue (#63) is NOT reported as
+  # unresolvable, so the new class is discriminating rather than a blanket.
+  grep -q "Issue #63 not in the fork issue space" "$T/sweep-unres.out" \
+    && bad "sweep-unresolved-over-reports-open-issues" || ok
+  # ...and NOTHING is released: an unresolvable token is not a licence to write.
+  chk "sweep-unresolved-writes-nothing" "0" \
+    "$(jq '[.events[] | select(.kind == "unclaim")] | length' "$UAT/sweep_unres.json")"
+
+  # 54b3 (#485 positive control): when EVERY token resolves to an OPEN fork
+  # issue the clean verdict IS printed, and it names the population it is a
+  # claim about. Without this, a fix that never printed the verdict would pass
+  # 54b2 vacuously.
+  jq -n '{workers:[], events:[
+      {n:1, t:"2026-09-21T00:00:00Z", by:"editor 33333333-3333-3333-3333-333333333333", kind:"claim", what:"CLAIM #63 — a genuinely OPEN fork issue"}]}' > "$UAT/sweep_clean.json"
+  PATH="$T/mock_bin:$PATH" OC_LEDGER="$UAT/sweep_clean.json" bash "$ME" sweep-closed-claims > "$T/sweep-clean.out" 2>/dev/null
+  chk "sweep-clean-rc" 0 $?
+  grep -q "All open claims map to OPEN issues (1 1 0 0 =" "$T/sweep-clean.out" && ok || bad "sweep-clean-verdict-with-population"
+  grep -q "UNRESOLVED" "$T/sweep-clean.out" && bad "sweep-clean-false-unresolved" || ok
 
   # 54c (#314, toolsmith 2fae1230): sweep-closed-claims WRITE PATH. Before this
   # fix the verb had NO write path — `--dry-run` was parsed, passed to the
@@ -2414,6 +2461,18 @@ for claim in oc.open_claims(events, sys.argv[2] or None):
 cmd_sweep_closed_claims() { # oc-ledger sweep-closed-claims [--dry-run]
   # Release OPEN claim rows whose issue is CLOSED on the fork.
   #
+  # #485: the verdict is a claim about a POPULATION, so the population is read in
+  # FULL. Only the CLOSED list was fetched before, which made a token absent from
+  # it indistinguishable from a token whose issue is genuinely OPEN — and also
+  # from a token naming an issue that does not exist in this repo, which is the
+  # shape that printed "All open claims map to OPEN issues." for 15 days while
+  # n=1678 (an upstream-qualified ref read in fork space) stayed OPEN against
+  # work that had shipped. That false clean was found by a hand census, not by
+  # the tool. Every token now lands in exactly one of three classes: CLOSED
+  # (released), OPEN (the intended clean case), UNRESOLVED (reported, never
+  # released, and it WITHHOLDS the clean verdict). The summary line carries the
+  # four counts so the verdict can be checked against the population it names.
+  #
   # #314: this verb had NO WRITE PATH. `--dry-run` was parsed, passed to the
   # embedded python, and the live branch printed the same scan and `exit 0` — so
   # the flag changed nothing, `dry_run` was a dead variable, and the selftest
@@ -2440,7 +2499,7 @@ cmd_sweep_closed_claims() { # oc-ledger sweep-closed-claims [--dry-run]
   done
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
 
-  local pairs rc
+  local pairs unres
   pairs="$(python3 -c '
 import sys, os, json, subprocess
 
@@ -2459,31 +2518,80 @@ open_claims = oc.open_claims(events)
 if not open_claims:
     sys.exit(0)
 
-res = subprocess.run(
-    ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs",
-     "--state", "closed", "--limit", "1000", "--json", "number,title"],
-    capture_output=True, text=True)
-if res.returncode != 0:
-    sys.stderr.write("gh issue list failed (rc %d): %s\n"
-                     % (res.returncode, (res.stderr or "").strip()[:200]))
-    sys.exit(4)
-try:
-    closed_map = {i["number"]: i.get("title", "") for i in json.loads(res.stdout)}
-except Exception as e:
-    sys.stderr.write("failed to parse closed issues: %s\n" % e)
-    sys.exit(4)
+# #485: the closed list ALONE cannot decide the verdict. A token absent from it
+# is indistinguishable from a token whose issue is genuinely OPEN -- and also
+# from a token naming an issue that does not exist in this repo, which is the
+# case that printed the clean verdict for 15 days (n=1678 named an
+# UPSTREAM-qualified ref read in fork space). So BOTH states are read and every
+# token lands in exactly one of three classes: CLOSED (release), OPEN (the
+# intended clean case), or UNRESOLVED (report it -- never silently count it as
+# open).
+def probe(state):
+    res = subprocess.run(
+        ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs",
+         "--state", state, "--limit", "1000", "--json", "number,title"],
+        capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.stderr.write("gh issue list --state %s failed (rc %d): %s\n"
+                         % (state, res.returncode, (res.stderr or "").strip()[:200]))
+        sys.exit(4)
+    try:
+        return {i["number"]: i.get("title", "") for i in json.loads(res.stdout)}
+    except Exception as e:
+        sys.stderr.write("failed to parse %s issues: %s\n" % (state, e))
+        sys.exit(4)
 
+
+closed_map = probe("closed")
+open_map = probe("open")
+
+n_closed = n_open = 0
+unresolved = []
 for claim in open_claims:
     for tok in claim["tokens"]:
         if tok in closed_map:
-            sys.stdout.write("%d\t%s\t%s\n"
+            n_closed += 1
+            sys.stdout.write("C\t%d\t%s\t%s\n"
                              % (tok, claim["by"], (closed_map[tok] or "")[:60]))
-' "$LEDGER" "$_OC_DIR")"
+        elif tok in open_map:
+            n_open += 1
+        else:
+            unresolved.append((tok, claim["by"], claim["what"][:60]))
+for tok, by, what in unresolved:
+    sys.stdout.write("U\t%d\t%s\t%s\n" % (tok, by, what))
+# The verdict is a CLAIM ABOUT A POPULATION, so the population travels with it.
+sys.stdout.write("S\t%d\t%d\t%d\t%d\n"
+                 % (len(open_claims), n_open, n_closed, len(unresolved)))
+' "$LEDGER" "$_OC_DIR" 2>"${TMPDIR:-/tmp}/oc-sweep-closed-claims.$$.err")"
   rc=$?
   [ $rc -eq 0 ] || die 3 "sweep-closed-claims: scan failed (rc $rc) — ledger or GitHub probe"
 
+  local counts
+  counts="$(printf '%s\n' "$pairs" | awk -F'\t' '$1=="S" {print $2" "$3" "$4" "$5}')"
+  unres="$(printf '%s\n' "$pairs" | awk -F'\t' '$1=="U" {print $2"\t"$3"\t"$4}')"
+  pairs="$(printf '%s\n' "$pairs" | awk -F'\t' '$1=="C" {print $2"\t"$3"\t"$4}')"
+  rm -f "${TMPDIR:-/tmp}/oc-sweep-closed-claims.$$.err"
+
+  # #485: report the UNRESOLVABLE class before any verdict. A token that names
+  # no fork issue in EITHER state is neither a stale claim nor a live one: it is
+  # a claim this verb cannot judge, and counting it as open is what made the
+  # clean verdict a lie.
+  local n_unres=0
+  if [ -n "$unres" ]; then
+    n_unres="$(printf '%s\n' "$unres" | grep -c .)"
+    echo "UNRESOLVED: $n_unres claim token(s) name no issue in leshchenko1979/opencrabs (neither OPEN nor CLOSED):"
+    printf '%s\n' "$unres" | awk -F'\t' \
+      '{ printf "  Issue #%s not in the fork issue space — claimed by %s (%s)\n", $1, $2, $3 }'
+    echo "  These claims are NOT released and NOT clean. A common cause is an"
+    echo "  upstream-qualified reference (adolfousier/opencrabs#N) read in fork"
+    echo "  space: the number resolves on the upstream repo, never here."
+  fi
+
   if [ -z "$pairs" ]; then
-    echo "All open claims map to OPEN issues."
+    if [ -n "$unres" ]; then
+      exit 0
+    fi
+    echo "All open claims map to OPEN issues ($counts = claim rows, open tokens, closed tokens, unresolvable tokens)."
     exit 0
   fi
 
