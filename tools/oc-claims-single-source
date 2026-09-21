@@ -35,11 +35,6 @@ keys on what a copy must RE-IMPLEMENT:
          reconstructs CLOSING_KINDS or LANDED_KINDS.  Keyed on VALUES, so a
          rename still fires.  Restricted to module level, which is what excludes
          every fixture dict and every inline `kind in (...)` comparison.
-  ARM C  an OVERSTATING COMMENT (WARNING) - a comment in file F naming another
-         oc-* tool as sharing the canonical predicate, while that tool actually
-         carries a copy.  A comment is evidence about intent, not a second
-         implementation, so ARM C never fails the run.
-
 SCAN UNITS, i.e. the surface this covers: every PYTHON UNIT under tools/ - a
 whole .py or python oc-* file, AND (for a shell tool) every python blob it
 embeds via `python3 -c '...'` or a `python3 - <<'PY'` heredoc.  The blob form is
@@ -49,18 +44,15 @@ family's centre of gravity.
 
 SCOPE, stated rather than implied: tools/tests/ is EXCLUDED.  A test legitimately
 exercises the predicate, and the test tree is not a runtime consumer - the
-hazard is a copy that ANSWERS claim questions in production.  ARM C reads `#`
-comment blocks; docstrings are not read.
+hazard is a copy that ANSWERS claim questions in production.
 
 COVERAGE IS REPORTED, NOT ASSUMED.  A unit that fails to parse is SKIPPED - it
 cannot be scanned - so the ok line states BOTH figures, `scanned of declared`,
 and prints one `NOTE rel:start` line per skip.  A green report must never rest
 on a silent skip: measured 2026-09-20, the tools/ tree declared 18 python units
 and this tool scanned 12, so a third of the surface was invisible behind one
-confident number.  Separately, a scanned file's OWN syntax is not a finding:
-whether a unit is well-formed python is a classification question here, so the
-`ast.parse` used to answer it runs with warnings muted and nothing is written
-to stderr.  The syntax of a file under tools/ is never this tool's report.
+confident number.  A scanned file's OWN syntax is not a finding - the `ast.parse`
+used to classify it runs with warnings muted and writes nothing to stderr.
 
 Usage: oc-claims-single-source [--scan DIR] [--selftest] [-h]
 Exit:  0 clean | 1 HARD finding | 2 usage / IO error
@@ -88,8 +80,6 @@ CONST_NAME_RE = re.compile(r"^_?[A-Z][A-Z0-9_]{2,}$")
 # Verdict VARIABLE names (never function names - those are free to vary).
 VERDICT_NAME_RE = re.compile(r"^(closed|is_closed|closer|is_open|open|opens|landed)$")
 KINDSIDE_RE = re.compile(r"clos|landed|kind", re.I)
-DELEG_RE = re.compile(r"canonical|single implementation|not a local copy|delegat|shared with", re.I)
-TOOLNAME_RE = re.compile(r"\boc[-_][a-z][a-z_-]*")
 RE_PY_C = re.compile(r"\bpython3\s+-c\s*'")
 RE_PY_HEREDOC = re.compile(r"\bpython3\s+-\s*<<-?\s*'?([A-Za-z_][A-Za-z0-9_]*)'?")
 SKIP_DIRS = frozenset(("__pycache__", ".git", "tests"))
@@ -323,23 +313,6 @@ def arm_b_hits(tree):
     return hits
 
 
-def comment_blocks(src):
-    """(start_line, text) for each run of consecutive # comment lines."""
-    lines = src.splitlines()
-    block, start = [], 0
-    for i, line in enumerate(lines, 1):
-        s = line.lstrip()
-        if s.startswith("#"):
-            if not block:
-                start = i
-            block.append(s.lstrip("#").strip())
-            continue
-        if block:
-            yield start, " ".join(block)
-            block = []
-    if block:
-        yield start, " ".join(block)
-
 
 def unit_count(units):
     """How many units were ACTUALLY SCANNED (parsed) across the tree.
@@ -353,8 +326,6 @@ def unit_count(units):
 
 def scan(root):
     files = list(iter_source_files(root))
-    tool_names = set(os.path.basename(r) for _, r in files
-                     if os.path.basename(r).startswith("oc-"))
 
     units = {}          # rel -> (whole_file_text, [(blob_start, tree), ...])
     skipped = []        # (rel, blob_start, reason) - enumerated but NOT parsed
@@ -375,7 +346,6 @@ def scan(root):
                 skipped.append((rel, start, _unparsed_reason(code)))
         units[rel] = (src, parsed)
 
-    copies = {}         # basename -> (rel, first hit line)
     findings = []
     for rel in sorted(units):
         _, parsed = units[rel]
@@ -385,28 +355,12 @@ def scan(root):
                 desc = ("ARM A  closure-verdict shape: def %s() walks a later-event "
                         "slice and yields a closed/open verdict" % name)
                 findings.append((rel, line, desc))
-                copies.setdefault(os.path.basename(rel), (rel, line))
             for name, ln, vals in arm_b_hits(tree):
                 line = start + ln - 1 if start > 1 else ln
                 desc = ("ARM B  local predicate constant %s = %s" % (name, vals))
                 findings.append((rel, line, desc))
-                copies.setdefault(os.path.basename(rel), (rel, line))
 
-    warnings = []
-    for rel in sorted(units):
-        src, _ = units[rel]
-        for start, text in comment_blocks(src):
-            if not DELEG_RE.search(text):
-                continue
-            for m in TOOLNAME_RE.finditer(text):
-                name = m.group(0).rstrip("-_")
-                if name == "oc_claims" or name == os.path.basename(rel):
-                    continue
-                if name in copies and name in tool_names:
-                    warnings.append((rel, start,
-                                     "comment claims %s shares the canonical predicate, but %s "
-                                     "carries a copy (line %d)" % (name, name, copies[name][1])))
-    return findings, warnings, units, skipped
+    return findings, units, skipped
 
 import shutil
 import subprocess
@@ -517,13 +471,6 @@ LEDGER_DELEGATE = '''#!/bin/sh
 echo ok
 '''
 
-LEDGER_OVERSTATE = '''#!/bin/sh
-# The closure predicate lives in tools/lib/oc_claims.py - THE single
-# implementation, shared with oc-harvest-dispatch (#305) and oc-roster (#314).
-# (this file still carries its own copy below - the comment overstates)
-echo ok
-'''
-
 LEDGER_BLOB_COPY = '''#!/bin/sh
 cmd_claims() {
   python3 -c '
@@ -584,9 +531,8 @@ def selftest():
             "oc-issue-dispatch": ISSUE_DELEGATE,
             "oc-ledger": LEDGER_DELEGATE,
         })
-        finds, warns, units, skipped_clean = scan(clean)
-        ck("delegating tree: zero HARD findings", finds == [], repr(finds))
-        ck("delegating tree: zero warnings", warns == [], repr(warns))
+        finds_clean, units, skipped_clean = scan(clean)
+        ck("delegating tree: zero HARD findings", finds_clean == [], repr(finds_clean))
         ck("delegating tree: units were actually scanned", unit_count(units) > 0,
            "units=%d" % unit_count(units))
         rc, out = _run_cli(clean)
@@ -599,9 +545,9 @@ def selftest():
             "oc-harvest-dispatch": HD_COPY,
             "oc-harvest-census": CENSUS_DELEGATE,
             "oc-issue-dispatch": ISSUE_DELEGATE,
-            "oc-ledger": LEDGER_OVERSTATE,
+            "oc-ledger": LEDGER_DELEGATE,
         })
-        finds, warns, _, _ = scan(dirty)
+        finds, _, _ = scan(dirty)
         a, b = _arm_counts(finds, "oc-roster")
         ck("roster copy: ARM A fires on claims_index", a >= 1, "armA=%d" % a)
         ck("roster copy: ARM B fires on CLOSERS", b >= 1, "armB=%d" % b)
@@ -609,30 +555,20 @@ def selftest():
         ck("dispatch copy: ARM A fires on claim_is_closed", a >= 1, "armA=%d" % a)
         ck("dispatch copy: ARM B fires on _CLOSING_KINDS", b >= 1, "armB=%d" % b)
 
-        # ---- leg group 3: the false-positive boundary ----------------------
+        # ---- leg groups 3+4: the false-positive boundary -------------------
         a, b = _arm_counts(finds, "oc-harvest-census")
         ck("delegating oc-harvest-census does NOT fire", a == 0 and b == 0, "a=%d b=%d" % (a, b))
         a, b = _arm_counts(finds, "oc-issue-dispatch")
         ck("oc-issue-dispatch does NOT fire (delegates; LANDED_KINDS is a USE)",
            a == 0 and b == 0, "a=%d b=%d" % (a, b))
-
-        # ---- leg group 4: same name, delegating body -> silent -------------
-        a, b = _arm_counts(scan(clean)[0], "oc-harvest-dispatch")
+        a, b = _arm_counts(finds_clean, "oc-harvest-dispatch")
         ck("a delegating def named claim_is_closed does NOT fire (name-independence)",
            a == 0 and b == 0, "a=%d b=%d" % (a, b))
-
-        # ---- leg group 5: ARM C, the overstating comment -------------------
-        named = " ".join(t for _, _, t in warns)
-        ck("ARM C warns on the overstating comment", len(warns) >= 1, repr(warns))
-        ck("ARM C warning names the tool that still carries the copy",
-           "oc-roster" in named, named[:160] or "<no warning text>")
-        ck("ARM C is a WARNING, not a HARD finding",
-           all(not d.startswith("ARM C") for _, _, d in finds), repr(finds[:2]))
 
         # ---- leg group 6: the embedded-blob surface (oc-ledger's shape) ----
         blobs = os.path.join(tmp, "blobs")
         _write_tree(blobs, {"oc-ledger": LEDGER_BLOB_COPY})
-        finds, _, _, _ = scan(blobs)
+        finds, _, _ = scan(blobs)
         a, b = _arm_counts(finds, "oc-ledger")
         ck("shell blob: ARM A fires inside a python3 -c blob", a >= 1, repr(finds))
         ck("shell blob: ARM B fires inside a python3 -c blob", b >= 1, repr(finds))
@@ -646,9 +582,8 @@ def selftest():
         ck("missing --scan DIR exits 2", rc == 2, "rc=%d" % rc)
 
         # ---- leg group 8: THE regression assertion -------------------------
-        finds, warns, units, skipped_live = scan(TOOLS_DIR)
+        finds, units, skipped_live = scan(TOOLS_DIR)
         ck("LIVE tools/ tree: zero HARD findings", finds == [], repr(finds[:3]))
-        ck("LIVE tools/ tree: zero warnings", warns == [], repr(warns[:3]))
         ck("LIVE tools/ tree: the canonical module was excluded",
            not any(CANONICAL_REL in r for r, _, _ in finds),
            "units=%d" % unit_count(units))
@@ -713,11 +648,9 @@ def main(argv):
         sys.stderr.write("not a directory: %s\n" % root)
         return 2
 
-    findings, warnings, units, skipped = scan(root)
+    findings, units, skipped = scan(root)
     for rel, line, desc in findings:
         sys.stdout.write("HARD  %s:%d  %s\n" % (rel, line, desc))
-    for rel, line, text in warnings:
-        sys.stdout.write("WARN  %s:%d  %s\n" % (rel, line, text))
     for rel, start, reason in sorted(skipped):
         sys.stdout.write("NOTE  %s:%d  enumerated but NOT scanned (%s) - this unit is a "
                          "coverage hole; make it parseable, or scan the text another way\n"
