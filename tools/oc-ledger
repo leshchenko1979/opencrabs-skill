@@ -633,8 +633,15 @@ cmd_sync() {
       swept="$(git status --porcelain | sed 's/^...//' | grep -vE '^(SKILL\.md|CHANGELOG\.md|tools/tests/battery-last\.json)$' || true)"
       git add -A
       [ -n "$swept" ] && echo "PAYLOAD SWEPT into bump commit (--allow-sweep; silent-stray class, pre-v0.4.63): $(printf '%s' "$swept" | tr '\n' '; ')" >&2
-      git commit -q -m "skill v$v: oc-ledger sync — ${why:-version sync}" 2>/dev/null \
-        || echo "commit-lag: skill commit deferred" >&2
+      # #467: `git commit` exits non-zero for BOTH a genuine failure and the
+      # benign 'nothing to commit' case, so this `||` arm reported a commit-lag
+      # on every idempotent re-sync — a clean tree is not a deferred commit.
+      # `git diff --cached --quiet` exits 0 exactly when the index matches HEAD
+      # (nothing staged), so the commit is attempted only when there is work.
+      if ! git diff --cached --quiet; then
+        git commit -q -m "skill v$v: oc-ledger sync — ${why:-version sync}" 2>/dev/null \
+          || echo "commit-lag: skill commit deferred" >&2
+      fi
       git tag "v$v" 2>/dev/null || echo "tag v$v exists or failed" >&2 )
   fi
 
@@ -1120,7 +1127,27 @@ PAYLOAD
   chk "sync-event" "skill-bump" "$(jq -r '[.events[] | select(.kind == "skill-bump")] | last | .kind // ""' "$OC_LEDGER")"
   git -C "$T/state" log --oneline | grep "skill-bump v0.4.2" >/dev/null && ok || bad "sync-state-commit"   # no -q: pipefail v0.4.72 — grep -q early-close can SIGPIPE git log (141)
   git -C "$T/skill" tag | grep -q '^v0\.4\.2$' && ok || bad "sync-skill-tag"
-  bash "$ME" sync --version 0.4.2 --why resync >/dev/null 2>&1; chk "sync-resync-equal" 0 $?
+  bash "$ME" sync --version 0.4.2 --why resync >"$T/resync.out" 2>"$T/resync.err"; chk "sync-resync-equal" 0 $?
+  # #467: AC-1 — a re-sync on an UNCHANGED tree commits nothing, so `git commit`
+  # exits non-zero for the benign 'nothing to commit' case and the `||` arm used to
+  # cry commit-lag on every idempotent re-sync. A clean tree is not a deferral.
+  case "$(cat "$T/resync.err")" in
+    *"commit-lag: skill commit deferred"*) bad "sync-clean-tree-no-commit-lag" ;;
+    *) ok ;;
+  esac
+  # #467: AC-2 — a GENUINE deferral must STILL be reported. A failing pre-commit
+  # hook with something staged is what makes `git commit` fail while the tree is
+  # otherwise sound, so the `||` arm is then the only thing that can say so.
+  printf '#!/bin/sh\nexit 1\n' > "$T/skill/.git/hooks/pre-commit"
+  chmod +x "$T/skill/.git/hooks/pre-commit"
+  printf 'fixture\n' >> "$T/skill/CHANGELOG.md"
+  bash "$ME" sync --version 0.4.2 --why hookfail >"$T/lag.out" 2>"$T/lag.err"; chk "sync-hook-fail-rc" 0 $?
+  case "$(cat "$T/lag.err")" in
+    *"commit-lag: skill commit deferred"*) ok ;;
+    *) bad "sync-genuine-deferral-reported" ;;
+  esac
+  rm -f "$T/skill/.git/hooks/pre-commit"
+  git -C "$T/skill" reset -q; git -C "$T/skill" checkout -q -- CHANGELOG.md
   # 17b-pre (v0.4.157): the stray-guard REFUSES an unrelated dirty path, names it,
   # and writes NO skill-bump event (a refused sync must leave no drift behind).
   sed -i 's/version: 0.4.2/version: 0.4.3/' "$T/skill/SKILL.md"
