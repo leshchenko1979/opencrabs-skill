@@ -48,10 +48,16 @@ usage() { echo "usage: $0 -m <msg> [-m <msg>...] [--issue N] [--repo <path>] [--
 if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
   d="$(mktemp -d)" || exit 3
   trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
-  # ledger fixture: worker u-fix has a claim mentioning #149
+  # ledger fixture: worker f1c7c0de-0000-4000-8000-000000000149 has a claim mentioning #149.
+  # (#441) The actor is a CANONICAL uuid because claim-ref now validates its
+  # argument domain — it used to be the non-uuid u-fix, which the verb
+  # rejects at rc 2. The ledger's by-prose must CONTAIN the actor:
+  # _latest_claim_issue still selects with contains($u), the substring
+  # behaviour #441 kept by decision (shape 1), because the composed
+  # role-plus-uuid form derive_by emits needs that substring to resolve.
   cat > "$d/wl.json" <<'JSON'
-{"workers":[{"uuid":"u-fix","role":"editor"}],"events":[
- {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor u-fix (topic 29947)","what":"claimed Duty-6 fix for #149 trailer test"},
+{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[
+ {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor f1c7c0de-0000-4000-8000-000000000149 (topic 29947)","what":"claimed Duty-6 fix for #149 trailer test"},
  {"t":"2026-08-31T10:01:00Z","kind":"claim","by":"other worker","what":"unrelated"}]}
 JSON
   R="$d/repo"; git init -q -b main "$R"
@@ -68,49 +74,56 @@ exit 3
   ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR -u OPENCRABS_SESSION_ID "$OC" -m test --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: unset OC_ACTOR != 3" >&2; exit 1; }
   # 1b. OPENCRABS_SESSION_ID fallback works -> 0
-  ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR OPENCRABS_SESSION_ID=u-fix "$OC" -m "test: fallback" --repo "$R" ) >/dev/null 2>&1
+  ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR OPENCRABS_SESSION_ID=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "test: fallback" --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 0 ] || { echo "selftest: OPENCRABS_SESSION_ID fallback != 0" >&2; exit 1; }
+  # 1c. (#441) a NON-uuid actor: the derivation must fail rc 3 and the verb's
+  #     domain diagnostic must reach the caller's stderr (it names claims N),
+  #     rather than a bare "no OPEN claim". This is the domain guard's blast
+  #     radius on THIS tool, pinned.
+  ( cd "$R" && echo x1c > f1c && git add f1c && OC_ACTOR=u-fix "$OC" -m "test: non-uuid actor" --repo "$R" ) >/dev/null 2>"$d/1c.err"
+  [ $? -eq 3 ] || { echo "selftest: non-uuid actor must not derive (want 3)" >&2; exit 1; }
+  grep -q "is not a session uuid" "$d/1c.err" || { echo "selftest: non-uuid actor domain diagnostic must reach the caller" >&2; exit 1; }
   # 2. detached HEAD -> 3
   ( cd "$R" && git checkout -q --detach && echo y > g && git add g \
-      && OC_ACTOR=u-fix "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+      && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m test --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: detached HEAD != 3" >&2; exit 1; }
   ( cd "$R" && git checkout -q main && git reset -q )
   # 3. nothing staged -> 3
-  OC_ACTOR=u-fix "$OC" -m test --repo "$R" >/dev/null 2>&1
+  OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m test --repo "$R" >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: nothing-staged != 3" >&2; exit 1; }
   # 4. success: trailers derived (Session-Id + Issue-Ref #149 from claim) + comment posted via stub
-  ( cd "$R" && echo z > h && git add h && OC_ACTOR=u-fix "$OC" -m "fix: trailers" --repo "$R" ) >/dev/null 2>&1
+  ( cd "$R" && echo z > h && git add h && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: trailers" --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 0 ] || { echo "selftest: gated commit failed" >&2; exit 1; }
   # 4b. comment leg folded: stub fails -> rc 5 (commit landed, comment FAILED)
-  ( cd "$R" && echo q > k && git add k && OC_ISSUE_LOG_BIN="$STUB_FAIL" OC_ACTOR=u-fix "$OC" -m "fix: comment-fail" --repo "$R" ) >/dev/null 2>&1
+  ( cd "$R" && echo q > k && git add k && OC_ISSUE_LOG_BIN="$STUB_FAIL" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: comment-fail" --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 5 ] || { echo "selftest: comment-fail-after-commit != 5" >&2; exit 1; }
   # 4c. --no-comment skips the post leg entirely (stub-fail but rc 0)
-  ( cd "$R" && echo r > l && git add l && OC_ISSUE_LOG_BIN="$STUB_FAIL" OC_ACTOR=u-fix "$OC" -m "chore: drill" --no-comment --repo "$R" ) >/dev/null 2>&1
+  ( cd "$R" && echo r > l && git add l && OC_ISSUE_LOG_BIN="$STUB_FAIL" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: drill" --no-comment --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 0 ] || { echo "selftest: --no-comment drill != 0" >&2; exit 1; }
   LOG="$(git -C "$R" log -1 --format=%B)"
-  printf '%s' "$LOG" | grep -q "Session-Id: u-fix" || { echo "selftest: Session-Id trailer missing" >&2; exit 1; }
+  printf '%s' "$LOG" | grep -q "Session-Id: f1c7c0de-0000-4000-8000-000000000149" || { echo "selftest: Session-Id trailer missing" >&2; exit 1; }
   printf '%s' "$LOG" | grep -q "Issue-Ref: #149" || { echo "selftest: Issue-Ref #149 missing" >&2; exit 1; }
   # 5. explicit --issue overrides derivation
-  ( cd "$R" && echo w > i && git add i && OC_ACTOR=u-fix "$OC" -m "chore: override" --issue 42 --repo "$R" ) >/dev/null 2>&1
+  ( cd "$R" && echo w > i && git add i && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: override" --issue 42 --repo "$R" ) >/dev/null 2>&1
   git -C "$R" log -1 --format=%B | grep -q "Issue-Ref: #42" || { echo "selftest: --issue override missing" >&2; exit 1; }
   # 6. claim without #N and no --issue -> 3
   cat > "$d/wl2.json" <<'JSON'
-{"workers":[{"uuid":"u-fix","role":"editor"}],"events":[
- {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor u-fix","what":"claim with no issue ref"}]}
+{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[
+ {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor f1c7c0de-0000-4000-8000-000000000149","what":"claim with no issue ref"}]}
 JSON
-  ( cd "$R" && echo v > j && git add j && OC_LEDGER="$d/wl2.json" OC_ACTOR=u-fix "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  ( cd "$R" && echo v > j && git add j && OC_LEDGER="$d/wl2.json" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m test --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: no-issue-derivable != 3" >&2; exit 1; }
   # 6b. (#335) claim CLOSED by a later done row -> 3, and NO comment is posted
   #     onto the finished issue; an explicit --issue still commits, because that
   #     is the lane taking the decision on the record.
   cat > "$d/wl3.json" <<'JSON'
-{"workers":[{"uuid":"u-fix","role":"editor"}],"events":[
- {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor u-fix","what":"CLAIM #149 — finished work"},
- {"t":"2026-08-31T11:00:00Z","kind":"done","by":"editor u-fix","what":"done #149 — shipped and released"}]}
+{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[
+ {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor f1c7c0de-0000-4000-8000-000000000149","what":"CLAIM #149 — finished work"},
+ {"t":"2026-08-31T11:00:00Z","kind":"done","by":"editor f1c7c0de-0000-4000-8000-000000000149","what":"done #149 — shipped and released"}]}
 JSON
-  ( cd "$R" && echo t > t1 && git add t1 && OC_LEDGER="$d/wl3.json" OC_ACTOR=u-fix "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  ( cd "$R" && echo t > t1 && git add t1 && OC_LEDGER="$d/wl3.json" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m test --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 3 ] || { echo "selftest: closed-claim derivation != 3" >&2; exit 1; }
-  ( cd "$R" && echo t > t2 && git add t2 && OC_LEDGER="$d/wl3.json" OC_ACTOR=u-fix "$OC" -m "chore: explicit" --issue 42 --repo "$R" ) >/dev/null 2>&1
+  ( cd "$R" && echo t > t2 && git add t2 && OC_LEDGER="$d/wl3.json" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: explicit" --issue 42 --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 0 ] || { echo "selftest: closed-claim + --issue override != 0" >&2; exit 1; }
   git -C "$R" log -1 --format=%B | grep -q "Issue-Ref: #42" \
     || { echo "selftest: closed-claim --issue override trailer missing" >&2; exit 1; }
@@ -125,18 +138,18 @@ JSON
       || { echo "selftest: duplicate/absent Session-Id ($1)" >&2; exit 1; }
     git -C "$R" log -1 --format="%(trailers)" | grep -c '^Issue-Ref:' | grep -qx 1 \
       || { echo "selftest: duplicate/absent Issue-Ref ($1)" >&2; exit 1; }
-    git -C "$R" log -1 --format="%(trailers)" | grep -q '^Session-Id: u-fix$' \
+    git -C "$R" log -1 --format="%(trailers)" | grep -q '^Session-Id: f1c7c0de-0000-4000-8000-000000000149$' \
       || { echo "selftest: derived Session-Id did not win ($1)" >&2; exit 1; }
     git -C "$R" log -1 --format="%(trailers)" | grep -q '^Issue-Ref: #149$' \
       || { echo "selftest: derived Issue-Ref did not win ($1)" >&2; exit 1; }
   }
-  ( cd "$R" && echo d1 > d1 && git add d1 && OC_ACTOR=u-fix "$OC" -m "fix: caller already carries the trailers
+  ( cd "$R" && echo d1 > d1 && git add d1 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: caller already carries the trailers
 
 Issue-Ref: #149
 " --repo "$R" ) >/dev/null 2>&1
   [ $? -eq 0 ] || { echo "selftest: dup same-value commit != 0" >&2; exit 1; }
   _dup "same value"
-  ( cd "$R" && echo d2 > d2 && git add d2 && OC_ACTOR=u-fix "$OC" -m "fix: caller carries FOREIGN values
+  ( cd "$R" && echo d2 > d2 && git add d2 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: caller carries FOREIGN values
 
 Issue-Ref: #999
 Session-Id: a-foreign-session
@@ -144,7 +157,7 @@ Session-Id: a-foreign-session
   [ $? -eq 0 ] || { echo "selftest: dup foreign-value commit != 0" >&2; exit 1; }
   _dup "foreign value"
   # 7. usage
-  OC_ACTOR=u-fix "$OC" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: no args != 2" >&2; exit 1; }
+  OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: no args != 2" >&2; exit 1; }
   # 8. (#428) close-keyword hazard scan — an ADVISORY that names the matched
   #    shape and NEVER changes the exit code. The scan is what stands between an
   #    honest-limit sentence and GitHub's parser closing the issue 11 s after the
@@ -153,7 +166,7 @@ Session-Id: a-foreign-session
   # 8a. the honest-limit case — the shape sits inside a NEGATION. The parser
   #     cannot read negation, so this is the exact shape of the #321 incident: it
   #     must warn class=negated, name the shape, AND still land rc=0.
-  ( cd "$R" && echo k1 > k1 && git add k1 && OC_ACTOR=u-fix "$OC" -m "fix: budget honesty
+  ( cd "$R" && echo k1 > k1 && git add k1 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: budget honesty
 
 Part B alone does NOT fix #321." --no-comment --repo "$R" ) >/dev/null 2>"$E"
   [ $? -eq 0 ] || { echo "selftest: #428-negated-rc0 the commit must still land" >&2; exit 1; }
@@ -162,11 +175,11 @@ Part B alone does NOT fix #321." --no-comment --repo "$R" ) >/dev/null 2>"$E"
   grep -q 'class=genuine' "$E" && { echo "selftest: #428-negated-not-genuine a negated shape was classified as a genuine close" >&2; exit 1; }
   # 8b. no close-keyword shape anywhere -> NO warning at all (a scan that cries
   #     wolf on ordinary prose is a scan nobody reads)
-  ( cd "$R" && echo k2 > k2 && git add k2 && OC_ACTOR=u-fix "$OC" -m "chore: tidy the fixtures, no issue references here" --no-comment --repo "$R" ) >/dev/null 2>"$E"
+  ( cd "$R" && echo k2 > k2 && git add k2 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: tidy the fixtures, no issue references here" --no-comment --repo "$R" ) >/dev/null 2>"$E"
   [ $? -eq 0 ] || { echo "selftest: #428-clean-rc0" >&2; exit 1; }
   grep -q 'close-keyword' "$E" && { echo "selftest: #428-clean-silent a body with no close-keyword shape must not warn" >&2; exit 1; }
   # 8c. the same shape OUTSIDE any negation -> class=genuine, still rc 0
-  ( cd "$R" && echo k3 > k3 && git add k3 && OC_ACTOR=u-fix "$OC" -m "fix: land it
+  ( cd "$R" && echo k3 > k3 && git add k3 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: land it
 
 This closes #321 for real." --no-comment --repo "$R" ) >/dev/null 2>"$E"
   [ $? -eq 0 ] || { echo "selftest: #428-genuine-rc0" >&2; exit 1; }

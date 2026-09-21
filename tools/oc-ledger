@@ -180,6 +180,15 @@ STATE_DIR() { dirname "$LEDGER"; }
 
 ledger_ok() { [ -f "$LEDGER" ] && jq -e . "$LEDGER" >/dev/null 2>&1; }
 max_n() { jq '([.events[]? | .n // 0] | max // 0)' "$LEDGER"; }
+# _is_uuid (#441, DRY extraction): the ONE uuid-shape predicate. ack/enroll/
+# promote/retire each carried a byte-identical private copy of this regex;
+# claim-ref was the only verb that shipped WITHOUT one, which is how a bare
+# issue number came to be accepted as an actor. Lowercase hex only — the shape
+# a session id actually carries (derive_by lowercases its input for the same
+# reason, M2-3).
+_is_uuid() { # $1 -> rc 0 iff a canonical 8-4-4-4-12 lowercase-hex uuid
+  printf '%s' "${1:-}" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+}
 
 git_state_commit() { # $1=message — inside lock; never fatal
   local sd; sd="$(STATE_DIR)"
@@ -689,7 +698,7 @@ cmd_ack() {
   local uuid="${1:-}" version="${2:-}" at=""; shift 2 2>/dev/null || true
   while [ $# -gt 0 ]; do case "$1" in --at) at="${2:-}"; shift 2 ;; *) shift ;; esac; done
   [ -n "$uuid" ] && [ -n "$version" ] || die 2 "usage: oc-ledger ack <uuid> <0.N.N version> [--at <ts>]"
-  echo "$uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+  _is_uuid "$uuid" \
     || die 2 "ack: uuid shape invalid (want 8-4-4-4-12 hex): '$uuid'"
   version="${version#v}"  # tolerate display spelling v0.N.N; store bare, matching sync
   echo "$version" | grep -Eq '^0\.[0-9]+\.[0-9]+$' || die 2 "ack: version shape invalid (want 0.N.N, v prefix tolerated): '$version'"
@@ -751,7 +760,7 @@ cmd_enroll() {
   case "$role" in
     -*) die 2 "enroll: role looks like a flag: '$role' (role positional missing?)" ;;
   esac
-  echo "$uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+  _is_uuid "$uuid" \
     || die 2 "enroll: uuid shape invalid: '$uuid'"
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   jq -e --arg u "$uuid" '.workers[]? | select(.uuid == $u)' "$LEDGER" >/dev/null 2>&1 \
@@ -788,7 +797,7 @@ cmd_promote() { # promote <uuid> <new-role> [--topic N] [--feature X] — update
   case "$role" in
     -*) die 2 "promote: role looks like a flag: '$role' (role positional missing?)" ;;
   esac
-  echo "$uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+  _is_uuid "$uuid" \
     || die 2 "promote: uuid shape invalid: '$uuid'"
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   jq -e --arg u "$uuid" '.workers[]? | select(.uuid == $u)' "$LEDGER" >/dev/null 2>&1 \
@@ -874,7 +883,7 @@ cmd_retire() { # retire <uuid> [--topic N] [--role R] [--why TEXT] — REMOVE on
     esac
   done
   [ -n "$uuid" ] || die 2 "usage: oc-ledger retire <uuid> [--topic N] [--role R] [--why TEXT]"
-  echo "$uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+  _is_uuid "$uuid" \
     || die 2 "retire: uuid shape invalid: '$uuid'"
   # Selector shape is validated BEFORE the match query, so a malformed --topic
   # can never be misread as "no row matches" — that confusion is exactly what
@@ -1174,6 +1183,14 @@ PAYLOAD
   bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee 0.4.2 >/dev/null 2>&1; chk "ack-happy" 0 $?
   chk "ack-written" "0.4.2" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
   bash "$ME" ack aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee v0.4.3 >/dev/null 2>&1; chk "ack-vprefix" 0 $?
+  # #441: the uuid-shape predicate is now ONE function (_is_uuid) instead of
+  # four byte-identical private copies, and claim-ref — the verb that shipped
+  # without one — uses it too. These pin the extraction: the four migrated
+  # guards must still refuse a non-uuid shape with rc 2.
+  bash "$ME" ack not-a-uuid 0.4.2 >/dev/null 2>&1; chk "is-uuid-ack-shape-rc2" 2 $?
+  bash "$ME" enroll not-a-uuid tester >/dev/null 2>&1; chk "is-uuid-enroll-shape-rc2" 2 $?
+  bash "$ME" promote not-a-uuid editor >/dev/null 2>&1; chk "is-uuid-promote-shape-rc2" 2 $?
+  bash "$ME" retire not-a-uuid >/dev/null 2>&1; chk "is-uuid-retire-shape-rc2" 2 $?
   chk "ack-vprefix-normalized" "0.4.3" "$(jq -r '.workers[0].last_acked.version' "$OC_LEDGER")"
   # M2-4 (2026-09-12): ack is IDEMPOTENT per (uuid, version), mirroring sync's
   # dup guard. `oc-drift-check --ack` DELEGATES here, so one adoption that both
@@ -1452,6 +1469,14 @@ AMBEOF
   # 41-45 (v0.4.77 F-M4): claim-ref — the oc-commit Issue-Ref backend
   bash "$ME" claim-ref "$W2" >/dev/null 2>&1; chk "claim-ref-after-claim" 0 $?
   chk "claim-ref-value" "999" "$(bash "$ME" claim-ref "$W2" 2>/dev/null)"
+  # M2-24 round trip (#441): derive_by EMITS the composed '<role> <uuid>' form,
+  # so that form must keep resolving. The domain guard accepts it by testing the
+  # TRAILING token and the MATCH is untouched (shape 1), so the round trip is
+  # exact — and the same guard must still refuse a composed form whose tail is
+  # not a uuid.
+  bash "$ME" claim-ref "tester $W2" >/dev/null 2>&1; chk "claim-ref-composed-rc0" 0 $?
+  chk "claim-ref-composed-value" "999" "$(bash "$ME" claim-ref "tester $W2" 2>/dev/null)"
+  bash "$ME" claim-ref "tester not-a-uuid" >/dev/null 2>&1; chk "claim-ref-composed-bad-tail-rc2" 2 $?
   local W3="22222222-3333-4444-5555-666666666666"
   # RESIDUAL (lane c6b1a539 report, 2026-09-12): a claim with NO issue ref is
   # now REFUSED (symmetric with #19) — every consumer keys on the ref, so such
@@ -1464,6 +1489,46 @@ AMBEOF
   OC_ACTOR="$W3" bash "$ME" stamp claim "CLAIM without issue ref" --allow-no-ref >/dev/null 2>&1; chk "stamp-claim-no-ref-hatch-rc" 0 $?
   bash "$ME" claim-ref "$W3" >/dev/null 2>&1; chk "claim-ref-no-ref-rc3" 3 $?
   bash "$ME" claim-ref "00000000-0000-0000-0000-000000000000" >/dev/null 2>&1; chk "claim-ref-no-claim-rc3" 3 $?
+  # #441 (Design Q shape 1, Decision 15): the ARGUMENT DOMAIN. Until the fix
+  # this verb validated PRESENCE only, so a plain issue number was accepted as
+  # the actor and _latest_claim_issue's free substring answered with a FOREIGN
+  # lane's claim at rc 0 — an answer a caller cannot tell from a real one. The
+  # two arguments below are the SAME class, failing in OPPOSITE directions
+  # pre-fix, which is why the failure MODE was unlearnable: '4400' is a
+  # substring of a real enrolled uuid (the lie, rc 0), while '438' matches
+  # nothing (rc 3, read as "this lane has no claim").
+  local WF="44004400-1111-2222-3333-444444444444"   # '4400' sits inside it
+  # The foreign lane lives in its OWN ledger (the amb-* legs' pattern) so the
+  # main fixture's worker and event counts — asserted by the roster and events
+  # blocks further down — are not perturbed by enrolling it here.
+  mkdir -p "$T/dom"
+  cat > "$T/dom/dom-ledger.json" <<'DOMEOF'
+{"current_skill_version":"0.4.1","meta":{"skill_version":"0.4.1","current_skill_version":"0.4.1"},
+ "updated_at":"2026-01-01T00:00:00Z","workers":[
+ {"uuid":"44004400-1111-2222-3333-444444444444","role":"tester","topic_id":43,"feature":"-","confirmed":true,"last_acked":null,"notes":[],"events":[]}],"events":[]}
+DOMEOF
+  local DL="$T/dom/dom-ledger.json"
+  OC_LEDGER="$DL" OC_ACTOR="$WF" bash "$ME" stamp claim "CLAIM #4242 — foreign-lane fixture" >/dev/null 2>&1
+  OC_LEDGER="$DL" bash "$ME" claim-ref "$WF" >/dev/null 2>&1; chk "claim-ref-foreign-lane-rc0" 0 $?
+  chk "claim-ref-foreign-lane-value" "4242" "$(OC_LEDGER="$DL" bash "$ME" claim-ref "$WF" 2>/dev/null)"
+  # the FRAGMENT of that uuid: pre-fix this answered 4242 at rc 0 — the lie.
+  OC_LEDGER="$DL" bash "$ME" claim-ref 4400 >"$T/domain.out" 2>"$T/domain.err"; chk "claim-ref-non-uuid-rc2" 2 $?
+  chk "claim-ref-non-uuid-hint" "true" "$(grep -qF -- 'claims <N>' "$T/domain.err" && echo true || echo false)"
+  chk "claim-ref-non-uuid-no-stdout" "" "$(cat "$T/domain.out")"
+  bash "$ME" claim-ref 2fae >/dev/null 2>&1; chk "claim-ref-fragment-rc2" 2 $?
+  bash "$ME" claim-ref 4400-1111-2222-3333-444444444444 >/dev/null 2>&1; chk "claim-ref-short-uuid-rc2" 2 $?
+  bash "$ME" claim-ref 44004400-1111-2222-3333-44444444444Z >/dev/null 2>&1; chk "claim-ref-nonhex-uuid-rc2" 2 $?
+  # AC-1, the substantive half: the failure names the verb that DOES take an
+  # issue number, and that verb actually answers for it.
+  OC_LEDGER="$DL" bash "$ME" claims 4242 >"$T/claims4242.out" 2>/dev/null; chk "claims-4242-rc" 0 $?
+  grep -qF "$WF" "$T/claims4242.out" && grep -qF '#4242' "$T/claims4242.out" \
+    && ok || bad "claims-4242-row"
+  # ...and the two negative controls above are untouched: rc 3, same diagnostic.
+  bash "$ME" claim-ref "$W3" >"$T/domain2.err" 2>&1; chk "claim-ref-no-ref-rc3-kept" 3 $?
+  # W3 DOES hold a claim row — it is the REF that is missing, so the diagnostic
+  # is the second branch of _latest_claim_issue. Pin its exact text: a
+  # domain guard that swallowed this case into "not a uuid" would redden here.
+  chk "claim-ref-no-ref-diagnostic-kept" "true" "$(grep -qF "latest claim by $W3 carries no numeric issue ref" "$T/domain2.err" && echo true || echo false)"
   # RESIDUAL (lane c6b1a539 report, 2026-09-12; the D-2 family): ref extraction
   # is the SINGLE OWNER's (_issue_ref_tokens), so (a) a claim written "issue N"
   # with NO '#' resolves at all, and (b) the FIRST-WRITTEN ref wins — the old
@@ -2106,12 +2171,33 @@ cmd_claim_ref() { # oc-ledger claim-ref <uuid> [--open] — print the #N from th
   while [ $# -gt 0 ]; do
     case "$1" in
       --open) open=1; shift ;;
-      -h|--help) echo "usage: oc-ledger claim-ref <uuid> [--open]"; exit 0 ;;
+      -h|--help) echo "usage: oc-ledger claim-ref <uuid> [--open]   (the composed '<role> <uuid>' is also accepted; for an ISSUE number use: oc-ledger claims <N>)"; exit 0 ;;
       --*) die 2 "claim-ref: unknown flag '$1'" ;;
       *) [ -z "$uuid" ] || die 2 "claim-ref: unexpected extra argument '$1'"; uuid="$1"; shift ;;
     esac
   done
   [ -n "$uuid" ] || die 2 "usage: oc-ledger claim-ref <uuid> [--open]"
+  # #441 / Design Q shape 1 (Decision 15, self-ruled): enforce the DOMAIN the
+  # usage line declares. Only PRESENCE was checked before, so any non-empty
+  # string was taken as the actor and _latest_claim_issue's free substring did
+  # the rest — two plain issue numbers failed in OPPOSITE directions, rc 0 and
+  # rc 3, so a caller could not learn the failure MODE from the argument and a
+  # typo was reported as a fact about the ledger:
+  #   claim-ref 440  -> 402, rc 0   (440 sits inside 52058a75-e94b-4400-9e07-…)
+  #   claim-ref 2fae -> 436, rc 0   (a four-character fragment)
+  #   claim-ref 441  -> 393, rc 0   (this defect's OWN issue number)
+  #   claim-ref 438  -> "no claim event by 438", rc 3
+  # ACCEPTED: a canonical uuid, or the M2-24 composed '<role> <uuid>' form that
+  # derive_by EMITS (round-trip guard: the TRAILING token must be a uuid).
+  # REJECTED, rc 2, naming the verb that DOES take an issue number.
+  # The match itself is deliberately NOT touched (shape 1): a full 36-character
+  # uuid cannot substring-lie, and the composed form still needs the substring.
+  case "$uuid" in
+    *" "*) _is_uuid "${uuid##* }" \
+             || die 2 "claim-ref: '$uuid' is neither a session uuid nor the '<role> <uuid>' form — usage: oc-ledger claim-ref <uuid> [--open]. To resolve an ISSUE number, run: oc-ledger claims <N>" ;;
+    *) _is_uuid "$uuid" \
+         || die 2 "claim-ref: '$uuid' is not a session uuid — the ledger is addressed by session uuid, and a bare issue number or a fragment substring-matches a FOREIGN lane and answers with ITS claim. Usage: oc-ledger claim-ref <uuid> [--open]. To resolve an ISSUE number, run: oc-ledger claims <N>" ;;
+  esac
   local out
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   if [ "$open" = 1 ]; then
