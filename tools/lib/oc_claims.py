@@ -103,6 +103,7 @@ see, or derive an issue the scanner never wrote. Agreement is the point.
 """
 
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -112,6 +113,25 @@ import subprocess
 #: same window (a `24.0` here, an `86400` there) drift the moment one is tuned.
 SOAK_SECONDS = 24 * 3600
 SOAK_HOURS = SOAK_SECONDS / 3600.0
+
+
+#: The canonical workers-ledger.json location. ONE spelling for every reader:
+#: the same precedence `oc-ledger` uses on the write side (OC_LEDGER, then
+#: OC_DEV_STATE, then the ops profile default), so a reader can never look
+#: somewhere the writer does not write.
+def default_ledger_path():
+    state = os.environ.get("OC_DEV_STATE") or os.path.join(
+        os.path.expanduser("~"), ".opencrabs", "profiles", "ops", "opencrabs-dev")
+    return os.environ.get("OC_LEDGER") or os.path.join(state, "workers-ledger.json")
+
+
+def load_ledger(path=None):
+    """Read + parse the workers-ledger. Raises OSError/ValueError -- loud, never
+    a silent empty ledger: a caller that cannot tell "no claims" from "no file"
+    reports an idle fleet for a broken path.
+    """
+    with open(path or default_ledger_path()) as fh:
+        return json.load(fh)
 
 
 def fmt_iso_ts(ts):
@@ -574,3 +594,110 @@ def resolve_issue_files(repo_path, iss, ref="--all", index=None):
     """
     return commit_files(repo_path, resolve_issue_commits(
         repo_path, iss, ref=ref, index=index))
+
+
+# ---------------------------------------------------------------------------
+# ACTIVE CLAIMS (busy set) -- the still-open claims a scheduler must respect
+# ---------------------------------------------------------------------------
+
+# Memoized issue_ref_index -- ONE `git log --all` pass per repo per process.
+# get_active_claims resolves a footprint for every open claim and is called
+# several times per invocation (busy-set, lane selection, dispatch), and each
+# of those resolutions needs the SAME index. Without the memo every call
+# re-walks the log. Keyed on the abspath so two spellings of one repo share it.
+_ISSUE_REF_INDEX_CACHE = {}
+
+
+def cached_issue_ref_index(repo_path):
+    """issue_ref_index(repo_path), computed once per repo per process."""
+    key = os.path.abspath(str(repo_path))
+    if key not in _ISSUE_REF_INDEX_CACHE:
+        _ISSUE_REF_INDEX_CACHE[key] = issue_ref_index(repo_path)
+    return _ISSUE_REF_INDEX_CACHE[key]
+
+
+def resolve_actor_uuid(by, roster):
+    """Best-effort FULL uuid for a claim author, for busy-set comparison.
+
+    A short form is expanded against the roster so that 'editor-1a63f103' and
+    'editor 1a63f103-b899-...' collapse to ONE lane and a busy lane is not
+    reported idle (#276 -- the stateless avail[0] pinning every unit to a single
+    editor happened precisely because the two spellings did not compare equal).
+    """
+    s = str(by or "")
+    match = _FULL_UUID_RE.search(s)
+    if match:
+        return match.group(1).lower()
+    shorts = _SHORT_UUID_RE.findall(s)
+    if shorts:
+        short = shorts[-1].lower()
+        for w in roster:
+            if w.startswith(short):
+                return w
+        return short
+    return s.replace("editor ", "").strip()
+
+
+def get_active_claims(ledger_file, repo_path=None):
+    """Every still-OPEN claim as one row per (lane, issue), with its footprint.
+
+    The busy set a scheduler must respect. A missing or malformed ledger
+    returns [] DELIBERATELY: the caller-facing contract of the dispatch and
+    census in-flight fencing gates is that an unreadable ledger must not refuse
+    work. An empty answer means no lane holds an open claim -- never "the ledger
+    could not be read", which is why the failure path is silent here and loud
+    at the import boundary instead.
+
+    Emitted keys are exactly {'uuid', 'issue', 'what', 'files'} -- the dispatch
+    selftest greps them out of this JSON (#305).
+    """
+    if not os.path.exists(ledger_file):
+        return []
+    try:
+        with open(ledger_file) as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    events = data.get("events", [])
+    roster = [str(w.get("uuid", "")).lower() for w in data.get("workers", [])]
+    rows = parse_events(events)
+    claims = []
+    for idx, row in enumerate(rows):
+        if row["kind"] != "claim" or not row["targets"]:
+            continue
+        by = row["by"]
+        # An AUTHOR-LESS claim row (legacy artifacts carry by:null) names no
+        # lane: it can never occupy a lane in the busy set, and under the
+        # author-qualified predicate no signal could ever close it, so it would
+        # sit in the active list forever. Skip it rather than report a phantom
+        # claim owned by the empty uuid.
+        if not by.strip():
+            continue
+        uuid = resolve_actor_uuid(by, roster)
+        # One row per TARGET: claim_is_closed answers 'is THIS claim closed for
+        # THIS issue', so a multi-issue claim contributes each still-open
+        # target. A lane's later row about a DIFFERENT issue must NOT close
+        # this one (#305/#425).
+        for iss in sorted(row["targets"]):
+            if claim_is_closed(rows, idx, by, iss):
+                continue
+            files = []
+            raw = events[idx]
+            if "files" in raw and isinstance(raw["files"], list):
+                files = raw["files"]
+            elif repo_path and os.path.isdir(repo_path):
+                # #307: anchored footprint. This leg used to be an unanchored
+                # git-log -n 10 --grep=#N, so a commit that merely MENTIONED
+                # the issue in prose contributed its files to the claim and
+                # fenced an unrelated harvest. An empty list is a REAL answer
+                # (nothing anchored) -- no evidence of overlap, never a gap to
+                # refill by grepping commit prose.
+                files = resolve_issue_files(repo_path, iss,
+                                            index=cached_issue_ref_index(repo_path))
+            claims.append({
+                "uuid": uuid,
+                "issue": iss,
+                "what": row["what"],
+                "files": files,
+            })
+    return claims

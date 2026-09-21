@@ -87,9 +87,9 @@ import sys, os, json, re, subprocess, argparse, time, datetime, glob
 # is a drift, and this file carried (a) an unanchored git-log -n 10 --grep=#N
 # that read upstream commit PROSE as fork work on an issue it never touched, and
 # (b) a closure copy whose author arm ignored the issue, so a lane's later row
-# about a DIFFERENT issue closed this claim. What stays LOCAL: resolve_actor_uuid
-# and its two actor regexes (_ACTOR_FULL_RE / _ACTOR_SHORT_RE), used only for
-# busy-set comparison.
+# about a DIFFERENT issue closed this claim. Nothing of the three stays local
+# now: the busy-set wrapper, its actor regexes and its memoized index moved
+# into the lib with the rest (#425).
 _TOOLS_DIR = os.environ.get('OC_TOOLS_DIR') or os.path.dirname(os.path.abspath(sys.argv[0]))
 sys.path.insert(0, os.path.join(_TOOLS_DIR, 'lib'))
 try:
@@ -390,17 +390,6 @@ def check_files_diff(files, base_ref, repo_path):
         return True, ''
     return False, out
 
-_ISSUE_REF_INDEX_CACHE = {}
-
-# Memoized oc_claims.issue_ref_index — one 'git log --all' pass per repo.
-# get_active_claims() runs several times per invocation (busy-set, lane
-# selection, dispatch), and each footprint resolution needs the same index.
-def _issue_ref_index(repo_path):
-    key = os.path.abspath(repo_path)
-    if key not in _ISSUE_REF_INDEX_CACHE:
-        _ISSUE_REF_INDEX_CACHE[key] = oc_claims.issue_ref_index(repo_path)
-    return _ISSUE_REF_INDEX_CACHE[key]
-
 # SHAs of commits that ANCHOR to fork issue 'issue_num'. Delegates to
 # tools/lib/oc_claims.py (#307). The body this replaced matched '#N' in a commit
 # SUBJECT as well as its trailer, over a fork-main-bounded range — so upstream
@@ -411,7 +400,7 @@ def resolve_issue_commits(issue_num, repo_path, index=None):
     if not repo_path or not os.path.isdir(repo_path):
         return []
     if index is None:
-        index = _issue_ref_index(repo_path)
+        index = oc_claims.cached_issue_ref_index(repo_path)
     return oc_claims.resolve_issue_commits(repo_path, issue_num, index=index)
 
 def get_fork_issue_hierarchy(issue_num, repo_path=None, mock_hierarchy=None):
@@ -604,100 +593,21 @@ def check_upstream_pr(issue_num, upstream_repo, mock_prs=None):
         # fork-qualified reference is lost by removing this arm.
     return None
 
-# --- issue #305: author-qualified claim closure ------------------------------
-# The ledger's by field is free text. Observed forms include
-# 'editor <uuid>', '<short-uuid>', 'editor-<short-uuid>', 'toolsmith/<short-uuid>',
-# 'unrostered-actor <short-uuid>', 'editor lane (session <short-uuid>)', and bare
-# lane labels ('lamp-lane', 'editor-14', 'supervisor').
-_ACTOR_FULL_RE = re.compile(r'([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})', re.IGNORECASE)
-_ACTOR_SHORT_RE = re.compile(r'([0-9a-f]{8})(?![0-9a-f-])', re.IGNORECASE)
 # claim_is_closed / actor_key / actor_match / _ACTOR_ROLE_RE / _CLOSING_KINDS
 # were DELETED here (#425): tools/lib/oc_claims.py owns the canonical closure
 # predicate, and a local copy is a drift. The copy this replaced checked the
 # AUTHOR arm WITHOUT asking whether the closing row referenced THIS issue, so a
 # lane's later row about a DIFFERENT issue closed this claim -- reporting an
 # ACTIVE lane as IDLE and bypassing the in-flight fencing (#305).
-
-def resolve_actor_uuid(by, roster):
-    # Best-effort full uuid for a claim author, for busy-set comparison.
-    # A short form is expanded against the roster so that 'editor-1a63f103' and
-    # 'editor 1a63f103-b899-...' collapse to one lane and a busy lane is not
-    # reported idle.
-    s = str(by or '')
-    m = _ACTOR_FULL_RE.search(s)
-    if m:
-        return m.group(1).lower()
-    shorts = _ACTOR_SHORT_RE.findall(s)
-    if shorts:
-        short = shorts[-1].lower()
-        for w in roster:
-            if w.startswith(short):
-                return w
-        return short
-    return s.replace('editor ', '').strip()
-
-def get_active_claims(ledger_file, repo_path=None):
-    # The claim-CLOSURE predicate AND the target extraction are DELEGATED to
-    # tools/lib/oc_claims.py (#425). This function used to carry a private copy
-    # of both, and its closure copy checked the AUTHOR arm WITHOUT asking
-    # whether the closing row referenced THIS issue -- so a lane's later row
-    # about a DIFFERENT issue closed this claim, which reported an ACTIVE lane
-    # as IDLE and bypassed the in-flight fencing (#305).
-    if not os.path.exists(ledger_file):
-        return []
-    try:
-        with open(ledger_file) as f:
-            data = json.load(f)
-    except Exception:
-        return []
-    events = data.get('events', [])
-    roster = [str(w.get('uuid', '')).lower() for w in data.get('workers', [])]
-    rows = oc_claims.parse_events(events)
-    claims = []
-    for idx, row in enumerate(rows):
-        if row['kind'] != 'claim' or not row['targets']:
-            continue
-        by = row['by']
-        # An AUTHOR-LESS claim row (legacy artifacts carry by:null) names no
-        # lane: it can never occupy a lane in the busy set, and under the
-        # author-qualified predicate no signal could ever close it, so it
-        # would sit in the active list forever. Skip it instead of reporting
-        # a phantom claim owned by the empty uuid.
-        if not by.strip():
-            continue
-        uuid = resolve_actor_uuid(by, roster)
-        # One row per TARGET: oc_claims answers 'is THIS claim closed for THIS
-        # issue', so a multi-issue claim contributes each still-open target.
-        # The emitted keys stay exactly {'uuid','issue','what','files'} --
-        # the selftest greps them out of this JSON.
-        for iss in sorted(row['targets']):
-            if oc_claims.claim_is_closed(rows, idx, by, iss):
-                continue
-            files = []
-            raw = events[idx]
-            if 'files' in raw and isinstance(raw['files'], list):
-                files = raw['files']
-            elif repo_path and os.path.isdir(repo_path):
-                # #307: anchored footprint. This leg used to be an
-                # unanchored git log -n 10 --grep=#N, so a commit that merely
-                # MENTIONED the issue in prose contributed its files to the
-                # claim and fenced an unrelated harvest. oc_claims owns the
-                # predicate; an empty list means no evidence of overlap.
-                files = oc_claims.resolve_issue_files(repo_path, iss, index=_issue_ref_index(repo_path))
-            claims.append({
-                'uuid': uuid,
-                'issue': iss,
-                'what': row['what'],
-                'files': files
-            })
-    return claims
+# resolve_actor_uuid and its two actor regexes followed it: the lib owns them
+# now, beside the predicate that needs the same lane identity.
 
 def get_available_editors(ledger_file, target_uuid=None):
     if not os.path.exists(ledger_file):
         return []
     with open(ledger_file) as f:
         data = json.load(f)
-    active_claims = get_active_claims(ledger_file)
+    active_claims = oc_claims.get_active_claims(ledger_file)
     busy_uuids = set(c['uuid'] for c in active_claims)
     workers = data.get('workers', [])
     available = []
@@ -934,7 +844,7 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
 
     # Gate 2d: In-Flight Lane Fencing Check (HELD_IN_FLIGHT_LANE)
     ledger_path = mock_ledger or os.environ.get('OC_HARVEST_MOCK_LEDGER') or os.path.join(st_dir, 'workers-ledger.json')
-    active_claims = get_active_claims(ledger_path, repo_path)
+    active_claims = oc_claims.get_active_claims(ledger_path, repo_path)
     if target_files_set and active_claims:
         for claim in active_claims:
             c_iss = claim.get('issue')
@@ -1153,7 +1063,7 @@ elif action == 'test-active-claims':
     # claim-closure semantics can be asserted against a fixture ledger.
     ledger_file = sys.argv[2]
     repo_path = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != 'none' else None
-    print(json.dumps(get_active_claims(ledger_file, repo_path)))
+    print(json.dumps(oc_claims.get_active_claims(ledger_file, repo_path)))
 
 elif action == 'vet':
     candidate = sys.argv[2]
@@ -1202,7 +1112,7 @@ elif action == 'dispatch':
         sys.exit(1)
 
     # Step 2: Capacity check on ledger
-    active_claims = get_active_claims(ledger_file)
+    active_claims = oc_claims.get_active_claims(ledger_file)
     selected_worker = None
 
     if target_uuid:

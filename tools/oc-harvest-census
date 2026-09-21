@@ -637,12 +637,10 @@ _HUNK_RE = re.compile(r'^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@(.*)$')
 _FN_DECL_RE = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)')
 _STATIC_DECL_RE = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?static\s+([A-Za-z_][A-Za-z0-9_]*)')
 
-
 def _show_at_rev(sha, path, repo_path, rev=None):
     spec = ('%s:%s' % (rev, path)) if rev else ('%s^:%s' % (sha, path))
     res = subprocess.run(['git', '-C', repo_path, 'show', spec], capture_output=True, text=True)
     return res.stdout if res.returncode == 0 else ''
-
 
 def _nearest_enclosing_fn(lines, start_idx):
     fallback_static = None
@@ -654,7 +652,6 @@ def _nearest_enclosing_fn(lines, start_idx):
         if s and fallback_static is None:
             fallback_static = s.group(1)
     return fallback_static
-
 
 def derive_symbols(commits_list, repo_path):
     # Symbols touched by the fix, read from the fix's own diff.
@@ -699,7 +696,6 @@ def derive_symbols(commits_list, repo_path):
                 stats['unresolved'] += 1
             pairs.append((cur_file, sym))
     return pairs, stats
-
 
 def subject_present_upstream(pairs, repo_path, base_ref='adolfousier/main'):
     # FILE-SCOPED subject test: a symbol counts only when it resolves in the
@@ -794,46 +790,6 @@ def declared_subject_present(declared, repo_path, base_ref='adolfousier/main'):
     res = subprocess.run(['git', '-C', repo_path, 'grep', '-q', '-F', '-e', declared, base_ref],
                          capture_output=True)
     return res.returncode == 0
-
-def get_active_claims(ledger_file, repo_path=None):
-    if not os.path.exists(ledger_file):
-        return []
-    try:
-        with open(ledger_file) as f:
-            data = json.load(f)
-    except Exception:
-        return []
-    events = data.get('events', [])
-    # CLOSURE: the canonical predicate (#307), not a local copy. The previous
-    # local form closed a claim when ANY later row of a closing kind merely
-    # mentioned `#N` in prose, regardless of actor — a pre-#305 shape.
-    open_rows = oc_claims.open_claims(events)
-    index = None  # one `git log --all` pass, shared by every claim
-    claims = []
-    for row in open_rows:
-        by = row.get('by', '')
-        m_uuid = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', by)
-        uuid = m_uuid.group(1) if m_uuid else by
-        raw = events[row['idx']] if 0 <= row.get('idx', -1) < len(events) else {}
-        for iss in row.get('tokens') or []:
-            files = []
-            if isinstance(raw.get('files'), list):
-                files = raw['files']
-            elif repo_path:
-                # FOOTPRINT: anchored to the `Issue-Ref` TRAILER, fork space
-                # only. An empty answer means no commit anchors to this issue —
-                # a real answer. The old unanchored `--grep=#N` filled it with
-                # files from commits whose PROSE mentioned the number (#307).
-                if index is None:
-                    index = oc_claims.issue_ref_index(repo_path)
-                files = oc_claims.resolve_issue_files(repo_path, iss, index=index)
-            claims.append({
-                'uuid': uuid,
-                'issue': iss,
-                'what': row.get('what', ''),
-                'files': files
-            })
-    return claims
 
 action = sys.argv[1]
 upstream_repo = sys.argv[2]
@@ -1024,7 +980,7 @@ if action == 'check':
     # 3. IN-FLIGHT LANE FENCING (HELD_IN_FLIGHT_LANE)
     # Check if target touches files belonging to an active lane with an open claim
     ledger_path = mock_ledger or os.path.join(st_dir, 'workers-ledger.json')
-    active_claims = get_active_claims(ledger_path, repo_path)
+    active_claims = oc_claims.get_active_claims(ledger_path, repo_path)
     if target_files and active_claims:
         for claim in active_claims:
             c_iss = claim.get('issue')
