@@ -828,7 +828,23 @@ issue_map, pr_entries = parse_issue_map(prs)
 if action == 'check':
     m_iss = re.fullmatch(r'#?(\d+)', target) or re.fullmatch(r'issue-?(\d+)', target, re.IGNORECASE)
     target_iss = int(m_iss.group(1)) if m_iss else None
-    
+
+    # #493: every refusal leg is EVALUATED and its refusal COLLECTED, instead of
+    # the first hit calling sys.exit(1). The legs are independent read-only
+    # predicates over the same three inputs (matching_commits, target_files,
+    # active_claims), so exiting at the first one merely hides the rest — and
+    # hides them permanently, since `check` exposes no --explain/--verbose/--all
+    # route. The damage is the eligible_at field: it is emitted by the SOAK legs
+    # only, so a lane that comes back at the printed instant is refused again by
+    # a masked leg carrying no clock at all (the #344 <-> #318 circular fence is
+    # exactly that shape). One refusal per leg, every leg reported, rc unchanged.
+    refusals = []
+
+    def refuse(msg):
+        """Record + print ONE refusal leg. Never exits (see #493 note above)."""
+        print(msg)
+        refusals.append(msg)
+
     match = None
     if target_iss and target_iss in issue_map:
         match = issue_map[target_iss]
@@ -854,11 +870,9 @@ if action == 'check':
             if reopened:
                 print(f'NOTE: Target {target} infers MERGED upstream in PR #{num}, but fork issue {target_iss} reads REOPENED -- merge refusal overridden')
         if st == 'MERGED' and not reopened:
-            print(f'REFUSED: Target {target} is already MERGED upstream in PR #{num}: {ti}')
-            sys.exit(1)
+            refuse(f'REFUSED: Target {target} is already MERGED upstream in PR #{num}: {ti}')
         elif st == 'OPEN':
-            print(f'REFUSED: Target {target} is currently IN_FLIGHT upstream in PR #{num}: {ti}')
-            sys.exit(1)
+            refuse(f'REFUSED: Target {target} is currently IN_FLIGHT upstream in PR #{num}: {ti}')
         elif st == 'CLOSED':
             closed_match = match
     
@@ -879,8 +893,7 @@ if action == 'check':
         by_issue = target_iss is not None and (target_iss in r_issues)
         by_unit = bool(r.get('unit')) and str(r['unit']).lower() == target.lower()
         if by_issue or by_unit:
-            print('REFUSED: Target %s is manually recorded as filed in PR #%s (unit %s)' % (target, r.get('pr'), r.get('unit')))
-            sys.exit(1)
+            refuse('REFUSED: Target %s is manually recorded as filed in PR #%s (unit %s)' % (target, r.get('pr'), r.get('unit')))
 
     commits = get_ahead_commits(repo_path, mock_commits)
     matching_commits = []
@@ -951,8 +964,8 @@ if action == 'check':
             else:
                 age_hours = 0.0
             if age_hours < oc_claims.SOAK_HOURS:
-                print('REFUSED: Target %s is within 24h feature soak window (age: %.1fh < 24h, commit %s: %s) %s' % (target, max(0.0, age_hours), mc.get('short_sha', '')[:7], subj[:50], oc_claims.soak_anchor_fields(c_sha, d_ts)))
-                sys.exit(1)
+                refuse('REFUSED: Target %s is within 24h feature soak window (age: %.1fh < 24h, commit %s: %s) %s' % (target, max(0.0, age_hours), mc.get('short_sha', '')[:7], subj[:50], oc_claims.soak_anchor_fields(c_sha, d_ts)))
+                break
 
     # 2. SUBSYSTEM COHESION & DEPENDENT SOAK CHECK (HELD_DEPENDENT_SOAK)
     # Check if target touches files of an unharvested feat/* currently in soak window
@@ -974,8 +987,8 @@ if action == 'check':
                     substantive_overlap = filter_substantive_overlap(overlap)
                     if substantive_overlap:
                         overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
-                        print('REFUSED: Target %s touches files of soaking feature %s (age: %.1fh < 24h) [HELD_DEPENDENT_SOAK: %s] %s' % (target, oc.get('short_sha', '')[:7], max(0.0, oc_age_hours), overlap_sample, oc_claims.soak_anchor_fields(oc_sha, oc_d_ts)))
-                        sys.exit(1)
+                        refuse('REFUSED: Target %s touches files of soaking feature %s (age: %.1fh < 24h) [HELD_DEPENDENT_SOAK: %s] %s' % (target, oc.get('short_sha', '')[:7], max(0.0, oc_age_hours), overlap_sample, oc_claims.soak_anchor_fields(oc_sha, oc_d_ts)))
+                        break
 
     # 3. IN-FLIGHT LANE FENCING (HELD_IN_FLIGHT_LANE)
     # Check if target touches files belonging to an active lane with an open claim
@@ -1004,8 +1017,8 @@ if action == 'check':
             if substantive_overlap:
                 overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
                 c_uuid = claim.get('uuid', '')[:8]
-                print('REFUSED: Target %s touches files of active lane %s claim #%s [HELD_IN_FLIGHT_LANE: %s]' % (target, c_uuid, c_iss or '?', overlap_sample))
-                sys.exit(1)
+                refuse('REFUSED: Target %s touches files of active lane %s claim #%s [HELD_IN_FLIGHT_LANE: %s]' % (target, c_uuid, c_iss or '?', overlap_sample))
+                break
 
     # 4. UPSTREAM SUBJECT EXISTENCE & FORK PROVENANCE
     #    (UPSTREAM_VOID / HELD_PARENT_UNHARVESTED / orphan ADVISORY)
@@ -1062,8 +1075,7 @@ if action == 'check':
                 why = ''
                 if derivation_empty:
                     why = '; no declared subject' if not declared else ('; declared subject %r not present in %s' % (declared, base_ref))
-                print('REFUSED: Target %s has no subject symbol present in %s [UPSTREAM_VOID: tested %s%s]' % (target, base_ref, tested, why))
-                sys.exit(1)
+                refuse('REFUSED: Target %s has no subject symbol present in %s [UPSTREAM_VOID: tested %s%s]' % (target, base_ref, tested, why))
 
         # Per-hunk packaging advisory: a hunk whose symbol does not resolve
         # upstream has no target there and is dropped at packaging — an
@@ -1086,11 +1098,25 @@ if action == 'check':
                         # be here) and reports as an advisory instead.
                         parent_harvested = issue_subject_upstream(intro_iss, repo_path, base_ref)
                         if parent_harvested is not True:
-                            print('REFUSED: Target %s path %s was introduced by unharvested fork issue #%s (%s) and does not exist in %s [HELD_PARENT_UNHARVESTED]' % (target, f_path, intro_iss, intro_sha[:8] if intro_sha else '?', base_ref))
-                            sys.exit(1)
+                            refuse('REFUSED: Target %s path %s was introduced by unharvested fork issue #%s (%s) and does not exist in %s [HELD_PARENT_UNHARVESTED]' % (target, f_path, intro_iss, intro_sha[:8] if intro_sha else '?', base_ref))
+                            continue
                         print('ADVISORY: orphan path %s (absent upstream) — parent #%s already harvested; port decision required' % (f_path, intro_iss))
                         continue
                     print('ADVISORY: orphan path %s (absent upstream) — port decision required' % f_path)
+
+    # #493: EVERY leg has now been evaluated, so the full applying set is printed
+    # above rather than the first one to fire. rc is unchanged (1 on any
+    # refusal), and the ELIGIBLE arms below stay unreachable when a refusal
+    # fired — which is the precedence the pre-#493 code got by exiting early.
+    if refusals:
+        if len(refusals) > 1:
+            soak_legs = [r for r in refusals if 'soak' in r.lower()]
+            print('NOTE: %d refusal legs apply (all listed above).' % len(refusals))
+            if soak_legs:
+                print('NOTE: eligible_at, where printed, binds the SOAK leg ONLY (anchor + 24h) — it is NOT total clearance. %d other leg(s) are also refusing and carry no eligible_at clock, so returning at that instant will be refused again.' % (len(refusals) - len(soak_legs)))
+            else:
+                print('NOTE: no soak leg applies, so no eligible_at is printed — none of the refusals above carries a clearance clock.')
+        sys.exit(1)
 
     if closed_match:
         num = closed_match['pr']
@@ -1661,6 +1687,15 @@ EOF
     "commit_ts": 100000,
     "deployed_ts": 100000,
     "files": ["src/parser/mod.rs"]
+  },
+  {
+    "sha": "7c0ffee0000000000000000000000000000000",
+    "short_sha": "7c0ffee",
+    "subject": "feat(multi-leg): fresh feature whose file an active lane also holds (#702)",
+    "trailer": "leshchenko1979/opencrabs#702",
+    "commit_ts": 1789000000,
+    "deployed_ts": 1789000000,
+    "files": ["src/multi/leg.rs"]
   }
 ]
 EOF
@@ -1681,6 +1716,13 @@ EOF
       "by": "editor 11111111-2222-3333-4444-555555555555",
       "what": "CLAIM #601 active lane work whose only footprint is a shared registry",
       "files": ["src/tests/mod.rs"]
+    },
+    {
+      "n": 102,
+      "kind": "claim",
+      "by": "editor 22222222-3333-4444-5555-666666666666",
+      "what": "CLAIM #703 second active lane holding a real file",
+      "files": ["src/multi/leg.rs"]
     }
   ]
 }
@@ -1834,6 +1876,44 @@ EOF
     ok "check registry-only in-flight overlap -> ELIGIBLE exit 0 (shared-registry exemption)"
   else
     echo "  bad  - check registry-only overlap expected rc=0 ELIGIBLE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 3d3. MULTI-LEG REFUSAL REPORT (#493) -> the FULL applying set is printed, and
+  #      eligible_at is qualified as binding the SOAK leg only.
+  #      Fixture: target #702 is itself a fresh feat in soak (§1 fires and emits
+  #      eligible_at) AND its file src/multi/leg.rs is held by active claim #703,
+  #      a DIFFERENT issue (§3 fires and carries no clock at all).
+  #      Pre-#493 the engine exited at §1, so HELD_IN_FLIGHT_LANE never printed —
+  #      which is exactly how a lane re-arms on the printed eligible_at and is
+  #      refused again by the masked leg (the #344 <-> #318 shape).
+  #      MUTATION KILL: restore any `sys.exit(1)` in place of a `refuse()` call
+  #      at §1 and this case fails on the missing HELD_IN_FLIGHT_LANE + NOTE.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "702" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] \
+     && echo "$out" | grep -q "within 24h feature soak window" \
+     && echo "$out" | grep -q "HELD_IN_FLIGHT_LANE" \
+     && echo "$out" | grep -q "NOTE: 2 refusal legs apply" \
+     && echo "$out" | grep -q "binds the SOAK leg ONLY"; then
+    ok "multi-leg refusal: both legs reported, eligible_at qualified (#493)"
+  else
+    echo "  bad  - multi-leg refusal expected rc=1 with soak + HELD_IN_FLIGHT_LANE + NOTE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 3d4. SINGLE-LEG CONTROL for 3d3 -> the qualifier is NOT printed when only one
+  #      leg applies. Target #300 is a fresh feat in soak (§1 only; no claim
+  #      holds src/tools/shared.rs), so the NOTE must be absent. Without this,
+  #      a fix that unconditionally printed the NOTE would pass 3d3.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "300" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] \
+     && echo "$out" | grep -q "within 24h feature soak window" \
+     && ! echo "$out" | grep -q "refusal legs apply"; then
+    ok "single-leg refusal: no multi-leg NOTE printed (control for #493)"
+  else
+    echo "  bad  - single-leg refusal expected rc=1 and no NOTE, got rc=$rc ($out)"
     return 1
   fi
 
