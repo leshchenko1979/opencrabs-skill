@@ -155,7 +155,7 @@ selftest_impl() {
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-upstream-delta-watch',1,'','ok');"
 
   printf '{"ts":"2026-09-11T00:00:00Z","tool":"oc-demo","args":"","exit":0,"secs":0.1,"extra":{}}\n' > "$T/tools.log"
-  echo '{"version":1,"events":[],"roster":{"workers":{}}}' > "$T/state/workers-ledger.json"
+  echo '{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[]}' > "$T/state/workers-ledger.json"
 
   run() {
     OC_HEALTH_STATE="$T/state" OC_HEALTH_TMP_GLOB="$T/tmp/oc-*" OC_HEALTH_TMP2_GLOB="$T/tmp2/tmp.*" OC_HEALTH_TMP3_GLOB="$T/tmp3/tmp.*" OC_HEALTH_DB="$T/db.sqlite" \
@@ -382,11 +382,20 @@ print(m.group(1) if m else "none")
   RC=0; OUT="$(run --class fleet_lanes 2>&1)" || RC=$?
   chk "fleet_lanes-corrupt-rc1" 1 "$RC"
   case "$OUT" in *"ledger-corrupt"*) ok ;; *) bad "fleet_lanes-corrupt: $OUT" ;; esac
-  echo '{"version":1,"events":[],"roster":{"workers":{}}}' > "$T/state/workers-ledger.json"
+  echo '{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[]}' > "$T/state/workers-ledger.json"
 
   # 13. Class: issue_portfolio — clean run
   RC=0; OUT="$(run --class issue_portfolio 2>&1)" || RC=$?
   chk "issue_portfolio-clean-rc0" 0 "$RC"
+
+  # 13b. DISCRIMINATING leg: plant a duplicate uuid AND an authorless claim.
+  # Pre-fix both legs read keys that never existed and stayed silent on the same input.
+  printf '%s\n' '{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"},{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[{"n":1,"kind":"claim","t":"2026-09-21T10:00:00Z","what":"#9999 planted claim with no author"}]}' > "$T/state/workers-ledger.json"
+  RC=0; OUT="$(run --class fleet_lanes 2>&1)" || RC=$?
+  case "$OUT" in *"roster-inconsistency"*) ok ;; *) bad "fleet_lanes-duplicate-uuid: $OUT" ;; esac
+  RC=0; OUT="$(run --class issue_portfolio 2>&1)" || RC=$?
+  case "$OUT" in *"issue-claims"*) ok ;; *) bad "issue_portfolio-unassigned-claim: $OUT" ;; esac
+  echo '{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[]}' > "$T/state/workers-ledger.json"
 
   # 14. Unknown class argument handling
   RC=0; OUT="$(run --class nonexistent 2>&1)" || RC=$?
@@ -925,18 +934,17 @@ if is_class_active "fleet_lanes"; then
     if ! python3 -c 'import json; json.load(open("'"$STATE/workers-ledger.json"'"))' 2>/dev/null; then
       add_finding 13 URGENT ledger-corrupt "workers-ledger.json has invalid JSON syntax"
     else
+      # Roster is TOP-LEVEL `.workers` (a LIST) — NOT `.roster.workers`, which has
+      # never existed: `uuids` was always [] so the duplicate check could not fire.
       roster_err="$(python3 -c '
 import json, sys
 try:
-    with open("'"$STATE/workers-ledger.json"'") as f:
-        d = json.load(f)
-    roster = d.get("roster", {}).get("workers", {})
-    uuids = list(roster.keys())
+    uuids = [w.get("uuid") for w in json.load(sys.stdin).get("workers", [])]
     if len(uuids) != len(set(uuids)):
         print("duplicate worker UUIDs in roster")
 except Exception as e:
-    print(f"roster error: {e}")
-' 2>/dev/null)"
+    print("roster error: %s" % e)
+' < "$STATE/workers-ledger.json" 2>/dev/null)"
       if [ -n "$roster_err" ]; then
         add_finding 14 QUIRK roster-inconsistency "$roster_err"
       else
@@ -1012,31 +1020,22 @@ fi
 # CLASS 8: issue_portfolio
 # =============================================================================
 if is_class_active "issue_portfolio"; then
-  # Audit issue claims in ledger
+  # Audit issue claims. DELEGATED to tools/lib/oc_claims.py, the ONE claim-closure
+  # predicate. The copy this replaces keyed on keys absent from all 9025 live events.
   if [ -f "$STATE/workers-ledger.json" ]; then
     claims_check="$(python3 -c '
-import json, sys
-try:
-    with open("'"$STATE/workers-ledger.json"'") as f:
-        d = json.load(f)
-    events = d.get("events", [])
-    open_claims = {}
-    for ev in events:
-        k = ev.get("kind")
-        ref = ev.get("issue_ref")
-        uuid = ev.get("session_id")
-        if k == "claim" and ref:
-            open_claims[ref] = uuid
-        elif k in ("unclaim", "close", "done") and ref in open_claims:
-            open_claims.pop(ref, None)
-    # Check if any claim lacks uuid
-    empty = [r for r, u in open_claims.items() if not u]
-    if empty:
-        print(f"{len(empty)} unassigned claim(s)")
-except Exception as e:
-    pass
-' 2>/dev/null)"
-    if [ -n "$claims_check" ]; then
+import json, sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import oc_claims as oc
+open_c = oc.open_claims(json.load(sys.stdin).get("events", []))
+unassigned = [c for c in open_c if not c["by"]]
+if unassigned:
+    print("%d unassigned claim(s) of %d open" % (len(unassigned), len(open_c)))
+' "$TOOLS_DIR" < "$STATE/workers-ledger.json" 2>&1)"
+    claims_rc=$?
+    if [ "$claims_rc" -ne 0 ]; then
+      add_finding 17 REPORT issue-claims "claim scan FAILED (rc=$claims_rc): $(printf '%s' "$claims_check" | head -1)"
+    elif [ -n "$claims_check" ]; then
       add_finding 17 REPORT issue-claims "$claims_check"
     else
       clean_line "issue portfolio: ledger claim structure valid"

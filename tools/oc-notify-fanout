@@ -152,7 +152,7 @@ else
   oc_log_finish() { :; }
 fi
 trap 'oc_log_finish $?' EXIT
-LEDGER="${OC_FANOUT_LEDGER:-$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json}"
+LEDGER="${OC_FANOUT_LEDGER:-$(oc_ledger_path)}"   # ONE literal: tools/lib/oc-log.sh
 PROFILE="${OC_NOTIFY_PROFILE:-ops}"
 SENDER="oc-notify-fanout"
 
@@ -298,6 +298,27 @@ JSON
   # L10 is a dormant editor WITH active claim -> claim holder is preserved and SENT
   echo "$out" | grep -q "SENT $L10" && chk 0 dormant-with-claim-sent || chk 1 dormant-with-claim-sent
   grep -qF "$L10" "$T/fake-notify-log" && chk 0 dormant-with-claim-notified || chk 1 dormant-with-claim-notified
+  # 1a2. DISCRIMINATING leg for the LAW-17 holder scan. The L10 assertions above
+  #      CANNOT catch the defect they look like they cover: run_fanout exports
+  #      OC_FANOUT_LEDGER, and the pre-fix scan read os.environ['LEDGER'] OR
+  #      os.environ['OC_FANOUT_LEDGER'] — so the TEST environment supplied the
+  #      path the PRODUCTION environment never did. On a real run LEDGER (line
+  #      155) is assigned WITHOUT export, so the scan saw '' and LAW 17 marked
+  #      every live claim-holder DORMANT. This leg UNSETS OC_FANOUT_LEDGER and
+  #      points HOME at a tree holding the ledger at the DEFAULT path, so the
+  #      holder set can only come from the argv-passed $LEDGER: pre-fix it
+  #      prints SKIP L10 DORMANT, post-fix SENT L10.
+  H="$T/home"
+  mkdir -p "$H/.opencrabs/profiles/ops/opencrabs-dev"
+  cp "$LEDG" "$H/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json"
+  : > "$T/fake-notify-log-1a2"
+  out="$(env -u OC_FANOUT_LEDGER OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$T/run-home" \
+    HOME="$H" FAKE_NOTIFY_LOG="$T/fake-notify-log-1a2" \
+      bash "$0" --title T --text "brief {{UUID}}" --no-stamp 2>&1)"
+  echo "$out" | grep -q "SENT $L10" && chk 0 law17-holder-from-argv-ledger || chk 1 law17-holder-from-argv-ledger
+  grep -qF "$L10" "$T/fake-notify-log-1a2" && chk 0 law17-holder-notified-argv-ledger || chk 1 law17-holder-notified-argv-ledger
   # 1b. The OTHER arm of law 9: an explicitly ACTIVE row must still be
   #     sendable. L1 above carries NO state key at all (the enroll default), so
   #     it proves only the ABSENT arm — a rewrite that special-cases RETIRED and
@@ -828,14 +849,14 @@ fanout_ensure_detached
 version="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL_DIR/SKILL.md" | head -1)"
 [ -n "$version" ] || die "cannot read version from SKILL.md"
 [ -n "$title" ] || die "usage: --title required"
-[ -f "$LEDGER" ] || die 3 "roster missing: $LEDGER"
+[ -f "$LEDGER" ] || die "roster missing: $LEDGER" 3
 bin="$(oc_notify_resolve_bin)" || die "notify binary unresolvable (set OC_NOTIFY_BIN)"
 
 # LAW 7/8 — wave-id + lock + sent-ledger. wave-id derives from title+brief so
 # the same wave re-run (retry, resume) hashes identically while any content
 # change forks a new wave. Locks/receipts live in <skill-repo>/run/ (gitignored).
 RUN_DIR="${OC_FANOUT_RUN_DIR:-$SKILL_DIR/run}"
-mkdir -p "$RUN_DIR" 2>/dev/null || die 3 "cannot create run dir: $RUN_DIR"
+mkdir -p "$RUN_DIR" 2>/dev/null || die "cannot create run dir: $RUN_DIR" 3
 if [ -n "$text_file" ]; then [ -f "$text_file" ] || die "--text-file missing: $text_file"; fi
 wave_text="${title}|$( [ -n "$text_file" ] && cat "$text_file" || echo "${text:-}" )"
 wave_id="$(printf '%s' "$wave_text" | sha256sum | cut -c1-12)"
@@ -893,56 +914,38 @@ ACTIVE_HOLDERS="$(mktemp /tmp/fanout-active.XXXXXX)"
 # remain a hard fail, never an empty roster that reads as "nothing to notify".
 "$SKILL_DIR/tools/lib/oc_sqlite" "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
   "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
-  > "$LIVE_SESSIONS" 2>/dev/null || die 3 "session DB unreadable — cannot validate targets"
+  > "$LIVE_SESSIONS" 2>/dev/null || die "session DB unreadable — cannot validate targets" 3
 # FORUM-SCOPE roster (law 6): sessions bound to the opencrabs-dev forum chat.
 # One query, same read-only DB; empty roster = nothing is sendable (safe).
 "$SKILL_DIR/tools/lib/oc_sqlite" "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
   "SELECT b.session_id FROM session_bindings b JOIN sessions s ON s.id = b.session_id
    WHERE s.archived_at IS NULL AND b.chat_id = '$forum_chat';" \
-  > "$IN_SCOPE_SESSIONS" 2>/dev/null || die 3 "session DB unreadable — cannot resolve forum scope"
+  > "$IN_SCOPE_SESSIONS" 2>/dev/null || die "session DB unreadable — cannot resolve forum scope" 3
 # RECENCY query (LAW 17, owner order 2026-09-13): resolve last update epoch seconds per session.
 "$SKILL_DIR/tools/lib/oc_sqlite" "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
   "SELECT id, COALESCE(updated_at, 0) FROM sessions WHERE archived_at IS NULL;" \
-  | tr '|' ' ' > "$SESSION_RECENCY" 2>/dev/null || die 3 "session DB unreadable — cannot resolve session recency"
+  | tr '|' ' ' > "$SESSION_RECENCY" 2>/dev/null || die "session DB unreadable — cannot resolve session recency" 3
 
-# ACTIVE CLAIM & WORKTREE HOLDERS (LAW 17): scan ledger claims + active worktrees
-python3 -c "
-import os, sys, json, re, subprocess
-ledger = os.environ.get('LEDGER') or os.environ.get('OC_FANOUT_LEDGER') or ''
-repo = os.environ.get('OC_FANOUT_REPO', os.path.expanduser('~/opencrabs'))
-active = set()
-if os.path.exists(ledger):
-    try:
-        with open(ledger) as f:
-            led = json.load(f)
-        UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
-        ISSUE_RE = re.compile(r'#(\\d+)')
-        issues_by_uuid = {}
-        for ev in led.get('events', []):
-            if ev.get('kind') == 'claim':
-                m = UUID_RE.search(ev.get('by') or '')
-                if m:
-                    u = m.group(0)
-                    active.add(u)
-                    mi = ISSUE_RE.search(ev.get('what') or '')
-                    if mi:
-                        issues_by_uuid.setdefault(u, set()).add(mi.group(1))
-        if os.path.isdir(repo):
-            r_wt = subprocess.run(['git', '-C', repo, 'worktree', 'list', '--porcelain'], capture_output=True, text=True)
-            for line in r_wt.stdout.splitlines():
-                if line.startswith('worktree '):
-                    task = os.path.basename(line.split(' ', 1)[1])
-                    if task.startswith('oc-wt-'): task = task[6:]
-                    m = re.match(r'^(\\d+)', task)
-                    if m:
-                        for u, s in issues_by_uuid.items():
-                            if m.group(1) in s:
-                                active.add(u)
-    except Exception:
-        pass
-for u in active:
-    print(u)
-" 2>/dev/null >> "$ACTIVE_HOLDERS" || true
+# ACTIVE CLAIM HOLDERS (LAW 17): claim authors, via the canonical claim module.
+# $LEDGER arrives as argv, NOT os.environ — line 155 assigns it unexported, so the
+# environ read this replaces always saw an empty path on a real run and LAW 17
+# skipped live claim-holders as DORMANT. Fail-loud: an empty holder set is a
+# FINDING, never a silent "nobody is active".
+python3 -c '
+import json, os, re, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import oc_claims as oc
+U = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+with open(sys.argv[2]) as f:
+    rows = oc.parse_events(json.load(f).get("events", []))
+seen = set()
+for row in rows:
+    if row["kind"] == "claim":
+        m = U.search(row["by"])
+        if m and m.group(0) not in seen:
+            seen.add(m.group(0))
+            print(m.group(0))
+' "$SKILL_DIR/tools" "$LEDGER" >> "$ACTIVE_HOLDERS" || die "ACTIVE_HOLDERS scan failed — refusing to run LAW 17 with an empty holder set" 3
 
 # --text-file is loaded HERE, not merely hashed. The first cut validated the
 # file (244), hashed its content into the wave-id (245) — and then never read
