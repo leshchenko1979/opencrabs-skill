@@ -202,6 +202,15 @@ after sloppy lanes and hide the pattern.
 
 ---
 
+## 18. Registered-worktree tracked-file deletion — `REPORT` (warn)
+
+- **Where:** every registered worktree of `$OC_HEALTH_FORK` and `$SKILL_CHECK`, via `git worktree list --porcelain`.
+- **Invariant:** porcelain ` D` (tracked file deleted in the worktree, NOT staged) is never a legitimate mid-work state — a deliberate removal is staged by `git rm` and then reads `D ` in the INDEX column, so a lane mid-work cannot trip this. The staged form is a DIFFERENT condition and is deliberately NOT flagged.
+- **Remediation:** Report only (`git checkout -- <path>` in the affected tree, or stage the removal). Removing the tree itself stays `tools/oc-wt remove`.
+- **Quirk:** n/a — the finding IS the signal.
+
+---
+
 ## Never touch (evidence / live state)
 
 - `workers-ledger.json` itself, `tools.log`, `journal/`, `incident-evidence-*`,

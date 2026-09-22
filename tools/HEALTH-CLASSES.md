@@ -84,6 +84,7 @@ into two tiers:
   - Shared skill checkout cleanliness (`git status --porcelain`).
   - Remote tracking divergence (`HEAD` vs `origin/main`).
   - Version/ledger consistency (`oc-ledger check-version`).
+  - Unstaged tracked-file deletion inside a registered worktree (porcelain ` D` — check 18).
 - **Remediation:** Report only. Worktree removal must use `oc-wt remove` (dirty-tree safety gate).
 
 ### Class 5: `schedulers`
