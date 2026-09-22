@@ -1,5 +1,16 @@
 # Changelog — opencrabs-dev
 
+## v0.4.237 (2026-09-22)
+
+**A resume record that is not git-tracked does not exist — and nothing tracked it.** Raised by the #341 lane as a law gap against the harvest resume idiom, verified first-hand, and it is a silent-loss class of exactly the kind that idiom exists to prevent.
+
+The idiom named `<state dir>/<issue>-harvest-state.md` as the owning lane's resume record but never required it to be TRACKED, and no mechanism did it either: `oc-ledger stamp` stages **only** `workers-ledger.json` (`tools/oc-ledger:200`), while the `commit-pending --bundle` sweep whitelists `tools.log baseline.json orders.json journal deployed.sha deployed.meta.json fanout.state oc-deploy oc-deploy-shadow.log oc-deploy-shadow.archive.log` (`tools/oc-ledger:1009`) — the harvest-state class is on NEITHER list, and **no cron invokes the bundle verb at all**. So the receipt that looks like cover proves nothing: measured 2026-09-22T00:5xZ, a stamp reporting `git: state commit ok … sha=bcc12a81` carried **1 file changed (workers-ledger.json only)**.
+
+**Measured census at 2026-09-22T08:59Z (predicate: `*-harvest-state.md` in the state dir): 20 on disk, 3 tracked, 17 untracked** — every untracked one a LIVE record (real headings, mtimes within 3 days), not residue. The consequence is total: for a parked harvest the state file is the ONLY resume record, its cron keeps firing a prompt that READS it, and the file dies with the disk while its lane believes it is safe.
+
+**Ownership is split, and the split is the ruling.** The file's CONTENT belongs to the owning lane — never edit another lane's record. The TRACKING is owed by the lane that CREATES the file, in that turn, verified with `git ls-files --error-unmatch <file>` (rc 0 = tracked) and never by reading a stamp receipt. The pre-amendment residue was swept by HQ (state commit `960bec99`, 19 files = 17 untracked + 2 tracked-but-dirty) as a one-time hygiene act, not a transfer of content authorship, because a parked harvest's lane may never return to track its own file. The mechanism-side belt — adding the class to the bundle whitelist — is `tools/**` CODE and routes to the Toolsmith.
+
+LOC: 3460 -> 3460 (net 0; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f))` over the 8-file law corpus, SKILL.md / editor.md / editor-upstream-pr.md / hq.md / triage.md / toolsmith.md / fleet-directives.md / upstream-merge-runbook.md). The whole change is INSIDE the existing `State file` bullet of `upstream-merge-runbook.md` (424 lines before and after — one line replaced by one line), so no file in the corpus changes its line count. **Scope note for the next reader:** this corpus EXCLUDES `review-lenses.md` and INCLUDES `upstream-merge-runbook.md`; a recomputation that swaps those two returns 3330 instead of 3460 and is a SCOPE error, not a drop in the law.
 ## v0.4.236 (2026-09-22)
 
 **Two law-gap rulings, raised by two lanes within the hour, and they are ONE defect class: a classifier keyed on a PATTERN instead of on the object's own identity.** Both were filed as gaps with the reasoning already done; both turned out to be the same missing test carried on a different leg.
