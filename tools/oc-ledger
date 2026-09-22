@@ -105,7 +105,7 @@
 #                                          to NO fork issue is reported as
 #                                          UNRESOLVED and the clean verdict is
 #                                          withheld (see cmd_sweep_closed_claims).
-#   --selftest                             fixture suite (332 cases)
+#   --selftest                             fixture suite (409 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -776,12 +776,35 @@ cmd_enroll() {
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   jq -e --arg u "$uuid" '.workers[]? | select(.uuid == $u)' "$LEDGER" >/dev/null 2>&1 \
     && die 2 "enroll: uuid already enrolled: $uuid"
+  # TOPIC EXISTENCE GUARD (fork #503, Toolsmith 2026-09-22). --topic used to be
+  # taken verbatim and coerced with tonumber, so ANY numeric value enrolled rc 0
+  # and a real forum topic was indistinguishable from an issue number — a live
+  # row carried topic_id 478 (an ISSUE id, never a topic) and only a retire could
+  # undo it. WARN, never refuse: enroll runs at lane bring-up and must not be
+  # blockable by an absent or busy session DB (a refusal here would be a worse
+  # defect than the one it guards), and the live roster resolves 32 of 32 today,
+  # so this fires on a genuinely wrong value rather than on normal traffic.
+  # Mirrors derive_by, which warns for an unresolvable actor and still writes.
+  case "${topic:-}" in
+    ''|'-'|*[!0-9]*) : ;;   # omitted, or non-numeric (the jq coercion fails that later)
+    *)
+      local _tdb _tn
+      _tdb="${OC_LEDGER_DB:-$(dirname "$(STATE_DIR)")/opencrabs.db}"
+      if [ -f "$_tdb" ]; then
+        _tn="$("$_OC_DIR/lib/oc_sqlite" "file:${_tdb}?mode=ro" \
+          "SELECT count(*) FROM session_bindings WHERE thread_id = ${topic};" 2>/dev/null | tr -d '[:space:]')"
+        if [ "${_tn:-}" = "0" ]; then
+          printf '%s\n' "oc-ledger enroll: WARNING topic $topic names no live binding in $_tdb — if that is an ISSUE number rather than a forum topic the roster mapping is wrong and only a retire can undo it (fork #503); if the topic was simply created and its lane has not messaged yet, ignore this." >&2
+        fi
+      fi
+      ;;
+  esac
   _enroll_locked() {
     local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
     atomic_jq --arg u "$uuid" --arg r "$role" --arg tp "$topic" --arg f "$feature" --arg n "$n" --arg t "$t" \
       '.workers += [{uuid: $u, role: $r, topic_id: (if $tp == "-" then null else ($tp|tonumber) end),
                      feature: $f, confirmed: false, first_seen: $t, last_acked: null, notes: [], events: []}]
-       | .events += [{n: ($n|tonumber), t: $t, by: "oc-ledger enroll", kind: "roster-enroll", what: ("enrolled " + $r + " " + $u)}]
+       | .events += [{n: ($n|tonumber), t: $t, by: "oc-ledger enroll", kind: "roster-enroll", what: ("enrolled " + $r + " " + $u + (if $tp == "-" then "" else " (topic " + $tp + ")" end))}]
        | .updated_at = $t' || return $?
     echo "enrolled $role $uuid (event n=$n)"
     git_state_commit "ledger n=$n: enroll $role $uuid (oc-ledger)"
@@ -1014,7 +1037,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (271 cases) -----------------------------------------------------
+# ---- selftest (409 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -2013,6 +2036,25 @@ EOF
   OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live >/dev/null 2>&1; chk "roster-live-subagent-excluded" 1 $?
   OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live --json >/dev/null 2>&1; chk "roster-live-json-nomatch-rc1" 1 $?
   OC_LEDGER_DB="$T/nope.db" bash "$ME" roster --live >/dev/null 2>&1; chk "roster-live-db-missing-rc3" 3 $?
+  # TOPIC EXISTENCE GUARD legs (fork #503, Toolsmith 2026-09-22). The fixture
+  # binds ONLY thread 55555, so 55555 is the live case and 478 is the dead one —
+  # 478 being the real INCIDENT's value (an ISSUE number a caller enrolled as a
+  # forum topic). Both must enrol rc 0, because the guard WARNS and never
+  # refuses; only the dead topic may warn. OC_LEDGER_DB is passed explicitly so
+  # these legs read the FIXTURE db rather than the live profile's (the guard
+  # derives its db from the state dir, which the fixture does not override).
+  OC_LEDGER_DB="$T/sessions.db" bash "$ME" enroll ab000000-0000-4000-8000-000000000503 deadtopic --topic 478 >"$T/enroll-dead.out" 2>&1
+  chk "enroll-dead-topic-rc0" 0 $?
+  grep -q "WARNING topic 478 names no live binding" "$T/enroll-dead.out" && ok || bad "enroll-dead-topic-warns"
+  OC_LEDGER_DB="$T/sessions.db" bash "$ME" enroll ab000000-0000-4000-8000-000000000504 livetopic --topic 55555 >"$T/enroll-live.out" 2>&1
+  chk "enroll-live-topic-rc0" 0 $?
+  grep -q "WARNING topic 55555" "$T/enroll-live.out" && bad "enroll-live-topic-must-not-warn" || ok
+  # ...and the enroll EVENT must carry the supplied topic, so a wrong value stays
+  # recoverable after the fact — the phantom row's own event recorded none, which
+  # is why its bad topic_id could not be traced from the trail.
+  grep -q '(topic 478)' "$OC_LEDGER" && ok || bad "enroll-event-records-topic"
+  bash "$ME" retire ab000000-0000-4000-8000-000000000503 >/dev/null 2>&1
+  bash "$ME" retire ab000000-0000-4000-8000-000000000504 >/dev/null 2>&1
   # fixture hygiene: the two probe rows leave the roster as they found it (the
   # WS retire comes AFTER the subagent-exclusion legs above, which assert on a
   # row that still EXISTS — retiring it first would make them pass for the
