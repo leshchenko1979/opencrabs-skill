@@ -185,6 +185,17 @@ SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 # Phase B swap-target overrides (sandbox/selftest point these elsewhere)
 SWAP_TARGET="${OC_SWAP_TARGET:-/usr/local/bin/opencrabs}"
 BACKUP_DIR="${OC_SWAP_BACKUP_DIR:-${HOME:-/root}/opencrabs-binary-backups}"
+# Retention for BACKUP_DIR (#497, HQ toolshed item 2). The swap path took a
+# backup on EVERY swap target and never removed one, so the directory reached 38
+# files / 3.3 GB, was purged by hand to 3 / 261 MB, and regrew to 6 / 522 MB
+# within ~5 h — ~260 MB per swap cycle on a 58 GB root with ~11 GB free.
+# Keyed on the FILENAME STAMP, never on mtime: the backup is taken with `cp -p`,
+# which preserves the SOURCE's timestamps, so a backup's mtime is the mtime of
+# the binary it copied (several share one mtime — a 4-way tie was measured) and
+# an mtime-ordered "newest N" is ambiguous. The name is
+# `opencrabs-YYYYMMDD-HHMMSS-pre-<short>` — fixed width, so it sorts
+# lexicographically into true creation order.
+BAK_KEEP="${OC_SWAP_BACKUP_KEEP:-5}"
 RESTART_CMD="${OC_SWAP_RESTART_CMD:-systemctl --user restart opencrabs-ops.service}"
 ACTIVE_CMD="${OC_SWAP_ACTIVE_CMD:-systemctl --user is-active opencrabs-ops.service}"
 PID_CMD="${OC_SWAP_PID_CMD:-systemctl --user show -p MainPID --value opencrabs-ops.service}"
@@ -519,6 +530,58 @@ jline() { # $1=step  $2=exit(int|null)  $3=extra-json-object (optional)
      --argjson exit "${2:-null}" --argjson extra "${3:-\{\}}" \
      '{ts:$ts, seq:$seq, step:$step, exit:$exit} + $extra' >> "$JF"
   sync -f "$JF" 2>/dev/null || sync 2>/dev/null || true
+}
+
+# --------------------------------------------------- backup retention (#497) --
+prune_binary_backups() { # $1 = the backup JUST TAKEN (never a prune candidate)
+  # Keep the newest $BAK_KEEP backups, delete older ones (#497, HQ toolshed
+  # item 2). Rules, each answering a way this could destroy a rollback point:
+  #
+  #  * ONLY files matching the chain's own naming convention are ever touched —
+  #    `opencrabs-YYYYMMDD-HHMMSS-pre-<hex>`. Anything else in the directory
+  #    (a hand-made copy, a differently-named artefact) is left alone, so this
+  #    cannot eat a file it did not create.
+  #  * ORDER IS THE FILENAME STAMP, never mtime: `cp -p` preserves the source's
+  #    timestamps, so mtimes tie and mislead (measured 4-way). The stamp is
+  #    fixed-width, so a lexicographic sort IS chronological.
+  #  * THE JUST-TAKEN BACKUP IS EXEMPT by construction — it is the newest name —
+  #    but it is also passed in explicitly and skipped by path, so a clock skew
+  #    (a machine whose clock stepped back between swaps) cannot make the fresh
+  #    backup look oldest.
+  #  * NOTHING IS PRUNED BELOW THE KEEP COUNT, so an in-flight swap's journaled
+  #    `backup_path` is inside the window: rollback reads that exact path and
+  #    never scans the directory.
+  #  * A NO-OP IS SILENT. A prune that reports on every healthy swap is noise.
+  local fresh="${1:-}" keep="${BAK_KEEP:-5}" f
+  [ -d "$BACKUP_DIR" ] || return 0
+  case "$keep" in ''|*[!0-9]*) return 0 ;; esac   # a bad value must not mean "prune everything"
+  [ "$keep" -ge 1 ] || return 0
+
+  local pruned=0 freed=0 size
+  # Newest-first by NAME; skip the first $keep, prune the remainder.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -n "$fresh" ] && [ "$f" = "$fresh" ] && continue
+    size="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+    if rm -f "$f"; then
+      pruned=$((pruned + 1))
+      freed=$((freed + size))
+    fi
+  done <<EOF
+$(ls -1 "$BACKUP_DIR" 2>/dev/null \
+    | grep -E '^opencrabs-[0-9]{8}-[0-9]{6}-pre-[0-9a-f]+$' \
+    | sort -r \
+    | tail -n +"$((keep + 1))" \
+    | sed "s|^|$BACKUP_DIR/|")
+EOF
+
+  if [ "$pruned" -gt 0 ]; then
+    printf 'oc-deploy: backup retention: pruned %d old backup(s), %d MB freed, kept newest %d\n' \
+      "$pruned" "$((freed / 1048576))" "$keep" >&2
+    jline backup-prune 0 "$(jq -cn --argjson n "$pruned" --argjson b "$freed" \
+      --argjson keep "$keep" '{pruned:$n, bytes_freed:$b, keep:$keep}')"
+  fi
+  return 0
 }
 
 # -------------------------------------------------- ledger stamp (flock'd) --
@@ -953,7 +1016,63 @@ NSTUB2
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: failed restore not journaled truthfully (rc=1 + restore_failed)"; }
   grep -q 'ROLLBACK-FAILED' "$SD/workers-ledger.json" \
     && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: ledger did not stamp ROLLBACK-FAILED"; }
-  # 12. RETIRED 2026-08-28 (was swap-consent-missing; consent process eliminated)
+  # 11c. BACKUP RETENTION (#497, HQ toolshed item 2). The swap path took a
+  #      backup on every target and removed none: 38 files / 3.3 GB, purged by
+  #      hand to 3, regrown to 6 within ~5 h. The prune is asserted here at the
+  #      FUNCTION level as well as through a real drill below, because the two
+  #      properties that matter are not "some file was deleted" but:
+  #        (1) ORDER IS THE FILENAME STAMP, NOT mtime — `cp -p` preserves the
+  #            source's timestamps, so a backup's mtime is the mtime of the
+  #            BINARY it copied and several tie. The fixture below gives the
+  #            NEWEST name the OLDEST mtime, which is exactly the live shape;
+  #            an mtime-ordered rule would delete the live rollback point.
+  #        (2) ONLY the chain's own naming convention is touched — a foreign
+  #            file in that directory is not this tool's to remove.
+  #      MUTATION KILL: swap `sort -r` for `ls -1t` (mtime order) and the
+  #      "fresh backup survived" assertion fails; drop the grep and the foreign
+  #      file is deleted.
+  local SD7="$T/state7"; mkdir -p "$SD7/backups"
+  local _n
+  for _n in 01 02 03 04; do
+    echo "old$_n" > "$SD7/backups/opencrabs-2026090${_n:1}-1200${_n}-pre-aaaaaa$_n"
+  done
+  # newest NAME, oldest mtime -> the trap
+  touch -t 202001010000 "$SD7/backups/opencrabs-20260904-120004-pre-aaaaaa04"
+  touch -t 202601010000 "$SD7/backups/opencrabs-20260901-120001-pre-aaaaaa01"
+  echo keep > "$SD7/backups/hand-made-copy"
+  local _JF7="$T/state7/journal.jsonl"; : > "$_JF7"
+  (
+    BACKUP_DIR="$SD7/backups" BAK_KEEP=2 JF="$_JF7" SEQ=0
+    prune_binary_backups "$SD7/backups/opencrabs-20260904-120004-pre-aaaaaa04"
+  ) >/dev/null 2>&1
+  local _survivors; _survivors="$(ls -1 "$SD7/backups" | sort | tr '\n' ' ')"
+  case "$_survivors" in
+    *"pre-aaaaaa01"*) fail=$((fail+1)); echo "SELFTEST FAIL: prune kept the OLDEST name (mtime ordering?): $_survivors" ;;
+    *) pass=$((pass+1)) ;;
+  esac
+  case "$_survivors" in
+    *"pre-aaaaaa04"*) pass=$((pass+1)) ;;   # the live rollback point (oldest mtime!)
+    *) fail=$((fail+1)); echo "SELFTEST FAIL: prune deleted the NEWEST-NAME backup: $_survivors" ;;
+  esac
+  case "$_survivors" in
+    *"hand-made-copy"*) pass=$((pass+1)) ;;
+    *) fail=$((fail+1)); echo "SELFTEST FAIL: prune deleted a FOREIGN file: $_survivors" ;;
+  esac
+  [ "$(ls -1 "$SD7/backups" | grep -cE '^opencrabs-[0-9]{8}-[0-9]{6}-pre-')" = "2" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: prune did not land on exactly 2 kept: $_survivors"; }
+  grep -q '"step":"backup-prune"' "$_JF7" \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: prune not journaled"; }
+  # A no-op must stay SILENT: at or below the keep count nothing is removed and
+  # nothing is journalled (a prune that reports on every healthy swap is noise).
+  local _JF7b="$T/state7/journal2.jsonl"; : > "$_JF7b"
+  ( BACKUP_DIR="$SD7/backups" BAK_KEEP=9 JF="$_JF7b" SEQ=0 prune_binary_backups "" ) >/dev/null 2>&1
+  [ -s "$_JF7b" ] && { fail=$((fail+1)); echo "SELFTEST FAIL: prune journalled a no-op"; } || pass=$((pass+1))
+  # A BAD KEEP VALUE must not read as "prune everything".
+  local _JF7c="$T/state7/journal3.jsonl"; : > "$_JF7c"
+  ( BACKUP_DIR="$SD7/backups" BAK_KEEP="abc" JF="$_JF7c" SEQ=0 prune_binary_backups "" ) >/dev/null 2>&1
+  [ "$(ls -1 "$SD7/backups" | grep -cE '^opencrabs-[0-9]{8}-[0-9]{6}-pre-')" = "2" ] \
+    && pass=$((pass+1)) || { fail=$((fail+1)); echo "SELFTEST FAIL: a non-numeric BAK_KEEP pruned anyway"; }
+
   # 13. swap-execute below S2 -> exit 4 (stage gate)
   printf '{"meta":{"oc_deploy_stage":"S1"}}' > "$SD/workers-ledger.json"
   OC_DEPLOY_STATE_DIR="$SD" OC_SWAP_TARGET="$T/bin/oc-fake" \
@@ -2207,6 +2326,7 @@ swap_execute() {
   BAK_SHA="$(sha256sum "$BAK" | cut -d' ' -f1)"
   BAK_BYTES="$(stat -c %s "$BAK")"
   jline backup 0 "$(jq -cn --arg p "$BAK" --arg s "$BAK_SHA" --argjson b "$BAK_BYTES" '{backup_path:$p, backup_sha256:$s, bytes:$b}')"
+  prune_binary_backups "$BAK"
 
   # --- 4. state backups for rollback (markers + baseline + orders) ---
   mkdir -p "$WORKDIR/state-backup"
