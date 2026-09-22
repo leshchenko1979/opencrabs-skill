@@ -338,6 +338,31 @@ print(m.group(1) if m else "none")
   case "$OUT" in *"orphan-worktrees"*) ok ;; *) bad "git_vcs-orphan: $OUT" ;; esac
   rm -rf "$T/wt/orphan"
 
+  # 9b. Class: git_vcs — registered-worktree tracked-file DELETION (#380).
+  #     Pre-fix, NO check ran `git status` inside a registered worktree, so the
+  #     live fleet lost a tracked file from 195 of 206 trees with no signal.
+  git -C "$T/fork" worktree add -q "$T/wt/lanedel" -b lanedel >/dev/null 2>&1
+  chk "git_vcs-wt-deletion-fixture" "true" "$([ -d "$T/wt/lanedel" ] && echo true || echo false)"
+  # a lane MID-WORK must not trip it: a MODIFIED tracked file is legitimate
+  echo y2 >> "$T/wt/lanedel/f"
+  RC=0; OUT="$(run --class git_vcs 2>&1)" || RC=$?
+  case "$OUT" in *"worktree-tracked-deleted"*) bad "git_vcs-wt-deletion-fires-on-modification: $OUT" ;; *) ok ;; esac
+  # the signal: an UNSTAGED tracked deletion
+  rm "$T/wt/lanedel/f"
+  RC=0; OUT="$(run --class git_vcs 2>&1)" || RC=$?
+  chk "git_vcs-wt-deletion-rc1" 1 "$RC"
+  case "$OUT" in *"worktree-tracked-deleted"*) ok ;; *) bad "git_vcs-wt-deletion: $OUT" ;; esac
+  case "$OUT" in *"1 of "*"registered worktree"*) ok ;; *) bad "git_vcs-wt-deletion-count: $OUT" ;; esac
+  # the NEGATIVE half the issue names explicitly: a STAGED deletion ('git rm')
+  # is a DIFFERENT condition and must NOT be flagged
+  git -C "$T/wt/lanedel" checkout -- f >/dev/null 2>&1
+  git -C "$T/wt/lanedel" rm -q f >/dev/null 2>&1
+  RC=0; OUT="$(run --class git_vcs 2>&1)" || RC=$?
+  chk "git_vcs-wt-deletion-staged-rc0" 0 "$RC"
+  case "$OUT" in *"worktree-tracked-deleted"*) bad "git_vcs-wt-deletion-staged-flagged: $OUT" ;; *) ok ;; esac
+  git -C "$T/fork" worktree remove --force "$T/wt/lanedel" >/dev/null 2>&1
+  chk "git_vcs-wt-deletion-fixture-removed" "true" "$([ -d "$T/wt/lanedel" ] && echo false || echo true)"
+
   # 10. Class: schedulers — DM leak detection
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='telegram:133526395' WHERE name='oc-roster-detached-sweep';"
   RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
@@ -951,6 +976,51 @@ if is_class_active "git_vcs"; then
     fi
   else
     FAILED=$((FAILED + 1))
+  fi
+
+  # 18. Worktree tracked-file DELETIONS (#380) — report only.
+  #
+  # 195 of 206 registered worktrees lost the tracked file `.cargo/config.toml`
+  # and NOTHING reported it, for weeks. Check 2 above compares registration
+  # against the directories on disk, and check 6 below inspects the SHARED
+  # checkout only — so no check ever ran `git status` INSIDE a registered
+  # worktree. Both concepts existed; they were never joined.
+  #
+  # The predicate is deliberately narrow: porcelain ` D` is a tracked file
+  # deleted in the worktree and NOT staged. That is never a legitimate mid-work
+  # state, because a deliberate removal is staged by `git rm` and then reads
+  # `D ` in the INDEX column — so a lane mid-work cannot trip this. Measured on
+  # the live fleet 2026-09-19 after remediation: ` D` 0, `D ` 1, ` M`/`M ` 163,
+  # `??` 7 — zero false positives across 163 legitimate modified paths. The
+  # staged form (`D `) is a DIFFERENT condition and is deliberately NOT flagged.
+  #
+  # `-uno` skips the untracked walk (the expensive half on a large tree) and
+  # cannot change this predicate, which only ever matches a tracked deletion:
+  # measured 23s -> 6s across the fleet's 211 trees.
+  _wrepos="$FORK"
+  [ "$SKILL_CHECK" = "$FORK" ] || _wrepos="$FORK $SKILL_CHECK"
+  wt_scanned=0; wt_del_trees=0; wt_del_files=0; wt_del_sample=""
+  for _wrepo in $_wrepos; do
+    [ -d "$_wrepo/.git" ] || continue
+    while IFS= read -r _wt; do
+      [ -n "$_wt" ] || continue
+      [ -d "$_wt" ] || continue
+      wt_scanned=$((wt_scanned + 1))
+      _wtdel="$(git -C "$_wt" status --porcelain -uno 2>/dev/null | grep '^ D' || true)"
+      [ -n "$_wtdel" ] || continue
+      wt_del_trees=$((wt_del_trees + 1))
+      wt_del_files=$((wt_del_files + $(printf '%s\n' "$_wtdel" | grep -c .)))
+      if [ -z "$wt_del_sample" ]; then
+        wt_del_sample="$(printf '%s\n' "$_wtdel" | awk '{print $2}' | head -3 | tr '\n' ' ')"
+      fi
+    done <<EOF_WT
+$(git -C "$_wrepo" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+EOF_WT
+  done
+  if [ "$wt_del_trees" -gt 0 ]; then
+    add_finding 18 QUIRK worktree-tracked-deleted "$wt_del_trees of $wt_scanned registered worktree(s) carry an UNSTAGED tracked-file deletion ($wt_del_files file(s), e.g. $wt_del_sample) — never a legitimate mid-work state (a deliberate removal is staged as 'D '); restore the file or stage the removal"
+  else
+    clean_line "worktree tracked files: $wt_scanned registered tree(s), 0 unstaged deletions"
   fi
 
   # 6. Shared checkout cleanliness & divergence
