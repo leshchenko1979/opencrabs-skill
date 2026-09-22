@@ -1,5 +1,17 @@
 # Changelog — opencrabs-dev
 
+## v0.4.239 (2026-09-22)
+
+**The version record could not say when a tool fix shipped.** Found by re-reading this file against the sync ranges, in the same pass that followed the meta-factory Delegate's Recoverability 4 -> 3 dock on the state repo: two consecutive version windows bundled a `tools/**` fix that neither entry named, and nothing in the law required the naming — `hq.md` required only that an entry EXIST, and the sync gate (`tools/oc-ledger`) enforces exactly that. So the CHANGELOG was complete by the letter of the rule and incomplete as a record.
+
+**Measured over the sync ranges (`git log --oneline <prev-sync>..<this-sync>`):** v0.4.237 bundled `8e213c5e` (#503, `oc-ledger enroll` WARNS when `--topic` names no live binding and records the topic) and v0.4.238 bundled `e63b2f56` (#505, the bundle sweep now covers `*-harvest-state.md`). Neither number appeared anywhere in this file — `grep -c '#503'` and `grep -c '#505'` each returned 0 — while every sibling of the same Toolsmith batch (#492/#483/#485/#495/#496/#497/#493) IS named, in the v0.4.235 entry. The standard was already the fleet's; these two fell below it, and the cause is structural rather than careless: a fix that lands AFTER the entry is drafted but BEFORE the sync rides in unmentioned, and that window is open on every bump.
+
+**#505 was the sharpest instance** because v0.4.237's own entry left the routing OPEN — "The mechanism-side belt — adding the class to the bundle whitelist — is `tools/**` CODE and routes to the Toolsmith." A reader of v0.4.237 therefore saw a gap that had in fact closed, and the version record could not correct them. That is the same class as the state repo's 345 uncommitted entries and the 17 untracked harvest records: state that is not durable where it claims to be.
+
+**Landed:** both entries backfilled with their bundled commits, and `hq.md`'s Checkable Completion Formula sharpened so "entry present" means the entry NAMES every non-sync commit the sync bundles, with `git log --oneline <prev-sync>..<this-sync>` as the checklist. Rule text stays lean per §Rule-text provenance — this entry is the biography.
+
+LOC: 3476 -> 3476 (net 0; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f))`, LINES READ). The whole change is one line replaced inside `hq.md`'s completion formula (319 lines before and after); `CHANGELOG.md` is not in the corpus.
+
 ## v0.4.238 (2026-09-22)
 
 **The state repo's recoverability: 345 untracked entries, and the advisory that measured them named the wrong mechanism.** Raised by the meta-factory Delegate (OpenCrabs dev 62/76, Recoverability 4 -> 3), which recommended declaring the generated patterns as a namespace and reaping them. The COUNT was right; the mechanism was not, and the difference changes the fix.
@@ -16,6 +28,8 @@
 
 **The generated class is NOT reaped blindly, and the marker proves why.** `pacemakers-off` sits in the same state dir and is a marker the owner's pacemaker order REQUIRES to exist (`HEALTH-CLASSES.md:93`); a blanket state-dir clean would delete it and flip that check's direction. The rule is an allowlist of generated PATTERNS, never a general clean — and the 78 `.bak` sidecars were deliberately LEFT on disk (3.9 MB, now gitignored) rather than deleted, because a sidecar taken while its source was still UNTRACKED is the only copy of that reading, which is the loss lane `facd50af` reported today.
 
+**The v0.4.237 entry's open routing CLOSED in this window, and this entry did not say so until the v0.4.239 backfill:** `e63b2f56` (#505) — the bundle sweep now covers `*-harvest-state.md`, so the mechanism-side belt that v0.4.237 left "routing to the Toolsmith" was fitted and shipped here. A reader of v0.4.237 therefore saw a gap that had already closed, and the version record could not correct them.
+
 LOC: 3460 -> 3476 (net +16; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f))`, LINES READ). The whole change is SKILL.md 626 -> 642: the `state dir vs skill dir` glossary entry now declares the two classes, TRACKED and GENERATED-IGNORED, plus the obligation and the two commit paths. No other corpus file changed.
 ## v0.4.237 (2026-09-22)
 
@@ -26,6 +40,8 @@ The idiom named `<state dir>/<issue>-harvest-state.md` as the owning lane's resu
 **Measured census at 2026-09-22T08:59Z (predicate: `*-harvest-state.md` in the state dir): 20 on disk, 3 tracked, 17 untracked** — every untracked one a LIVE record (real headings, mtimes within 3 days), not residue. The consequence is total: for a parked harvest the state file is the ONLY resume record, its cron keeps firing a prompt that READS it, and the file dies with the disk while its lane believes it is safe.
 
 **Ownership is split, and the split is the ruling.** The file's CONTENT belongs to the owning lane — never edit another lane's record. The TRACKING is owed by the lane that CREATES the file, in that turn, verified with `git ls-files --error-unmatch <file>` (rc 0 = tracked) and never by reading a stamp receipt. The pre-amendment residue was swept by HQ (state commit `960bec99`, 19 files = 17 untracked + 2 tracked-but-dirty) as a one-time hygiene act, not a transfer of content authorship, because a parked harvest's lane may never return to track its own file. The mechanism-side belt — adding the class to the bundle whitelist — is `tools/**` CODE and routes to the Toolsmith.
+
+**Also bundled by this version's sync, and unmentioned here until the v0.4.239 backfill:** `8e213c5e` (#503) — `oc-ledger enroll` now WARNS when `--topic` names no live binding, and records the topic, so an enrollment aimed at a dead topic is visible instead of silently accepted.
 
 LOC: 3460 -> 3460 (net 0; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f))` over the 8-file law corpus, SKILL.md / editor.md / editor-upstream-pr.md / hq.md / triage.md / toolsmith.md / fleet-directives.md / upstream-merge-runbook.md). The whole change is INSIDE the existing `State file` bullet of `upstream-merge-runbook.md` (424 lines before and after — one line replaced by one line), so no file in the corpus changes its line count. **Scope note for the next reader:** this corpus EXCLUDES `review-lenses.md` and INCLUDES `upstream-merge-runbook.md`; a recomputation that swaps those two returns 3330 instead of 3460 and is a SCOPE error, not a drop in the law.
 ## v0.4.236 (2026-09-22)
