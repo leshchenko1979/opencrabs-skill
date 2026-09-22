@@ -1,5 +1,22 @@
 # Changelog — opencrabs-dev
 
+## v0.4.238 (2026-09-22)
+
+**The state repo's recoverability: 345 untracked entries, and the advisory that measured them named the wrong mechanism.** Raised by the meta-factory Delegate (OpenCrabs dev 62/76, Recoverability 4 -> 3), which recommended declaring the generated patterns as a namespace and reaping them. The COUNT was right; the mechanism was not, and the difference changes the fix.
+
+**Taxonomy, python over `git status --porcelain`, classes summing to exactly 345:** 198 (57.4%) `oc-deploy/journal/*.jsonl` · 78 (22.6%) `.bak` sidecars · 33 (9.6%) report/doc/census · 14 (4.1%) lane `*-state.md` records · 12 (3.5%) scratch dirs · 7 (2.0%) probe scripts · 1 `.ledger.IW5b9i` temp · 1 lane cursor · 1 `pacemakers-off` marker. **So the recommended fix addresses 23.1%, and the dominant 57.4% is a namespace TRACKED BY DESIGN** — 2 289 of the deploy journal's 2 487 files are already tracked, and it is the audit trail `oc-ledger recover-receipt` reads. Reaping it would have destroyed deploy history.
+
+**The mechanism is an UNINVOKED SWEEP, not a missing reaper.** `oc-ledger`'s auto-commit (`git_state_commit`, `tools/oc-ledger:200`) stages exactly ONE file, `workers-ledger.json`; the `commit-pending --bundle` sweep (`:1010-1031`) stages the namespace whitelist INCLUDING `oc-deploy` — and **measured, 0 enabled crons across all profile DBs invoke it**. The 345 are what accumulates when the sweep that would commit them never runs.
+
+**Landed (state commit `e43f7cc5`, 505 files, +30431/-1895, pushed):** the live backlog committed — 198 deploy journals, 31 reviews, the lane state records, reports, evidence. `.gitignore` now carries the generated class (`*.bak`, `*.bak-*`, `.ledger.*`, `__pycache__/`, `*.pyc`). The leaked `.ledger.IW5b9i` temp (3 052 914 bytes, Sep 19) is reaped. `git status` went 358 -> 0 lines and 14 unpushed commits -> 0.
+
+**A safety check earned its keep.** The first `.gitignore` used `*.bak` alone, which does NOT match the `.bak-<suffix>` variants (`smoke-verdicts.log.bak-prerebind-353`, `harvest-registry.json.bak-325-...`), so four generated files slipped into the staged set. The staged-set grep caught them; `*.bak-*` was added and the set re-verified with none present.
+
+**Two new defects routed to the Toolsmith, both `tools/**`.** (D2) the `.ledger.*` temp leaks on any signal that bypasses normal shell flow: `mktemp` inside the state dir (`:236`), `rm -f` only on the jq-failure paths (`:237-239`), and the EXIT trap (`:140`) calls the logger rather than a cleanup and cannot see the local — the vector is the daemon restart, which SIGKILLs in-flight children (9 starts/stops on 09-21). (D3) the generated class has no retention reaper; `oc-health` already resolves the state dir (`tools/oc-health:32`) but `HEALTH-CLASSES.md:76` covers only `*.corrupt-*.bak`, a different pattern.
+
+**The generated class is NOT reaped blindly, and the marker proves why.** `pacemakers-off` sits in the same state dir and is a marker the owner's pacemaker order REQUIRES to exist (`HEALTH-CLASSES.md:93`); a blanket state-dir clean would delete it and flip that check's direction. The rule is an allowlist of generated PATTERNS, never a general clean — and the 78 `.bak` sidecars were deliberately LEFT on disk (3.9 MB, now gitignored) rather than deleted, because a sidecar taken while its source was still UNTRACKED is the only copy of that reading, which is the loss lane `facd50af` reported today.
+
+LOC: 3460 -> 3476 (net +16; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f))`, LINES READ). The whole change is SKILL.md 626 -> 642: the `state dir vs skill dir` glossary entry now declares the two classes, TRACKED and GENERATED-IGNORED, plus the obligation and the two commit paths. No other corpus file changed.
 ## v0.4.237 (2026-09-22)
 
 **A resume record that is not git-tracked does not exist — and nothing tracked it.** Raised by the #341 lane as a law gap against the harvest resume idiom, verified first-hand, and it is a silent-loss class of exactly the kind that idiom exists to prevent.

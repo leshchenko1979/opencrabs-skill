@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.237
+version: 0.4.238
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -346,9 +346,25 @@ it would FAIL on the pre-fix artifact — state the input on which it fails.**
   (`oc-deploy fanout`, idempotent via `fanout.state`).
 - **state dir vs skill dir** — the v0.4.60 split: skill repo
   (`skills/opencrabs-dev/`, versioned code+docs) vs state dir
-  (`opencrabs-dev/`, runtime: ledger, journals, markers, locks, tools.log).
-  The state dir has NO tools/ — tools always resolve next to the invoking
-  script.
+  (`opencrabs-dev/`, runtime). The state dir has NO tools/ — tools always
+  resolve next to the invoking script.
+  Its content is declared in TWO classes (v0.4.238, a RECOVERABILITY rule: a
+  tracked file's only durable record is git):
+  - **TRACKED** — `workers-ledger.json` · `journal/` · `oc-deploy/journal/`
+    (the deploy audit trail `oc-ledger recover-receipt` reads) · the lane
+    `*-state.md` records · `reviews/` · `evidence/` · `tools.log` ·
+    `smoke-verdicts.log` · `deployed.sha`/`.meta.json` · `baseline.json` ·
+    `fanout.state` · markers (`pacemakers-off`).
+  - **GENERATED-IGNORED** — the generated class: `.bak`/`.bak-*` sidecars ·
+    `.ledger.*` temps · `__pycache__/` · `*.pyc` · `*.lock`. Never committed,
+    reaped on the hygiene cadence WITH a keep-window (a sidecar taken while its
+    source was still UNTRACKED is the only copy of that reading).
+  A TRACKED class's additions and updates MUST be committed by the state-repo
+  commit path. The two paths differ: `oc-ledger`'s auto-commit
+  (`git_state_commit`, `tools/oc-ledger:200`) stages ONLY `workers-ledger.json`;
+  `oc-ledger commit-pending --bundle` stages the namespace whitelist. Nothing
+  accumulates untracked when the bundle sweep is INVOKED — measured 2026-09-22,
+  345 entries had piled up because no enabled cron invokes it.
 - **single-flight** — the one dispatch/adoption lock serializing concurrent
   oc-prchecks invocations; under it, the newest carrier dispatch is this
   lane's own run.
