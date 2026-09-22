@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.240
+version: 0.4.241
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -601,7 +601,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
     | Filing unit | one feature PR, per lane | **PR GROUP** — related PRs approved together |
     | Smoke rubric / CI gate / rollback | 4 legs / unchanged / owner's call | 4 legs / unchanged / owner's call |
 
-    **CURRENT MODE: DEGRADED.** Resolution is LIVE, never remembered: read the newest `MODE:` row via `oc-ledger events --kind note`; **if NO `MODE:` row exists the default is DEGRADED** (fail closed — holding a filing costs nothing, an unapproved filing is a public act). The owner switches by word, receipted by `oc-ledger stamp note "MODE: <HIGH-TRUST|DEGRADED> — <provenance>" --by "hq <uuid>"`. Procedure: `editor-upstream-pr.md` §Phase 7 step 0a.
+    **CURRENT MODE: DEGRADED.** Resolution is LIVE, never remembered: read the newest `MODE:` row via `oc-ledger events --n 2000 --kind note` — **`--n` is MANDATORY, because `events` is a TAIL whose default window is ~21 rows, so a bare `events --kind note` returns an EMPTY result that is INDISTINGUISHABLE from "no `MODE:` row exists"** (the sole MODE row sat ~590 rows back and was invisible to the bare form; measured 2026-09-22T20:1xZ, and it had already produced two "no MODE row, therefore DEGRADED" findings in durable records that were RIGHT only because the law fails closed). **If NO `MODE:` row exists the default is DEGRADED** (fail closed — holding a filing costs nothing, an unapproved filing is a public act). The owner switches by word, receipted by `oc-ledger stamp note "MODE: <HIGH-TRUST|DEGRADED> — <provenance>" --by "hq <uuid>"`. Procedure: `editor-upstream-pr.md` §Phase 7 step 0a.
   (Deleted-tool history: CHANGELOG.md.)
 - ROLE-SCOPED BROADCASTS: messages reach non-owning roles ONLY when tagged
   [ALL]; otherwise send strictly to the owning role. CC-everyone is noise.
