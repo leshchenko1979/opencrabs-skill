@@ -14,7 +14,7 @@ this PR is the ONE sanctioned exception (completed features only).
 
 ```bash
 # 0a. MODE GATE (v0.4.226) — resolve the current mode LIVE, never from memory:
-#       tools/oc-ledger events --kind note | grep -o 'MODE: [A-Z-]*' | head -1
+#       tools/oc-ledger events --n 2000 --kind note | grep -o 'MODE: [A-Z-]*' | head -1
 #     NO `MODE:` row => DEGRADED (fail closed).
 #       DEGRADED   -> HOLD the PR GROUP. Request owner approval in YOUR forum topic
 #                     (reply or a positive reaction = approval; silence is NOT consent).
