@@ -1,5 +1,17 @@
 # Changelog — opencrabs-dev
 
+## v0.4.242 (2026-09-22)
+
+**The C8 naming check WARNS — codified before the tool lands, so the implementation has a stated contract.**
+
+The Toolsmith's C8 extension would have `oc-ledger sync` list every commit in its own range that the version entry does not name. Its disposition — **WARN, never `die 6`** — is accepted and now stated in law at the `oc-ledger sync` CHANGELOG-gate row. Two structural reasons, and they are the Toolsmith's own: the range is **other lanes' work**, so a hard gate would let one lane's landing block the fleet's version record at HQ's boundary; and the range legitimately contains commits carrying no issue ref **by design**, so a hard gate needs an exclusion list — which is where this class of gate goes to die. A warn that LISTS the unnamed commits puts the gap into the sync's own output at the moment it is created, which is exactly what failed on v0.4.237, where the entry left a routing visibly OPEN after it had closed.
+
+**One guard is part of the contract, not an optional nicety:** when the previous-sync anchor cannot be derived, the comparison is SKIPPED with a **NOTE** — never a silent clean. An unverifiable check that reports clean is the #485 defect in a new costume.
+
+Status: the warning gate itself is **NOT LANDED** — it is the Toolsmith's next-cycle work, and it is not sequenced ahead of anything by this entry. The existing HARD existence gate (v0.4.65, the v0.4.54 backfill incident) is unchanged.
+
+LOC: 3494 -> 3494 (net 0; the whole change is one table row in `SKILL.md`, replaced 1:1). Predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ.
+
 ## v0.4.241 (2026-09-22)
 
 **A floor read off the wrong clock, the doc clause for the sidecar reaper, and a backfill for a fix that rode the previous sync unnamed.**
