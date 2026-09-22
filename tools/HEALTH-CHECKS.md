@@ -45,6 +45,14 @@ after sloppy lanes and hide the pattern.
 - **Remediation (`--reap`):** Keep 3 newest backups, delete older. Never delete a backup
   younger than 24h (crash insurance for active writes).
 
+## 3b. Generated sidecar retention — `SAFE` (prune old, keep newest N per source)
+
+- **Where:** `$OC_DEV_STATE` generated `*.bak` / `*.bak-*` sidecars.
+- **Invariant:** Keep the newest `OC_HEALTH_SIDECAR_KEEP` sidecars per source (default `3`); prune only beyond that keep-window and only when older than `OC_HEALTH_SIDECAR_MAX_AGE_H` (default `48` hours). The check uses the writer's filename timestamp where present and falls back to mtime.
+- **Source safety:** If the sidecar's **source file is not tracked** in the state repo, report `sidecar-untracked-source` and NEVER reap it — it may be the only copy of that reading.
+- **Scope:** This is an allowlist of generated sidecar patterns, never a general state-dir clean; marker files such as `pacemakers-off` cannot become candidates. It is separate from ledger-backup retention: ledger backups keep newest N globally and are excluded by prefix, so the checks cannot double-count them.
+- **Remediation (`--reap`):** Run `oc-health --class persistence --reap` to prune beyond the per-source keep-window and age floor. `OC_HEALTH_SIDECAR_KEEP` and `OC_HEALTH_SIDECAR_MAX_AGE_H` tune the check. Reports are emitted without `--reap`; `--reap` adds a receipt naming the pruned count and kept count.
+
 ## 4. State-dir bloat — `REPORT`
 
 - **Where:** `$OC_DEV_STATE` total; per-file top 10.

@@ -68,13 +68,14 @@ into two tiers:
 - **Remediation:** Report via `WARN`; notify owning lanes if processes are orphaned.
 
 ### Class 3: `persistence`
-- **Objects Audited:** `opencrabs.db`, `workers-ledger.json`, backup artifacts.
+- **Objects Audited:** `opencrabs.db`, `workers-ledger.json`, backup artifacts, generated sidecars.
 - **Invariants Checked:**
   - Session SQLite DB size (>1GB).
   - Ledger backup retention (keep 3 newest; never delete <24h).
   - Ledger JSON schema integrity and JSON syntax validity.
   - Backup file bloat and corruption markers (`*.corrupt-*.bak`).
-- **Remediation:** Under `--reap`, prune ledger backups beyond keep count.
+  - **3b `sidecar-retention` — SAFE:** generated `*.bak` / `*.bak-*` sidecars in the state dir; keep newest N **per source**, prune beyond that only past the age floor; sources not tracked in the state repo are reported and never reaped.
+- **Remediation:** Under `--reap`, prune ledger backups beyond keep count and sidecars beyond their per-source keep-window and age floor. Sidecar retention is a separate check from ledger-backup retention: the former is per source, the latter global; ledger backups are excluded by prefix so neither check double-counts them. `OC_HEALTH_SIDECAR_KEEP` and `OC_HEALTH_SIDECAR_MAX_AGE_H` tune the sidecar check.
 
 ### Class 4: `git_vcs`
 - **Objects Audited:** Skill repo (`opencrabs-dev`), fork repo (`~/opencrabs`), worktree directories.
