@@ -291,6 +291,41 @@ if [ -f "$TOOLS_DIR/lib/oc-embed.sh" ]; then
   [ -z "$out" ] && ok "embed: ORDER job without embed -> empty" || bad "embed no-embed got: '$out'"
   out="$(oc_decode_job_embed "Linux amd64 (shortsha, x)")"
   [ -z "$out" ] && ok "embed: non-40-hex parenthetical -> empty" || bad "embed short-sha got: '$out'"
+  # CALLER-PREFIXED job names (HQ request, 2026-09-21). The carrier CI refactor
+  # (commit 0e81404c8 on ci/quick-build-linux) split the two lane workflows into
+  # thin shells calling one shared workflow_call body, and GitHub renders every
+  # called job as "<caller> / <called>": `ship / Linux amd64 (<sha>, <features>)`,
+  # `gate / PR-lane gates (<sha>)`. The anchor is the parenthetical, so the prefix
+  # is harmless TODAY — but every fixture above is unprefixed, so nothing GUARDED
+  # that: a future name shape could break the ship lane with a green battery.
+  # This case and the one below cover a slash WITH an embed; the existing
+  # "ORDER gates / validate" case covers a slash WITHOUT one. Both matter.
+  out="$(oc_decode_job_embed "ship / Linux amd64 (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, telegram)")"
+  [ "$out" = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|telegram" ] \
+    && ok "embed: caller-prefixed job name -> sha|features" || bad "embed prefix got: '$out'"
+  # A caller-prefixed job with NO comma is not an embed (the decoder requires
+  # `<sha>,`), which is the same rule the real ORDER-gates name relies on.
+  out="$(oc_decode_job_embed "gate / PR-lane gates (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)")"
+  [ -z "$out" ] \
+    && ok "embed: caller-prefixed, sha without a feature list -> empty (not an embed)" \
+    || bad "embed prefix-nofeat got: '$out'"
+  # The REAL post-refactor shapes, verbatim from run 35612234852. BOTH carry a
+  # slash and a 40-hex, and only ONE is decodable — the decoder needs the COMMA
+  # after the sha, because an embed is `(<sha>, <features>)`. That asymmetry is
+  # load-bearing: `run_built_sha` (oc-deploy:1874-1882) takes the FIRST job name
+  # that DECODES, so the ORDER-gates job must NOT decode or the ship lane would
+  # read the gate as the build.
+  out="$(oc_decode_job_embed "ship / Linux amd64 (5140b36a0d8b2015eeea27ecbe18a46cc7d6e0c8, telegram,code-graph,browser)")"
+  [ "$out" = "5140b36a0d8b2015eeea27ecbe18a46cc7d6e0c8|telegram,code-graph,browser" ] \
+    && ok "embed: real ship-lane build job name (run 35612234852)" || bad "embed real-ship got: '$out'"
+  out="$(oc_decode_job_embed "ship / ORDER gates (5140b36a0d8b2015eeea27ecbe18a46cc7d6e0c8)")"
+  [ -z "$out" ] \
+    && ok "embed: prefixed ORDER-gates job is NOT decodable (first-match lands on the build)" \
+    || bad "embed real-gates should be empty, got: '$out'"
+  out="$(oc_decode_job_embed "ship / PR-lane gates (5140b36a0d8b2015eeea27ecbe18a46cc7d6e0c8)")"
+  [ -z "$out" ] \
+    && ok "embed: prefixed PR-lane gates job is NOT decodable" \
+    || bad "embed real-prelanegates should be empty, got: '$out'"
 else
   bad "lib/oc-embed.sh missing"
 fi
