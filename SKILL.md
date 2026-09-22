@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.239
+version: 0.4.240
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -360,11 +360,16 @@ it would FAIL on the pre-fix artifact — state the input on which it fails.**
     reaped on the hygiene cadence WITH a keep-window (a sidecar taken while its
     source was still UNTRACKED is the only copy of that reading).
   A TRACKED class's additions and updates MUST be committed by the state-repo
-  commit path. The two paths differ: `oc-ledger`'s auto-commit
-  (`git_state_commit`, `tools/oc-ledger:200`) stages ONLY `workers-ledger.json`;
-  `oc-ledger commit-pending --bundle` stages the namespace whitelist. Nothing
-  accumulates untracked when the bundle sweep is INVOKED — measured 2026-09-22,
-  345 entries had piled up because no enabled cron invokes it.
+  commit path. That path has ONE home (#508, 2026-09-22): `STATE_TRACKED_PATHS` +
+  `STATE_TRACKED_GLOB` (`tools/oc-ledger:223`/`:230`), consumed by
+  `state_sweep_tracked` (`:232`), with a selftest asserting the single source
+  (`:1540`). BOTH callers sweep the SAME namespace — the auto-commit tail (`:276`)
+  and `commit-pending --bundle` (`:1101`). Before #508 the auto-commit staged
+  `workers-ledger.json` ALONE and the sweeping verb was invoked by NO enabled cron:
+  measured 2026-09-22, 345 entries had piled up on that split. Consequence for
+  authorship: a class named TRACKED above is only actually swept if it is in
+  `STATE_TRACKED_PATHS` — naming it here without adding it there leaves it
+  accumulating while the law reads as covered.
 - **single-flight** — the one dispatch/adoption lock serializing concurrent
   oc-prchecks invocations; under it, the newest carrier dispatch is this
   lane's own run.
@@ -444,6 +449,18 @@ uses them as a licence to fix outside its scope.
   from `$OPENCRABS_SESSION_ID` (commit `978fe5fe`). Manual `export OC_ACTOR` is retired.
 - Checkout `~/opencrabs`: remote **`origin`** = fork `leshchenko1979/opencrabs`
   (push target) · remote **`adolfousier`** = sync source (upstream).
+- **`gh` in `~/opencrabs` defaults to UPSTREAM — `-R` is MANDATORY (2026-09-22).**
+  The fork remote carries NO `gh-resolved` key while `remote.adolfousier.gh-resolved
+  base` does, so gh's resolver selects upstream `adolfousier/opencrabs` for ANY command
+  run from that directory without `-R` / `--repo`. It fails SILENTLY in both directions:
+  a number that exists upstream returns a REAL but WRONG issue, and one that does not
+  404s and reads as "no such issue" — while a write (`gh issue close` / `comment` / `edit`)
+  lands on the OWNER'S UPSTREAM REPO. Measured 2026-09-22 from that cwd: unscoped
+  `gh issue list --state open` → 9 (upstream), `-R leshchenko1979/opencrabs` → 144;
+  `gh issue view 340` 404s unscoped and resolves scoped. Every prescribed `gh` command
+  in this corpus already carries `-R` (14 sites) — this bullet states the RULE they were
+  silently following. The environment fix (`gh repo set-default`) rewrites shared repo
+  config and is the OWNER's call, never a lane's.
 - BUILD SOURCE = fork `main`. Editors fast-forward their signed commits into
   `leshchenko1979/opencrabs@main`; `oc-deploy ship` dispatches THAT ref — every
   artifact compiles all editors' merged changes TOGETHER (decision 2026-08-25).
