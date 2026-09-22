@@ -105,7 +105,7 @@
 #                                          to NO fork issue is reported as
 #                                          UNRESOLVED and the clean verdict is
 #                                          withheld (see cmd_sweep_closed_claims).
-#   --selftest                             fixture suite (414 cases)
+#   --selftest                             fixture suite (418 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -205,6 +205,58 @@ _is_uuid() { # $1 -> rc 0 iff a canonical 8-4-4-4-12 lowercase-hex uuid
   printf '%s' "${1:-}" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 }
 
+# ---- state-repo TRACKED namespace: ONE home (#508) --------------------------
+# The v0.4.238 law says a TRACKED class is committed by the state-repo commit
+# path. Until now the whitelist lived INSIDE cmd_commit_pending --bundle while
+# git_state_commit staged workers-ledger.json ALONE, and no cron invoked the
+# bundle verb at all — so tools.log and friends accumulated dirty with nothing
+# sweeping them (live proof: tools.log modified-uncommitted in the state dir).
+# TWO callers now consume this one list: the auto-commit tail of every mutation,
+# and commit-pending --bundle.
+# v0.4.49: seal-state receipts (baseline.json / orders.json) joined the sweep —
+#   the swap chain writes them but never self-commits (the 6a2e66e manual-commit
+#   gap; owner "Go with 1" 2026-08-29). v0.4.51: journal/ joins too — smoke
+#   journals land here, git-tracked since 1232ccd; the overnight cbc77058 swap
+#   (smoke-34) proved the gap live.
+# health-rotation.json (#508): written by oc-health --rotate, already TRACKED in
+#   the state repo but absent from this list, so nothing carried it either.
+STATE_TRACKED_PATHS="tools.log baseline.json orders.json journal deployed.sha deployed.meta.json fanout.state oc-deploy oc-deploy-shadow.log oc-deploy-shadow.archive.log health-rotation.json"
+# The harvest-state class (v0.4.237, HQ ruling 2026-09-22) is a SEPARATE
+# variable: it carries glob metacharacters and must reach git QUOTED and
+# DIRECTLY — an unquoted expansion pathname-expands against the CALLER's cwd.
+# A parked harvest's state file is its ONLY resume record — its resume cron
+# reads it. TRACKING IS NOT AUTHORSHIP: the CONTENT stays the owning lane's;
+# this only makes the record survive the disk.
+STATE_TRACKED_GLOB='*-harvest-state.md'
+
+state_sweep_tracked() { # $1=state dir, $2=label -> commits the TRACKED namespace; rc 0 iff something committed
+  local sd="$1" label="${2:-state}" did=0 hits had_f=0
+  case $- in *f*) had_f=1 ;; esac
+  # `git add` DIES on a pathspec that matches nothing (rc 128, and it stages
+  # NOTHING at all), so the whitelist is never handed to git wholesale — the
+  # dirty subset is derived from ONE porcelain read first.
+  hits="$(git -C "$sd" status --porcelain -- $STATE_TRACKED_PATHS 2>/dev/null \
+          | cut -c4- | sed 's/^.* -> //')"
+  if [ -n "$hits" ]; then
+    # Paths come from porcelain (repo-relative, no glob metacharacter), and
+    # `set -f` keeps a caller's cwd from expanding them on the way to git.
+    set -f
+    # shellcheck disable=SC2086
+    if git -C "$sd" add -- $hits 2>/dev/null \
+       && git -C "$sd" commit -q -m "state sweep:$hits ($label)" 2>/dev/null; then
+      echo "sweep: state runtime files committed:$hits"
+      did=1
+    fi
+    [ "$had_f" -eq 1 ] || set +f
+  fi
+  if [ -n "$(git -C "$sd" status --porcelain -- "$STATE_TRACKED_GLOB" 2>/dev/null)" ]; then
+    git -C "$sd" add -- "$STATE_TRACKED_GLOB" 2>/dev/null \
+      && git -C "$sd" commit -q -m "state sweep: $STATE_TRACKED_GLOB ($label)" 2>/dev/null \
+      && { echo "sweep: harvest-state records committed"; did=1; }
+  fi
+  [ "$did" -eq 1 ]
+}
+
 git_state_commit() { # $1=message — inside lock; never fatal
   local sd; sd="$(STATE_DIR)"
   [ -d "$sd/.git" ] || return 0
@@ -217,6 +269,11 @@ git_state_commit() { # $1=message — inside lock; never fatal
   else
     echo "commit-lag: state commit deferred — $1" >&2
   fi
+  # #508 (HQ item a): the ledger alone is not the TRACKED class. Sweep the rest
+  # of the namespace on the same tail — this is the state-repo commit path the
+  # v0.4.238 law names, so the TRACKED class stops accumulating dirty between
+  # bundle sweeps (which no cron invokes).
+  state_sweep_tracked "$sd" "auto-commit: $1" || true
 }
 
 push_mirror() { # $1=repo dir, $2=label — off-box durability tail step (v0.4.50)
@@ -1037,38 +1094,11 @@ cmd_commit_pending() {
         && { echo "sweep: state ledger committed (n=$((head_n+1))..$disk_n)"; did=1; }
     fi
     if [ "$bundle" -eq 1 ]; then
-      # v0.4.49: seal-state receipts (baseline.json / orders.json) join the
-      # sweep — the swap chain writes them but never self-commits (the 6a2e66e
-      # manual-commit gap; owner "Go with 1" 2026-08-29). v0.4.51: journal/
-      # joins too — smoke journals land here, git-tracked since 1232ccd; the
-      # overnight cbc77058 swap (smoke-34) proved the gap live.
-      local state_hits=""
-      for p in tools.log baseline.json orders.json journal deployed.sha deployed.meta.json fanout.state oc-deploy oc-deploy-shadow.log oc-deploy-shadow.archive.log; do
-        [ -n "$(git -C "$sd" status --porcelain -- "$p" 2>/dev/null)" ] && state_hits="$state_hits $p"
-      done
-      if [ -n "$state_hits" ]; then
-        # shellcheck disable=SC2086
-        git -C "$sd" add -- $state_hits \
-          && git -C "$sd" commit -q -m "state sweep:$state_hits (oc-ledger commit-pending --bundle)" \
-          && { echo "sweep: state runtime files committed:$state_hits"; did=1; }
-      fi
-      # v0.4.237 (HQ ruling 2026-09-22): the harvest-state class joins the
-      # sweep. A parked harvest's state file is its ONLY resume record -- its
-      # resume cron reads it -- and NOTHING tracked it: the ledger commit above
-      # stages workers-ledger.json ALONE, and this whitelist omitted the class,
-      # so 17 of 20 sat untracked while their crons kept reading them (a stamp
-      # reporting "state commit ok" carried 1 file changed, ledger only).
-      # TRACKING IS NOT AUTHORSHIP: the CONTENT stays the owning lane's -- this
-      # only makes the record survive the disk. The pathspec is passed QUOTED
-      # and DIRECTLY to git, never through $state_hits, whose unquoted expansion
-      # the shell would pathname-expand against the CALLER's cwd.
-      local hs_hits=""
-      hs_hits="$(git -C "$sd" status --porcelain -- '*-harvest-state.md' 2>/dev/null)"
-      if [ -n "$hs_hits" ]; then
-        git -C "$sd" add -- '*-harvest-state.md' \
-          && git -C "$sd" commit -q -m "state sweep: *-harvest-state.md (oc-ledger commit-pending --bundle)" \
-          && { echo "sweep: harvest-state records committed"; did=1; }
-      fi
+      # #508 (DRY): the TRACKED namespace lives in ONE home above, consumed by
+      # both this verb and the auto-commit tail. The rationale for each member
+      # (v0.4.49 seal-state receipts, v0.4.51 journal/, v0.4.237 harvest-state,
+      # #508 health-rotation.json) rides STATE_TRACKED_PATHS.
+      state_sweep_tracked "$sd" "commit-pending --bundle" && did=1
     fi
   fi
   # skill repo: whitelisted runtime artifacts only (never doc edits)
@@ -1091,7 +1121,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (414 cases) -----------------------------------------------------
+# ---- selftest (418 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -1494,6 +1524,22 @@ ACKEOF
   echo '{"verdict":"PASS","fail":0,"mirror":"probe"}' > "$T/skill/tools/tests/battery-last.json"
   bash "$ME" commit-pending --bundle | grep -q "mirror: skill pushed" && ok || bad "commit-pending-mirror-push"
   git -C "$T/mirror.git" rev-parse --verify HEAD >/dev/null 2>&1 && ok || bad "commit-pending-mirror-received"
+  # #508: the AUTO-COMMIT tail covers the TRACKED namespace, not the ledger
+  # alone. Before this, git_state_commit staged workers-ledger.json ONLY, while
+  # the whitelist sat inside `commit-pending --bundle` -- a verb NO cron invokes
+  # -- so tools.log sat modified-uncommitted in the live state dir for days.
+  # The first assertion is the vacuity guard: if the probe were not dirty to
+  # begin with, the second would pass without the fix.
+  printf 'probe\n' >> "$T/state/tools.log"
+  git -C "$T/state" status --porcelain -- tools.log | grep -q . && ok || bad "auto-commit-probe-not-dirty"
+  bash "$ME" stamp note "#508 auto-commit probe" >/dev/null 2>&1
+  git -C "$T/state" status --porcelain -- tools.log | grep -q . && bad "auto-commit-tools-log-left-dirty" || ok
+  # DRY proof: the whitelist has exactly ONE home, and both callers reach it
+  # through the shared function (a re-inlined copy is the regression this
+  # guards -- the same shape as the claim-closure duplication in #441).
+  chk "state-tracked-single-source" "1" "$(grep -c '^STATE_TRACKED_PATHS=' "$ME")"
+  chk "state-sweep-fn-single-source" "1" "$(grep -c '^state_sweep_tracked()' "$ME")"
+
   # 33: concurrent race
   local before; before="$(jq '([.events[].n] | max)' "$OC_LEDGER")"
   for i in 1 2 3 4 5; do bash "$ME" stamp note "race-a-$i" >/dev/null 2>&1 & bash "$ME" stamp note "race-b-$i" >/dev/null 2>&1 & done
