@@ -621,6 +621,15 @@ JOURNAL_TAIL_LINES = 60
 #: recorded and must be retried. Collapsing them is what duplicated dispatches (#S).
 RC_UNVERIFIED = 6
 
+#: #370: the TARGETED path now runs the same eligibility arms as --auto, so its
+#: two refusals need codes of their own. They must NOT reuse 6: that code means
+#: "the send MAY have landed, the dispatch IS recorded, do NOT re-send", which is
+#: the OPPOSITE operator action from a refusal that sent nothing. Collapsing them
+#: is the same defect RC_UNVERIFIED's own note warns about. Registered in
+#: tools/RC-CONTRACT.md.
+RC_TARGETED_LANDED = 8
+RC_TARGETED_ALREADY_DISPATCHED = 9
+
 #: Greppable marker for a dispatch that routed WITHOUT an affinity table (#390).
 #: ONE home, so a caller can count degraded runs with `grep -c '^DEGRADED:'`.
 DEGRADED_MARKER = "DEGRADED"
@@ -1169,6 +1178,56 @@ def is_reopened(issue):
     return str(issue.get("stateReason") or "").upper() == "REOPENED"
 
 
+def evaluate_issue_arms(iss, landed, recent):
+    """Arm decision for ONE issue — the single-issue core of the eligibility seam.
+
+    Extracted from classify_dispatch_arms (#370) so the TWO entry points share ONE
+    predicate. `--auto` consulted the landed and dedup arms; the TARGETED form
+    (`oc-issue-dispatch <N>`, which the harvest patrol uses) called neither, so an
+    already-landed issue was re-proposed and an issue already wired to a lane was
+    wired to a SECOND one — the exact double-dispatch #337 was filed to stop. The
+    fix for #337 was wired into one path and the other was left as-is, which is
+    why the arithmetic lives here now rather than inline in either caller.
+
+    Returns `(events, dispatchable)` where `events` is the ordered list of arm
+    events this ONE issue produced (see classify_dispatch_arms for the vocabulary)
+    and `dispatchable` says whether it survives every arm.
+    """
+    is_gated, reason = check_issue_claim_gate(iss)
+    if is_gated:
+        return [("gated", iss, reason)], False
+    return evaluate_landed_and_dedup_arms(iss, landed, recent)
+
+
+def evaluate_landed_and_dedup_arms(iss, landed, recent):
+    """The LANDED and DEDUP arms for ONE issue, shared by both entry points (#370).
+
+    Split from evaluate_issue_arms because the CLAIM gate above is the one arm the
+    two paths treat differently: `--targeted` carries `--force` to bypass it, while
+    `--auto` does not. The landed and dedup arms have no such difference — they are
+    the same question on both paths — so they live here and neither caller may
+    re-implement them.
+
+    #414 — a REOPENED issue OVERRIDES both arms, because both are INFERENCES about
+    state: `landed` comes from artifacts (an `Issue-Ref` trailer on origin/main, or
+    a ledger landing row) and `recent` records only OUR OWN past dispatch, whereas a
+    reopen is a DELIBERATE act that contradicts them. The override is part of THIS
+    function, not of either caller, so the targeted path cannot lose it.
+    """
+    events = []
+    num = iss.get("number")
+    reopened = is_reopened(iss)
+    if num in landed and not reopened:
+        return [("landed", iss, None)], False
+    if num in landed and reopened:
+        events.append(("reopened", iss, "landed"))
+    if num in recent and not reopened:
+        events.append(("dedup", iss, recent[num]))
+        return events, False
+    if num in recent and reopened:
+        events.append(("reopened", iss, "dedup"))
+    return events, True
+
 def classify_dispatch_arms(unclaimed, landed, recent):
     """Partition `unclaimed` across the four dispatch arms, in evaluation order.
 
@@ -1204,23 +1263,12 @@ def classify_dispatch_arms(unclaimed, landed, recent):
     events = []
     dispatchable = []
     for iss in unclaimed:
-        num = iss.get("number")
-        is_gated, reason = check_issue_claim_gate(iss)
-        if is_gated:
-            events.append(("gated", iss, reason))
-            continue
-        reopened = is_reopened(iss)
-        if num in landed and not reopened:
-            events.append(("landed", iss, None))
-            continue
-        if num in landed and reopened:
-            events.append(("reopened", iss, "landed"))
-        if num in recent and not reopened:
-            events.append(("dedup", iss, recent[num]))
-            continue
-        if num in recent and reopened:
-            events.append(("reopened", iss, "dedup"))
-        dispatchable.append(iss)
+        # #370: the per-issue decision lives in evaluate_issue_arms() so BOTH
+        # entry points run ONE predicate; this loop is the multi-issue driver.
+        evs, ok = evaluate_issue_arms(iss, landed, recent)
+        events.extend(evs)
+        if ok:
+            dispatchable.append(iss)
     return events, dispatchable
 
 
@@ -1488,6 +1536,32 @@ def cmd_targeted(args):
     if is_gated and not args.force:
         print(f"ERROR: Issue #{issue_num} is claim-gated ({reason}). Pass --force to bypass gate in targeted mode.", file=sys.stderr)
         return 5
+
+    # #370: the TARGETED form consulted NEITHER eligibility guard, so an
+    # already-landed issue was re-proposed and an issue already wired to a lane
+    # was wired to a SECOND one — the double-dispatch #337 exists to stop. Both
+    # entry points now run the SAME arms (evaluate_landed_and_dedup_arms), so the
+    # two can never drift apart again.
+    if args.allow_landed:
+        landed = set()
+    else:
+        landed = fetch_landed_issues(args.repo) | ledger_landed_issues(ledger_data)
+    recent = {} if args.redispatch else recent_dispatches(ledger_data)
+    arm_events, arm_ok = evaluate_landed_and_dedup_arms(target_issue, landed, recent)
+    if not arm_ok:
+        for kind, _iss, detail in arm_events:
+            if kind == "landed":
+                print(f"ERROR: Issue #{issue_num} has LANDED — its fix is already on "
+                      f"origin/main (an Issue-Ref trailer references it) or the ledger "
+                      f"holds a landing row for it. Re-dispatching re-proposes shipped "
+                      f"work. Pass --allow-landed to override.", file=sys.stderr)
+                return RC_TARGETED_LANDED
+            if kind == "dedup":
+                lane, ts = detail
+                print(f"ERROR: Issue #{issue_num} was ALREADY dispatched to {lane} at "
+                      f"{ts} and is not yet acked. Dispatching again wires a SECOND lane "
+                      f"to the same issue. Pass --redispatch to override.", file=sys.stderr)
+                return RC_TARGETED_ALREADY_DISPATCHED
 
     editor_lanes = get_worker_roster(ledger_data)
     target_lane = None
@@ -2090,6 +2164,93 @@ def run_selftest():
         assert_true("#337 arm A: a qualified fork ref lands (#343)", 343 in _armA)
     finally:
         shutil.rmtree(_armA_repo, ignore_errors=True)
+
+    # Test 12c: #370 -- the TARGETED path runs the SAME eligibility arms.
+    #   Pre-fix, cmd_targeted consulted NEITHER the landed arm nor the dedup arm
+    #   (`grep -n 'LANDED_KINDS\|recent_dispatches(' ` found call sites inside
+    #   cmd_auto ONLY), so an already-landed issue was re-proposed and an issue
+    #   already wired to a lane was wired to a SECOND one -- the double-dispatch
+    #   #337 exists to stop. The fix routes BOTH entry points through
+    #   evaluate_landed_and_dedup_arms, so the two can no longer drift.
+    #   MUTATION KILL: delete the `evaluate_landed_and_dedup_arms` call from
+    #   cmd_targeted and the three cmd_targeted legs below fail (rc 4, not 6/7).
+    _arm_iss = {"number": 370, "title": "t", "body": "b", "labels": []}
+    _ev_l, _ok_l = evaluate_landed_and_dedup_arms(_arm_iss, {370}, {})
+    assert_eq("#370 a landed issue is not dispatchable on the shared arm", _ok_l, False)
+    assert_eq("#370 ...and the arm event says LANDED", _ev_l[0][0], "landed")
+    _ev_d, _ok_d = evaluate_landed_and_dedup_arms(
+        _arm_iss, set(), {370: ("11111111", "2026-09-22T00:00:00Z")})
+    assert_eq("#370 an already-dispatched issue is not dispatchable", _ok_d, False)
+    assert_eq("#370 ...and the arm event says DEDUP", _ev_d[0][0], "dedup")
+    _ev_c, _ok_c = evaluate_landed_and_dedup_arms(_arm_iss, set(), {})
+    assert_eq("#370 a clean issue IS dispatchable", _ok_c, True)
+
+    # ...and the behavioural half: drive cmd_targeted ITSELF, because the defect
+    # was that this ENTRY POINT never called the arms -- a helper-level leg alone
+    # would have passed on the pre-fix tree.
+    _f370 = tempfile.mkdtemp()
+    _repo370 = tempfile.mkdtemp()
+    try:
+        def _g370(*a):
+            return subprocess.run(["git", "-C", _repo370, *a],
+                                  capture_output=True, text=True, check=True)
+
+        _g370("init", "-q")
+        _g370("config", "user.email", "selftest@example.com")
+        _g370("config", "user.name", "selftest")
+        with open(os.path.join(_repo370, "f.txt"), "w") as _fh:
+            _fh.write("x\n")
+        _g370("add", "f.txt")
+        _g370("commit", "-q", "--no-gpg-sign", "-m", "chore: base")
+        _g370("update-ref", "refs/remotes/origin/main", "HEAD")
+
+        _iss370 = os.path.join(_f370, "issues.json")
+        with open(_iss370, "w") as _fh:
+            json.dump([{"number": 370, "title": "fix(tools): targeted path",
+                        "body": "no gate markers here", "labels": []}], _fh)
+        os.environ["OC_DISPATCH_MOCK_ISSUES"] = _iss370
+
+        def _ns370(ledger_events, **kw):
+            _lp = os.path.join(_f370, "ledger-%d.json" % len(ledger_events) + str(kw))
+            with open(_lp, "w") as _fh:
+                json.dump({"workers": [], "events": ledger_events}, _fh)
+            _a = dict(repo=_repo370, ledger=_lp, issue=370, to=None, dry_run=True,
+                      force=False, allow_landed=False, redispatch=False, budget_secs=0)
+            _a.update(kw)
+            return argparse.Namespace(**_a)
+
+        _done_row = [{"n": 1, "t": "2026-09-22T00:00:00Z", "by": "toolsmith 1234",
+                      "kind": "done", "what": "DONE #370 -- landed"}]
+        _e370 = io.StringIO()
+        with contextlib.redirect_stderr(_e370):
+            _rc_landed = cmd_targeted(_ns370(_done_row))
+        assert_eq("#370 cmd_targeted REFUSES a landed issue (rc 8, was rc 4/pass-through)",
+                  _rc_landed, RC_TARGETED_LANDED)
+        assert_true("#370 ...naming the arm and the override flag",
+                    "LANDED" in _e370.getvalue() and "--allow-landed" in _e370.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()):
+            _rc_landed_ov = cmd_targeted(_ns370(_done_row, allow_landed=True))
+        assert_eq("#370 ...and --allow-landed bypasses that refusal (falls through to capacity)",
+                  _rc_landed_ov, 4)
+
+        _disp_row = [{"n": 1, "t": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                      "by": "toolsmith 1234", "kind": "note",
+                      "what": "Triage dispatch issue #370 to editor 11111111 -- wire zero-ack claim-first"}]
+        _e370b = io.StringIO()
+        with contextlib.redirect_stderr(_e370b):
+            _rc_disp = cmd_targeted(_ns370(_disp_row))
+        assert_eq("#370 cmd_targeted REFUSES an already-dispatched issue (rc 9)",
+                  _rc_disp, RC_TARGETED_ALREADY_DISPATCHED)
+        assert_true("#370 ...naming the lane it was already wired to",
+                    "11111111" in _e370b.getvalue() and "--redispatch" in _e370b.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()):
+            _rc_disp_ov = cmd_targeted(_ns370(_disp_row, redispatch=True))
+        assert_eq("#370 ...and --redispatch bypasses that refusal (falls through to capacity)",
+                  _rc_disp_ov, 4)
+    finally:
+        os.environ.pop("OC_DISPATCH_MOCK_ISSUES", None)
+        shutil.rmtree(_f370, ignore_errors=True)
+        shutil.rmtree(_repo370, ignore_errors=True)
 
     # Test 13: #414 -- a REOPENED issue OVERRIDES the landed arm AND the dedup arm.
     #

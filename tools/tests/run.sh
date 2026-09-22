@@ -1463,10 +1463,16 @@ d451_run() { # $1 = tool path, $2 = label
   D451OUT="$D451STUB/out-$2.txt"
   # OC_TOOLS_NOLOG is re-exported explicitly: env -i drops the battery's own
   # export, and without it these synthetic runs append to the unified tools log.
+  # --allow-landed --redispatch: this fixture uses issue 451 purely as a VEHICLE
+  # for the SIGKILL-survival question, and #451's own fix IS landed (an Issue-Ref
+  # trailer on the skill repo's origin/main). Since #370 the targeted path runs
+  # the same eligibility arms as --auto, so the fixture must bypass them or it
+  # refuses with rc 8 before ever reaching the notify leg it exists to test.
   env -i HOME="$D451STUB/home" PATH="$D451STUB/bin:/usr/bin:/bin" \
       OC_TOOLS_NOLOG=1 OC_DISPATCH_NOTIFY_TIMEOUT=60 OC_DISPATCH_RECEIPT_GRACE=5 \
       timeout -s KILL 10 "$1" 451 \
         --to deadbeef-0000-0000-0000-000000000000 \
+        --allow-landed --redispatch \
         --ledger "$D451STUB/ledger.json" --repo "$TOOLS_DIR/.." \
       > "$D451OUT" 2>"$D451STUB/err-$2.txt"
   D451RC=$?
