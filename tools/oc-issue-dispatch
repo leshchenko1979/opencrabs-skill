@@ -69,6 +69,7 @@ import tempfile
 import fcntl
 import signal
 import collections
+import contextlib
 
 if '__file__' in globals():
     TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -594,6 +595,17 @@ def _env_positive_int(name, default):
 #: recorded -- the reported "hang with no output and no side effect".
 NOTIFY_TIMEOUT_SECS = _env_positive_int("OC_DISPATCH_NOTIFY_TIMEOUT", 120)
 
+#: Wall-clock bound on the ONE `oc-roster classify` call this tool routes on.
+#: `oc-roster` allows ITSELF 120s for the same DB read (tools/oc-roster:154), so
+#: an outer bound BELOW that kills work the inner tool was still doing -- the
+#: outer number has to be at least the inner one or the inner one is
+#: unreachable (#390). Measured live on this box, three consecutive IDLE runs:
+#: 9.76s / 16.50s / 17.36s -- a 1.78x swing with nothing else changing, so the
+#: old 60s had 3.5-6x headroom at best and none under carrier-build load, which
+#: is exactly when a cron fires this tool.
+#: Overridable (#390) so an operator under an outer `timeout N` can shorten it.
+ROSTER_TIMEOUT_SECS = _env_positive_int("OC_DISPATCH_ROSTER_TIMEOUT", 120)
+
 #: How long to keep re-reading the journal for a receipt after the send.
 #: Overridable (#451) for the same reason as NOTIFY_TIMEOUT_SECS.
 RECEIPT_GRACE_SECS = _env_positive_int("OC_DISPATCH_RECEIPT_GRACE", 30)
@@ -608,6 +620,26 @@ JOURNAL_TAIL_LINES = 60
 #: an unverified dispatch IS recorded and must not be re-sent, a failed one is NOT
 #: recorded and must be retried. Collapsing them is what duplicated dispatches (#S).
 RC_UNVERIFIED = 6
+
+#: Greppable marker for a dispatch that routed WITHOUT an affinity table (#390).
+#: ONE home, so a caller can count degraded runs with `grep -c '^DEGRADED:'`.
+DEGRADED_MARKER = "DEGRADED"
+
+
+def report_roster_degraded(rc, err, budget):
+    """Announce that the affinity table is unavailable, on BOTH streams (#390).
+
+    The WARN this replaces went to stderr ONLY, and a cron-driven invocation
+    discards stderr -- so a run that lost affinity routing left no trace at all
+    and `classify_ok=False` was recorded nowhere. The marker also goes to stdout,
+    where a caller can COUNT it, and it names the BUDGET because a timeout under
+    load is the case this exists for.
+    """
+    detail = (err or "").strip() or f"rc={rc}"
+    for stream in (sys.stdout, sys.stderr):
+        print(f"{DEGRADED_MARKER}: affinity table unavailable -- oc-roster classify "
+              f"failed (budget {budget}s, {detail}); routing WITHOUT affinity "
+              f"(every lane treated busy).", file=stream)
 
 
 _ISSUE_REF_VALUE_RE = re.compile(r"#([0-9]+)")
@@ -725,7 +757,8 @@ def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_pa
     else:
         roster_bin = os.path.join(TOOL_DIR, "oc-roster")
         if os.path.exists(roster_bin):
-            rc, out, err = run_cmd([roster_bin, "classify", "--json"], timeout=60)
+            rc, out, err = run_cmd([roster_bin, "classify", "--json"],
+                                   timeout=ROSTER_TIMEOUT_SECS)
             if rc == 0:
                 try:
                     cdata = json.loads(out)
@@ -734,8 +767,13 @@ def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_pa
                     classify_ok = True
                 except Exception as e:
                     print(f"WARN: Failed to parse oc-roster classify output: {e}", file=sys.stderr)
+                    report_roster_degraded(rc, f"unparseable output: {e}", ROSTER_TIMEOUT_SECS)
             else:
-                print(f"WARN: oc-roster classify failed (rc={rc}): {err.strip()}", file=sys.stderr)
+                report_roster_degraded(rc, err, ROSTER_TIMEOUT_SECS)
+        else:
+            # A MISSING oc-roster is the same degradation as a failed one, and was
+            # equally silent (#390): classify_ok stayed False with no output at all.
+            report_roster_degraded(127, f"no such tool: {roster_bin}", ROSTER_TIMEOUT_SECS)
 
     # Validate sessions existence against SQLite database (or mock_sessions in tests)
     known_sessions = None
@@ -1508,7 +1546,9 @@ def run_selftest():
     # #483: the window-full warning is asserted by shrinking the module's window
     # global rather than by fabricating 1000 issues, so the PRODUCTION comparison
     # (len(issues) >= OPEN_ISSUES_LIMIT) is the thing under test.
-    global OPEN_ISSUES_LIMIT
+    # #390: TOOL_DIR and ROSTER_TIMEOUT_SECS are swapped the same way -- the
+    # production call site reads both as globals, so the test drives the real one.
+    global OPEN_ISSUES_LIMIT, TOOL_DIR, ROSTER_TIMEOUT_SECS
     print("Running oc-issue-dispatch --selftest battery...")
     tests_passed = 0
     tests_failed = 0
@@ -1778,6 +1818,71 @@ def run_selftest():
     # Since oc-roster classify in test environment returns real rows or if absent fails,
     # let's test check_journal_receipt helper directly
     assert_true("check_journal_receipt returns False for nonexistent journal", not check_journal_receipt("nonexistent", 0, "/tmp/no-journal"))
+
+    # Test 6e (#390): the classify budget, and the degradation report.
+    #
+    # A stub `oc-roster` makes both arms deterministic. The stub `exec`s, so the
+    # process `run_cmd` kills IS the sleeper -- without exec the kill lands on the
+    # shell and the orphaned child keeps the stdout pipe open, which would make
+    # the elapsed assertion below measure the stub's sleep instead of the budget.
+    def _stub_roster(body):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "oc-roster")
+        with open(p, "w") as fh:
+            fh.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(p, 0o755)
+        return d
+
+    _saved_tool_dir, _saved_roster_budget = TOOL_DIR, ROSTER_TIMEOUT_SECS
+    try:
+        # (A) the BUDGET governs the call: a 3s stub under a 1s budget is KILLED
+        TOOL_DIR = _stub_roster("exec sleep 3")
+        ROSTER_TIMEOUT_SECS = 1
+        _out, _err = io.StringIO(), io.StringIO()
+        _t0 = time.time()
+        with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
+            _lanes = get_worker_roster(mock_ledger_classify_fail, mock_classify=None,
+                                       mock_sessions={"lane-safety-1"},
+                                       db_path="/tmp/nonexistent-db.sqlite")
+        _elapsed = time.time() - _t0
+        assert_true("#390 the classify budget governs the call (3s stub, 1s budget -> killed)",
+                    _elapsed < 2.5)
+        assert_true("#390 a killed classify is reported on STDOUT (countable by a cron)",
+                    any(l.startswith(DEGRADED_MARKER) for l in _out.getvalue().splitlines()))
+        assert_true("#390 ...and on STDERR (the stream it used to be alone on)",
+                    any(l.startswith(DEGRADED_MARKER) for l in _err.getvalue().splitlines()))
+        assert_true("#390 the report names the budget it exceeded",
+                    "budget 1s" in _out.getvalue())
+        assert_true("#390 every lane reads busy AND not-known when the table is unavailable",
+                    bool(_lanes) and all(l["is_busy"] and not l["busy_known"] for l in _lanes))
+
+        # (B) a FAST failure takes the same report path (rc 3, not a timeout)
+        TOOL_DIR = _stub_roster("exit 3")
+        _out2 = io.StringIO()
+        with contextlib.redirect_stdout(_out2), contextlib.redirect_stderr(io.StringIO()):
+            get_worker_roster(mock_ledger_classify_fail, mock_classify=None,
+                              mock_sessions={"lane-safety-1"},
+                              db_path="/tmp/nonexistent-db.sqlite")
+        assert_true("#390 a non-timeout classify failure is reported too",
+                    any(l.startswith(DEGRADED_MARKER) for l in _out2.getvalue().splitlines()))
+
+        # (C) a MISSING oc-roster was the silent case: classify_ok stayed False
+        # with no output at all before this fix.
+        TOOL_DIR = tempfile.mkdtemp()
+        _out3 = io.StringIO()
+        with contextlib.redirect_stdout(_out3), contextlib.redirect_stderr(io.StringIO()):
+            get_worker_roster(mock_ledger_classify_fail, mock_classify=None,
+                              mock_sessions={"lane-safety-1"},
+                              db_path="/tmp/nonexistent-db.sqlite")
+        assert_true("#390 a MISSING oc-roster is reported, not silent",
+                    any(l.startswith(DEGRADED_MARKER) for l in _out3.getvalue().splitlines()))
+    finally:
+        TOOL_DIR, ROSTER_TIMEOUT_SECS = _saved_tool_dir, _saved_roster_budget
+
+    # (D) the shipped default must not sit BELOW oc-roster's own allowance, or the
+    # inner budget is unreachable by construction (#390).
+    assert_true("#390 default classify budget >= oc-roster's own 120s allowance",
+                ROSTER_TIMEOUT_SECS >= 120)
 
     # Test 7: Negative control for CLI argument parsing
     p = argparse.ArgumentParser()
