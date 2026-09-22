@@ -383,10 +383,27 @@ chk("primary slash-joined list",
     oc.primary_issue_tokens("CLAIM #1414/#1418 — pair"), [1414, 1418])
 chk("primary live n=8034 parenthetical excluded",
     oc.primary_issue_tokens("CLAIM #302 — backfill (supersedes #290, #297)"), [302])
-chk("primary live n=1678 upstream mention excluded",
+# #379: this leg used to expect [1419] while its own name said "excluded" --
+# the expectation pinned the phantom the issue is about. A leading reference
+# qualified by a FOREIGN slug is upstream space: no fork target, so the dead
+# letter ([]), never a claim on a fork issue that does not exist.
+chk("primary live n=1678 upstream slug is not a fork target",
     oc.primary_issue_tokens(
         "md-plane wave lane claims n=1675 PATH-2 execution: upstream issue "
-        "adolfousier/opencrabs#1419 filed FIRST"), [1419])
+        "adolfousier/opencrabs#1419 filed FIRST"), [])
+chk("ref foreign slug skipped by every-ref tokens",
+    oc.issue_ref_tokens("upstream adolfousier/opencrabs#1419 filed"), [])
+chk("ref fork slug still yields its number",
+    oc.issue_ref_tokens("fork leshchenko1979/opencrabs#52"), [52])
+chk("primary foreign slug in the body is not the address",
+    oc.primary_issue_tokens("CLAIM #400 - upstream adolfousier/opencrabs#1419"), [400])
+chk("primary fork-qualified ref keeps its number",
+    oc.primary_issue_tokens("Issue-Ref leshchenko1979/opencrabs#1419"), [1419])
+# the false-negative guard: a filesystem path before a SPACED `issue N` must
+# not read as a slug and silently drop a real fork reference. This is why the
+# predicate matches the immediate form only.
+chk("ref filesystem path before spaced issue-N is not a slug",
+    oc.issue_ref_tokens("see tools/lib/oc_claims.py issue 379"), [379])
 chk("primary non-leading ref is the anchor when no earlier ref exists",
     oc.primary_issue_tokens("Claimed compaction-signal feature: Issue-Ref "
                             "leshchenko1979/opencrabs#29 (mirror of #1256)"), [29])

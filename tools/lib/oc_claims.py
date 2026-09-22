@@ -54,9 +54,11 @@ be read as an issue number (#272), and `claims 76` must not match a claim on
 WHAT A CLAIM CLAIMS (#329). Reference extraction answers TWO different
 questions, and one token list must not serve both:
 
-  * "does this row REFERENCE `#N`?" — every reference counts. A closing row's
-    prose mention of `#N` is part of signal 1 (same author, references `#N`),
-    so :func:`issue_ref_tokens` deliberately keeps them all.
+  * "does this row REFERENCE `#N`?" — every FORK-space reference counts. A
+    closing row's prose mention of `#N` is part of signal 1 (same author,
+    references `#N`), so :func:`issue_ref_tokens` deliberately keeps them all —
+    all of them that name a fork issue. A reference qualified by another
+    repository is upstream space and is skipped in BOTH predicates (#379).
   * "does this row CLAIM `#N`?" — only the row's ADDRESS counts. A `what` is a
     SENTENCE: the issues it cites while explaining itself are context, not
     claims. Live instance — row `n=8226` claims #327 and its note ends `...
@@ -206,6 +208,38 @@ LANDED_KINDS = ("close", "done")
 _REF_RE = re.compile(r"(?:#[0-9]+|issue[ \t=#]*[0-9]+)", re.IGNORECASE)
 _DIGITS_RE = re.compile(r"[0-9]+")
 
+#: The fork's own slug. A reference qualified by any OTHER slug is upstream
+#: space and must never fence a fork issue.
+FORK_REPO_SLUG = "leshchenko1979/opencrabs"
+
+#: `<owner>/<repo>` sitting IMMEDIATELY before a reference — the prose path's
+#: repo qualifier.
+_SLUG_BEFORE_RE = re.compile(r"([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+)$")
+
+def _is_foreign_ref(text, pos):
+    """True when the reference at ``pos`` is qualified by a non-fork slug (#379).
+
+    `#379`: `_REF_RE`'s `#[0-9]+` alternative also matched the `#N` INSIDE
+    `owner/repo#N`, and nothing on the prose path was repo-aware — so a row
+    naming an UPSTREAM issue (`adolfousier/opencrabs#1419`) registered a claim
+    on fork issue 1419, which does not exist. It reported as an open claim for
+    12.5 days (live carrier: ledger n=1678), listed under the lane's claims by
+    `oc-roster classify`, and could never be closed by fork-side work. The
+    trailer path already refused a foreign repository
+    (:func:`parse_issue_ref_value`); this is the same refusal for prose.
+
+    The IMMEDIATE form only — `slug#N`, no space between. Measured over the live
+    ledger's 18 181 prose fields, that form carries exactly two slugs
+    (`adolfousier/opencrabs` 80x, `leshchenko1979/opencrabs` 65x) and the
+    whitespace-separated form (`slug issue N`) never carries a foreign one, so
+    the immediate form IS the whole live population. Tolerating whitespace would
+    also read a filesystem path (`tools/lib/oc_claims.py issue 379`) as a slug
+    and silently drop a real fork reference — a false negative in exchange for
+    nothing.
+    """
+    match = _SLUG_BEFORE_RE.search(text[:pos])
+    return bool(match) and match.group(1) != FORK_REPO_SLUG
+
 # A claim's ADDRESS: consecutive references joined ONLY by list punctuation or
 # whitespace. Anything else (prose, a separator, a bracket) ends the address and
 # begins the body — see the module docstring, "WHAT A CLAIM CLAIMS".
@@ -229,16 +263,24 @@ UNATTRIBUTED_PREFIXES = ("(unattributed", "unrostered-actor")
 
 
 def issue_ref_tokens(text):
-    """Every issue reference in ``text``, as INTEGERS, in first-seen order.
+    """Every FORK-space issue reference in ``text``, INTEGERS, first-seen order.
 
     Integers, not strings: the four drifted copies disagreed on this and one of
     them therefore compared a str token against int tokens forever-falsely.
+
+    Fork space ONLY (#379): a reference qualified by another repository
+    (`adolfousier/opencrabs#1419`) is upstream space and is skipped, exactly as
+    :func:`parse_issue_ref_value` skips it on the trailer path. An upstream
+    reference cannot fence a fork issue in either place.
     """
     if not text:
         return []
+    s = str(text)
     out = []
-    for match in _REF_RE.findall(str(text)):
-        for num in _DIGITS_RE.findall(match):
+    for match in _REF_RE.finditer(s):
+        if _is_foreign_ref(s, match.start()):
+            continue
+        for num in _DIGITS_RE.findall(match.group(0)):
             value = int(num)
             if value not in out:
                 out.append(value)
@@ -261,15 +303,24 @@ def primary_issue_tokens(text):
     whitespace, so ``CLAIM #193, #205 — harvest packaging`` claims BOTH while
     ``CLAIM #327 — ... one proven live break (#323)`` claims only #327.
 
-    Never empty when the text carries any reference at all (the cluster always
-    contains the first one), so a caller may use it as the claim's target list
-    and treat ``[]`` as "no reference anywhere".
+    Empty means "no FORK target" — which is NOT the same as "no reference
+    anywhere", and the difference is deliberate (#379). A text whose LEADING
+    reference is qualified by another repository returns ``[]``: the row leads
+    with upstream work, and there is no fork issue for it to claim. That is the
+    existing dead-letter contract for a claim with no fork target, and it is the
+    conservative direction — the alternative would hunt for a later reference
+    and read a body citation as the address, which is the #329 phantom rebuilt
+    from the other end. Before #379 the leading-reference rule could not be
+    reached here at all: the upstream slug was stripped and its number returned
+    as a fork issue.
     """
     if not text:
         return []
     s = str(text)
     first = _REF_RE.search(s)
     if not first:
+        return []
+    if _is_foreign_ref(s, first.start()):
         return []
     cluster = _CLUSTER_RE.match(s[first.start():])
     return issue_ref_tokens(cluster.group(0) if cluster else first.group(0))
@@ -431,7 +482,7 @@ def open_claims(events, target_issue=None):
 #: The fork that OWNS the issue space. An `Issue-Ref` naming another repository
 #: is an UPSTREAM reference and must never fence a fork issue: measured live
 #: 2026-09-18, six commits carry `Issue-Ref: adolfousier/opencrabs#1419`.
-FORK_REPO_SLUG = "leshchenko1979/opencrabs"
+# FORK_REPO_SLUG now lives above, with _REF_RE — the prose path shares it (#379).
 
 # `#N` or `<owner>/<repo>#N` — the two forms oc-commit writes.
 _SLUG_REF_RE = re.compile(r"^([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+)?#(\d+)$")

@@ -1643,6 +1643,12 @@ AMBEOF
   # now REFUSED (symmetric with #19) — every consumer keys on the ref, so such
   # a row is a dead letter that cmd_claims cannot see (it answered CLEAN).
   OC_ACTOR="$W3" bash "$ME" stamp claim "CLAIM without issue ref" >/dev/null 2>&1; chk "stamp-claim-no-ref-refused" 2 $?
+  # #379: the same dead-letter rule now covers a claim naming ONLY an upstream
+  # issue. Before the fix the extractor stripped the slug and read
+  # `adolfousier/opencrabs#1419` as fork 1419 -- a number that does not exist in
+  # the fork -- so this guard PASSED and the row fenced a phantom issue for
+  # 12.5 days (live carrier n=1678).
+  OC_ACTOR="$W3" bash "$ME" stamp claim "CLAIM upstream adolfousier/opencrabs#1419 only" >/dev/null 2>&1; chk "stamp-claim-foreign-only-refused" 2 $?
   # ...and the guard must carry an escape hatch (#19 has --allow-unattributed,
   # sync has --allow-sweep): a caller who DELIBERATELY wants a ref-less claim
   # says so. The row lands, and claim-ref still answers rc 3 for it — which is
