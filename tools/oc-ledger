@@ -105,7 +105,7 @@
 #                                          to NO fork issue is reported as
 #                                          UNRESOLVED and the clean verdict is
 #                                          withheld (see cmd_sweep_closed_claims).
-#   --selftest                             fixture suite (411 cases)
+#   --selftest                             fixture suite (414 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -137,7 +137,18 @@ set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
 _OC_DIR="$(cd "$(dirname "$0")" && pwd)"
 _OC_LIB="$_OC_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-ledger" "$@"; else oc_log_finish() { :; }; fi
-trap 'oc_log_finish $?' EXIT
+# D2 (2026-09-22, #507): atomic_jq's temp lives INSIDE the state dir, so a
+# SIGKILL/OOM/cgroup teardown mid-write leaves it behind — measured, a 3.0 MB
+# .ledger.IW5b9i sat for 3 days, and the daemon SIGKILLs in-flight children on
+# every restart (9 starts / 9 stops on 2026-09-21). The EXIT trap below covers
+# every CATCHABLE signal (SIGTERM included — verified); the sweep inside
+# atomic_jq is the only cover for the uncatchable ones, which no trap can catch.
+# `_OC_TMP` is the seam that lets the trap name the path at all: atomic_jq's own
+# `tmp` is a function local, so a trap body has no way to see the live temp.
+_OC_TMP=""
+_oc_cleanup_tmp() { [ -n "${_OC_TMP:-}" ] && rm -f "$_OC_TMP"; return 0; }
+_oc_exit() { local rc=$?; _oc_cleanup_tmp; oc_log_finish "$rc"; }
+trap '_oc_exit' EXIT
 
 SKILL_DIR="${OC_SKILL_DIR:-$(cd "$_OC_DIR/.." && pwd)}"
 STATE_DIR_DEFAULT="${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}"
@@ -231,12 +242,38 @@ push_mirror() { # $1=repo dir, $2=label — off-box durability tail step (v0.4.5
 }
 
 # ---- atomic mutation core (call under lock) --------------------------------
+# ---- stale temp sweep (D2, #507) -------------------------------------------
+# Every atomic_jq caller is a `_*_locked` helper run under with_lock, so no live
+# temp can be in flight when this runs: any `.ledger.*` present is a corpse from
+# a SIGKILL. The age gate is belt-and-braces for a future caller that is NOT
+# under the lock, and it is what stops this from becoming a blanket `rm
+# .ledger.*` that could reap a temp mid-write. Globs the dir (one readdir, no
+# stat until a match) rather than shelling out to find: the normal case is zero
+# matches and this sits on the hot mutation path.
+_OC_TMP_MAX_AGE_M="${OC_LEDGER_TMP_MAX_AGE:-60}"
+sweep_stale_temps() { # $1 = state dir; best-effort — never fails the caller
+  local f n=0 now
+  now="$(date +%s)"
+  for f in "$1"/.ledger.*; do
+    [ -e "$f" ] || continue                      # no nullglob: the literal glob survives
+    [ "$f" = "${_OC_TMP:-}" ] && continue        # never reap our own live temp
+    [ $(( now - $(stat -c %Y "$f" 2>/dev/null || echo "$now") )) -ge $(( _OC_TMP_MAX_AGE_M * 60 )) ] || continue
+    rm -f "$f" && n=$((n+1))
+  done
+  if [ "$n" -gt 0 ] && command -v oc_log_extra >/dev/null 2>&1; then
+    oc_log_extra "stale_tmp_swept" "n=$n"
+  fi
+  return 0
+}
 atomic_jq() { # $@ = full jq invocation (--arg triples + program); exit 3 parse / 4 write-fail; live untouched on fail
-  local sd tmp; sd="$(STATE_DIR)"
-  tmp="$(mktemp "$sd/.ledger.XXXXXX")" || return 4
-  if ! jq "$@" "$LEDGER" > "$tmp" 2>/dev/null; then rm -f "$tmp"; return 3; fi
-  if ! jq -e . "$tmp" >/dev/null 2>&1; then rm -f "$tmp"; return 4; fi
-  mv "$tmp" "$LEDGER" || { rm -f "$tmp"; return 4; }
+  local sd; sd="$(STATE_DIR)"
+  sweep_stale_temps "$sd"
+  _OC_TMP="$(mktemp "$sd/.ledger.XXXXXX")" || { _OC_TMP=""; return 4; }
+  local tmp="$_OC_TMP"
+  if ! jq "$@" "$LEDGER" > "$tmp" 2>/dev/null; then rm -f "$tmp"; _OC_TMP=""; return 3; fi
+  if ! jq -e . "$tmp" >/dev/null 2>&1; then rm -f "$tmp"; _OC_TMP=""; return 4; fi
+  mv "$tmp" "$LEDGER" || { rm -f "$tmp"; _OC_TMP=""; return 4; }
+  _OC_TMP=""
 }
 with_lock() { # runs "$@" with exclusive flock on $LEDGER.lock
   local rc; exec 9>"$LEDGER.lock"
@@ -1054,7 +1091,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (411 cases) -----------------------------------------------------
+# ---- selftest (414 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -2188,6 +2225,44 @@ EOF
   bash "$ME" events --n 1 > "$T/nc-t.out" 2>"$T/nc-t.err"; chk "events-nc-trunc-rc" 0 $?
   chk "events-nc-trunc-160" "160" "$(awk -F'\t' '{print length($5)}' "$T/nc-t.out")"
   grep -q "truncated" "$T/nc-t.err" && ok || bad "events-nc-trunc-nudge"
+
+  # --- D2/#507: the atomic_jq temp leak --------------------------------------
+  # A corpse left by a SIGKILL must be collected by the NEXT mutation — no trap
+  # can catch SIGKILL, so this sweep is the only cover — while a FRESH temp must
+  # survive the age gate (a blanket `rm .ledger.*` would reap a live one).
+  OLD_TMP="$T/state/.ledger.stale1"; : > "$OLD_TMP"; touch -d '3 days ago' "$OLD_TMP"
+  NEW_TMP="$T/state/.ledger.fresh1"; : > "$NEW_TMP"
+  bash "$ME" stamp note "#507 sweep probe" >/dev/null 2>&1
+  [ ! -e "$OLD_TMP" ] && ok || bad "tmp-sweep-stale-reaped"
+  [ -e "$NEW_TMP" ] && ok || bad "tmp-sweep-fresh-kept"
+  rm -f "$T/state"/.ledger.* 2>/dev/null
+
+  # trap leg: a CATCHABLE signal mid-write must not leave the temp behind. The
+  # window is opened deterministically by a jq shim that sleeps ONLY when its
+  # stdout is the `.ledger.*` temp (the mutation write), so nothing else in the
+  # invocation is slowed. The `SAW` guard matters: a probe that never observed
+  # the window must report INCONCLUSIVE, never a vacuous green.
+  SHIM="$T/shim"; mkdir -p "$SHIM"; REAL_JQ="$(command -v jq)"
+  cat > "$SHIM/jq" <<SHIMEOF
+#!/bin/sh
+case "\$(readlink /proc/\$\$/fd/1 2>/dev/null)" in */.ledger.*) sleep 5 ;; esac
+exec "$REAL_JQ" "\$@"
+SHIMEOF
+  chmod +x "$SHIM/jq"
+  PATH="$SHIM:$PATH" bash "$ME" stamp note "#507 trap probe" >/dev/null 2>&1 &
+  KPID=$!
+  SAW=0
+  for _ in $(seq 1 100); do
+    [ -n "$(ls "$T/state"/.ledger.* 2>/dev/null)" ] && { SAW=1; break; }
+    sleep 0.05
+  done
+  kill -TERM "$KPID" 2>/dev/null; wait "$KPID" 2>/dev/null
+  if [ "$SAW" -eq 0 ]; then
+    bad "tmp-trap-probe-window (temp never observed — probe inconclusive)"
+  else
+    LEFT="$(ls "$T/state"/.ledger.* 2>/dev/null)"
+    [ -z "$LEFT" ] && ok || { bad "tmp-trap-clears-on-term"; rm -f "$T/state"/.ledger.*; }
+  fi
   rm -rf "$T"
 
   echo "oc-ledger selftest: PASS=$P FAIL=$F"
