@@ -13,7 +13,8 @@
 #   --rotate        advance round-robin pointer in health-rotation.json (default)
 #   --status        show rotation history and next class up without executing sweep
 #   --json          machine-readable findings (the cron's contract)
-#   --reap          apply the SAFE remediations (stale locks, old backups, old tmp).
+#   --reap          apply the SAFE remediations (stale locks, old backups, old tmp,
+#                   generated *.bak sidecars beyond the keep-window).
 #                   Without it the tool is a pure read — safe to run any time.
 #   --quiet         print only findings, not the checked-and-clean lines
 #   --selftest      run the hermetic offline fixture suite, exit 0/1
@@ -38,6 +39,12 @@ WT_PATTERNS="${OC_HEALTH_WT_PATTERNS:-${HOME:-/root}/oc-work/* ${HOME:-/root}/oc
 LOCK_MAX_AGE_H="${OC_HEALTH_LOCK_MAX_AGE_H:-24}"
 BAK_KEEP="${OC_HEALTH_BAK_KEEP:-3}"
 TMP_MAX_AGE_H="${OC_HEALTH_TMP_MAX_AGE_H:-48}"
+# D3 (#509): the GENERATED-IGNORED sidecar class (*.bak / *.bak-*). Keep the
+# newest SIDECAR_KEEP per source, and prune beyond that only once older than
+# SIDECAR_MAX_AGE_H. 48h + 3/source prunes 17 of the live 75 while keeping the
+# three most recent pre-images of every file.
+SIDECAR_KEEP="${OC_HEALTH_SIDECAR_KEEP:-3}"
+SIDECAR_MAX_AGE_H="${OC_HEALTH_SIDECAR_MAX_AGE_H:-48}"
 # M2-22 (2026-09-12): the second temp class — `mktemp -d` WORKDIRs left behind by
 # oc-deploy's swap path and by the battery's run_selftest. They reached 3.3G and
 # took the root fs to 85%. Distinct glob + distinct age + a SIGNATURE gate: a
@@ -264,6 +271,37 @@ selftest_impl() {
   left="$(ls -1 "$T/state"/workers-ledger.json.*bak* 2>/dev/null | wc -l)"
   chk "persistence-backups-pruned" 3 "$left"
   rm -f "$T/state"/workers-ledger.json.*bak*
+
+  # 7b. Class: persistence — GENERATED sidecar retention (D3, #509) ----------
+  # The class is the .gitignore'd *.bak / *.bak-* sidecars. The prune path needs
+  # the fixture state dir to BE a git repo, because the guard is "never reap a
+  # sidecar whose source is not tracked" -- so this leg inits one. That is also
+  # the fail-safe direction: with no repo to read, nothing is reaped at all.
+  git -C "$T/state" init -q 2>/dev/null
+  git -C "$T/state" config user.email t@t; git -C "$T/state" config user.name t
+  printf 'live\n' > "$T/state/tracked-state.md"
+  git -C "$T/state" add tracked-state.md >/dev/null 2>&1
+  git -C "$T/state" commit -qm base >/dev/null 2>&1
+  # 4 sidecars of a TRACKED source, oldest 4 days back: keep 3, prune the 4th
+  for i in 1 2 3 4; do
+    ts="$(date -u -d "-${i} day" +%Y-%m-%dT%H%M%S)"
+    printf 'x' > "$T/state/tracked-state.md.${ts}Z.bak"
+    touch -d "$i days ago" "$T/state/tracked-state.md.${ts}Z.bak"
+  done
+  # 2 sidecars of an UNTRACKED source: the only-copy guard must refuse them
+  for i in 1 2; do
+    ts="$(date -u -d "-${i} day" +%Y-%m-%dT%H%M%S)"
+    printf 'y' > "$T/state/untracked-state.md.${ts}Z.bak"
+    touch -d "$i days ago" "$T/state/untracked-state.md.${ts}Z.bak"
+  done
+  # the REQUIRED marker the owner's pacemaker order needs: --reap must not flip it
+  : > "$T/state/pacemakers-off"
+  RC=0; OUT="$(run --class persistence --reap 2>&1)" || RC=$?
+  chk "sidecar-tracked-pruned-to-keep" 3 "$(ls -1 "$T/state"/tracked-state.md.*.bak 2>/dev/null | wc -l)"
+  chk "sidecar-untracked-source-kept" 2 "$(ls -1 "$T/state"/untracked-state.md.*.bak 2>/dev/null | wc -l)"
+  [ -e "$T/state/pacemakers-off" ] && ok || bad "sidecar-reap-marker-survived"
+  case "$OUT" in *"sidecar-untracked-source"*) ok ;; *) bad "sidecar-untracked-reported: $OUT" ;; esac
+  rm -f "$T/state"/tracked-state.md.*.bak "$T/state"/untracked-state.md.*.bak "$T/state/pacemakers-off"
 
   # 8. Class: runtime_procs — unthrottled watcher detection (inside the window)
   NOW_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -778,6 +816,93 @@ if is_class_active "persistence"; then
       add_finding 3 SAFE ledger-backups "$n_bak ledger backups (keep $BAK_KEEP) — rerun with --reap"
     else
       clean_line "ledger backups: $n_bak (keep $BAK_KEEP)"
+    fi
+  fi
+
+  # 3b. GENERATED sidecar class retention (D3, #509) ---------------------------
+  # The .gitignore'd generated class: *.bak / *.bak-* sidecars left beside the
+  # file they are a PRE-IMAGE of. Nothing reaped it -- the class reached 75
+  # files / 4.1 MB in the live state dir. HEALTH-CLASSES.md's *.corrupt-*.bak
+  # row is a DIFFERENT pattern and never covered this one.
+  # Three safety properties, each the reason a simpler rule was rejected:
+  #  - allowlist generated PATTERNS only. A REQUIRED marker such as
+  #    `pacemakers-off` (HEALTH-CLASSES.md:93) is not a *.bak, so it can never be
+  #    a candidate and the reaper cannot flip that check's direction.
+  #  - a sidecar whose SOURCE is not tracked in the state repo is NEVER reaped.
+  #    Taken while its source was still untracked it may be the ONLY copy of that
+  #    reading (lane facd50af lost exactly that on 2026-09-22, #341), so the class
+  #    is REPORTED and left alone -- visible, not risked.
+  #  - the newest SIDECAR_KEEP per source are always kept, and the rest go only
+  #    once older than SIDECAR_MAX_AGE_H.
+  # NOT unified with the ledger-backup check above: that one keeps the newest N
+  # GLOBALLY, this one keeps the newest N PER SOURCE -- different rules. The
+  # ledger's own backups are excluded by prefix so the two never double-count.
+  if [ -d "$STATE" ] && git -C "$STATE" rev-parse --git-dir >/dev/null 2>&1; then
+    n_sc=0; sc_bytes=0; reap_sc=0; n_sc_prunable=0; n_sc_untracked=0; sc_untracked_names=""
+    sc_plan="$(python3 - "$STATE" "$SIDECAR_KEEP" "$SIDECAR_MAX_AGE_H" <<'PY' 2>/dev/null
+import os, re, subprocess, sys, time
+sd, keep, max_age_h = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+def source_of(f):
+    if ".bak-" in f:                       # <src>.bak-<suffix>
+        return f.split(".bak-")[0]
+    return re.sub(r"\.(?:19|20)\d{2}-\d{2}-\d{2}T\d{6}Z?$", "", f[:-4])
+try:
+    tracked = set(subprocess.check_output(["git", "-C", sd, "ls-files"],
+                                          text=True, stderr=subprocess.DEVNULL).split("\n"))
+except Exception:
+    tracked = set()
+names = sorted(f for f in os.listdir(sd)
+               if (f.endswith(".bak") or ".bak-" in f)
+               and not f.startswith("workers-ledger.json"))
+now = time.time(); total = 0; by = {}
+for f in names:
+    p = os.path.join(sd, f)
+    if not os.path.isfile(p):
+        continue
+    total += os.path.getsize(p)
+    by.setdefault(source_of(f), []).append(f)
+print("COUNT\t%d\t%d" % (len(names), total))
+def stamp(f):
+    # the writer's own stamp where it left one, mtime otherwise. mtime is sound
+    # here: 75 distinct mtimes over 75 live sidecars, so these are NOT cp -p
+    # copies of their source's timestamps.
+    m = re.search(r"\.(\d{4}-\d{2}-\d{2}T\d{6})Z?\.bak$", f)
+    if m:
+        try:
+            return time.mktime(time.strptime(m.group(1), "%Y-%m-%dT%H%M%S"))
+        except Exception:
+            pass
+    return os.path.getmtime(os.path.join(sd, f))
+for src, fs in sorted(by.items()):
+    fs.sort(key=stamp, reverse=True)
+    if src not in tracked:
+        for f in fs:
+            print("UNTRACKED\t%s" % f)
+        continue
+    for f in fs[keep:]:
+        if (now - stamp(f)) / 3600.0 >= max_age_h:
+            print("PRUNE\t%s" % f)
+PY
+)" || sc_plan=""
+    while IFS=$'\t' read -r tag a b; do
+      case "$tag" in
+        COUNT) n_sc="$a"; sc_bytes="$b" ;;
+        PRUNE) n_sc_prunable=$((n_sc_prunable + 1))
+               if [ "$REAP" = "1" ] && rm -f "$STATE/$a"; then reap_sc=$((reap_sc + 1)); fi ;;
+        UNTRACKED) n_sc_untracked=$((n_sc_untracked + 1)); sc_untracked_names="$sc_untracked_names $a" ;;
+      esac
+    done <<< "$sc_plan"
+    sc_mb="$(awk -v b="$sc_bytes" 'BEGIN{printf "%.1f", b/1048576}')"
+    if [ "$n_sc_untracked" -gt 0 ]; then
+      add_finding 3 QUIRK sidecar-untracked-source "$n_sc_untracked sidecar(s) whose source is NOT tracked in the state repo - NOT reaped (each may be the only copy of its reading):$sc_untracked_names"
+    fi
+    if [ "$reap_sc" -gt 0 ]; then
+      REAPED=$((REAPED + reap_sc))
+      add_finding 3 SAFE sidecar-retention "pruned $reap_sc generated sidecar(s), kept newest $SIDECAR_KEEP per source (>=${SIDECAR_MAX_AGE_H}h)"
+    elif [ "$n_sc_prunable" -gt 0 ]; then
+      add_finding 3 SAFE sidecar-retention "$n_sc generated sidecar(s) / ${sc_mb}MB, $n_sc_prunable prunable (keep $SIDECAR_KEEP per source, >=${SIDECAR_MAX_AGE_H}h) - rerun with --reap"
+    else
+      clean_line "generated sidecars: $n_sc / ${sc_mb}MB (keep $SIDECAR_KEEP per source)"
     fi
   fi
 
