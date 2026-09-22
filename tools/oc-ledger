@@ -105,7 +105,7 @@
 #                                          to NO fork issue is reported as
 #                                          UNRESOLVED and the clean verdict is
 #                                          withheld (see cmd_sweep_closed_claims).
-#   --selftest                             fixture suite (409 cases)
+#   --selftest                             fixture suite (411 cases)
 #
 # Exit codes: 0 ok · 1 verdict (cadence FIRE / check-version mismatch) ·
 #   2 usage (bad kind/shape/dup) · 3 ledger missing/parse/unknown-uuid ·
@@ -1015,6 +1015,23 @@ cmd_commit_pending() {
           && git -C "$sd" commit -q -m "state sweep:$state_hits (oc-ledger commit-pending --bundle)" \
           && { echo "sweep: state runtime files committed:$state_hits"; did=1; }
       fi
+      # v0.4.237 (HQ ruling 2026-09-22): the harvest-state class joins the
+      # sweep. A parked harvest's state file is its ONLY resume record -- its
+      # resume cron reads it -- and NOTHING tracked it: the ledger commit above
+      # stages workers-ledger.json ALONE, and this whitelist omitted the class,
+      # so 17 of 20 sat untracked while their crons kept reading them (a stamp
+      # reporting "state commit ok" carried 1 file changed, ledger only).
+      # TRACKING IS NOT AUTHORSHIP: the CONTENT stays the owning lane's -- this
+      # only makes the record survive the disk. The pathspec is passed QUOTED
+      # and DIRECTLY to git, never through $state_hits, whose unquoted expansion
+      # the shell would pathname-expand against the CALLER's cwd.
+      local hs_hits=""
+      hs_hits="$(git -C "$sd" status --porcelain -- '*-harvest-state.md' 2>/dev/null)"
+      if [ -n "$hs_hits" ]; then
+        git -C "$sd" add -- '*-harvest-state.md' \
+          && git -C "$sd" commit -q -m "state sweep: *-harvest-state.md (oc-ledger commit-pending --bundle)" \
+          && { echo "sweep: harvest-state records committed"; did=1; }
+      fi
     fi
   fi
   # skill repo: whitelisted runtime artifacts only (never doc edits)
@@ -1037,7 +1054,7 @@ cmd_commit_pending() {
   [ "$did" -eq 1 ] || echo "sweep: clean — nothing pending"
 }
 
-# ---- selftest (409 cases) -----------------------------------------------------
+# ---- selftest (411 cases) -----------------------------------------------------
 cmd_selftest() {
   export OC_SHIP_AUDIT_CHAIN=0
   export OC_TOOLS_NOLOG=1
@@ -1426,6 +1443,13 @@ ACKEOF
   mkdir -p "$T/state/journal"
   echo '{"probe":true}' > "$T/state/journal/sweep-probe.json"
   bash "$ME" commit-pending --bundle | grep -q "state runtime files committed.*journal" && ok || bad "commit-pending-journal-sweep"
+  # harvest-state class (v0.4.237, HQ ruling 2026-09-22) -- the bundle whitelist
+  # omitted it entirely, so a parked harvest's ONLY resume record sat untracked
+  # while its resume cron kept reading it. Tracking is not authorship: the
+  # content stays the owning lane's, and the file must simply survive the disk.
+  echo '# probe' > "$T/state/341-harvest-state.md"
+  bash "$ME" commit-pending --bundle | grep -q "harvest-state records committed" && ok || bad "commit-pending-harvest-state-sweep"
+  git -C "$T/state" status --porcelain -- '*-harvest-state.md' | grep -q . && bad "commit-pending-harvest-state-left-dirty" || ok
   # 32c: mirror push (v0.4.50) — a configured origin receives branch + tags;
   # bare fixture remote stands in for GitHub (offline selftest rule)
   git init -q --bare "$T/mirror.git"
