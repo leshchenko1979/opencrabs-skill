@@ -220,17 +220,34 @@ _is_uuid() { # $1 -> rc 0 iff a canonical 8-4-4-4-12 lowercase-hex uuid
 #   (smoke-34) proved the gap live.
 # health-rotation.json (#508): written by oc-health --rotate, already TRACKED in
 #   the state repo but absent from this list, so nothing carried it either.
-STATE_TRACKED_PATHS="tools.log baseline.json orders.json journal deployed.sha deployed.meta.json fanout.state oc-deploy oc-deploy-shadow.log oc-deploy-shadow.archive.log health-rotation.json"
+# #514 (2026-09-23, editor-lane report): the glossary's TRACKED bullet ALSO names
+#   smoke-verdicts.log, reviews/ and evidence/. All three are tracked in the state
+#   repo and carried by NOTHING here, so every later change accumulated until a
+#   hand-run hygiene commit swept it. smoke-verdicts.log is the receipted one and
+#   is MULTI-ACTOR — measured 33 distinct actor= values across 333 rows — so the
+#   sweep now DISCLOSES it in its commit subject. The append-only carve-out
+#   (toolsmith.md, proposal n=4057) exempts a self-attributing shared log from the
+#   dirty-path ban on condition that foreign rows are explicitly disclosed; the
+#   sweep is the one actor that stages rows it did not write, so it is the one
+#   that owes the sentence.  pacemakers-off is a bare-name MARKER, not a log: the
+#   glossary declares markers TRACKED and it was likewise carried by nothing.
+STATE_TRACKED_PATHS="tools.log baseline.json orders.json journal deployed.sha deployed.meta.json fanout.state oc-deploy oc-deploy-shadow.log oc-deploy-shadow.archive.log health-rotation.json smoke-verdicts.log reviews evidence pacemakers-off"
 # The harvest-state class (v0.4.237, HQ ruling 2026-09-22) is a SEPARATE
 # variable: it carries glob metacharacters and must reach git QUOTED and
 # DIRECTLY — an unquoted expansion pathname-expands against the CALLER's cwd.
 # A parked harvest's state file is its ONLY resume record — its resume cron
 # reads it. TRACKING IS NOT AUTHORSHIP: the CONTENT stays the owning lane's;
 # this only makes the record survive the disk.
-STATE_TRACKED_GLOB='*-harvest-state.md'
+# WIDENED at #514 from '*-harvest-state.md' to the class the glossary actually
+# declares ("the lane `*-state.md` records"). Measured 2026-09-23: 33 such files,
+# 20 of them harvest-state and 13 of them ship-/smoke-/fast-follow-state RECORDS
+# (138, 187, 199, 275-279, 291, 302, 321, 330, 341, 352, 444, 446, merge-20260906)
+# — every one already tracked in git, but tracked by a HAND-RUN hygiene commit, so
+# the mechanism carried none of them and the gap simply had not been exercised yet.
+STATE_TRACKED_GLOB='*-state.md'
 
 state_sweep_tracked() { # $1=state dir, $2=label -> commits the TRACKED namespace; rc 0 iff something committed
-  local sd="$1" label="${2:-state}" did=0 hits had_f=0
+  local sd="$1" label="${2:-state}" did=0 hits had_f=0 note=''
   case $- in *f*) had_f=1 ;; esac
   # `git add` DIES on a pathspec that matches nothing (rc 128, and it stages
   # NOTHING at all), so the whitelist is never handed to git wholesale — the
@@ -242,8 +259,18 @@ state_sweep_tracked() { # $1=state dir, $2=label -> commits the TRACKED namespac
     # `set -f` keeps a caller's cwd from expanding them on the way to git.
     set -f
     # shellcheck disable=SC2086
+    # Append-only shared logs self-attribute per row (actor=<uuid>), so a sweep
+    # that stages rows it did not write satisfies the carve-out ONLY by saying
+    # so. The disclosure is per-class, not per-actor: the actors are named IN the
+    # file, and enumerating them here would put a lane-uuid list in a commit
+    # subject that nothing parses.
+    case " $hits " in
+      *" smoke-verdicts.log "*)
+        note=' [disclose foreign rows: smoke-verdicts.log rows self-attribute via actor=]' ;;
+      *) note='' ;;
+    esac
     if git -C "$sd" add -- $hits 2>/dev/null \
-       && git -C "$sd" commit -q -m "state sweep:$hits ($label)" 2>/dev/null; then
+       && git -C "$sd" commit -q -m "state sweep:$hits ($label)$note" 2>/dev/null; then
       echo "sweep: state runtime files committed:$hits"
       did=1
     fi
@@ -252,9 +279,78 @@ state_sweep_tracked() { # $1=state dir, $2=label -> commits the TRACKED namespac
   if [ -n "$(git -C "$sd" status --porcelain -- "$STATE_TRACKED_GLOB" 2>/dev/null)" ]; then
     git -C "$sd" add -- "$STATE_TRACKED_GLOB" 2>/dev/null \
       && git -C "$sd" commit -q -m "state sweep: $STATE_TRACKED_GLOB ($label)" 2>/dev/null \
-      && { echo "sweep: harvest-state records committed"; did=1; }
+      && { echo "sweep: lane state records committed"; did=1; }
   fi
   [ "$did" -eq 1 ]
+}
+
+# ---- declared-vs-mechanism audit (#514) -------------------------------------
+# SKILL.md's state-dir glossary declares a TRACKED class; THIS list is the only
+# mechanism that carries it. The two have now drifted FIVE times — tools.log,
+# baseline.json/orders.json, journal/, health-rotation.json, and #514's
+# smoke-verdicts.log + reviews/ + evidence/ — and the list's own comment block
+# records four of them. Every drift has the same shape: the law reads as covered
+# while the file accumulates untracked, and nothing fails. One more name is the
+# fifth patch, not the fix, so this function is the guard: it parses the
+# glossary's OWN TRACKED bullet and names every entry the mechanism does not
+# carry.
+# Posture mirrors the C8 disposition (v0.4.242): WARN with the remedy, and an
+# explicit SKIP — never a silent clean — when the bullet cannot be located or a
+# token cannot be classified, because a check that cannot observe its failure
+# class must not report one (#485's shape).
+# WARN-only and rc 0 always: the declaration is HQ's law surface and the list is
+# this tool's, so a hard failure here would let one side's edit block the other's
+# work at a boundary it does not own.
+state_tracked_audit() { # Prints findings to stderr; ALWAYS rc 0 (never a gate).
+  local bullet tok mech m hit=0 gap=0 unclass=0
+  bullet="$(awk '/^  - \*\*TRACKED\*\* —/ { f=1; print; next } f && (/^  - / || /^  [A-Za-z]/) { f=0 } f { print }' "$SKILL_DIR/SKILL.md" 2>/dev/null)"
+  if [ -z "$bullet" ]; then
+    echo "state-tracked: NOTE — declared-vs-mechanism check SKIPPED: SKILL.md carries no '  - **TRACKED** —' bullet to parse. This is NOT a clean result and NOT a finding." >&2
+    return 0
+  fi
+  # Names carried by ANY mechanism: the two list variables, plus
+  # workers-ledger.json which git_state_commit stages on its OWN path and which
+  # is deliberately NOT in STATE_TRACKED_PATHS (the auto-commit tail would
+  # otherwise stage it against a foreign lock).
+  mech="$STATE_TRACKED_PATHS $STATE_TRACKED_GLOB workers-ledger.json"
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    case "$tok" in
+      *[![:print:]]*) continue ;;
+    esac
+    # A backticked span containing whitespace is a COMMAND documented in the
+    # bullet's parenthetical (e.g. `oc-ledger recover-receipt`), not a path.
+    case "$tok" in
+      *[[:space:]]*) unclass=$((unclass + 1)); continue ;;
+    esac
+    # The glossary writes directory entries with a trailing slash (`journal/`)
+    # while the mechanism stores them bare; an unnormalised compare reports both
+    # as gaps.
+    tok="${tok%/}"
+    hit=0
+    for m in $mech; do
+      [ "$tok" = "$m" ] && { hit=1; break; }
+      case "$tok" in
+        *"/$m") hit=1; break ;;
+      esac
+      case "$m" in
+        *"/$tok") hit=1; break ;;
+      esac
+      # a leading-dot token is the second half of a slash-pair in the prose
+      # ('deployed.sha'/'.meta.json' -> the mechanism name deployed.meta.json)
+      case "$tok" in
+        .*) case "$m" in *"$tok") hit=1; break ;; esac ;;
+      esac
+    done
+    [ "$hit" -eq 1 ] && continue
+    echo "state-tracked: WARN — '$tok' is declared TRACKED in SKILL.md's state-dir glossary but carried by NEITHER STATE_TRACKED_PATHS nor STATE_TRACKED_GLOB. Add it to the list, or amend the glossary (#514)." >&2
+    gap=$((gap + 1))
+  done <<EOF
+$(printf '%s\n' "$bullet" | grep -o '`[^`]*`' | tr -d '`')
+EOF
+  [ "$unclass" -gt 0 ] && echo "state-tracked: note — $unclass backticked span(s) in the TRACKED bullet are not path-shaped (commands/parentheticals) and were not classified. Disclosed so the skip is never silent." >&2
+  [ "$gap" -eq 0 ] && echo "state-tracked: every name declared TRACKED in SKILL.md is carried by the sweep list." >&2
+  return 0
 }
 
 git_state_commit() { # $1=message — inside lock; never fatal
@@ -797,6 +893,9 @@ cmd_sync() {
     || die 6 "sync: CHANGELOG.md has no '## v$v' entry — write the receipt first"
   # C8 second leg (v0.4.242): WARN, never die — see c8_naming_warn above.
   c8_naming_warn "$v"
+  # #514: the state-dir glossary is edited by the SAME law commits a sync ships,
+  # so this is the boundary where a declared-but-uncarried name first exists.
+  state_tracked_audit
   # step check: equal (re-sync) or third-component +1 only; --catch-up (T2
   # verdict n=1695, HQ-approved 2026-09-06) relaxes ONLY the step size for the
   # shipped-ahead dead zone — the doc-first gate above still pins v to the
@@ -1791,8 +1890,54 @@ ACKEOF
   # while its resume cron kept reading it. Tracking is not authorship: the
   # content stays the owning lane's, and the file must simply survive the disk.
   echo '# probe' > "$T/state/341-harvest-state.md"
-  bash "$ME" commit-pending --bundle | grep -q "harvest-state records committed" && ok || bad "commit-pending-harvest-state-sweep"
+  bash "$ME" commit-pending --bundle | grep -q "lane state records committed" && ok || bad "commit-pending-harvest-state-sweep"
   git -C "$T/state" status --porcelain -- '*-harvest-state.md' | grep -q . && bad "commit-pending-harvest-state-left-dirty" || ok
+  # ---- #514: the class the glossary declares, one wideness up ----
+  # The glossary says "the lane `*-state.md` records"; the mechanism carried only
+  # `*-harvest-state.md`. Measured 2026-09-23: 33 `*-state.md` files, 20 harvest
+  # and 13 ship-/smoke-/fast-follow-state RECORDS — all 13 already tracked, but by
+  # a HAND-RUN hygiene commit, so the mechanism carried none of them.
+  echo '# probe' > "$T/state/444-ship-state.md"
+  bash "$ME" commit-pending --bundle | grep -q "lane state records committed" && ok || bad "commit-pending-ship-state-sweep"
+  git -C "$T/state" status --porcelain -- '*-state.md' | grep -q . && bad "commit-pending-ship-state-left-dirty" || ok
+  # smoke-verdicts.log: TRACKED per the glossary, in the list since nothing, and
+  # MULTI-ACTOR (33 distinct actor= values / 333 rows measured) — so the sweep
+  # owes the append-only carve-out's disclosure sentence (toolsmith.md n=4057).
+  echo 'verdict=PASS actor=deadbeef-dead-4dead-8dead-deaddeadbeef' > "$T/state/smoke-verdicts.log"
+  bash "$ME" commit-pending --bundle | grep -q "smoke-verdicts.log" && ok || bad "commit-pending-smoke-verdicts-sweep"
+  git -C "$T/state" status --porcelain smoke-verdicts.log | grep -q . && bad "commit-pending-smoke-verdicts-left-dirty" || ok
+  git -C "$T/state" log -1 --format=%s | grep -q "disclose foreign rows" && ok || bad "commit-pending-smoke-verdicts-disclosed"
+  # a sweep that did NOT stage the shared log must NOT carry the disclosure —
+  # an unconditional sentence would be noise on every other commit
+  echo '# probe' > "$T/state/555-ship-state.md"
+  bash "$ME" commit-pending --bundle | grep -q "lane state records committed" && ok || bad "commit-pending-plain-sweep"
+  git -C "$T/state" log -1 --format=%s | grep -q "disclose foreign rows" && bad "commit-pending-disclosure-unconditional" || ok
+  mkdir -p "$T/state/reviews/2026probe" && echo 'probe' > "$T/state/reviews/2026probe/p.md"
+  bash "$ME" commit-pending --bundle | grep -q "reviews" && ok || bad "commit-pending-reviews-sweep"
+  git -C "$T/state" status --porcelain -- reviews | grep -q . && bad "commit-pending-reviews-left-dirty" || ok
+  # ---- the GUARD itself: declared-vs-mechanism, HERMETIC ----
+  # SKILL_DIR is pointed at a fixture doc so a LAW-side edit can never redden
+  # these legs: the declaration is HQ's surface and the list is this tool's, and
+  # coupling my battery to HQ's prose would block my commits for their edit.
+  chk "state-tracked-audit-single-source" "1" "$(grep -c '^state_tracked_audit()' "$ME")"
+  mkdir -p "$T/auditskill"
+  awk '/^state_tracked_audit\(\)/,/^}$/' "$ME" > "$T/auditfn.sh"
+  eval "$(grep -m1 '^STATE_TRACKED_PATHS=' "$ME")"
+  eval "$(grep -m1 '^STATE_TRACKED_GLOB='   "$ME")"
+  # (a) SKIP path: no bullet derivable -> a NOTE that SAYS it is not clean
+  printf '# fixture with no TRACKED bullet\n' > "$T/auditskill/SKILL.md"
+  export STATE_TRACKED_PATHS STATE_TRACKED_GLOB
+  _aout="$(SKILL_DIR="$T/auditskill" bash -c '. '"$T"'/auditfn.sh; state_tracked_audit' 2>&1)"
+  printf '%s' "$_aout" | grep -q 'SKIPPED' && ok || bad "state-tracked-audit-skip-note"
+  printf '%s' "$_aout" | grep -q 'NOT a clean result' && ok || bad "state-tracked-audit-skip-not-silent"
+  [ "$(printf '%s' "$_aout" | grep -c '^state-tracked: WARN')" = "0" ] && ok || bad "state-tracked-audit-skip-no-warn"
+  # (b) the discriminating half: a declared name the mechanism does NOT carry
+  sed -n '/^  - \*\*TRACKED\*\* —/,/^  - \*\*GENERATED-IGNORED\*\*/p' "$SKILL_DIR/SKILL.md" > "$T/auditskill/SKILL.md"
+  sed -i 's/· `baseline.json` ·/· `baseline.json` · `bogus-new-record.json` ·/' "$T/auditskill/SKILL.md"
+  grep -q 'bogus-new-record.json' "$T/auditskill/SKILL.md" && ok || bad "state-tracked-audit-fixture-injected"
+  _bout="$(SKILL_DIR="$T/auditskill" bash -c '. '"$T"'/auditfn.sh; state_tracked_audit' 2>&1)"
+  [ "$(printf '%s' "$_bout" | grep -c '^state-tracked: WARN')" = "1" ] && ok || bad "state-tracked-audit-warns-once"
+  printf '%s' "$_bout" | grep -q "bogus-new-record.json" && ok || bad "state-tracked-audit-names-the-gap"
   # 32c: mirror push (v0.4.50) — a configured origin receives branch + tags;
   # bare fixture remote stands in for GitHub (offline selftest rule)
   git init -q --bare "$T/mirror.git"
