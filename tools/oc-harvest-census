@@ -871,6 +871,145 @@ def cycle_note(active_claims, target_iss):
             notes.append('NOTE: mutual in-flight cycle #%s <-> #%s on %s; precedence: older claim #%s keeps, newer yields' % (target_iss, claim.get('issue') or '?', ', '.join(sorted(overlap)[:3]), older.get('issue') or '?'))
     return notes
 
+# ---- Leg (v): re-validate the claim's OWN recorded blocker (#536) ------------
+# Legs (i)-(iv) bound WHEN a claim was filed (liveness/age) and how cycles
+# resolve, but NOT ONE of them reads the claim's own reason — so a claim whose
+# blocker has already expired still fences exactly as though live. Measured
+# case: lane aaa8d8ae's #443 claim was recorded DESIGN-GATED with "no code in
+# flight", yet all four of its commits were ancestors of origin/main and
+# origin/main == deployed.sha BEFORE the release ruling. The claim had outlived
+# its own stated blocker and nothing re-validated it.
+#
+# CLOSED SET of blocker TYPES only, never a semantic read of free text:
+#   design-gate    the claim names a session plan; is approved_at still null?
+#   code-in-flight the claim's ANCHORED footprint; do those paths now carry a
+#                  commit on origin/main since the claim was filed?
+# The note is ADVISORY and printed BESIDE the fence — it never becomes a gate
+# verdict and never changes rc. When neither type parses (no plan reference, no
+# anchored footprint, unreadable plan), the SKIP DISCLOSURE is printed instead
+# of nothing: an unverifiable check that reports clean is the #485 defect in a
+# new costume, and a silent skip is indistinguishable from "blocker still
+# holds". Same posture as the oc-ledger C8 anchor guard.
+BLOCKER_DESIGN = re.compile(r'design[\s-]*gated', re.I)
+BLOCKER_FLIGHT = re.compile(r'in[\s-]*flight|fix queued|code in flight', re.I)
+# The uuid must be DECLARED as a plan reference. A bare 8-hex token is not one:
+# claim prose routinely carries card/message/thread ids, and matching one of
+# those to a plan filename would yield a confident verdict about the wrong plan.
+BLOCKER_PLAN_REF = re.compile(
+    r'\b(?:session\s+)?plan[\s:#]*([0-9a-f]{8}(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?)\b',
+    re.I)
+
+
+def _plan_dirs(st_dir):
+    """Directories the session-plan files live in, most specific first.
+
+    Both are live in this fleet: the engine writes under
+    <profile>/agents/session/ while <profile>/session/ carries the older set, so
+    searching either alone silently misses plans — and a miss reads as
+    "the plan is not on disk", which is a DIFFERENT verdict from "approved".
+    OC_PLAN_DIRS (colon-separated) overrides the search for fixtures.
+    """
+    override = os.environ.get('OC_PLAN_DIRS')
+    if override:
+        return [d for d in override.split(':') if d]
+    base = os.path.dirname(st_dir.rstrip('/')) if st_dir else ''
+    return [os.path.join(base, 'agents/session'), os.path.join(base, 'session'),
+            os.path.join(st_dir, 'agents/session'), os.path.join(st_dir, 'session')]
+
+
+def _plan_approved_at(plan_dirs, prefix):
+    """(found, approved_at) for the session plan whose uuid starts `prefix`.
+
+    Returns (False, None) when no plan matches, which the caller reports as a
+    SKIP rather than as a held blocker: "no plan on disk" must never be rendered
+    as a verdict about the blocker.
+    """
+    for d in plan_dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for name in names:
+            if not (name.startswith('.opencrabs_plan_') and name.endswith('.json')):
+                continue
+            if prefix[:8] not in name:
+                continue
+            try:
+                with open(os.path.join(d, name)) as f:
+                    return True, json.load(f).get('approved_at')
+            except Exception:
+                return True, None
+    return False, None
+
+
+def blocker_note(claim, repo_path, st_dir, now_ts=None):
+    """One ADVISORY line re-validating the claim's own recorded blocker (#536).
+
+    Never raises and never returns a gate verdict: an unresolvable input yields
+    the skip disclosure, so the caller can print a note whose absence is always
+    explained. Returns None when the claim records no blocker from the closed
+    set at all — that is "not a blocker-bearing claim", which is a different
+    answer from "a blocker-bearing claim whose blocker cannot be resolved".
+    """
+    what = claim.get('what') or ''
+    if BLOCKER_DESIGN.search(what):
+        m = BLOCKER_PLAN_REF.search(what)
+        if not m:
+            return ('NOTE(blocker): claim #%s says design-gated but names no session plan '
+                    '— blocker NOT re-validated (skip)' % (claim.get('issue') or '?'))
+        found, approved_at = _plan_approved_at(_plan_dirs(st_dir), m.group(1))
+        if not found:
+            return ('NOTE(blocker): claim #%s design-gated on plan %s, which is not on disk '
+                    '— blocker NOT re-validated (skip)' % (claim.get('issue') or '?', m.group(1)[:8]))
+        if approved_at:
+            return ('NOTE(blocker): claim #%s says design-gated but its plan %s now carries '
+                    'approved_at=%s — the recorded blocker has EXPIRED; review the fence'
+                    % (claim.get('issue') or '?', m.group(1)[:8], approved_at))
+        return ('NOTE(blocker): claim #%s says design-gated and plan %s still has '
+                'approved_at=null — blocker holds' % (claim.get('issue') or '?', m.group(1)[:8]))
+
+    if BLOCKER_FLIGHT.search(what):
+        files = [f for f in (claim.get('files') or []) if f]
+        if not files:
+            return ('NOTE(blocker): claim #%s says in-flight but carries no anchored footprint '
+                    '— blocker NOT re-validated (skip)' % (claim.get('issue') or '?'))
+        if not repo_path or not os.path.isdir(repo_path):
+            return ('NOTE(blocker): claim #%s says in-flight but no repo is readable '
+                    '— blocker NOT re-validated (skip)' % (claim.get('issue') or '?'))
+        rv = subprocess.run(['git', '-C', repo_path, 'rev-parse', '--verify', 'origin/main'],
+                            capture_output=True, text=True)
+        if rv.returncode != 0:
+            return ('NOTE(blocker): claim #%s says in-flight but origin/main does not resolve '
+                    '— blocker NOT re-validated (skip)' % (claim.get('issue') or '?'))
+        since = claim.get('filed_ts')
+        if not since:
+            return ('NOTE(blocker): claim #%s says in-flight but records no filing time '
+                    '— blocker NOT re-validated (skip); an unbounded window would read '
+                    'every path as touched' % (claim.get('issue') or '?'))
+        touched, commits = [], 0
+        for path in files:
+            r = subprocess.run(['git', '-C', repo_path, 'log', 'origin/main',
+                                '--since=%s' % since, '--format=%H', '--', path],
+                               capture_output=True, text=True)
+            n = len([ln for ln in r.stdout.split() if ln])
+            if n:
+                touched.append(path)
+                commits += n
+        if touched:
+            sample = ', '.join(sorted(touched)[:2])
+            return ('NOTE(blocker): claim #%s says in-flight but %d/%d named path(s) now carry '
+                    '%d commit(s) on origin/main since the claim (%s) — the recorded blocker may '
+                    'have EXPIRED' % (claim.get('issue') or '?', len(touched), len(files),
+                                      commits, sample))
+        return ('NOTE(blocker): claim #%s says in-flight and none of its %d named path(s) moved '
+                'on origin/main since the claim — blocker holds'
+                % (claim.get('issue') or '?', len(files)))
+
+    return None
+
+
 if action == 'check':
     m_iss = re.fullmatch(r'#?(\d+)', target) or re.fullmatch(r'issue-?(\d+)', target, re.IGNORECASE)
     target_iss = int(m_iss.group(1)) if m_iss else None
@@ -1069,6 +1208,15 @@ if action == 'check':
                 age_note = ' holder_age=unknown' if claim_age is None else ' holder_age=%.1fh%s' % (claim_age, ' DORMANT' if claim_dormant else '')
                 advisory = ' ADVISORY: review/release dormant holder claim' if claim_dormant else ''
                 refuse('REFUSED: Target %s touches files of active lane %s claim #%s [HELD_IN_FLIGHT_LANE: %s]%s%s' % (target, c_uuid, c_iss or '?', overlap_sample, age_note, advisory))
+                # Leg (v), #536: re-validate the claim's OWN recorded blocker
+                # beside the fence. Printed DIRECTLY, not through refuse(): a
+                # blocker note is advisory evidence about the claim, never a
+                # refusal leg of its own, and routing it through refuse() would
+                # both inflate the "N refusal legs apply" count and imply the
+                # note carries a clearance clock of its own. rc is untouched.
+                _bn = blocker_note(claim, repo_path, st_dir, now_ts)
+                if _bn:
+                    print(_bn)
 
     for cycle in cycle_note(active_claims, target_iss):
         refuse(cycle)
@@ -2046,6 +2194,152 @@ EOF
     ok "no cycle note without an own claim (control for #535)"
   else
     echo "  bad  - control expected rc=1 and no cycle note, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 3d7. LEG (v): RE-VALIDATE THE CLAIM'S OWN RECORDED BLOCKER (#536).
+  #      Legs (i)-(iv) bound WHEN a claim was filed and HOW cycles resolve, but
+  #      none reads the claim's OWN reason, so a claim whose blocker expired
+  #      still fences exactly as though live (#443: all four commits were
+  #      ancestors of origin/main and origin/main == deployed.sha BEFORE the
+  #      release ruling). CLOSED SET of blocker TYPES only, reported as a NOTE
+  #      beside the fence; an unresolvable input prints the SKIP DISCLOSURE
+  #      rather than a clean result.
+  #
+  #      Own ledger so the #533 full-fence-set leg keeps its exact claim count.
+  local mock_ledger_blocker="$selftest_tmp/mock_ledger_blocker.json"
+  local plan_dir="$selftest_tmp/plans"
+  mkdir -p "$plan_dir"
+  # A real git repo: the flight arm asks whether the named paths moved on
+  # origin/main, which no synthetic commit dict can answer.
+  local blocker_repo="$selftest_tmp/blocker_repo"
+  mkdir -p "$blocker_repo/src/active"
+  git -C "$blocker_repo" init -q
+  git -C "$blocker_repo" config user.name fixture
+  git -C "$blocker_repo" config user.email fixture@example.invalid
+  git -C "$blocker_repo" config commit.gpgsign false
+  printf 'pub fn lane_fn() -> u8 {\n    1\n}\n' > "$blocker_repo/src/active/lane.rs"
+  git -C "$blocker_repo" add -A
+  git -C "$blocker_repo" commit -q -m "base"
+  git -C "$blocker_repo" update-ref refs/remotes/origin/main "$(git -C "$blocker_repo" rev-parse HEAD)"
+
+  # --- design-gate arm: plan still approved_at=null -> blocker HOLDS ---
+  printf '{"status":"Editing","approved_at":null,"tasks":[]}\n' \
+    > "$plan_dir/.opencrabs_plan_aaaa1111-bbbb-4ccc-8ddd-eeeeeeeeeeee.json"
+  cat << 'BLKEOF' > "$mock_ledger_blocker"
+{"events":[
+ {"n":200,"kind":"claim","by":"editor 77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+  "what":"CLAIM #610 — DESIGN-GATED: parked on owner approval, design published in session plan aaaa1111",
+  "t":"2026-09-01T00:00:00Z","files":["src/active/lane.rs"]}
+]}
+BLKEOF
+  rc=0
+  out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_blocker" OC_PLAN_DIRS="$plan_dir" \
+        run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'blocker holds'; then
+    ok "leg (v) design-gate: plan approved_at=null -> blocker holds NOTE (#536)"
+  else
+    echo "  bad  - leg (v) design-gate hold expected rc=1 + 'blocker holds', got rc=$rc ($out)"
+    return 1
+  fi
+
+  # --- design-gate arm: plan now APPROVED -> recorded blocker EXPIRED ---
+  printf '{"status":"Active","approved_at":"2026-09-23T00:00:00Z","tasks":[]}\n' \
+    > "$plan_dir/.opencrabs_plan_aaaa1111-bbbb-4ccc-8ddd-eeeeeeeeeeee.json"
+  rc=0
+  out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_blocker" OC_PLAN_DIRS="$plan_dir" \
+        run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'recorded blocker has EXPIRED'; then
+    ok "leg (v) design-gate: plan approved -> blocker EXPIRED note, rc STILL 1 (#536)"
+  else
+    echo "  bad  - leg (v) expired design gate expected rc=1 + EXPIRED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # --- code-in-flight arm: named paths DID move on origin/main since the claim ---
+  local mock_ledger_flight="$selftest_tmp/mock_ledger_flight.json"
+  cat << 'FLTEOF' > "$mock_ledger_flight"
+{"events":[
+ {"n":210,"kind":"claim","by":"editor 77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+  "what":"CLAIM #611 — fix in flight: the fix lands next cycle",
+  "t":"2020-01-01T00:00:00Z","files":["src/active/lane.rs"]}
+]}
+FLTEOF
+  rc=0
+  out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_flight" \
+        run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'blocker may have EXPIRED'; then
+    ok "leg (v) code-in-flight: paths moved on origin/main -> may-EXPIRED note (#536)"
+  else
+    echo "  bad  - leg (v) flight-touched expected rc=1 + may-EXPIRED, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # --- code-in-flight CONTROL: paths did NOT move since the claim -> holds ---
+  local mock_ledger_flight2="$selftest_tmp/mock_ledger_flight2.json"
+  cat << 'FLT2EOF' > "$mock_ledger_flight2"
+{"events":[
+ {"n":211,"kind":"claim","by":"editor 77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+  "what":"CLAIM #611 — fix in flight: the fix lands next cycle",
+  "t":"2099-01-01T00:00:00Z","files":["src/active/lane.rs"]}
+]}
+FLT2EOF
+  rc=0
+  out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_flight2" \
+        run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'blocker holds'; then
+    ok "leg (v) code-in-flight control: no movement -> blocker holds (#536)"
+  else
+    echo "  bad  - leg (v) flight-untouched expected rc=1 + holds, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # --- SKIP DISCLOSURE: design-gated with no plan reference ---
+  local mock_ledger_skip="$selftest_tmp/mock_ledger_skip.json"
+  cat << 'SKPEOF' > "$mock_ledger_skip"
+{"events":[
+ {"n":220,"kind":"claim","by":"editor 77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+  "what":"CLAIM #612 — DESIGN-GATED per owner order; shape depends on his call",
+  "t":"2026-09-01T00:00:00Z","files":["src/active/lane.rs"]}
+]}
+SKPEOF
+  rc=0
+  out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_skip" OC_PLAN_DIRS="$plan_dir" \
+        run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'blocker NOT re-validated (skip)'; then
+    ok "leg (v) unparseable blocker prints the SKIP DISCLOSURE, not a clean result (#536)"
+  else
+    echo "  bad  - leg (v) skip disclosure expected rc=1 + skip text, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # --- SKIP DISCLOSURE: in-flight with NO filing time (unbounded window) ---
+  local mock_ledger_noflux="$selftest_tmp/mock_ledger_noflux.json"
+  cat << 'NOTEOF' > "$mock_ledger_noflux"
+{"events":[
+ {"n":221,"kind":"claim","by":"editor 77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+  "what":"CLAIM #613 — fix in flight, no timestamp recorded",
+  "files":["src/active/lane.rs"]}
+]}
+NOTEOF
+  rc=0
+  out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_noflux" \
+        run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'records no filing time'; then
+    ok "leg (v) in-flight without a filing time -> skip, never an unbounded window (#536)"
+  else
+    echo "  bad  - leg (v) no-filing-time expected rc=1 + skip text, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # --- AC3: a blocker-bearing claim that is NOT fencing prints NO note at all ---
+  rc=0
+  out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_blocker" OC_PLAN_DIRS="$plan_dir" \
+        run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "400" 2>&1)" || rc=$?
+  if ! echo "$out" | grep -q 'NOTE(blocker)'; then
+    ok "leg (v) note appears ONLY beside its own fence (no fence -> no note) (#536)"
+  else
+    echo "  bad  - leg (v) blocker note printed without a fence ($out)"
     return 1
   fi
 
