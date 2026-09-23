@@ -270,6 +270,61 @@ MUTEOF
   [ "$R1" -eq 0 ] && [ "$R2" -eq 0 ] \
     && t_ok "#429 real tool resolves both non-canonical shapes" \
     || t_bad "#429 real resolve (prefixed=$R1 foreign=$R2; want 0/0)"
+
+  # 17. #518: a worktree whose path matches NEITHER registered prefix. Before the
+  #     widening this class was dropped from `oc_wt_rows`, which feeds BOTH `list`
+  #     and the registry — so the tree was invisible to every verb and could only
+  #     be removed by a hand-run `git worktree remove`. Measured live 2026-09-23:
+  #     20 such trees in the source repo, 15 branch-carrying + 5 detached.
+  mkdir -p "$D/foreign"
+  mkwt "$D/foreign/plain-task" f-518
+  LST="$(env OC_TOOLS_NOLOG=1 "$SELF" list --repo "$D/repo" 2>&1)"
+  printf '%s\n' "$LST" | awk -F'\t' -v p="$D/foreign/plain-task" '$2==p {print $1}' | grep -qx "plain-task" \
+    && t_ok "#518 foreign-base worktree IS a list row" || t_bad "#518 foreign-base row missing"
+  #     the MAIN worktree must NOT become a row — widening without that exclusion
+  #     would emit the repo root as an unremovable row named after its basename.
+  [ "$(printf '%s\n' "$LST" | awk -F'\t' -v p="$D/repo" '$2==p' | wc -l)" -eq 0 ] \
+    && t_ok "#518 main worktree is NOT a row" || t_bad "#518 main worktree emitted as a row"
+  #     and it REMOVES by task name — the whole point of the registry leg
+  env OC_TOOLS_NOLOG=1 "$SELF" remove plain-task --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  if [ "$RC" -eq 0 ] && [ ! -d "$D/foreign/plain-task" ]; then
+    t_ok "#518 foreign-base resolves by task name and removes"
+  else t_bad "#518 foreign-base remove (rc=$RC)"; fi
+  # 17b. a DETACHED worktree (no `branch` line) is a row too, branch column
+  #      reading (detached) — `remove` resolves by path only, so hiding it would
+  #      leave the omission only partially closed.
+  "$GIT_BIN" -C "$D/repo" worktree add -q --detach "$D/foreign/detached-task" main 2>/dev/null
+  LST="$(env OC_TOOLS_NOLOG=1 "$SELF" list --repo "$D/repo" 2>&1)"
+  printf '%s\n' "$LST" | awk -F'\t' -v p="$D/foreign/detached-task" '$2==p && $3=="(detached)" {print 1}' | grep -qx 1 \
+    && t_ok "#518 detached worktree IS a row with a (detached) branch column" || t_bad "#518 detached row missing"
+  env OC_TOOLS_NOLOG=1 "$SELF" remove detached-task --repo "$D/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && t_ok "#518 detached worktree removes by task name" || t_bad "#518 detached remove (rc=$RC)"
+  # 17c. MUTANT: reintroduce the old two-substring predicate. The #518 class must
+  #      go invisible again, or the legs above prove nothing about the widening.
+  cp "$D/mut/lib/oc-wt-resolve.sh.orig" "$D/mut/lib/oc-wt-resolve.sh"
+  mkdir -p "$D/foreign"
+  mkwt "$D/foreign/mut-task" f-518m
+  cat >> "$D/mut/lib/oc-wt-resolve.sh" <<'MUTEOF'
+
+oc_wt_rows() {
+  "${GIT_BIN:-git}" -C "${REPO:-$HOME/opencrabs}" worktree list --porcelain 2>/dev/null | awk '
+    /^worktree /  { wt=substr($0,10) }
+    /^branch /    { br=substr($0,8)
+                    if (wt ~ /\/oc-wt-/ || wt ~ /\/opencrabs-wt\//) {
+                      t=wt; sub(/.*\//,"",t); sub(/^oc-wt-/,"",t)
+                      print t "\t" wt "\t" br
+                    }
+                    wt=""; br="" }'
+}
+MUTEOF
+  MUTOUT="$(env OC_TOOLS_NOLOG=1 "$D/mut/oc-wt" list --repo "$D/repo" 2>&1 | awk -F'\t' -v p="$D/foreign/mut-task" '$2==p')"
+  [ -z "$MUTOUT" ] \
+    && t_ok "#518 mutant: old predicate LOSES the foreign tree (legs are discriminating)" \
+    || t_bad "#518 mutant still showed the foreign tree: $MUTOUT"
+  env OC_TOOLS_NOLOG=1 "$D/mut/oc-wt" remove mut-task --repo "$D/repo" >/dev/null 2>&1; MRC=$?
+  [ "$MRC" -eq 5 ] \
+    && t_ok "#518 mutant: foreign task no longer resolves (rc 5, the pre-fix shape)" \
+    || t_bad "#518 mutant remove rc=$MRC (want 5)"
   echo "selftest: $pass/$((pass+fail)) passed"
   [ "$fail" -eq 0 ]
 }

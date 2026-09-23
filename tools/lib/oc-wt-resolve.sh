@@ -15,11 +15,13 @@
 #   $ oc-wt remove oc-wt-skill-glob-gate  -> rc 0 (undocumented working form)
 #
 # THE SHAPES, measured live 2026-09-20 (`oc-wt list`, 193 rows, ONE instant — the
-# population moves as lanes add and remove worktrees):
+# population moves as lanes add and remove worktrees). Since #518 the enumeration
+# is every non-main worktree (213 rows at the 2026-09-23 re-measure), so the
+# foreign-base leg below is no longer one curiosity but a 20-row class:
 #     143  $WT_BASE/oc-wt-<task>       canonical base, prefixed  -> candidate 2
 #      48  $WT_BASE/<task>             canonical base, bare      -> candidate 1
 #       1  $HOME/oc-wt-<task>          legacy home-level         -> candidate 3
-#       1  $HOME/oc-work/oc-wt-<task>  a base this lib does not own -> registry
+#      20  any other base, e.g. $HOME/oc-work/<task>, /tmp/<task> -> registry
 #
 # RESOLUTION IS PARTITIONED BY JURISDICTION, and that is what makes each leg
 # load-bearing (each is independently mutable in the selftest):
@@ -49,20 +51,42 @@
 oc_wt_base() { printf '%s\n' "${OC_WT_BASE:-$HOME/opencrabs-wt}"; }
 
 # oc_wt_rows — TSV "task<TAB>path<TAB>branch" for every worktree `oc-wt list`
-# reports. The predicate (/\/oc-wt-/ or /\/opencrabs-wt\//) and the task
-# derivation (basename, strip one oc-wt- prefix) ARE list's contract: changing
-# them here changes both what `list` prints and what every verb resolves, which
-# is the whole point of the two carriers sharing this file. A worktree with no
-# `branch` line (detached HEAD) is not a row — also matching `list`.
+# reports. The task derivation (basename, strip one oc-wt- prefix) IS list's
+# contract: changing it here changes both what `list` prints and what every verb
+# resolves, which is the whole point of the two carriers sharing this file.
+#
+# THE POPULATION IS EVERY NON-MAIN WORKTREE (#518). It used to be a PATH PREFIX
+# test — /\/oc-wt-/ or /\/opencrabs-wt\// — and a worktree under any other base
+# was dropped from the enumeration, which fed BOTH `list` and the registry, so it
+# was invisible to EVERY verb and could only be removed by a hand-run
+# `git worktree remove` (measured 2026-09-23: 20 such trees in the source repo,
+# 15 branch-carrying + 5 detached). The predicate was the defect: any whitelist of
+# BASES misses the next base a lane invents, which is exactly the pre-#429
+# mistake one level up.
+#
+# The MAIN worktree is excluded BY THE RECORD ORDER — git-worktree(1): "The main
+# working tree is listed first" — so record 1 is skipped. That exclusion is
+# load-bearing, not cosmetic: without it the repo root becomes a row whose task
+# name is the repo's own basename and which no verb could remove. It is pinned by
+# a selftest leg, so a git version that changed the ordering reddens there.
+#
+# A detached worktree (no `branch` line) IS a row, with the branch column reading
+# `(detached)`. `remove` resolves by PATH only, so a detached tree becomes
+# removable by task name — the same symptom the widening exists to close — and
+# hiding it would leave the omission only partially fixed.
 oc_wt_rows() {
   "${GIT_BIN:-git}" -C "${REPO:-$HOME/opencrabs}" worktree list --porcelain 2>/dev/null | awk '
-    /^worktree /  { wt=substr($0,10) }
-    /^branch /    { br=substr($0,8)
-                    if (wt ~ /\/oc-wt-/ || wt ~ /\/opencrabs-wt\//) {
-                      t=wt; sub(/.*\//,"",t); sub(/^oc-wt-/,"",t)
-                      print t "\t" wt "\t" br
-                    }
-                    wt=""; br="" }'
+    function put() {
+      if (n > 1) {
+        t=wt; sub(/.*\//,"",t); sub(/^oc-wt-/,"",t)
+        printf "%s\t%s\t%s\n", t, wt, (br != "" ? br : "(detached)")
+      }
+      wt=""; br=""
+    }
+    /^worktree / { if (wt != "") put(); wt=substr($0,10); n++; br="" }
+    /^branch /   { br=substr($0,8) }
+    /^$/         { if (wt != "") put() }
+    END          { if (wt != "") put() }'
 }
 
 # oc_wt_candidates <task> — the canonical-base ladder, most specific first.
