@@ -267,12 +267,26 @@ JSON
 #!/usr/bin/env bash
 if [ "$1" = "run" ] && [ "$2" = "view" ]; then
   rid="$3"
-  echo "{\"status\":\"completed\",\"conclusion\":\"success\",\"url\":\"https://github.com/test/runs/$rid\"}"
+  echo "{\"status\":\"completed\",\"conclusion\":\"success\",\"url\":\"https://github.com/test/runs/$rid\",\"headBranch\":\"leshchenko1979/fix/487-image-title-caption\",\"createdAt\":\"2026-09-14T02:19:23Z\"}"
   exit 0
 fi
 exit 1
 BINSCRIPT
   chmod +x "$d/bin/fake-gh"
+
+  # A NON-terminal stub: the same watcher that is still legitimately resumable.
+  # Paired with the terminal stub above this is the discriminating control for
+  # the c22 ACCEPT contract -- terminal suppresses, in-flight still notifies.
+  cat > "$d/bin/fake-gh-running" <<'BINSCRIPT'
+#!/usr/bin/env bash
+if [ "$1" = "run" ] && [ "$2" = "view" ]; then
+  rid="$3"
+  echo "{\"status\":\"in_progress\",\"conclusion\":null,\"url\":\"https://github.com/test/runs/$rid\",\"headBranch\":\"leshchenko1979/fix/487-image-title-caption\",\"createdAt\":\"2026-09-23T02:19:23Z\"}"
+  exit 0
+fi
+exit 1
+BINSCRIPT
+  chmod +x "$d/bin/fake-gh-running"
 
   local rc15=0
   local out15
@@ -282,12 +296,80 @@ BINSCRIPT
   orph_count="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d.get('orphans_recovered', [])))" "$out15" 2>/dev/null || echo 0)"
   assert_eq "recovers 2 orphan watchers (1 task + 1 checkpoint)" "2" "$orph_count"
 
-  # Test 15b: Live notify deduplication persists state in orphans_notified.json and skips repeat notification
+  # Test 15b: LIVE run against a TERMINAL run (completed/success) -> the
+  # watcher-recovery notice is SUPPRESSED (c22 ACCEPT, verdict-table:72). The
+  # records still surface so the sweep is never silently empty; what must not
+  # happen is a notify for a run that cannot be resumed.
   local out15b
   out15b="$(OC_GH="$d/bin/fake-gh" OC_DEV_STATE="$d/t15/state" OC_DEPLOY_STATE_DIR="$d/t15/state" "$SELF" --dir "$d/t15/detached" --notify-orphans --json 2>/dev/null)" || true
   local orph_live=0
   orph_live="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d.get('orphans_recovered', [])))" "$out15b" 2>/dev/null || echo 0)"
-  assert_eq "first live notify recovers 2 orphan watchers" "2" "$orph_live"
+  assert_eq "terminal live run still records 2 orphans" "2" "$orph_live"
+  local term_notified=0
+  term_notified="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(sum(1 for r in d.get('orphans_recovered', []) if r.get('notified')))" "$out15b" 2>/dev/null || echo -1)"
+  assert_eq "terminal run notifies 0 watchers (suppressed)" "0" "$term_notified"
+  local term_supp=0
+  term_supp="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(sum(1 for r in d.get('orphans_recovered', []) if r.get('suppressed_terminal')))" "$out15b" 2>/dev/null || echo -1)"
+  assert_eq "both terminal orphans recorded as suppressed_terminal" "2" "$term_supp"
+  # The suppression must be RECORDED, not merely skipped: a terminal run never
+  # becomes resumable, so re-querying it every sweep is pure waste.
+  local supp_persisted=1
+  python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if any(v.get('suppressed')=='terminal' for v in d.values()) else 1)" "$d/t15/state/orphans_notified.json" 2>/dev/null && supp_persisted=0
+  assert_eq "suppression persisted via the dedup path" "0" "$supp_persisted"
+
+  # Test 15d: the SAME watcher, same fixture, NON-terminal run -> still notified.
+  # This is the negative control for 15b: a fix that suppressed everything would
+  # pass 15b and fail here.
+  mkdir -p "$d/t15d/detached" "$d/t15d/state/runs/in-flight"
+  cat > "$d/t15d/detached/interrupted.json" <<'JSON'
+{
+  "id": "task-interrupted-running",
+  "session_id": "sess-running-arm",
+  "task": "gh run watch 777111 --repo leshchenko1979/opencrabs --interval 30 --exit-status",
+  "spawned_at": "2026-09-23T10:00:00Z",
+  "state": "Interrupted"
+}
+JSON
+  local out15d
+  out15d="$(OC_GH="$d/bin/fake-gh-running" OC_DEV_STATE="$d/t15d/state" OC_DEPLOY_STATE_DIR="$d/t15d/state" "$SELF" --dir "$d/t15d/detached" --notify-orphans --json 2>/dev/null)" || true
+  local run_notified=0
+  run_notified="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(sum(1 for r in d.get('orphans_recovered', []) if r.get('notified')))" "$out15d" 2>/dev/null || echo -1)"
+  assert_eq "NON-terminal (in_progress) run still notifies" "1" "$run_notified"
+  local run_supp=0
+  run_supp="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(sum(1 for r in d.get('orphans_recovered', []) if r.get('suppressed_terminal')))" "$out15d" 2>/dev/null || echo -1)"
+  assert_eq "NON-terminal run is not marked suppressed" "0" "$run_supp"
+
+  # Test 15e: the notice that DOES fire must name branch + issue + age -- the
+  # contract's second half, read from the record's own carried payload.
+  local n_bran=1ch=1
+  python3 -c "import json,sys; d=json.loads(sys.argv[1]); n=[r['notice'] for r in d.get('orphans_recovered',[]) if r.get('notified')]; sys.exit(0 if n and 'issue #487' in n[0] else 1)" "$out15d" 2>/dev/null && n_bran=0
+  assert_eq "fired notice names the branch's issue (#487)" "0" "$n_bran"
+  local n_age=1
+  python3 -c "import json,sys; d=json.loads(sys.argv[1]); n=[r['notice'] for r in d.get('orphans_recovered',[]) if r.get('notified')]; sys.exit(0 if n and 'old' in n[0] else 1)" "$out15d" 2>/dev/null && n_age=0
+  assert_eq "fired notice names the run age" "0" "$n_age"
+  # Fail-open guard: an unreadable conclusion must NOT suppress. An API fault
+  # may never silently swallow a real recovery.
+  local fo_verdict
+  fo_verdict="$(python3 -c "
+import re,sys
+src = open(sys.argv[1]).read()
+# The slice MUST carry _TERMINAL_NULLS: extracting the function alone raises
+# NameError, which a suppressed stderr would render as a silent pass.
+m = re.search(r'^_TERMINAL_NULLS.*?(?=^def branch_issue)', src, re.S|re.M)
+if not m:
+    print('EXTRACT_FAIL'); sys.exit(0)
+ns = {}
+exec(m.group(0), ns)
+f = ns['is_terminal_run']
+bad = []
+if f('unknown','unknown'): bad.append('unknown')
+if f('completed',''): bad.append('empty')
+if f('completed',None): bad.append('none')
+if f('completed','action_required'): bad.append('action_required')
+if not f('completed','success'): bad.append('NOT-TERMINAL:success')
+print('BAD:' + ','.join(bad) if bad else 'OK')
+" "$SELF" 2>/dev/null)"
+  assert_eq "is_terminal_run fails OPEN on unknown/null/action_required" "OK" "$fo_verdict"
 
   # Verify tracking file exists and contains task key
   local track_exists=1
@@ -516,12 +598,66 @@ def extract_run_info(cmd_text):
 def query_gh_run(run_id, repo):
     gh_bin = os.environ.get("OC_GH", "gh")
     try:
-        res = subprocess.run([gh_bin, "run", "view", str(run_id), "--repo", repo, "--json", "status,conclusion,url"], capture_output=True, text=True, timeout=15)
+        # headBranch + createdAt are REQUIRED by the watcher-recovery contract
+        # (c22 ACCEPT): a notice that fires must name branch + issue + age, and
+        # neither is derivable without them.
+        res = subprocess.run([gh_bin, "run", "view", str(run_id), "--repo", repo, "--json", "status,conclusion,url,headBranch,createdAt"], capture_output=True, text=True, timeout=15)
         if res.returncode == 0:
             return json.loads(res.stdout)
     except Exception:
         pass
     return None
+
+# --- watcher-recovery contract helpers (c22 ACCEPT, verdict-table:72) -------
+# The notice exists to wake a lane whose watcher died mid-flight. A run that is
+# already TERMINAL cannot be resumed -- `oc-prchecks resume` on it is a no-op at
+# best -- so notifying about one wakes a lane to do work that cannot exist.
+_TERMINAL_NULLS = ("", "null", "none", "unknown")
+
+def is_terminal_run(status, conclusion):
+    """True when the run cannot be resumed. Fail-OPEN: an unreadable conclusion
+    ("unknown" from a failed query) is NOT terminal, so an API fault can never
+    silently suppress a real recovery."""
+    c = str(conclusion if conclusion is not None else "").strip().lower()
+    if c in _TERMINAL_NULLS:
+        return False
+    # action_required is set on a COMPLETED run that is waiting for a human --
+    # the one conclusion that still has work attached.
+    if c == "action_required":
+        return False
+    return True
+
+def branch_issue(branch):
+    """Issue number named by a branch, or None. Conservative: an explicit #N
+    first, else a digit run delimited as its own path/name segment, so
+    `leshchenko1979/fix/487-image-title-caption` -> 487 while a branch with no
+    issue in it (ci/quick-build-linux) yields None rather than a stray match."""
+    b = str(branch or "")
+    m = re.search(r'#(\d{1,6})', b)
+    if m:
+        return m.group(1)
+    m = re.search(r'(?:^|[/\-_])(\d{2,6})(?:[-_/]|$)', b)
+    return m.group(1) if m else None
+
+def human_age(created_at):
+    """Age of the run (from createdAt), as a compact string, or None."""
+    if not created_at:
+        return None
+    try:
+        t = str(created_at).strip().replace("Z", "+00:00")
+        dt = datetime.datetime.fromisoformat(t)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        secs = int((datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds())
+        if secs < 0:
+            return None
+        if secs < 3600:
+            return f"{secs // 60}m"
+        if secs < 86400:
+            return f"{secs // 3600}h"
+        return f"{secs // 86400}d{(secs % 86400) // 3600}h"
+    except Exception:
+        return None
 
 def notify_session(uuid, title, text):
     home_dir = os.environ.get("HOME", "/root")
@@ -609,19 +745,59 @@ if notify_orphans:
         status = run_data.get("status") if run_data else "unknown"
         conclusion = run_data.get("conclusion") if run_data else "unknown"
         url = run_data.get("url") if run_data else f"https://github.com/{c['repo']}/actions/runs/{c['run_id']}"
-        
-        msg = f"[WATCHER RECOVERED] Detached watcher was interrupted by daemon restart.\nTarget: {c['repo']} run {c['run_id']}\nRun status: {status}, conclusion: {conclusion}\nRun URL: {url}\nResume command: oc-prchecks resume {c['run_id']}"
-        
+        branch = run_data.get("headBranch") if run_data else None
+        created = run_data.get("createdAt") if run_data else None
+
+        # c22 ACCEPT (verdict-table:72): a TERMINAL run cannot be resumed, so
+        # notifying about it wakes a lane to do work that cannot exist. Suppress
+        # it -- but never silently: the record keeps the reason.
+        suppressed = is_terminal_run(status, conclusion) and not dry_run
+
         rec = {
             "session_id": sess,
             "run_id": c["run_id"],
             "repo": c["repo"],
             "status": status,
             "conclusion": conclusion,
+            "branch": branch,
+            "issue": branch_issue(branch),
+            "age": human_age(created),
             "source": c["source"],
-            "notified": not dry_run
+            "notified": not dry_run and not suppressed,
+            "suppressed_terminal": suppressed
         }
         orphan_recoveries.append(rec)
+
+        if suppressed:
+            # Record the suppression through the SAME dedup path a notify uses.
+            # A terminal run never becomes resumable, so without this the sweep
+            # would re-query it on every pass, forever, for no possible gain.
+            if c.get("key"):
+                notified_orphans_state[c["key"]] = {
+                    "session_id": sess,
+                    "run_id": c["run_id"],
+                    "suppressed": "terminal",
+                    "conclusion": conclusion,
+                    "notified_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                }
+                new_notified = True
+            continue
+
+        ident = ""
+        if branch:
+            iss = branch_issue(branch)
+            age = human_age(created)
+            ident = f"\nBranch: {branch}"
+            if iss:
+                ident += f" (issue #{iss})"
+            if age:
+                ident += f" -- run is {age} old"
+        msg = f"[WATCHER RECOVERED] Detached watcher was interrupted by daemon restart.\nTarget: {c['repo']} run {c['run_id']}{ident}\nRun status: {status}, conclusion: {conclusion}\nRun URL: {url}\nResume command: oc-prchecks resume {c['run_id']}"
+        # Carry the emitted text on the record: the contract binds the NOTICE
+        # (it must name branch + issue + age), and an assertion that cannot read
+        # the payload measures the source constants instead of the artifact.
+        rec["notice"] = msg
+
         if not dry_run:
             notify_session(sess, "Detached Watcher Recovered", msg)
             if c.get("key"):
@@ -654,9 +830,18 @@ if json_mode:
         print(json.dumps(results, indent=2))
 else:
     if notify_orphans:
-        print(f"ORPHAN RECOVERY REPORT: {len(orphan_recoveries)} orphan watchers resolved")
+        n_supp = sum(1 for r in orphan_recoveries if r.get("suppressed_terminal"))
+        print(f"ORPHAN RECOVERY REPORT: {len(orphan_recoveries)} orphan watchers resolved ({n_supp} suppressed as terminal)")
         for r in orphan_recoveries:
-            print(f"  SESSION: {r['session_id']}\tRUN: {r['run_id']}\tSTATUS: {r['status']}\tCONCLUSION: {r['conclusion']}\tNOTIFIED: {r['notified']}")
+            extra = ""
+            if r.get("branch"):
+                extra = f"\tBRANCH: {r['branch']}"
+                if r.get("issue"):
+                    extra += f"\tISSUE: #{r['issue']}"
+                if r.get("age"):
+                    extra += f"\tAGE: {r['age']}"
+            supp = "\tSUPPRESSED: terminal" if r.get("suppressed_terminal") else ""
+            print(f"  SESSION: {r['session_id']}\tRUN: {r['run_id']}\tSTATUS: {r['status']}\tCONCLUSION: {r['conclusion']}\tNOTIFIED: {r['notified']}{extra}{supp}")
     if results:
         print(f"TASK_ID\tSESSION_ID\tSPAWNED_AT\tLIVE\tVIOLATION\tDETAIL\tCOMMAND")
         for r in results:
