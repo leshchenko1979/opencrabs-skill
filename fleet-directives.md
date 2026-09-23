@@ -221,6 +221,17 @@ All observed runtime events, anomalies, proposals, and feature ideas MUST follow
 
 - **Autonomous Goal Mandate**: Every editor claiming or waking on an issue MUST issue `/goal follow the skill until the smoke test phase` (or set its session goal) to ensure unbroken continuous execution across all lifecycle phases.
 - **Design-gate precondition (owner order 2026-09-12)**: The goal is issued **ONLY AFTER the owner has confirmed the design** (owner design gate, v0.4.128). Until that confirmation lands, the editor stays in the design/approval phase and MUST NOT open the autonomous run: issuing the goal early would carry the editor straight past the gate that exists to require owner approval BEFORE code. Sequence is fixed — design → owner confirms → `/goal` → continuous execution to the smoke test phase.
+- **Design-gated WRITE SCOPE (v0.4.243, cycle `20260922-c22`; converged from lanes
+  `9fa7c71a` and `40427d4f`).** A lane parked on the owner design gate had a codified
+  NUDGE scope and, until this clause, NO write scope — the only constraint a parked lane
+  could see was a harness-injected block, and `grep -rln "plan mode|plan-mode"` over the
+  whole skill returned **ZERO files** (measured 2026-09-22), so "no project file edits"
+  could not be resolved against a lane's fleet-process write obligations. The scope is a
+  SURFACE distinction, not "files vs no files" — a design-gated lane **MAY** write
+  fleet-process surfaces (the ledger, `reviews/**` including its own proposal file, the
+  state dir, journals, and run artifacts) and **MAY NOT** write project/source files or
+  open the autonomous checklist. Two lanes resolved that ambiguity the same way by reading
+  intent rather than law; this clause makes that reading the rule.
 - **No Early Halts**: Editors MUST NOT stop, ask for confirmation, or stall after writing code (Phase 4), after pushing, or after intermediate ship legs. Work continues uninterrupted through Phase 5 (`oc-ship-chain`) to live host deployment and Phase 6b behavioral smoke testing.
 - **Completion Definition**: A task is complete ONLY when the live behavioral smoke test on the swapped binary has executed and its 4-leg receipt is recorded in `smoke-verdicts.log`.
 
@@ -575,6 +586,7 @@ Every tool/script we build must be debuggable from its logs alone. Each state-ch
 4. **W4 (Notify wiring):** Automated watchers notify directly to the owning session UUID via `session_notify` upon terminal completion.
 5. **W5 (Log-window cuts):** Grep and log queries must bound search ranges (`--since` or fixed tail) to avoid context compaction floods.
 6. **W6 (Actor attribution):** automatic via ambient `$OPENCRABS_SESSION_ID` — see §Attribution & Goal Hygiene A1.
+7. **W7 (Inline waiter cap, v0.4.243 cycle `20260922-c22`; converged from lanes `61161247`, `c6b1a539`, `d18ce16a`):** an INLINE blocking wait MUST stay under the harness tool-runner cap — **600 s** (the bash tool's own `timeout_secs` maximum; the 120 s figure in the v0.4.57 note is STALE). The **2700 s** budget belongs to the DETACHED form / `oc-prchecks wait <ref>` ONLY, so W2's ceiling is not a licence for an inline `--wait 2700`: that call cannot survive its own budget (2700 s = 4.5× the cap). **A waiter killed at the cap does NOT void the dispatch it started** — do not read it as "the gate never dispatched": recover the run id (`gh run list -R leshchenko1979/opencrabs --workflow=pr-checks.yml`, or the run URL in the journal's `extra.run_id`) and re-attach with `oc-prchecks resume <run-id>` (no dispatch, no adoption). **Never re-issue the original call.** This is the rc-5-TIMEOUT law's missing sibling: the law covered a wait that RETURNED a timeout, never one killed outright.
 
 ## Swap-head signature for rebase/synthesis/merge-derived binaries (owner 2026-09-03 "Land 1+2 only, keep version as-is") [LANE]
 
