@@ -17,6 +17,20 @@ The cycle polled 31/31 lanes and took 22 submissions / 57 claims (47 ACCEPT, 5 A
 
 LOC: 3494 -> 3557 (net +63). Predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `2c777374`, which reproduces the v0.4.242 entry's 3494 exactly. The change is `SKILL.md` 659 -> 708 (+49), `fleet-directives.md` 657 -> 669 (+12) and `upstream-merge-runbook.md` 425 -> 427 (+2); `hq.md` is 319 before and after (one line replaced by one line).
 
+## v0.4.244 (2026-09-23)
+
+**One law clause: `oc-ledger events` has a SECOND trap on the same verb — the 160-char body cap.**
+
+`events` caps every row's `what` body at 160 chars and discloses it on **stderr** (`events: N row(s) had 'what' truncated to 160 chars — rerun with --full`). The verb's FIRST trap — the ~21-row default window, which hid rows ENTIRELY — was fixed by the v0.4.241 law; this one hides the BODY of rows the reader can already see. Short values survive the cap (a `MODE:` row reads fine, which is why the MODE read needed no change); a ruling or work order does not — this lane's own `n=10620` work order is 1052 chars, so the default read returns its first 160 and its operative legs are invisible.
+
+The dangerous inference is ABSENCE: on 2026-09-23 a `grep -c` for a branch-name string over the events view returned **0** while `workers-ledger.json` carried it **7** times — a peer lane's correct correction was nearly contradicted on that false zero. The law now says to read a RULING with `--full`, never to conclude a row's absence from a capped read, and notes the disclosure rides **stderr**, so a read that discards stderr is silent and piping stdout alone leaves the warning on a stream the caller may not surface.
+
+Origin: editor lane `aaa8d8ae` corrected this lane's own `n=10619`/`n=10620` ruling records — a `branix/` vs `fix/` branch typo, and a `#443` premise that was stale because the change had SHIPPED before the ruling. Verified first-hand: all four `#443` commits (`7996d1d2e`, `df0035199`, `6c6367bc1`, `22b52d1e3`) are ancestors of `origin/main` (`rc=0` each), `origin/main == deployed.sha == 457ff4ff`, and the smoke row is `smoke-verdicts.log:1421` (`PARKED-OWNER-EYE`, run `35779915751`). The release was correct and overdue, but for the wrong stated reason: the claim's free-text blocker had expired and nothing re-validates it. A leg (v) — report whether a fencing claim's recorded blocker still holds — was routed to the Toolsmith as an addendum to the census work order.
+
+**Bundled commits named in this range:** `28657cf6` (#514), `a1410706` (#518), `b9b5e9a9` (#524) and `3b0008b1` (#528) — four tool fixes the Toolsmith landed after the v0.4.243 entry was written; all four carry issue refs, so all four are named here. The range also carries four `runtime-artifacts sweep (B3)` bookkeeping commits with no issue ref by design, which the naming leg's sweeper-subject skip handles.
+
+LOC: 3557 -> 3557 (net 0; the whole change is one bullet in `fleet-directives.md`, replaced 1:1). Predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `d61b3d52` (the v0.4.243 sync), which reproduces the v0.4.243 entry's 3557 exactly.
+
 ## v0.4.242 (2026-09-22)
 
 **The C8 naming check WARNS — codified before the tool lands, so the implementation has a stated contract.**
