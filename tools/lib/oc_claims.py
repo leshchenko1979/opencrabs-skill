@@ -749,6 +749,7 @@ def get_active_claims(ledger_file, repo_path=None):
                 "uuid": uuid,
                 "issue": iss,
                 "what": row["what"],
+                "filed_ts": row["t"],
                 "files": files,
             })
     return claims

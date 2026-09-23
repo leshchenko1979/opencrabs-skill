@@ -105,6 +105,35 @@ def parse_iso_ts(ts_str):
     except Exception:
         return 0
 
+DORMANT_CLAIM_HOURS = 24.0
+
+
+def claim_activity(claim, state_dir, now_ts):
+    """Return (age_hours, dormant) from the target session DB, fail-open."""
+    uuid = claim.get('uuid', '')
+    if not uuid:
+        return None, False
+    db_path = os.environ.get('OC_LEDGER_DB') or os.path.join(
+        os.path.dirname(state_dir), 'opencrabs.db')
+    sqlite_tool = os.path.join(_TOOLS_DIR, 'lib', 'oc_sqlite')
+    sql = "SELECT updated_at FROM sessions WHERE id='%s'" % uuid.replace("'", "''")
+    try:
+        result = subprocess.run([sqlite_tool, db_path, sql], capture_output=True,
+                                text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None, False
+    if result.returncode != 0 or not result.stdout.strip():
+        return None, False
+    try:
+        updated = int(result.stdout.strip().splitlines()[0].split('|')[0])
+        if updated > 10 ** 12:
+            updated //= 1000
+        age = max(0.0, (now_ts - updated) / 3600.0)
+        return age, age >= DORMANT_CLAIM_HOURS
+    except (TypeError, ValueError):
+        return None, False
+
+
 def load_swap_history(state_dir):
     swaps = []
     if not state_dir or not os.path.exists(state_dir):
@@ -825,6 +854,23 @@ for p in prs:
 
 issue_map, pr_entries = parse_issue_map(prs)
 
+
+def cycle_note(active_claims, target_iss):
+    """Name mutual substantive overlaps; older filed claim keeps precedence."""
+    own = [c for c in active_claims if c.get('issue') == target_iss]
+    if not own:
+        return []
+    notes = []
+    for claim in active_claims:
+        if claim.get('issue') == target_iss:
+            continue
+        overlap = set().union(*(set(c.get('files', [])) for c in own)).intersection(claim.get('files', []))
+        overlap = filter_substantive_overlap(overlap)
+        if overlap:
+            older = min(own + [claim], key=lambda c: c.get('filed_ts', 0) or 0)
+            notes.append('NOTE: mutual in-flight cycle #%s <-> #%s on %s; precedence: older claim #%s keeps, newer yields' % (target_iss, claim.get('issue') or '?', ', '.join(sorted(overlap)[:3]), older.get('issue') or '?'))
+    return notes
+
 if action == 'check':
     m_iss = re.fullmatch(r'#?(\d+)', target) or re.fullmatch(r'issue-?(\d+)', target, re.IGNORECASE)
     target_iss = int(m_iss.group(1)) if m_iss else None
@@ -988,7 +1034,9 @@ if action == 'check':
                     if substantive_overlap:
                         overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
                         refuse('REFUSED: Target %s touches files of soaking feature %s (age: %.1fh < 24h) [HELD_DEPENDENT_SOAK: %s] %s' % (target, oc.get('short_sha', '')[:7], max(0.0, oc_age_hours), overlap_sample, oc_claims.soak_anchor_fields(oc_sha, oc_d_ts)))
-                        break
+                        # Keep evaluating every overlapping feature; refuse() aggregates
+                        # this leg and the caller retains rc=1.
+
 
     # 3. IN-FLIGHT LANE FENCING (HELD_IN_FLIGHT_LANE)
     # Check if target touches files belonging to an active lane with an open claim
@@ -1017,11 +1065,15 @@ if action == 'check':
             if substantive_overlap:
                 overlap_sample = ', '.join(sorted(list(substantive_overlap))[:3])
                 c_uuid = claim.get('uuid', '')[:8]
-                refuse('REFUSED: Target %s touches files of active lane %s claim #%s [HELD_IN_FLIGHT_LANE: %s]' % (target, c_uuid, c_iss or '?', overlap_sample))
-                break
+                claim_age, claim_dormant = claim_activity(claim, st_dir, now_ts)
+                age_note = ' holder_age=unknown' if claim_age is None else ' holder_age=%.1fh%s' % (claim_age, ' DORMANT' if claim_dormant else '')
+                advisory = ' ADVISORY: review/release dormant holder claim' if claim_dormant else ''
+                refuse('REFUSED: Target %s touches files of active lane %s claim #%s [HELD_IN_FLIGHT_LANE: %s]%s%s' % (target, c_uuid, c_iss or '?', overlap_sample, age_note, advisory))
+
+    for cycle in cycle_note(active_claims, target_iss):
+        refuse(cycle)
 
     # 4. UPSTREAM SUBJECT EXISTENCE & FORK PROVENANCE
-    #    (UPSTREAM_VOID / HELD_PARENT_UNHARVESTED / orphan ADVISORY)
     #
     # The operative question is whether the fix's SUBJECT exists upstream, not
     # whether every touched FILE does (#365; HQ ruling 2026-09-18, v0.4.201,
@@ -1723,6 +1775,20 @@ EOF
       "by": "editor 22222222-3333-4444-5555-666666666666",
       "what": "CLAIM #703 second active lane holding a real file",
       "files": ["src/multi/leg.rs"]
+    },
+    {
+      "n": 104,
+      "kind": "claim",
+      "by": "editor 55555555-6666-7777-8888-999999999999",
+      "what": "CLAIM #500 lane own claim on the shared cycle file",
+      "files": ["src/active/lane.rs"]
+    },
+    {
+      "n": 103,
+      "kind": "claim",
+      "by": "editor 33333333-4444-5555-6666-777777777777",
+      "what": "CLAIM #704 second active lane holding the same real file",
+      "files": ["src/active/lane.rs"]
     }
   ]
 }
@@ -1761,9 +1827,8 @@ EOF
   export OC_HARVEST_MOCK_LEDGER="$mock_ledger"
   export OC_HARVEST_MOCK_SQUASHED="$mock_squashed"
   export OC_HARVEST_MOCK_ISSUE_STATE="$mock_issue_state"
+  export OC_TOOLS_DIR="$(cd "$(dirname "$0")" && pwd)"
   export OC_HARVEST_NOW_TS="1789010000"
-
-  local rc=0 out=""
 
   # 1. Check on MERGED issue (#132) -> exits 1 REFUSED.
   #    Doubles as the NEGATIVE CONTROL for 3d: fixture 132 reads COMPLETED (not
@@ -1858,6 +1923,21 @@ EOF
     return 1
   fi
 
+    # 3d1. FULL IN-FLIGHT FENCE SET (#533). Two foreign claims overlap the same
+    #     substantive target file; one invocation must report both claim numbers.
+  #     MUTATION KILL: restore the claim-loop break and this leg sees only one.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
+  fence_count="$(printf '%s\n' "$out" | grep -c 'HELD_IN_FLIGHT_LANE' || true)"
+  if [ "$rc" -eq 1 ] && [ "$fence_count" -eq 2 ] \
+     && echo "$out" | grep -q 'claim #600' \
+     && echo "$out" | grep -q 'claim #704'; then
+    ok "full in-flight fence set: all overlapping claims reported (#533)"
+  else
+    echo "  bad  - full fence set expected rc=1 and claims #600/#704, got rc=$rc count=$fence_count ($out)"
+    return 1
+  fi
+
   # 3d2. REGISTRY-ONLY POSITIVE CONTROL (#375) -> must NOT fence, exits 0 ELIGIBLE.
   #      Fixture: target #501's ONLY file is `src/tests/mod.rs`, which is in
   #      SHARED_DECLARATION_REGISTRIES, and active claim #601 (a DIFFERENT issue)
@@ -1917,8 +1997,59 @@ EOF
     return 1
   fi
 
+  # 3d5. HOLDER LIVENESS NOTE (#534): the fence remains rc=1 for both a live
+  #     and dormant holder; a fixture DB controls updated_at and the dormant
+  #     arm must expose age plus DORMANT rather than silently clearing.
+  local mock_live_db="$selftest_tmp/mock_sessions_live.db"
+  local mock_dormant_db="$selftest_tmp/mock_sessions_dormant.db"
+  python3 -c 'import sqlite3,sys; db=sys.argv[1]; now=int(sys.argv[2]); con=sqlite3.connect(db); con.execute("create table sessions (id text, updated_at integer)"); con.execute("insert into sessions values (?,?)", (sys.argv[3], now-int(sys.argv[4]))); con.commit(); con.close()' "$mock_live_db" "$OC_HARVEST_NOW_TS" "11111111-2222-3333-4444-555555555555" 3600
+  python3 -c 'import sqlite3,sys; db=sys.argv[1]; now=int(sys.argv[2]); con=sqlite3.connect(db); con.execute("create table sessions (id text, updated_at integer)"); con.execute("insert into sessions values (?,?)", (sys.argv[3], now-int(sys.argv[4]))); con.commit(); con.close()' "$mock_dormant_db" "$OC_HARVEST_NOW_TS" "11111111-2222-3333-4444-555555555555" $((3*24*3600))
+  export OC_LEDGER_DB="$mock_live_db"
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'holder_age=1.0h' \
+     && ! echo "$out" | grep -q 'DORMANT'; then
+    ok "live holder fence reports age without DORMANT"
+  else
+    echo "  bad  - live holder expected rc=1 with age and no DORMANT, got rc=$rc ($out)"
+    return 1
+  fi
+  export OC_LEDGER_DB="$mock_dormant_db"
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'DORMANT' \
+     && echo "$out" | grep -q 'review/release dormant holder claim'; then
+    ok "dormant holder fence remains refusal with advisory"
+  else
+    echo "  bad  - dormant holder expected rc=1 with DORMANT advisory, got rc=$rc ($out)"
+    return 1
+  fi
+
+  unset OC_LEDGER_DB
+  # 3d6. MUTUAL CYCLE NOTE + PRECEDENCE (#535): when the target's OWN claim
+  #     overlaps a foreign claim on the same substantive file, the refusal set
+  #     must name the cycle and state the deterministic precedence rule.
+  #     CONTROL: a target with no own claim (#400, soak-only) prints no cycle NOTE.
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] \
+     && echo "$out" | grep -q 'mutual in-flight cycle #500 <-> #600' \
+     && echo "$out" | grep -q 'older claim #500 keeps, newer yields'; then
+    ok "mutual cycle named with deterministic precedence (#535)"
+  else
+    echo "  bad  - cycle note expected rc=1 with cycle + precedence, got rc=$rc ($out)"
+    return 1
+  fi
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "400" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && ! echo "$out" | grep -q 'mutual in-flight cycle'; then
+    ok "no cycle note without an own claim (control for #535)"
+  else
+    echo "  bad  - control expected rc=1 and no cycle note, got rc=$rc ($out)"
+    return 1
+  fi
+
   # 3e. PROSE-ONLY NEGATIVE CONTROL (#307) -> must NOT fence, exits 0 ELIGIBLE.
-  #     Fixture: a claim with NO `files` key, over a history in which ONLY a
   #     prose mention of #700 exists. The anchored resolver returns an EMPTY
   #     footprint — a real answer, not a gap — so the fence cannot fire.
   #     MUTATION GUARD: regress the footprint to the old unanchored
