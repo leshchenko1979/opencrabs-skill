@@ -604,6 +604,74 @@ cmd_stamp() {
 
 # ---- sync -------------------------------------------------------------------
 battery_receipt() { echo "$SKILL_DIR/tools/tests/battery-last.json"; }
+# C8 naming WARN (v0.4.242 law, HQ item 1; lens C8 extension of the v0.4.65
+# gate). The EXISTENCE gate above is HARD and stays hard: a bump with no
+# "## v$v" entry is refused (die 6). This is the second leg — the entry must
+# NAME every non-sync commit the sync bundles, per hq.md's Checkable Completion
+# Formula ("entry present" means the entry names every non-sync commit the sync
+# bundles). It is WARN-only, for two structural reasons now recorded in law:
+#   * the range is OTHER LANES' work — a hard gate would let one lane's landing
+#     block the fleet's version record at HQ's boundary;
+#   * the range carries untrailered law commits BY DESIGN, so a hard gate would
+#     need an exclusion list, and an exclusion list is where this class of gate
+#     goes to die.
+# Built for the real miss: v0.4.237 bundled 8e213c5e (#503) and v0.4.238
+# bundled e63b2f56 (#505); neither number appeared anywhere in the entry while
+# every sibling of the same batch was named, so the version record could not
+# state their ship date. #505 was worse still — the v0.4.237 entry left the
+# routing OPEN ("routes to the Toolsmith") for work that had already closed.
+c8_naming_warn() { # $1 = version. Prints to stderr; ALWAYS rc 0 (never a gate).
+  local v="$1" anchor entry range c sha subj refs named missing=""
+  # The anchor is the previous sync commit, resolved from its OWN subject — the
+  # sync commits as "skill v<ver>: oc-ledger sync — <why>" at the tail of this
+  # function, so the newest such commit at THIS point is the previous sync.
+  anchor="$(git -C "$SKILL_DIR" log --grep='^skill v' -1 --format=%H 2>/dev/null || true)"
+  if [ -z "$anchor" ]; then
+    # An unverifiable check must never pass as clean (#485's shape): say SKIPPED
+    # and say it is NOT a clean result, so absence of a WARN is never read as
+    # "every commit was named".
+    echo "sync: NOTE — C8 naming check SKIPPED: no previous 'skill v...' commit is derivable, so the bundled range is unverifiable. This is NOT a clean result and NOT a finding." >&2
+    return 0
+  fi
+  # The entry BODY: from its header to the next '## v' header. Version dots are
+  # unescaped, matching the existence gate's own grep — a version is 0.N.N and
+  # no header will collide by accident.
+  entry="$(awk -v v="$v" '
+    BEGIN { p = "^## v" v "([ —(:]|$)" }
+    $0 ~ p { f = 1; next }
+    f && /^## v/ { exit }
+    f { print }
+  ' "$SKILL_DIR/CHANGELOG.md" 2>/dev/null || true)"
+  # Every NON-SYNC commit the sync bundles (hq.md:57), newest first.
+  range="$(git -C "$SKILL_DIR" log --format='%h %s' --no-merges "$anchor"..HEAD 2>/dev/null || true)"
+  [ -n "$range" ] || return 0
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    sha="${c%% *}"; subj="${c#* }"
+    # Sync commits name themselves and carry no issue ref; the law scopes the
+    # requirement to NON-sync commits.
+    case "$subj" in "skill v"*) continue ;; esac
+    named=0
+    case "$entry" in *"$sha"*) named=1 ;; esac
+    if [ "$named" -eq 0 ]; then
+      refs="$(printf '%s' "$subj" | grep -oE '#[0-9]+' 2>/dev/null || true)"
+      for r in $refs; do
+        case "$entry" in *"$r"*) named=1; break ;; esac
+      done
+    fi
+    [ "$named" -eq 1 ] || missing="$missing$sha $subj
+"
+  done <<EOF
+$range
+EOF
+  [ -n "$missing" ] || return 0   # named-everything is SILENT
+  echo "sync: WARN — C8 naming: the '## v$v' entry does not name every commit this sync bundles." >&2
+  printf '%s' "$missing" | sed 's/^/    unnamed: /' >&2
+  echo "  WARN only, never a refusal: the range is other lanes' work and carries untrailered law commits by design." >&2
+  echo "  Name each one in the '## v$v' entry (short sha or issue ref) — the version record is the only place a bundled fix's ship date exists." >&2
+  return 0
+}
+
 cmd_sync() {
   local v="" why="" catchup=0 allow_sweep=0
   while [ $# -gt 0 ]; do
@@ -635,6 +703,8 @@ cmd_sync() {
   # at line start followed by space/paren/dash/end — not a bare-line equality.
   grep -Eq "^## v$v([ —(:]|$)" "$SKILL_DIR/CHANGELOG.md" \
     || die 6 "sync: CHANGELOG.md has no '## v$v' entry — write the receipt first"
+  # C8 second leg (v0.4.242): WARN, never die — see c8_naming_warn above.
+  c8_naming_warn "$v"
   # step check: equal (re-sync) or third-component +1 only; --catch-up (T2
   # verdict n=1695, HQ-approved 2026-09-06) relaxes ONLY the step size for the
   # shipped-ahead dead zone — the doc-first gate above still pins v to the
@@ -1312,6 +1382,50 @@ PAYLOAD
   bash "$ME" sync --version 0.4.9 --catch-up --why selftest-catchup >/dev/null 2>&1; chk "sync-catchup-happy" 0 $?
   chk "sync-catchup-event" "true" "$(jq -r '[.events[] | select(.kind == "skill-bump")] | last | .what | contains("catch-up from 0.4.7 (skipped 0.4.8)")' "$OC_LEDGER")"
   chk "sync-catchup-heal" "true" "$(jq '(.current_skill_version == "0.4.9") and (.meta.current_skill_version == "0.4.9") and (.meta.skill_version == "0.4.9")' "$OC_LEDGER")"
+  # C8 naming WARN (v0.4.242 law, HQ item 1). The v0.4.65 EXISTENCE gate above
+  # stays HARD (die 6); this second leg only LISTS the commits the entry does
+  # not name, because the range is other lanes' work and carries untrailered law
+  # commits by design. Discriminating: on the pre-fix artifact c8_naming_warn
+  # does not exist, so no C8 line is emitted at all and (a)-(c) go red.
+  C8S="$T/c8skill"; C8D="$T/c8state"
+  mkdir -p "$C8S/tools/tests" "$C8D"
+  printf 'name: fixture\nversion: 0.4.2\n---\n' > "$C8S/SKILL.md"
+  printf '# fixture changelog\n' > "$C8S/CHANGELOG.md"
+  : > "$C8S/tools/tests/.keep"
+  printf '{"verdict":"PASS","fail":0,"ts":"%s"}\n' "$(now_iso)" > "$C8S/tools/tests/battery-last.json"
+  printf '{"current_skill_version":"0.4.1","meta":{"skill_version":"0.4.1","current_skill_version":"0.4.1"},"updated_at":"2026-01-01T00:00:00Z","workers":[],"events":[]}\n' > "$C8D/workers-ledger.json"
+  for r in "$C8S" "$C8D"; do
+    git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
+    git -C "$r" add -A; git -C "$r" commit -q -m base
+  done
+  c8sync() { # $1 = version
+    OC_LEDGER="$C8D/workers-ledger.json" OC_SKILL_DIR="$C8S" OC_DEPLOY_STATE_DIR="$C8D" \
+      bash "$ME" sync --version "$1" --why selftest-c8 2>&1
+  }
+  # (a) UNDERIVABLE anchor: no 'skill v...' commit exists in the fixture yet, so
+  #     the comparison must be SKIPPED out loud and must not read as clean.
+  printf '\n## v0.4.2\nc8 receipt\n' >> "$C8S/CHANGELOG.md"
+  C8U="$(c8sync 0.4.2)"; C8URC=$?
+  chk "c8-naming-skip-rc" 0 "$C8URC"
+  case "$C8U" in *"C8 naming check SKIPPED"*) ok ;; *) bad "c8-naming-skip-note-missing" ;; esac
+  case "$C8U" in *"NOT a clean result"*) ok ;; *) bad "c8-naming-skip-must-not-read-clean" ;; esac
+  # (b) anchor present, one bundled commit the entry does NOT name -> listed.
+  git -C "$C8S" commit -q --allow-empty -m "skill v0.4.1: oc-ledger sync — fixture anchor"
+  printf 'x\n' > "$C8S/unnamed.txt"; git -C "$C8S" add -A
+  git -C "$C8S" commit -q -m "fix(tools): #778 a commit the entry does not name"
+  C8SHA="$(git -C "$C8S" rev-parse --short HEAD)"
+  C8B="$(c8sync 0.4.2)"; C8BRC=$?
+  case "$C8B" in *"unnamed: $C8SHA"*) ok ;; *) bad "c8-naming-unnamed-not-listed ($C8SHA)" ;; esac
+  # the WARN is NOT a refusal: case (b) warned AND still synced rc 0 (the law's
+  # whole point — a hard gate here would let one lane's landing block the
+  # fleet's version record at HQ's boundary).
+  case "$C8B" in *"WARN — C8 naming"*) chk "c8-naming-warn-never-blocks" 0 "$C8BRC" ;; *) bad "c8-naming-warn-missing" ;; esac
+  # (c) same commit NAMED in the entry -> SILENT. Both directions, because a
+  #     one-way test cannot tell a working check from one that never fires.
+  printf 'name: fixture\nversion: 0.4.3\n---\n' > "$C8S/SKILL.md"
+  printf '\n## v0.4.3\nc8 receipt naming %s and #778\n' "$C8SHA" >> "$C8S/CHANGELOG.md"
+  C8C="$(c8sync 0.4.3)"; chk "c8-naming-named-rc" 0 $?
+  case "$C8C" in *"unnamed:"*) bad "c8-naming-not-silent-when-named" ;; *) ok ;; esac
   # 23-26: ack (v0.4.55: full 0.N.N shape — the old N.N regex could never
   # record a real skill version, which broke the reload convention's ack step)
   bash "$ME" ack short-uuid 0.4.2 >/dev/null 2>&1; chk "ack-bad-uuid" 2 $?
