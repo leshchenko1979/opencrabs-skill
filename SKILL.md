@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.242
+version: 0.4.243
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -212,6 +212,18 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
 - CLI form carries `--sender "<lane label>" --title "<topic>"` where supported
   (oc-deploy fanout precedent) — the mechanical `from=<uuid>` header is added
   on top and cannot be forged or stripped.
+- **`from` is a RETURN ADDRESS only when the sender is a LIVE SESSION (v0.4.243,
+  cycle `20260922-c22`).** The identity bullet above ("replies route back with
+  `target_session = from`") holds for a lane-to-lane notify and NOT for a notify
+  whose sender is not a session at all — a cron job, a fan-out generator, or a
+  tool. There `from` is a SYNTHETIC label naming the component that sent it, not
+  a mailbox: a reply addressed to it reaches nothing, and the label is not a
+  roster entry. So read the header before treating it as an address — an address
+  you can reply to belongs to a session that exists; a synthetic `from` is
+  WRITE-ONLY. Measured 2026-09-22 (lanes 4b4463d5 and a5b34466, converged
+  independently): the distinction appeared nowhere in the corpus, and a lane
+  replying to a cron-originated notify was writing into a label. A reply that
+  matters must name the PROCESS OWNER session, resolved live, not the `from`.
 
 ### Telegram surface law (v0.4.31)
 
@@ -259,6 +271,20 @@ The table above carries the content; what remains prose:
 Rule: never write "tests pass" without naming the kind. A green Lint run is NOT
 a smoke pass; a smoke pass says nothing about clippy; a presence hit says
 nothing about behavior.
+
+- **A VERDICT TOKEN MUST BE REACHABLE AT THE TOOL THAT WRITES IT (v0.4.243,
+  cycle `20260922-c22`).** The sanctioned verdict vocabulary and the vocabulary
+  the verdict WRITER can actually emit are not the same set, and nothing in the
+  corpus checks the gap. Measured 2026-09-22: `oc-smoke` — the tool the
+  procedure names for writing verdict rows — accepts `--verdict PASS|FAIL` and
+  nothing else (`tools/oc-smoke:9`, `:57`, `:64`), while these laws mandate
+  tokens such as `UNPROVEN (presence-only)` and `PARKED-OWNER-EYE`. A lane
+  ordered to stamp a mandated token through that writer therefore CANNOT: the
+  row it produces says PASS or FAIL and the nuance is silently lost. So before
+  citing a verdict token as *recorded* evidence, confirm the writer can emit it;
+  when the mandated token is outside the writer's set, record it in the row's
+  free text and STATE which form was used — never present a token the tool
+  cannot produce as tool-emitted.
 
 **Corrected-code presence ≠ smoke success (owner order 2026-09-08):** evidence
 that the corrected code is merely PRESENT in the swapped binary — strings
@@ -461,6 +487,29 @@ uses them as a licence to fix outside its scope.
   in this corpus already carries `-R` (14 sites) — this bullet states the RULE they were
   silently following. The environment fix (`gh repo set-default`) rewrites shared repo
   config and is the OWNER's call, never a lane's.
+- **The skill glob GATE matches PATHS, not intent (v0.4.243, cycle
+  `20260922-c22`).** A skill whose `SKILL.md` declares a `globs:` frontmatter key
+  guards its own topic: any tool call whose harvested path tokens match one of
+  those globs — matched against the NORMALIZED ABSOLUTE path — is REJECTED while
+  the skill body has not been seen in this session. Harvested keys are `path` /
+  `file_path` / `filePath`, plus path-like tokens inside a `bash` command;
+  `grep`'s and `glob`'s own `pattern` key is deliberately NOT harvested ("a glob
+  pattern string is not a path"). Five consequences a lane must know before
+  reading a rejection: **(a)** it is a glob verdict about a PATH, never a verdict
+  about intent — an unrelated call that merely names a matching path is gated all
+  the same; **(b)** it re-arms after EVERY compaction (owner decision 2026-09-10),
+  so post-compaction the skill is unseen again even if you loaded it earlier the
+  same session; **(c)** recovery is `load_brain_file '<slug>'` or `read_file` on
+  the skill's own source path — BOTH are exempt, and `load_brain_file` marks the
+  skill seen exactly as the gate's own bookkeeping does — then re-issue the
+  IDENTICAL call (the retry is armed before the rejection returns); **(d)** the
+  body appended to a rejection is NOT a complete read, because tool output is
+  capped and a long skill arrives as a head/tail preview — read it with an
+  explicit `max_output_bytes`, or via `load_brain_file`; **(e)** the gate FAILS
+  OPEN, so a rejection you did NOT receive proves nothing about the path — it
+  means no globs were declared, the skill was already seen, or an internal error
+  passed the call. Source of these semantics: `src/brain/tools/skill_gate.rs`
+  (issue #150).
 - BUILD SOURCE = fork `main`. Editors fast-forward their signed commits into
   `leshchenko1979/opencrabs@main`; `oc-deploy ship` dispatches THAT ref — every
   artifact compiles all editors' merged changes TOGETHER (decision 2026-08-25).

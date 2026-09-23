@@ -1,5 +1,22 @@
 # Changelog — opencrabs-dev
 
+## v0.4.243 (2026-09-23)
+
+**Duty 4 cycle `20260922-c22` lands: seven convergence clusters from 57 claims, plus one instrument defect found while closing.**
+
+The cycle polled 31/31 lanes and took 22 submissions / 57 claims (47 ACCEPT, 5 ACCEPT-WITH-AMENDMENT, 5 ALREADY-COVERED, 0 REJECT). The claims landed as the 7 CONVERGENCE CLUSTERS rather than 57 individual rules — several lanes hit the same gap independently, and each cluster is ONE rule. Cluster 8 (media receipt leg-binding) was a NO-OP: that rule already exists in the ops `AGENTS.md`.
+
+- **`SKILL.md`** — cluster 5: a VERDICT TOKEN must be reachable at the tool that writes it (`oc-smoke` accepts only `--verdict PASS|FAIL`, `tools/oc-smoke:9/:57/:64`, against a corpus mandating `UNPROVEN (presence-only)` and `PARKED-OWNER-EYE`). Cluster 4: a notify's `from` is a RETURN ADDRESS only when the sender is a LIVE SESSION. Cluster 1: the skill glob GATE matches PATHS, not intent — semantics read from `src/brain/tools/skill_gate.rs` (issue #150), including that it re-arms after EVERY compaction and FAILS OPEN.
+- **`fleet-directives.md`** — cluster 2: design-gated WRITE SCOPE (fleet-process MAY, project/source and the autonomous checklist MAY NOT), a state that had a codified NUDGE scope and no write scope. Cluster 6: **W7 (Inline waiter cap)** — an inline blocking wait must stay under the 600 s harness cap; the 2700 s budget belongs to the DETACHED form only, and a cap-killed waiter does NOT void its dispatch (recover the run id, `oc-prchecks resume`, never re-issue).
+- **`upstream-merge-runbook.md`** — cluster 3: the 30 s TRIGGER ceiling and the `>= 300 s` BODY-side census budget must be read TOGETHER (a truncated census is an UNREAD result — never a WAIT, never a failure). Cluster 7: a resume job's PROMPT is not a schedule table and not a tracker mirror.
+- **`hq.md`** — the instrument defect: the file told HQ to close the cadence with `oc-ledger stamp review-battery`, but the boundary predicate is a `kind=note` row beginning `^vX.Y.Z ACCEPTED` (`tools/oc-ledger:913`), with `review-battery` consulted ONLY when no note close exists (`:914-915`). Following that prose literally would have silently failed to reset the counter while the stamp itself returned success.
+
+**Two proposer figures were corrected rather than carried:** `oc-smoke`'s reachable token set is **3** (`FAIL`, `PASS`, `PASSED`), not the 2 the verdict table recorded; and the stale-prompt count is **7 of 16** under the ANY-`#N`-token predicate (own read) rather than the proposer's 4 of 16 under its narrower asserts-the-state predicate — both correct for their own predicates, so the law carries the measured number WITH its predicate.
+
+**Bundled commits named in this range:** `0c39b940` (#517 — a red battery receipt now carries its transcript) and `873495a2` (#519 — the sync CHANGELOG gate gains a naming leg, WARN). The range ALSO carries the sweeper's own bookkeeping commit `10ae2ef7` (`runtime-artifacts sweep (B3)`), which carries no issue ref by design and is not law — named here so the new naming leg's output is self-explaining rather than a mystery hit.
+
+LOC: 3494 -> 3557 (net +63). Predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `2c777374`, which reproduces the v0.4.242 entry's 3494 exactly. The change is `SKILL.md` 659 -> 708 (+49), `fleet-directives.md` 657 -> 669 (+12) and `upstream-merge-runbook.md` 425 -> 427 (+2); `hq.md` is 319 before and after (one line replaced by one line).
+
 ## v0.4.242 (2026-09-22)
 
 **The C8 naming check WARNS — codified before the tool lands, so the implementation has a stated contract.**
