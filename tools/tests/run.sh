@@ -24,9 +24,13 @@ export OC_ACTOR="test-runner"
 # ---- helpers ---------------------------------------------------------------
 note()  { printf '%s\n' "$*"; }
 ok()    { PASS=$((PASS+1)); note "  ok   - $*"; }
-bad()   { FAIL=$((FAIL+1)); note "  FAIL - $*"; }
+bad()   { FAIL=$((FAIL+1)); note "  FAIL - $*"; if [ -n "${FAIL_LOG:-}" ]; then printf '  FAIL - %s\n' "$*" >> "$FAIL_LOG"; fi; }
 tool()  { [ -x "$TOOLS_DIR/$1" ] || { bad "missing tool: $1"; return 1; } }
 section() { note ""; note "== $1 =="; }
+# record — a continuation line's detail: printed AND appended to the fail
+# transcript. `tee -a` is byte-transparent on stdout, so a GREEN run stays
+# byte-identical (continuations appear only under a FAIL row).
+record() { if [ -n "${FAIL_LOG:-}" ]; then tee -a "$FAIL_LOG"; else cat; fi; }
 # Fork #453 (2026-09-20): a failing --selftest used to be a dead end — the
 # tool's own output went to /dev/null, so a flake left a bare tool name and
 # nothing to diagnose. Capture it and surface a bounded window of it under the
@@ -55,12 +59,12 @@ run_capture() { # $1 = label, $2.. = command
     bad "$label"
     n="$(wc -l < "$out")"
     if [ "$n" -le 40 ]; then
-      sed 's/^/       | /' "$out"
+      sed 's/^/       | /' "$out" | record
     else
       note "       | ... $((n - 40)) line(s) omitted from the middle"
-      head -n 20 "$out" | sed 's/^/       | /'
+      head -n 20 "$out" | sed 's/^/       | /' | record
       note "       | ..."
-      tail -n 20 "$out" | sed 's/^/       | /'
+      tail -n 20 "$out" | sed 's/^/       | /' | record
     fi
   fi
   rm -f "$out"
@@ -135,10 +139,29 @@ fi
 JOBS="${OC_BATTERY_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 if [ "${1:-}" = "--jobs" ] && [ -n "${2:-}" ]; then JOBS="$2"; shift 2; fi
 case "${1:-}" in --jobs=*) JOBS="${1#--jobs=}"; shift ;; esac
+# ---- red-receipt transcript -------------------------------------------------
+# Defect (HQ item 5, 2026-09-22): emit_summary wrote battery-last.json durably
+# while the transcript went only to stdout, so a committed red receipt
+# (228 pass / 1 fail, commit d1f63d9f) recorded THAT a leg failed and nothing
+# about WHICH — undiagnosable by the next reader, and its /tmp transcript was
+# gone. The receipt is a durable artifact; its diagnosis must be one too.
+#
+# Contract: a RED run leaves $FAIL_LOG carrying the FAIL rows and their
+# continuation lines, and the receipt JSON names that path; a GREEN run REMOVES
+# any stale log, so the log's PRESENCE is itself the red signal.
+FAIL_LOG="$TOOLS_DIR/tests/battery-last-fail.log"
+FAIL_LOG_REL="tools/tests/battery-last-fail.log"
+# Only the PARENT truncates: chunk children append to this same path, and a
+# child truncating it would erase rows its siblings already wrote.
+if [ -z "${BATTERY_IN_CHUNK:-}" ]; then : > "$FAIL_LOG" 2>/dev/null || true; fi
+finalize_fail_log() {
+  if [ "$FAIL" -eq 0 ]; then rm -f "$FAIL_LOG"; FAIL_LOG_FIELD=""; else FAIL_LOG_FIELD="$FAIL_LOG_REL"; fi
+}
 emit_summary() {
   local verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
-  printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s",\n  "mode": "%s"\n}\n' \
-    "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" "$BATTERY_MODE" \
+  finalize_fail_log
+  printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s",\n  "mode": "%s",\n  "fail_log": "%s"\n}\n' \
+    "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" "$BATTERY_MODE" "$FAIL_LOG_FIELD" \
     > "$TOOLS_DIR/tests/battery-last.json"
   note ""
   note "=============================="
@@ -552,7 +575,7 @@ PYEOF
   if python3 "$OCT/unit.py" "$TOOLS_DIR/lib" 2>"$OCT/err"; then
     ok "oc_claims predicate unit cases (tokens/actors/address/signals)"
   else
-    bad "oc_claims predicate unit cases"; sed 's/^/    /' "$OCT/err" | head -20
+    bad "oc_claims predicate unit cases"; sed 's/^/    /' "$OCT/err" | head -20 | record
   fi
   rm -rf "$OCT"
 else
@@ -1296,7 +1319,7 @@ PYEOF
   if python3 "$OCT/edge.py" "$TOOLS_DIR" >/dev/null 2>"$OCT/err"; then
     ok "oc-issue-dispatch role-binding edge cases (raw-absent lanes; owner outranks prose)"
   else
-    bad "oc-issue-dispatch role-binding edge cases"; sed 's/^/    /' "$OCT/err" | head -20
+    bad "oc-issue-dispatch role-binding edge cases"; sed 's/^/    /' "$OCT/err" | head -20 | record
   fi
   rm -rf "$OCT"
 fi
@@ -1499,9 +1522,61 @@ d451_run "$D451STUB/tools/oc-issue-dispatch-nolb" prefix
 
 rm -rf "$D451STUB"
 
+# ---- 75. red-receipt transcript (fail log) ---------------------------------
+# Defect (HQ item 5, 2026-09-22): emit_summary wrote battery-last.json durably
+# while the transcript went only to stdout, so a committed red receipt
+# (228 pass / 1 fail, commit d1f63d9f) recorded THAT a leg failed and nothing
+# about WHICH -- undiagnosable by the next reader. Contract: a RED run leaves
+# tools/tests/battery-last-fail.log carrying the FAIL rows and their
+# continuation lines and the receipt JSON names it; a GREEN run removes it, so
+# the log's PRESENCE is itself the red signal.
+#
+# Discriminating input: on the pre-fix artifact bad() has no transcript arm and
+# record() does not exist, so `bad` writes nothing to $FAIL_LOG. Legs (a)-(c)
+# go red on HEAD while passing here.
+section "red-receipt transcript (fail log)"
+FLT="$(mktemp -d)"
+# (a) bad() records the FAIL row. Runs in a SUBSHELL so the synthetic failure
+#     increments only the subshell's FAIL, and its stdout goes to /dev/null --
+#     a leaked "  FAIL - " line would be counted by the parallel parent and
+#     corrupt this run's own receipt.
+( FAIL_LOG="$FLT/a.log"; : > "$FAIL_LOG"; bad "synthetic-leg" ) >/dev/null 2>&1
+grep -q '  FAIL - synthetic-leg' "$FLT/a.log" \
+  && ok "bad() writes the FAIL row to the transcript" \
+  || bad "bad() did not record the FAIL row ($(wc -c < "$FLT/a.log" 2>/dev/null || echo 0) bytes)"
+# (b) record() is a TEE: the detail must reach BOTH stdout and the transcript.
+printf 'detail-line\n' | { FAIL_LOG="$FLT/b.log"; : > "$FAIL_LOG"; record; } > "$FLT/b.out" 2>/dev/null
+if grep -q 'detail-line' "$FLT/b.log" 2>/dev/null && grep -q 'detail-line' "$FLT/b.out" 2>/dev/null; then
+  ok "record() appends to the transcript AND passes stdout through"
+else
+  bad "record() tee failed: detail-line absent from the transcript or from stdout"
+fi
+# (c) finalize_fail_log: green clears the log and empties the field; red keeps
+#     it and names it. Both directions, because a one-way test cannot tell a
+#     working finalize from a constant.
+( FAIL=0; FAIL_LOG="$FLT/c.log"; : > "$FAIL_LOG"; finalize_fail_log
+  [ ! -f "$FAIL_LOG" ] && [ -z "$FAIL_LOG_FIELD" ] ) \
+  && ok "finalize on green removes the log and empties the receipt field" \
+  || bad "finalize on green left the log or a non-empty field"
+( FAIL=1; FAIL_LOG="$FLT/d.log"; : > "$FAIL_LOG"; finalize_fail_log
+  [ -f "$FAIL_LOG" ] && [ "$FAIL_LOG_FIELD" = "tools/tests/battery-last-fail.log" ] ) \
+  && ok "finalize on red keeps the log and names it in the receipt" \
+  || bad "finalize on red lost the log or the field name"
+# (d) wiring: BOTH receipt writers must declare the field (emit_summary, and the
+#     sequential tail). Counts the declaration, so a writer left behind is
+#     caught rather than a stray comment satisfying it.
+# Read the ARTIFACT UNDER TEST ($0), never the canonical path: a mutant run
+# under a sibling name would otherwise inspect the fixed file and pass.
+SELF_ABS="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+[ "$(grep -cE '^ *printf .*fail_log' "$SELF_ABS")" -ge 2 ] \
+  && ok "both receipt writers declare the fail_log field" \
+  || bad "a receipt writer is missing the fail_log field ($SELF_ABS)"
+rm -rf "$FLT"
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
-printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s"\n}\n' \
-  "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" \
+finalize_fail_log
+printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s",\n  "fail_log": "%s"\n}\n' \
+  "$TOOLS_DIR/tests/battery-last.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PASS" "$FAIL" "$verdict" "$FAIL_LOG_FIELD" \
   > "$TOOLS_DIR/tests/battery-last.json"
 
 # ---- summary ----------------------------------------------------------------

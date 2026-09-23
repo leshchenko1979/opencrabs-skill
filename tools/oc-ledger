@@ -707,7 +707,7 @@ cmd_sync() {
   if [ -d "$SKILL_DIR/.git" ] && [ "$allow_sweep" -ne 1 ]; then
     local stray
     stray="$(git -C "$SKILL_DIR" status --porcelain | sed 's/^...//' \
-      | grep -vE '^(SKILL\.md|CHANGELOG\.md|tools/tests/battery-last\.json)$' || true)"
+      | grep -vE '^(SKILL\.md|CHANGELOG\.md|tools/tests/battery-last\.json|tools/tests/battery-last-fail\.log)$' || true)"
     if [ -n "$stray" ]; then
       echo "sync: REFUSED - unrelated dirty paths in the skill repo would ride the bump commit:" >&2
       printf '%s\n' "$stray" | sed 's/^/    /' >&2
@@ -728,7 +728,7 @@ cmd_sync() {
       # porcelain emits a ONE-char status for a worktree modification (" M SKILL.md"),
       # so the exempt list was INERT - SKILL.md/CHANGELOG.md were reported as swept on
       # every sync. `sed 's/^...//'` strips XY<space> exactly, so the list works now.
-      swept="$(git status --porcelain | sed 's/^...//' | grep -vE '^(SKILL\.md|CHANGELOG\.md|tools/tests/battery-last\.json)$' || true)"
+      swept="$(git status --porcelain | sed 's/^...//' | grep -vE '^(SKILL\.md|CHANGELOG\.md|tools/tests/battery-last\.json|tools/tests/battery-last-fail\.log)$' || true)"
       git add -A
       [ -n "$swept" ] && echo "PAYLOAD SWEPT into bump commit (--allow-sweep; silent-stray class, pre-v0.4.63): $(printf '%s' "$swept" | tr '\n' '; ')" >&2
       # #467: `git commit` exits non-zero for BOTH a genuine failure and the
