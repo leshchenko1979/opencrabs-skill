@@ -621,17 +621,53 @@ battery_receipt() { echo "$SKILL_DIR/tools/tests/battery-last.json"; }
 # state their ship date. #505 was worse still — the v0.4.237 entry left the
 # routing OPEN ("routes to the Toolsmith") for work that had already closed.
 c8_naming_warn() { # $1 = version. Prints to stderr; ALWAYS rc 0 (never a gate).
-  local v="$1" anchor entry range c sha subj refs named missing=""
-  # The anchor is the previous sync commit, resolved from its OWN subject — the
-  # sync commits as "skill v<ver>: oc-ledger sync — <why>" at the tail of this
-  # function, so the newest such commit at THIS point is the previous sync.
-  anchor="$(git -C "$SKILL_DIR" log --grep='^skill v' -1 --format=%H 2>/dev/null || true)"
+  local v="$1" anchor anchor_t anchor_e spans entry range c sha subj refs named missing="" skipped=0 selfids="" selfskip=0 self_id
+  # The anchor is the previous SYNC commit. The pattern must name the SYNC FORM
+  # this tool's own tail writes ("skill v<ver>: oc-ledger sync — <why>"), not
+  # the bare '^skill v' prefix: that prefix also heads bump-only commits
+  # (a98a9729 "skill v0.4.238: state-repo recoverability — ...") and CORRECTION
+  # commits. Measured 2026-09-23: 115 prefixed commits, only 82 of them syncs.
+  # A prefix-only anchor therefore returns the newest COMMIT WITH THAT PREFIX,
+  # which lands too LATE whenever a bump-only commit is newer than the newest
+  # sync — and a late anchor TRUNCATES the range, silently dropping bundled
+  # commits (an under-flag, the exact silent-clean shape the skip-NOTE below
+  # exists to prevent). The pinned form was verified to select exactly the 82.
+  anchor="$(git -C "$SKILL_DIR" log --grep='^skill v[0-9.]*: oc-ledger sync' -1 --format=%H 2>/dev/null || true)"
   if [ -z "$anchor" ]; then
     # An unverifiable check must never pass as clean (#485's shape): say SKIPPED
     # and say it is NOT a clean result, so absence of a WARN is never read as
     # "every commit was named".
-    echo "sync: NOTE — C8 naming check SKIPPED: no previous 'skill v...' commit is derivable, so the bundled range is unverifiable. This is NOT a clean result and NOT a finding." >&2
+    echo "sync: NOTE — C8 naming check SKIPPED: no previous 'skill v<ver>: oc-ledger sync' commit is derivable, so the bundled range is unverifiable. This is NOT a clean result and NOT a finding." >&2
     return 0
+  fi
+  # LEDGER CROSS-CHECK (v0.4.243). The ledger is authoritative for which
+  # versions published, and it carries versions that minted NO commit at all
+  # (v0.4.239: ledger row n=10349 exists, zero commits carry the subject), so
+  # git alone cannot see a skipped window. Skill-bump rows newer than this
+  # anchor enumerate exactly the versions published since the previous sync;
+  # any of them means the anchor did not land on the immediately-previous
+  # version and the range STRADDLES windows. Say so — a range read as one
+  # window misreports which release a bundled commit shipped in.
+  anchor_t="$(git -C "$SKILL_DIR" log -1 --format=%cI "$anchor" 2>/dev/null || true)"
+  if [ -n "$anchor_t" ] && [ -f "$LEDGER" ]; then
+    # NORMALISE BOTH SIDES TO EPOCH before comparing. The two timestamps arrive
+    # in DIFFERENT ISO forms — the commit as "...+00:00", the ledger row as
+    # "...Z" — and 'Z' (0x5A) sorts ABOVE '+' (0x2B), so a plain string compare
+    # reads a row stamped in the SAME SECOND as NEWER than the commit that
+    # follows it. Caught by this function's own control leg, which fired on an
+    # unmodified fixture: every bump row looked newer than its own sync commit.
+    anchor_e="$(date -u -d "$anchor_t" +%s 2>/dev/null || echo 0)"
+    spans="$(jq -r '.events[]? | select(.kind == "skill-bump") | [(.t // ""), ((.what // "") | split(" ")[0])] | @tsv' \
+        "$LEDGER" 2>/dev/null \
+      | while IFS="$(printf '\t')" read -r rt rv; do
+          [ -n "$rt" ] || continue
+          [ -n "$rv" ] || continue
+          re="$(date -u -d "$rt" +%s 2>/dev/null || echo 0)"
+          [ "$re" -gt "$anchor_e" ] && printf '%s\n' "$rv"
+        done | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+    if [ -n "$spans" ]; then
+      echo "sync: NOTE — C8 naming: the range spans MORE THAN ONE version window. Skill-bump rows newer than the anchor ($spans) published without an intervening sync commit, so a commit listed below may belong to an earlier window than this one." >&2
+    fi
   fi
   # The entry BODY: from its header to the next '## v' header. Version dots are
   # unescaped, matching the existence gate's own grep — a version is 0.N.N and
@@ -645,12 +681,58 @@ c8_naming_warn() { # $1 = version. Prints to stderr; ALWAYS rc 0 (never a gate).
   # Every NON-SYNC commit the sync bundles (hq.md:57), newest first.
   range="$(git -C "$SKILL_DIR" log --format='%h %s' --no-merges "$anchor"..HEAD 2>/dev/null || true)"
   [ -n "$range" ] || return 0
+  # The syncing session's own commits, by Session-Id trailer. Built in ONE git
+  # call (a per-commit read would be one process per commit on every sync).
+  # OC_ACTOR wins when set, matching how the rest of this tool derives actors.
+  self_id="${OC_ACTOR:-${OPENCRABS_SESSION_ID:-}}"
+  if [ -n "$self_id" ]; then
+    selfids="$(git -C "$SKILL_DIR" log --format='%h %(trailers:key=Session-Id,valueonly)' --no-merges "$anchor"..HEAD 2>/dev/null \
+      | awk -v id="$self_id" 'NF>1 && index($0, id)>0 { printf "%s ", $1 }' || true)"
+  fi
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     sha="${c%% *}"; subj="${c#* }"
     # Sync commits name themselves and carry no issue ref; the law scopes the
     # requirement to NON-sync commits.
     case "$subj" in "skill v"*) continue ;; esac
+    # The sweeper's own bookkeeping (oc-ledger commit-pending --bundle) is
+    # committed by THIS tool with a subject it writes itself — see
+    # cmd_commit_pending. Those commits correctly carry no issue ref and are
+    # correctly unnamed by CHANGELOG (15 of them on 2026-09-23, 0 named), so
+    # without this they are re-listed as unnamed in EVERY window the sweeper
+    # runs in. Skip by the CONTRACT the tool writes, never a hand-maintained
+    # name list — a list would rot; the marker cannot. The count is reported
+    # at the end so the exclusion stays visible rather than silent.
+    case "$subj" in *"(oc-ledger commit-pending --bundle)"*) skipped=$(( skipped + 1 )); continue ;; esac
+    # The BUMPER'S OWN authoring commits (v0.4.243). The entry is written to
+    # the working tree, the law files are committed, and THEN this sync runs —
+    # so the range always contains the bumper's own law commit(s), and the
+    # entry could not name them even in principle: their shas did not exist
+    # when it was written. Measured on HQ's v0.4.243 run: `18a84fbf` (law files
+    # only) was flagged and CANNOT be named. `git log -S'## v0.4.243'` returns
+    # EMPTY at that moment — the entry itself is still uncommitted — so the
+    # "exclude the commit that introduced the entry" form is unavailable here;
+    # session identity is the discriminator that exists at sync time.
+    # Match on the Session-Id TRAILER (every commit carries one), never on the
+    # author name: a name is shared by every commit a lane ever makes, while
+    # the trailer is this session's own. An unmatched or absent session id
+    # excludes nothing — fail-open, which suits a WARN-only leg.
+    #
+    # TIGHTENED: skip only a self-commit that ALSO carries no issue ref. A
+    # self-commit naming an issue is real shipped work whose ship date belongs
+    # in the record, so it stays flagged — measured on the v0.4.243 range,
+    # this keeps the Toolsmith's `873495a2 (#519)` and `0c39b940 (#517)` listed
+    # while removing the law commit that could not be named. Without this, a
+    # sync run by a lane that had also shipped a fix would silently drop that
+    # fix from the WARN — trading one false positive for one false negative.
+    case " $selfids " in
+      *" $sha "*)
+        case "$subj" in
+          *'#'*) : ;;   # carries an issue ref -> nameable, keep flagging it
+          *) selfskip=$(( selfskip + 1 )); continue ;;
+        esac
+        ;;
+    esac
     named=0
     case "$entry" in *"$sha"*) named=1 ;; esac
     if [ "$named" -eq 0 ]; then
@@ -664,7 +746,17 @@ c8_naming_warn() { # $1 = version. Prints to stderr; ALWAYS rc 0 (never a gate).
   done <<EOF
 $range
 EOF
-  [ -n "$missing" ] || return 0   # named-everything is SILENT
+  # Disclose the exclusion BEFORE the clean-path return: a skip that is never
+  # reported is an exclusion list nobody can audit, which is how this class of
+  # gate dies. This is a lowercase note, not the WARN — the "silence means
+  # everything is named" contract still holds for the WARN itself.
+  if [ "$skipped" -gt 0 ]; then
+    echo "sync: note — C8 naming: $skipped commit(s) skipped as this tool's own sweeper bookkeeping (subject carries '(oc-ledger commit-pending --bundle)'). Disclosed so the exclusion is never silent; those commits carry no issue ref and need no naming." >&2
+  fi
+  if [ "$selfskip" -gt 0 ]; then
+    echo "sync: note — C8 naming: $selfskip commit(s) skipped as made by THIS syncing session (Session-Id trailer = $self_id) and naming no issue. The entry is written before those commits exist, so it cannot name them; disclosed so the exclusion is never silent. A self-commit that DOES name an issue is still listed — only the unnameable ones are skipped." >&2
+  fi
+  [ -n "$missing" ] || return 0   # named-everything is otherwise SILENT
   echo "sync: WARN — C8 naming: the '## v$v' entry does not name every commit this sync bundles." >&2
   printf '%s' "$missing" | sed 's/^/    unnamed: /' >&2
   echo "  WARN only, never a refusal: the range is other lanes' work and carries untrailered law commits by design." >&2
@@ -1426,6 +1518,76 @@ PAYLOAD
   printf '\n## v0.4.3\nc8 receipt naming %s and #778\n' "$C8SHA" >> "$C8S/CHANGELOG.md"
   C8C="$(c8sync 0.4.3)"; chk "c8-naming-named-rc" 0 $?
   case "$C8C" in *"unnamed:"*) bad "c8-naming-not-silent-when-named" ;; *) ok ;; esac
+  # (d) THE ANCHOR MUST BE A SYNC, not merely a commit whose subject starts
+  #     'skill v'. A bump-only commit is created NEWER than the last sync; the
+  #     prefix-only pattern anchors on it, truncating the range to empty and
+  #     reading CLEAN (silent) — an UNDER-flag, the dangerous direction. The
+  #     pinned pattern anchors on the sync and still sees the bundled commit.
+  #     Discriminating: pre-fix emits no 'unnamed:' line at all here.
+  printf 'y\n' > "$C8S/unnamed2.txt"; git -C "$C8S" add -A
+  git -C "$C8S" commit -q -m "fix(tools): #779 a second commit the entry does not name"
+  C8D2SHA="$(git -C "$C8S" rev-parse --short HEAD)"
+  git -C "$C8S" commit -q --allow-empty -m "skill v0.4.4: bump only (no sync commit here)"
+  printf 'name: fixture\nversion: 0.4.4\n---\n' > "$C8S/SKILL.md"
+  printf '\n## v0.4.4\nc8 receipt\n' >> "$C8S/CHANGELOG.md"
+  C8D2="$(c8sync 0.4.4)"
+  case "$C8D2" in *"unnamed: $C8D2SHA"*) ok ;; *) bad "c8-anchor-not-sync-under-flags ($C8D2SHA)" ;; esac
+  # (e) MULTI-WINDOW NOTE. The ledger is authoritative for what published — it
+  #     carries versions that minted no commit at all. Skill-bump rows newer
+  #     than the anchor mean the range straddles windows; the check must SAY so
+  #     rather than silently presenting a two-window span as one. Control first:
+  #     with no such rows the NOTE must be ABSENT (a note that always fires
+  #     carries no information).
+  printf 'name: fixture\nversion: 0.4.5\n---\n' > "$C8S/SKILL.md"
+  printf '\n## v0.4.5\nc8 receipt\n' >> "$C8S/CHANGELOG.md"
+  C8E0="$(c8sync 0.4.5)"
+  case "$C8E0" in *"MORE THAN ONE version window"*) bad "c8-multi-window-note-false-positive" ;; *) ok ;; esac
+  # NOTE the target: the C8 block's own ledger, NOT $OC_LEDGER — that variable
+  # holds the selftest's main fixture ledger (set far above this block), so
+  # writing there would seed rows the C8 check never reads and pollute later
+  # legs. Both paths were measured; this is the one c8sync drives.
+  jq '.events += [{n: 90001, t: "2099-01-01T00:00:00Z", by: "oc-ledger sync", kind: "skill-bump", what: "v0.4.9 — fixture row"},
+                  {n: 90002, t: "2099-01-02T00:00:00Z", by: "oc-ledger sync", kind: "skill-bump", what: "v0.4.10 — fixture row"}]' \
+    "$C8D/workers-ledger.json" > "$C8D/wl.tmp" && mv "$C8D/wl.tmp" "$C8D/workers-ledger.json"
+  C8E="$(c8sync 0.4.5)"
+  case "$C8E" in *"MORE THAN ONE version window"*) ok ;; *) bad "c8-multi-window-note-missing" ;; esac
+  case "$C8E" in *"v0.4.9"*) ok ;; *) bad "c8-multi-window-note-names-no-window" ;; esac
+  # (f) THE SWEEPER'S OWN BOOKKEEPING is skipped by the marker the tool WRITES
+  #     (not a hand-maintained list), and the skip is DISCLOSED — an unreported
+  #     exclusion is an exclusion list nobody can audit, which is how this class
+  #     of gate dies. Both halves asserted: absent from the unnamed set, and
+  #     visible as a count.
+  printf 'z\n' > "$C8S/sweep.txt"; git -C "$C8S" add -A
+  git -C "$C8S" commit -q -m "runtime-artifacts sweep (B3): tools/tests/battery-last.json (oc-ledger commit-pending --bundle)"
+  C8FSHA="$(git -C "$C8S" rev-parse --short HEAD)"
+  printf 'name: fixture\nversion: 0.4.6\n---\n' > "$C8S/SKILL.md"
+  printf '\n## v0.4.6\nc8 receipt\n' >> "$C8S/CHANGELOG.md"
+  C8F="$(c8sync 0.4.6)"
+  case "$C8F" in *"unnamed: $C8FSHA"*) bad "c8-sweeper-listed-as-unnamed" ;; *) ok ;; esac
+  case "$C8F" in *"skipped as this tool's own sweeper bookkeeping"*) ok ;; *) bad "c8-sweeper-skip-undisclosed" ;; esac
+  # (g) THE BUMPER'S OWN unnameable commit is skipped by Session-Id TRAILER and
+  #     the skip is DISCLOSED. A commit by the syncing session naming no issue
+  #     cannot be named by the entry — its sha does not exist when the entry is
+  #     written — so it is excluded structurally, and reported, because an
+  #     unreported skip is an exclusion list nobody can audit.
+  printf 'w\n' > "$C8S/law.txt"; git -C "$C8S" add -A
+  git -C "$C8S" commit -q -m "law: fixture cycle commit (no issue ref)" -m "Session-Id: $OC_ACTOR"
+  C8GSHA="$(git -C "$C8S" rev-parse --short HEAD)"
+  printf 'name: fixture\nversion: 0.4.7\n---\n' > "$C8S/SKILL.md"
+  printf '\n## v0.4.7\nc8 receipt\n' >> "$C8S/CHANGELOG.md"
+  C8G="$(c8sync 0.4.7)"
+  case "$C8G" in *"unnamed: $C8GSHA"*) bad "c8-selfcommit-no-issue-listed" ;; *) ok ;; esac
+  case "$C8G" in *"skipped as made by THIS syncing session"*) ok ;; *) bad "c8-selfskip-undisclosed" ;; esac
+  # (h) TIGHTENING: a self-commit that DOES name an issue is real shipped work
+  #     and stays LISTED. Without this the skip would trade a false positive for
+  #     a false negative on exactly the commits this leg exists to surface.
+  printf 'v\n' > "$C8S/fix.txt"; git -C "$C8S" add -A
+  git -C "$C8S" commit -q -m "fix(tools): #780 a self-commit that ships real work" -m "Session-Id: $OC_ACTOR"
+  C8HSHA="$(git -C "$C8S" rev-parse --short HEAD)"
+  printf 'name: fixture\nversion: 0.4.8\n---\n' > "$C8S/SKILL.md"
+  printf '\n## v0.4.8\nc8 receipt\n' >> "$C8S/CHANGELOG.md"
+  C8H="$(c8sync 0.4.8)"
+  case "$C8H" in *"unnamed: $C8HSHA"*) ok ;; *) bad "c8-selfcommit-with-issue-hidden" ;; esac
   # 23-26: ack (v0.4.55: full 0.N.N shape — the old N.N regex could never
   # record a real skill version, which broke the reload convention's ack step)
   bash "$ME" ack short-uuid 0.4.2 >/dev/null 2>&1; chk "ack-bad-uuid" 2 $?
