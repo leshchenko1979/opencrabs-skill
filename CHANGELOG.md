@@ -1,5 +1,21 @@
 # Changelog — opencrabs-dev
 
+## v0.4.249 — the Owner Push Freeze register is RETIRED (owner order 2026-09-24)
+
+**Owner order, verbatim:** *"Remove the freeze register. It's stale. Now the concepts are soaking and degraded state with global harvest freeze"* (2026-09-24T21:04Z).
+
+The per-group freeze register is GONE. Removed with it: the `json` block that was its machine-readable home, the T1-T18 / Tier-3 frozen table, the T3 disputed-release ruling, the pre-freeze-PR ruling, and all five rules. What replaces the section is a RETIRED tombstone naming the two concepts that supersede it and why the register was stale.
+
+**Why it was stale, each leg verified before removal:** its enforcement leg never existed (the fail-loud reader was never built — that was open fork issue #358, now CLOSED NOT_PLANNED); its machinery leg was vacuous (`oc-harvest-dispatch-4h` disabled); and MODE=DEGRADED already performed the same hold globally — a second mechanism for one concept. Its bookkeeping was a 2026-09-18 snapshot: T9 merged by the maintainer, one release ever (T6), T3 disputed and unresolved.
+
+**The two concepts that replace it:** SOAKING, unchanged, at `upstream-merge-runbook.md` §24-Hour Feature Soak; and **DEGRADED = GLOBAL harvest freeze**, now stated explicitly in the `SKILL.md` §MODE REGISTER — under DEGRADED no PR group of ANY feature is filed without explicit owner approval, and a soak maturing, a green census or an idle editor is never a release.
+
+**Fourteen `oc-harvest-*-resume` cron prompts are left deliberately unpatched, with the reason:** they carry a leg instructing the lane to read the removed `json` block. They are covered rather than rewritten — the tombstone sits at the exact section those prompts name, so a lane following the stale instruction lands on the retirement note, and the family is inert while disabled (13 of 14; only the MODE-watching `oc-harvest-403-resume` stays armed, and it now reads the global DEGRADED gate). Rewriting them would have meant 14 full-prompt writes through a tool argument, each at risk of the tail-cut that silently truncates a long payload — a worse hazard than a stale pointer to a tombstone. Patch them if the family is ever re-enabled.
+
+The `oc-ship-chain` / `oc-roster` hits for "freeze" are the **carrier** fork-rebase freeze — a different concept, untouched.
+
+LOC: 3584 -> 3536 (net -48; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `ca600ee2` which reproduces the v0.4.247 entry's 3572 exactly). The whole change is `fleet-directives.md` 695 -> 647; `SKILL.md` 708 -> 708 (the MODE REGISTER sentence is an IN-LINE append to an existing line, so it changes no line count).
+
 ## v0.4.248 (2026-09-24)
 
 **Open Questions register — the owner-commissioned surfacer gets its lane-side contract.**
