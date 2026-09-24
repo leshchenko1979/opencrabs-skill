@@ -721,11 +721,55 @@ for tok in oc.primary_issue_tokens(sys.argv[2]):
 ' "$_OC_DIR" "$1"
 }
 
+# _by_uuid_shaped_unresolvable <value> — WARN-ONLY guard for an explicit --by (#320).
+#
+# derive_by() already resolves an actor properly: exact uuid match, unique
+# fragment, the composed '<role> <uuid>' form, and a label boundary at
+# `*[!0-9a-f-]*`. But cmd_stamp's `--by` FLAG bypassed all of it and wrote the
+# value verbatim, so a hand-assembled uuid-format string landed as a phantom
+# actor: measured 2026-09-24, row n=10499 carried
+#   by='triage 530c29ec-9ba9-4d3e-9d5f-3b7d1b0d1a1f'
+# where the real lane is 530c29ec-596e-43a4-9c7e-1b6dfc3cd870 — a remembered
+# PREFIX plus an invented TAIL. The row is indistinguishable from a legitimate
+# one, and every consumer that keys on `by` (claim authorship, busy-set
+# resolution, phantom detection) inherits the corruption silently. The lane that
+# hit it had just written the defect up; incident n=2227 is the same tail
+# spliced onto a different prefix, i.e. two faces of one missing check.
+#
+# WARN, never REFUSE. derive_by:604 already records why: 64 of the 86 full-uuid
+# sentinel rows belong to uuids that ARE rostered today — they were stamped
+# inside the pre-`enroll` window — so a hard refusal would retroactively block a
+# legitimately-unresolvable shape. And oc-ship-chain passes an explicit `--by`
+# fallback: a refusal would trade its whole ledger trail for a warning.
+#
+# Silent when: the value is a LABEL (carries a non-hex/non-dash char in the
+# candidate position), the candidate is too short to be a fragment, or the
+# candidate RESOLVES to exactly one roster worker.
+_by_uuid_shaped_unresolvable() { # $1=value; prints a warning to stderr if unresolvable
+  local v="${1:-}" cand
+  [ -n "$v" ] || return 0
+  # the composed '<label> <uuid>' form carries its candidate in the TAIL
+  case "$v" in
+    *\ *) cand="${v##* }" ;;
+    *)   cand="$v" ;;
+  esac
+  case "$cand" in
+    *[!0-9a-f-]*) return 0 ;;   # a LABEL, not a uuid — silent, verbatim
+  esac
+  [ "${#cand}" -ge 4 ] || return 0
+  local hit
+  hit="$(jq -r --arg p "$cand" '[.workers[] | select((.uuid // "") | startswith($p))] | if length >= 1 then "y" else "" end' "$LEDGER" 2>/dev/null || true)"
+  [ -n "$hit" ] && return 0
+  printf '%s\n' "oc-ledger: WARNING — --by '$v' is UUID-SHAPED but resolves to NO roster worker; the row is stamped VERBATIM and is indistinguishable from a legitimate attribution." >&2
+  printf '%s\n' "  A hand-assembled uuid (remembered prefix + invented tail) is the usual cause. Fix: copy the uuid from a LIVE read — oc-ledger roster --live, or \$OPENCRABS_SESSION_ID. A genuine label is fine as-is (it carries a non-hex char)." >&2
+  return 0
+}
+
 cmd_stamp() {
-  local kind="" what="" by="" allow_unattr=0 allow_noref=0 what_file="" what_stdin=0
+  local kind="" what="" by="" by_explicit=0 allow_unattr=0 allow_noref=0 what_file="" what_stdin=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --by) by="${2:-}"; shift 2 ;;
+      --by) by="${2:-}"; by_explicit=1; shift 2 ;;
       --allow-unattributed) allow_unattr=1; shift ;;
       --allow-no-ref) allow_noref=1; shift ;;
       --what) what="${2:-}"; [ -n "$what" ] || die 2 "--what needs a value"; shift 2 ;;
@@ -765,6 +809,11 @@ cmd_stamp() {
   case "$KINDS" in *" $kind "*) ;; *) die 2 "stamp: unknown kind '$kind' (v1.2 vocabulary — see header)" ;; esac
   case "$what" in --*) die 2 "stamp: what looks like a lost flag (\"$what\") — pass text with --what explicitly (glitched-argv class, ledger n=1361/n=1372)" ;; esac
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+  # #320: an explicit --by bypasses derive_by entirely, so a hand-assembled
+  # uuid-format value lands as a phantom actor. Placed AFTER the ledger_ok gate
+  # so the documented rc precedence holds (a missing/corrupt ledger is rc 3,
+  # never a warning) — the helper reads the roster from $LEDGER.
+  [ "$by_explicit" = 1 ] && _by_uuid_shaped_unresolvable "$by"
   # #19 (dispatched by Triage 530c29ec, 2026-09-12; found on my own law-12 row
   # n=3794, and n=3786 before it): an anonymous row IS a defect — it cannot be
   # traced to a lane or a tool, which is the whole point of the `by` field.
@@ -2297,6 +2346,31 @@ ACKEOF
   # hq/opencrabs-dev-factory; refusing the label form would break it outright)
   bash "$ME" stamp note "label-stamp" --by "hq/opencrabs-dev-factory" >/dev/null 2>&1; chk "stamp-label-rc" 0 $?
   chk "stamp-label-verbatim" "hq/opencrabs-dev-factory" "$(jq -r '[.events[] | select(.what=="label-stamp")][0].by' "$OC_LEDGER")"
+  # ---- #320: a uuid-SHAPED --by that resolves nowhere must WARN, not refuse --
+  # derive_by resolves an actor properly, but the --by FLAG bypassed it and wrote
+  # verbatim, so a hand-assembled uuid (remembered prefix + invented tail) landed
+  # as a phantom actor indistinguishable from a real one (row n=10499). The
+  # warning is the fix; a REFUSAL would be wrong for the reason derive_by:604
+  # records (64/86 sentinel rows belong to uuids rostered TODAY, stamped inside
+  # the pre-enroll window).
+  bash "$ME" stamp note "by-fabricated-stamp" --by "triage 530c29ec-9ba9-4d3e-9d5f-3b7d1b0d1a1f" >/dev/null 2>"$T/by_fab.err"
+  chk "by-uuid-shaped-rc" 0 $?
+  chk "by-uuid-shaped-warns" "true" "$(grep -qF 'UUID-SHAPED' "$T/by_fab.err" && echo true || echo false)"
+  chk "by-uuid-shaped-names-remedy" "true" "$(grep -qF 'roster --live' "$T/by_fab.err" && echo true || echo false)"
+  chk "by-uuid-shaped-still-stamps-verbatim" "triage 530c29ec-9ba9-4d3e-9d5f-3b7d1b0d1a1f" \
+    "$(jq -r '[.events[] | select(.what=="by-fabricated-stamp")][0].by' "$OC_LEDGER")"
+  # the label form stays SILENT (the negative control: a fix that warns on any
+  # unrecognised --by reddens this and the verbatim leg above)
+  bash "$ME" stamp note "by-label-silent-stamp" --by "hq/opencrabs-dev-factory" >/dev/null 2>"$T/by_lab.err"
+  chk "by-label-no-warn" "false" "$(grep -qF 'UUID-SHAPED' "$T/by_lab.err" && echo true || echo false)"
+  # a RESOLVABLE uuid is silent too — the warning is about resolution, not shape
+  bash "$ME" stamp note "by-real-uuid-stamp" --by "tester aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" >/dev/null 2>"$T/by_real.err"
+  chk "by-real-uuid-rc" 0 $?
+  chk "by-real-uuid-no-warn" "false" "$(grep -qF 'UUID-SHAPED' "$T/by_real.err" && echo true || echo false)"
+  # and the OC_ACTOR path is UNTOUCHED: the guard is for an explicit --by only
+  OC_ACTOR="tester aaaaaaaa" bash "$ME" stamp note "by-actor-path-stamp" >/dev/null 2>"$T/by_actor.err"
+  chk "by-actor-path-rc" 0 $?
+  chk "by-actor-path-no-warn" "false" "$(grep -qF 'UUID-SHAPED' "$T/by_actor.err" && echo true || echo false)"
   # an AMBIGUOUS fragment must NOT resolve — a wrong pick is worse than an
   # honest sentinel. Built on an ISOLATED ledger: the shared fixture roster is
   # deliberately pinned at 3 workers by the roster-count assertions below.
