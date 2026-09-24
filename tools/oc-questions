@@ -1261,6 +1261,22 @@ def build_spec(entries, token, expires_at, action):
             "props": {"set_id": set_id, "lane": entry["lane"]},
             "children": question_keys}
         set_keys.append(set_key)
+    if not set_keys:
+        # Owner order 2026-09-24: the page is ALWAYS deployed, including when
+        # nothing is open. An empty register used to early-return, so the
+        # previous page kept serving a question that had already been answered
+        # and tapping it read as a failure. The empty state is typed DATA like
+        # every other block -- no second builder, no renderer change.
+        elements["empty-head"] = {
+            "type": "Heading",
+            "props": {"level": 2, "text": "No open questions"},
+            "children": []}
+        elements["empty-body"] = {
+            "type": "Paragraph",
+            "props": {"spans": [{"kind": "Text",
+                                 "text": "Nothing is waiting on you right now."}]},
+            "children": []}
+        set_keys = ["empty-head", "empty-body"]
     elements["page"] = {
         "type": "Page",
         "props": {"title": "Open questions", "expires_at": expires_at},
@@ -1508,9 +1524,9 @@ def publish_page(set_id=None, action=None, prune=False, rotate=False, quiet=Fals
             die(1, f"no open question set {set_id!r}")
     entries = sorted(entries, key=lambda s: s.get("asked_at") or "")
     pruned = prune_pages() if prune else []
-
-    if not entries:
-        return None, pruned
+    # No early return on an empty register (owner order 2026-09-24): the page
+    # must always be deployed, so an empty state is rendered and written to the
+    # SAME token rather than leaving the previous page serving stale questions.
 
     token = None
     if not rotate:
@@ -1572,13 +1588,6 @@ def cmd_publish(argv):
         if not entries:
             die(1, f"no open question set {wanted!r}")
     entries = sorted(entries, key=lambda s: s.get("asked_at") or "")
-    if not entries:
-        if flags.get("--json"):
-            print(json.dumps({"published": None, "reason": "no open questions",
-                              "pruned": []}, indent=2))
-        else:
-            print("nothing to publish (no open questions)")
-        return 0
 
     meta, pruned = publish_page(set_id=flags.get("--set"), action=action,
                                 prune=bool(flags.get("--prune")),
@@ -1915,6 +1924,53 @@ def selftest():
         rc, out, _ = run("publish", "--json")
         ck(json.loads(out)["token"] == rotated["token"],
            "\u2026and the new token is the one subsequently reused")
+
+        # Owner report 2026-09-24: "it seems to fail when there are no
+        # questions, but must deploy a no-open-questions page". Asserted on the
+        # ARTIFACT (the page bytes), not on the message. A PRISTINE store is
+        # used because the shared fixture store still holds open sets here --
+        # running against it would measure those, not the empty state.
+        empty_root = os.path.join(root, "empty-store")
+        empty_env = dict(env)
+        empty_env["OC_QUESTIONS_DIR"] = empty_root
+
+        def run_empty(*args):
+            proc = subprocess.run([tool] + list(args), env=empty_env,
+                                  capture_output=True, text=True, timeout=90)
+            return proc.returncode, proc.stdout, proc.stderr
+
+        rc, out, err = run_empty("publish", "--json")
+        ck(rc == 0, "publish with NOTHING open still exits 0 (rc=%d)" % rc)
+        # Crash-free on purpose: json.loads on a pre-fix empty output raises,
+        # and a selftest that dies mid-way reports NOTHING -- which reads as a
+        # pass. Every step below degrades to a FAIL row instead.
+        try:
+            empty_meta = json.loads(out)
+        except ValueError:
+            empty_meta = {}
+        empty_dir = os.path.join(empty_root, "pages", empty_meta.get("token", "?"))
+        ck(os.path.isfile(os.path.join(empty_dir, "index.html")),
+           "\u2026and still writes index.html -- the page is always deployed")
+        empty_body = ""
+        try:
+            with open(os.path.join(empty_dir, "index.html"),
+                      encoding="utf-8") as fh:
+                empty_body = fh.read()
+        except OSError:
+            pass
+        ck("No open questions" in empty_body,
+           "the empty page carries the empty state, not a stale question")
+        ck('name="qid"' not in empty_body,
+           "\u2026and names no question, so no tap can read as a failure")
+        ck((empty_meta.get("meta") or {}).get("questions") == 0,
+           "\u2026and reports 0 open questions, not a stale count")
+        rc, out, _ = run_empty("publish", "--json")
+        try:
+            again = json.loads(out).get("meta", {}).get("token")
+        except ValueError:
+            again = None
+        ck(again is not None and again == empty_meta.get("token"),
+           "\u2026on the SAME token -- an empty publish does not churn the URL")
 
         # C4: a mutation re-publishes, so the page is never hours stale.
         before = json.load(open(pointer, encoding="utf-8"))
