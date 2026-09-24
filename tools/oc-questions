@@ -1,0 +1,1400 @@
+#!/usr/bin/env python3
+# =============================================================================
+# oc-questions — the Open Questions register (#547)
+#
+# The sanctioned "blocked on you" channel (fleet-directives.md §Open Questions
+# register). A lane that needs an owner decision registers an ORDERED set of
+# questions in the same turn it parks; a renderer emits a card in the CALLING
+# session's own topic plus a short-lived public page; answers return to the
+# calling session.
+#
+# Store: <profile home>/questions/open.json, answered sets -> archive.jsonl
+# Single writer: flock + atomic replace (tmp -> rename). Two concurrent `ask`
+# calls must lose NEITHER set — that is a selftest criterion, not a comment.
+#
+# Verbs: ask · answer · list · render · publish · lint · gc
+#
+# rc vocabulary (tools/RC-CONTRACT.md): 0 ok / 1 finding-or-not-found /
+# 2 usage / 3 state-refused (already answered, expired) / 4 store-or-IO fault.
+# =============================================================================
+
+import datetime
+import fcntl
+import html
+import json
+import os
+import re
+import secrets
+import sys
+import tempfile
+import time
+
+PROG = "oc-questions"
+VERSION = "1.0.0"
+
+# Callback data cap is a Telegram limit, asserted at register and render time
+# (#547 risk table): a truncated callback resolves to nothing when tapped.
+CALLBACK_MAX_BYTES = 64
+DEFAULT_TTL_DAYS = 7
+SET_ID_LEN = 6
+
+# A lane NAME, never a uuid (fleet-directives: "Refer to workers by TOPIC/CHAT
+# NAME only"). The lint verb enforces it rather than trusting the caller.
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+# Secrets/no-secrets lint (#547 risk table: the page is world-readable).
+SECRET_RE = re.compile(
+    r"(?:/root/|/home/[a-z0-9_-]+/|api[_-]?key|bearer\s+[A-Za-z0-9._-]{16,}|"
+    r"[0-9]{6,}:[A-Za-z0-9_-]{30,}|ssh\s+-i\s|BEGIN [A-Z ]*PRIVATE KEY)",
+    re.I,
+)
+
+
+def profile_home():
+    prof = os.environ.get("OC_PROFILE") or os.environ.get("OPENCRABS_PROFILE") or "ops"
+    return os.path.join(os.path.expanduser("~"), ".opencrabs", "profiles", prof)
+
+
+def store_dir():
+    override = os.environ.get("OC_QUESTIONS_DIR")
+    if override:
+        return override
+    return os.path.join(profile_home(), "questions")
+
+
+def store_path():
+    return os.path.join(store_dir(), "open.json")
+
+
+def archive_path():
+    return os.path.join(store_dir(), "archive.jsonl")
+
+
+def pages_dir():
+    return os.path.join(store_dir(), "pages")
+
+
+def now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def parse_iso(text):
+    try:
+        return datetime.datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def age_hours(asked_at):
+    dt = parse_iso(asked_at)
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    delta = datetime.datetime.now(datetime.timezone.utc) - dt
+    return round(delta.total_seconds() / 3600.0, 1)
+
+
+def fmt_age(asked_at):
+    hours = age_hours(asked_at)
+    if hours is None:
+        return "age unknown"
+    if hours < 1:
+        return f"{int(hours * 60)}m old"
+    if hours < 48:
+        return f"{hours:g}h old"
+    return f"{hours / 24:.1f}d old"
+
+
+def empty_register():
+    return {"version": 1, "sets": []}
+
+
+def read_register():
+    """Read the register. A MISSING store is an empty register; a CORRUPT one is
+    an error, never silently replaced — overwriting it would destroy the only
+    copy of a parked question."""
+    path = store_path()
+    if not os.path.exists(path):
+        return empty_register()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:
+        die(4, f"register unreadable at {path}: {exc}")
+    if not isinstance(data, dict) or not isinstance(data.get("sets"), list):
+        die(4, f"register malformed at {path} (expected an object with a sets array)")
+    return data
+
+
+def write_register_atomic(data):
+    """tmp -> os.replace, so a reader never observes a half-written register."""
+    directory = store_dir()
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".open.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, store_path())
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+class RegisterLock(object):
+    """Single-writer guard: a read-modify-write must hold this for the WHOLE
+    cycle, or two concurrent `ask` calls interleave and one set is lost."""
+
+    def __init__(self, timeout=10.0):
+        self.timeout = timeout
+        self.fh = None
+
+    def __enter__(self):
+        os.makedirs(store_dir(), exist_ok=True)
+        path = os.path.join(store_dir(), ".lock")
+        self.fh = open(path, "a+")
+        deadline = None
+        import time as _time
+        deadline = _time.time() + self.timeout
+        while True:
+            try:
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if _time.time() >= deadline:
+                    die(4, f"register lock not acquired within {self.timeout:g}s "
+                           f"({path}) — another writer is mid-cycle")
+                _time.sleep(0.05)
+
+    def __exit__(self, *exc):
+        try:
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.fh.close()
+        return False
+
+
+def new_set_id(taken):
+    while True:
+        candidate = secrets.token_hex(SET_ID_LEN // 2 + 1)[:SET_ID_LEN]
+        if candidate not in taken:
+            return candidate
+
+
+def die(rc, message):
+    sys.stderr.write(f"{PROG}: {message}\n")
+    sys.exit(rc)
+
+
+def open_sets(data):
+    return [s for s in data["sets"] if s.get("status") == "open"]
+
+
+def find_set(data, set_id):
+    for entry in data["sets"]:
+        if entry.get("id") == set_id:
+            return entry
+    return None
+
+
+def find_question(entry, qid):
+    for question in entry.get("questions", []):
+        if question.get("qid") == qid:
+            return question
+    return None
+
+
+# A question is CLOSED only once it is answered, withdrawn or expired.
+# "clarifying" is NOT closed: a Clarify request means the owner asked for more
+# context and is still waiting. Counting it as closed archived the WHOLE set and
+# silently removed it from the live register — the opposite of the contract
+# ("a Clarify request ... never silently closes the question").
+CLOSED_STATUSES = ("answered", "withdrawn", "expired")
+
+def question_is_closed(question):
+    return question.get("status") in CLOSED_STATUSES
+
+def set_is_closed(entry):
+    questions = entry.get("questions") or []
+    return bool(questions) and all(question_is_closed(q) for q in questions)
+
+
+
+
+# =============================================================================
+# Unified tools log (parity with tools/lib/oc-log.sh, schema per RC-CONTRACT)
+# =============================================================================
+_LOG_ENABLED = False
+_LOG_ARGS = ""
+_LOG_EXTRA = {}
+_LOG_START = 0.0
+_LOG_FINISHED = False
+
+
+def _is_selftest():
+    return "--selftest" in sys.argv[1:] or (len(sys.argv) > 1 and sys.argv[1] == "selftest")
+
+
+def oc_log_init():
+    global _LOG_ENABLED, _LOG_ARGS, _LOG_EXTRA, _LOG_START, _LOG_FINISHED
+    _LOG_ARGS = " ".join(sys.argv[1:])
+    _LOG_EXTRA = {}
+    _LOG_FINISHED = False
+    if "--no-log" in sys.argv[1:] or _is_selftest():
+        os.environ["OC_TOOLS_NOLOG"] = "1"
+    if os.environ.get("OC_TOOLS_NOLOG", "0") == "1":
+        return
+    _LOG_ENABLED = True
+    _LOG_START = time.time()
+
+
+def oc_log_extra(key, value):
+    if _LOG_ENABLED:
+        _LOG_EXTRA[key] = value
+
+
+def oc_log_finish(exit_code):
+    global _LOG_FINISHED
+    if not _LOG_ENABLED or _LOG_FINISHED:
+        return
+    _LOG_FINISHED = True
+    logf = os.environ.get(
+        "OC_TOOLS_LOG",
+        os.path.join(
+            os.environ.get("OC_DEV_STATE",
+                           os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")),
+            "tools.log",
+        ),
+    )
+    entry = {
+        "ts": now_iso(),
+        "tool": PROG,
+        "actor": os.environ.get("OPENCRABS_SESSION_ID", "unknown"),
+        "args": _LOG_ARGS[:500],
+        "exit": int(exit_code) if isinstance(exit_code, int) else 1,
+        "secs": round(time.time() - _LOG_START, 3),
+        "extra": _LOG_EXTRA,
+    }
+    try:
+        os.makedirs(os.path.dirname(logf), exist_ok=True)
+        with open(logf, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
+# =============================================================================
+# Argument helpers
+# =============================================================================
+def parse_flags(argv, valued, boolean=()):
+    """Return (positional, {flag: value}). Unknown flags are a usage error —
+    silently ignoring one would let a typo register a question with no
+    recommendation while appearing to succeed."""
+    valued = set(valued)
+    boolean = set(boolean)
+    positional, flags, index = [], {}, 0
+    while index < len(argv):
+        token = argv[index]
+        if token in boolean:
+            flags[token] = True
+            index += 1
+            continue
+        if token in valued:
+            if index + 1 >= len(argv):
+                die(2, f"{token} requires a value")
+            if token in flags:
+                existing = flags[token]
+                flags[token] = existing + [argv[index + 1]] if isinstance(existing, list) \
+                    else [existing, argv[index + 1]]
+            else:
+                flags[token] = argv[index + 1]
+            index += 2
+            continue
+        if token.startswith("--"):
+            die(2, f"unknown flag {token} (see {PROG} --help)")
+        positional.append(token)
+        index += 1
+    return positional, flags
+
+
+def flag_list(flags, name):
+    value = flags.get(name)
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def normalise_questions(raw):
+    """Validate and normalise the ordered question array. Order is the contract
+    (#547: 'questions[] in call order'), so nothing here reorders."""
+    if not isinstance(raw, list) or not raw:
+        die(2, "at least one question is required")
+    out = []
+    for position, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            die(2, f"question {position} must be an object")
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        if not title:
+            die(2, f"question {position}: title is required")
+        if not description:
+            die(2, f"question {position}: description is required")
+        options = item.get("options") or []
+        if not isinstance(options, list):
+            die(2, f"question {position}: options must be an array")
+        options = [str(o) for o in options]
+        recommended = item.get("recommended")
+        if recommended is not None:
+            if not isinstance(recommended, int) or isinstance(recommended, bool):
+                die(2, f"question {position}: recommended must be an integer index")
+            if not options:
+                die(2, f"question {position}: recommended is set but the question "
+                       f"carries no options — there is nothing to recommend")
+            if not 0 <= recommended < len(options):
+                die(2, f"question {position}: recommended {recommended} is outside "
+                       f"options (0..{len(options) - 1})")
+        out.append({
+            "qid": f"q{position}",
+            "title": title,
+            "description": description,
+            "options": options,
+            "recommended": recommended,
+            "clarify": bool(item.get("clarify", True)),
+            "status": "open",
+            "answer": None,
+            "answered_at": None,
+            "answered_by": None,
+        })
+    return out
+
+
+def questions_from_flags(flags):
+    path = flags.get("--questions-file")
+    inline = flags.get("--questions-json")
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception as exc:
+            die(2, f"--questions-file unreadable: {exc}")
+    if inline:
+        try:
+            return json.loads(inline)
+        except Exception as exc:
+            die(2, f"--questions-json is not valid JSON: {exc}")
+    if flags.get("--title") or flags.get("--description"):
+        return [{
+            "title": flags.get("--title", ""),
+            "description": flags.get("--description", ""),
+            "options": flag_list(flags, "--option"),
+            "recommended": int(flags["--recommended"]) if "--recommended" in flags else None,
+            "clarify": "--no-clarify" not in flags,
+        }]
+    die(2, "supply --questions-file, --questions-json, or --title/--description")
+
+
+# =============================================================================
+# ask — register an ordered question set (the single-writer cycle)
+# =============================================================================
+def cmd_ask(argv):
+    _, flags = parse_flags(
+        argv,
+        valued=["--lane", "--session", "--questions-file", "--questions-json",
+                "--title", "--description", "--option", "--recommended",
+                "--ttl-days", "--subject"],
+        boolean=["--no-clarify", "--json"],
+    )
+    lane = (flags.get("--lane") or "").strip()
+    session = (flags.get("--session") or "").strip()
+    if not lane:
+        die(2, "ask requires --lane <topic NAME>")
+    if not session:
+        die(2, "ask requires --session <calling session id>")
+    if UUID_RE.search(lane):
+        die(2, f"--lane must be a topic NAME, not a session id (got {lane!r}) — "
+               f"fleet-directives: refer to workers by topic/chat name only")
+    questions = normalise_questions(questions_from_flags(flags))
+    try:
+        ttl_days = int(flags.get("--ttl-days", DEFAULT_TTL_DAYS))
+    except ValueError:
+        die(2, "--ttl-days must be an integer")
+    if not 1 <= ttl_days <= 365:
+        die(2, "--ttl-days must be between 1 and 365")
+
+    for question in questions:
+        for index in range(len(question["options"])):
+            callback_data("x" * SET_ID_LEN, question["qid"], index)
+
+    with RegisterLock():
+        data = read_register()
+        taken = {s.get("id") for s in data["sets"]}
+        set_id = new_set_id(taken)
+        entry = {
+            "id": set_id,
+            "lane": lane,
+            "session": session,
+            "subject": flags.get("--subject"),
+            "asked_at": now_iso(),
+            "ttl_days": ttl_days,
+            "status": "open",
+            "questions": questions,
+        }
+        data["sets"].append(entry)
+        write_register_atomic(data)
+
+    oc_log_extra("set", set_id)
+    oc_log_extra("questions", str(len(questions)))
+    if flags.get("--json"):
+        print(json.dumps(entry, indent=2, ensure_ascii=False))
+    else:
+        print(f"registered set {set_id} ({len(questions)} question(s), "
+              f"lane {lane}, ttl {ttl_days}d)")
+        for question in questions:
+            mark = ""
+            if question["options"] and question["recommended"] is not None:
+                mark = f" [recommended: {question['options'][question['recommended']]}]"
+            print(f"  {question['qid']}  {question['title']}{mark}")
+    return 0
+
+
+# =============================================================================
+# list — every parked decision, OLDEST FIRST (that ordering is the instrument)
+# =============================================================================
+def cmd_list(argv):
+    _, flags = parse_flags(argv, valued=["--lane", "--session"],
+                           boolean=["--json", "--all", "--quiet"])
+    with RegisterLock():
+        data = read_register()
+    entries = data["sets"]
+    if "--all" not in flags:
+        entries = [s for s in entries if s.get("status") == "open"]
+    if flags.get("--lane"):
+        entries = [s for s in entries if s.get("lane") == flags["--lane"]]
+    if flags.get("--session"):
+        entries = [s for s in entries if s.get("session") == flags["--session"]]
+    entries = sorted(entries, key=lambda s: s.get("asked_at") or "")
+
+    if flags.get("--json"):
+        print(json.dumps({"count": len(entries), "sets": entries},
+                         indent=2, ensure_ascii=False))
+        return 0
+
+    if not entries:
+        if "--quiet" not in flags:
+            print("no open questions")
+        return 0
+
+    open_count = sum(1 for s in entries for q in s.get("questions", [])
+                     if not question_is_closed(q))
+    for entry in entries:
+        print(f"{entry['id']}  {entry['lane']}  {fmt_age(entry.get('asked_at'))}  "
+              f"[{entry.get('status')}]")
+        for question in entry.get("questions", []):
+            if "--quiet" in flags and question.get("status") != "open":
+                continue
+            detail = f"    {question['qid']}  {question['title']}"
+            if question.get("status") == "open":
+                if question.get("options") and question.get("recommended") is not None:
+                    detail += f"  (recommended: {question['options'][question['recommended']]})"
+            else:
+                detail += f"  -> {question.get('status')}"
+                if question.get("answer") is not None:
+                    detail += f": {question['answer']}"
+            print(detail)
+    print(f"-- {len(entries)} set(s), {open_count} open question(s), oldest first")
+    return 0
+
+# =============================================================================
+# callback_data — the button payload (#547 risk: a 64-byte cap)
+# =============================================================================
+def callback_size(set_id, qid, choice):
+    return len(f"{set_id}:{qid}:{choice}".encode("utf-8"))
+
+def callback_data(set_id, qid, choice):
+    """<set-id>:<qid>:<choice>. A truncated callback resolves to NOTHING when
+    tapped, so the cap is asserted at register and render time rather than
+    discovered in production."""
+    payload = f"{set_id}:{qid}:{choice}"
+    size = len(payload.encode("utf-8"))
+    if size > CALLBACK_MAX_BYTES:
+        die(2, f"callback_data {payload!r} is {size} bytes, over the "
+               f"{CALLBACK_MAX_BYTES}-byte Telegram cap")
+    return payload
+
+def parse_callback(payload):
+    """Inverse of callback_data: (set_id, qid, choice) or None."""
+    parts = str(payload).split(":")
+    if len(parts) != 3 or not all(parts):
+        return None
+    return parts[0], parts[1], parts[2]
+
+def archive_entries(data, entries):
+    """Append closed sets to archive.jsonl, then drop them from the live
+    register. Caller MUST hold the lock. Append-only, so an archive write
+    cannot destroy a previously archived set."""
+    if not entries:
+        return 0
+    ids = {e.get("id") for e in entries}
+    os.makedirs(store_dir(), exist_ok=True)
+    with open(archive_path(), "a", encoding="utf-8") as fh:
+        for entry in entries:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    data["sets"] = [s for s in data["sets"] if s.get("id") not in ids]
+    return len(ids)
+
+# =============================================================================
+# answer — record an answer against ONE question (card tap or page submit)
+# =============================================================================
+def cmd_answer(argv):
+    positional, flags = parse_flags(
+        argv,
+        valued=["--text", "--via", "--by"],
+        boolean=["--json", "--clarify"],
+    )
+    if len(positional) < 2:
+        die(2, "answer requires <set-id> <question-id> [choice-index|clarify]")
+    set_id, qid = positional[0], positional[1]
+    choice = positional[2] if len(positional) > 2 else None
+    if flags.get("--clarify"):
+        choice = "clarify"
+    if choice is None and flags.get("--text") is None:
+        die(2, "supply a choice index, the literal 'clarify', or --text")
+    via = flags.get("--via") or "cli"
+    if via not in ("card", "page", "cli"):
+        die(2, "--via must be card, page or cli")
+
+    with RegisterLock():
+        data = read_register()
+        entry = find_set(data, set_id)
+        if entry is None:
+            die(1, f"no question set {set_id!r} in the register")
+        question = find_question(entry, qid)
+        if question is None:
+            die(1, f"set {set_id} has no question {qid!r}")
+        if question_is_closed(question):
+            # Idempotent by contract: a re-submit says so, it does not mutate.
+            # NOTE the predicate is CLOSED, not "not open": a CLARIFYING question
+            # is still awaiting the owner's real answer and MUST stay answerable.
+            # Keying on "not open" made a clarified question unanswerable forever.
+            if flags.get("--json"):
+                print(json.dumps({"set": set_id, "qid": qid,
+                                  "status": question.get("status"),
+                                  "answer": question.get("answer"),
+                                  "idempotent": True}, indent=2))
+            else:
+                print(f"{set_id}/{qid} is already {question.get('status')} "
+                      f"({question.get('answer')!r}) — re-submit ignored")
+            return 3
+
+        is_clarify = (str(choice).lower() == "clarify")
+        if is_clarify:
+            question["status"] = "clarifying"
+            question["answer"] = flags.get("--text")
+            question["answer_kind"] = "clarify"
+        else:
+            options = question.get("options") or []
+            text = flags.get("--text")
+            if choice is not None:
+                try:
+                    index = int(choice)
+                except ValueError:
+                    die(2, f"{choice!r} is neither an option index nor 'clarify'")
+                if not options:
+                    die(2, f"set {set_id}/{qid} has no options; answer with --text")
+                if not 0 <= index < len(options):
+                    die(2, f"option {index} is outside 0..{len(options) - 1}")
+                question["answer"] = options[index]
+            else:
+                question["answer"] = text
+            question["status"] = "answered"
+            question["answer_kind"] = "option" if choice is not None else "text"
+        question["answered_at"] = now_iso()
+        question["answered_by"] = flags.get("--by")
+        question["answered_via"] = via
+
+        remaining = [q for q in entry.get("questions", [])
+                     if not question_is_closed(q)]
+        archived = 0
+        if not remaining:
+            entry["status"] = "answered"
+            entry["closed_at"] = now_iso()
+            archived = archive_entries(data, [entry])
+        write_register_atomic(data)
+
+    oc_log_extra("set", set_id)
+    oc_log_extra("qid", qid)
+    oc_log_extra("via", via)
+    if flags.get("--json"):
+        print(json.dumps({"set": set_id, "qid": qid, "status": question["status"],
+                          "answer": question.get("answer"),
+                          "remaining": len(remaining), "archived": archived},
+                         indent=2, ensure_ascii=False))
+    else:
+        print(f"{set_id}/{qid} -> {question['status']}: {question.get('answer')!r}")
+        if remaining:
+            print(f"  {len(remaining)} question(s) still open in {set_id}")
+        else:
+            print(f"  set {set_id} complete — archived")
+    return 0
+
+# =============================================================================
+# lint — the register must not carry a uuid, a secret, or an over-cap callback
+# =============================================================================
+def cmd_lint(argv):
+    _, flags = parse_flags(argv, valued=[], boolean=["--json"])
+    with RegisterLock():
+        data = read_register()
+    findings = []
+    for entry in data["sets"]:
+        set_id = entry.get("id")
+        lane = str(entry.get("lane") or "")
+        if UUID_RE.search(lane):
+            findings.append({"set": set_id, "qid": "-",
+                             "why": "lane is a session id, not a topic NAME"})
+        if not str(entry.get("session") or "").strip():
+            findings.append({"set": set_id, "qid": "-",
+                             "why": "missing return address (session)"})
+        for question in entry.get("questions", []):
+            qid = question.get("qid")
+            blob = f"{question.get('title', '')}\n{question.get('description', '')}"
+            if SECRET_RE.search(blob):
+                findings.append({"set": set_id, "qid": qid,
+                                 "why": "text matches the no-secrets pattern"})
+            options = question.get("options") or []
+            if options and question.get("recommended") is None:
+                findings.append({"set": set_id, "qid": qid,
+                                 "why": "options without a recommendation"})
+            if callback_size(set_id, qid, "clarify") > CALLBACK_MAX_BYTES:
+                findings.append({"set": set_id, "qid": qid,
+                                 "why": "callback_data over the 64-byte cap"})
+    if flags.get("--json"):
+        print(json.dumps({"findings": findings, "count": len(findings)}, indent=2))
+    elif not findings:
+        print("lint clean — no uuid lanes, no secrets, no over-cap callbacks")
+    else:
+        for item in findings:
+            print(f"FINDING {item['set']}/{item['qid']}: {item['why']}")
+        print(f"-- {len(findings)} finding(s)")
+    return 1 if findings else 0
+
+# =============================================================================
+# gc — archive expired and fully-closed sets
+# =============================================================================
+def cmd_gc(argv):
+    _, flags = parse_flags(argv, valued=[], boolean=["--json", "--dry-run"])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    with RegisterLock():
+        data = read_register()
+        expired = []
+        for entry in data["sets"]:
+            if entry.get("status") != "open":
+                continue
+            asked = parse_iso(entry.get("asked_at"))
+            if not asked:
+                continue
+            if asked.tzinfo is None:
+                asked = asked.replace(tzinfo=datetime.timezone.utc)
+            ttl = int(entry.get("ttl_days") or DEFAULT_TTL_DAYS)
+            if now >= asked + datetime.timedelta(days=ttl):
+                entry["status"] = "expired"
+                entry["expired_at"] = now_iso()
+                expired.append(entry)
+        closed = [s for s in data["sets"] if set_is_closed(s)]
+        closed_ids = {s.get("id") for s in closed}
+        victims = expired + [s for s in closed if s.get("id") not in {e.get("id") for e in expired}]
+        if flags.get("--dry-run"):
+            moved = 0
+        else:
+            moved = archive_entries(data, victims)
+            if moved:
+                write_register_atomic(data)
+    if flags.get("--json"):
+        print(json.dumps({"expired": len(expired),
+                          "closed": len(closed_ids),
+                          "archived": moved,
+                          "dry_run": bool(flags.get("--dry-run"))}, indent=2))
+    else:
+        print(f"gc: {len(expired)} expired, {len(closed_ids)} closed, "
+              f"{moved} archived"
+              + (" (dry run — nothing written)" if flags.get("--dry-run") else ""))
+    return 0
+
+# =============================================================================
+# Session-binding lookups (read-only) — the card goes to the CALLER's own topic
+# =============================================================================
+def _session_db():
+    return os.environ.get("OC_QUESTIONS_DB") or \
+        os.path.join(profile_home(), "opencrabs.db")
+
+def binding_thread(session_id):
+    """(thread_id, note). The card must land in the CALLING session's topic, so
+    the thread is resolved from that session's binding — never guessed, and
+    never taken from whoever happens to be rendering."""
+    db = _session_db()
+    if not os.path.exists(db):
+        return None, f"binding SKIPPED: no session DB at {db}"
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "select thread_id from session_bindings where session_id=?",
+                (session_id,)).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        return None, f"binding SKIPPED: session_bindings unreadable ({exc})"
+    if not row:
+        return None, f"binding SKIPPED: {session_id[:8]} holds no binding row"
+    return row[0], None
+
+def derived_plan_cards(registered_sessions):
+    """plan_cards rows STILL AWAITING APPROVAL whose session registered no
+    question — so a lane that forgot to register still surfaces.
+
+    The awaiting-approval predicate is the button suffix in `signature`:
+    'ApproveDiscard' / 'ReviewingApproveDiscard' mean the card can still be
+    approved; 'DiscardOnly' means it has left Editing. plan_cards carries no
+    status column, so the suffix IS the state.
+
+    Returns (rows, note). An unreadable DB returns ([], reason) — a skip, NEVER
+    a silent clean (same posture as the C8 anchor guard)."""
+    db = _session_db()
+    if not os.path.exists(db):
+        return [], f"derived leg SKIPPED: no session DB at {db}"
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "select session_id, thread_id, updated_at, signature from plan_cards"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        return [], f"derived leg SKIPPED: plan_cards unreadable ({exc})"
+    out = []
+    for session_id, thread_id, updated_at, signature in rows:
+        tail = str(signature or "").split("\x01")[-1]
+        if "Approve" not in tail:
+            continue
+        if session_id in registered_sessions:
+            continue
+        out.append({"session": session_id, "thread": thread_id,
+                    "updated_at": updated_at})
+    out.sort(key=lambda item: item.get("updated_at") or 0)
+    return out, None
+
+# =============================================================================
+# render — the card spec for the CALLING session's own topic
+# =============================================================================
+def card_text(entry):
+    lines = [f"**Open questions — {entry['lane']}**",
+             f"set `{entry['id']}` · {fmt_age(entry.get('asked_at'))}"]
+    for question in entry.get("questions", []):
+        if question_is_closed(question):
+            continue
+        lines.append("")
+        lines.append(f"**{question['qid']}. {question['title']}**")
+        lines.append(question["description"])
+        options = question.get("options") or []
+        for index, option in enumerate(options):
+            mark = "  <- recommended" if index == question.get("recommended") else ""
+            lines.append(f"{index}. {option}{mark}")
+        if not options:
+            lines.append("_free-text answer_")
+    return "\n".join(lines)
+
+def card_buttons(entry):
+    """One row per question. Values are compact and the 64-byte cap is asserted
+    by callback_data at build time, not discovered when a tap resolves to
+    nothing."""
+    rows = []
+    for question in entry.get("questions", []):
+        if question_is_closed(question):
+            continue
+        row = []
+        for index, option in enumerate(question.get("options") or []):
+            row.append({"text": option[:28],
+                        "callback_data": callback_data(entry["id"], question["qid"], index)})
+        if question.get("clarify"):
+            row.append({"text": "Clarify",
+                        "callback_data": callback_data(entry["id"], question["qid"], "clarify")})
+        if row:
+            rows.append(row)
+    return rows
+
+def cmd_render(argv):
+    _, flags = parse_flags(argv, valued=["--set"], boolean=["--json", "--no-derived"])
+    with RegisterLock():
+        data = read_register()
+    entries = [s for s in data["sets"] if s.get("status") == "open"]
+    if flags.get("--set"):
+        wanted = flags["--set"]
+        entries = [s for s in entries if s.get("id") == wanted]
+        if not entries:
+            die(1, f"no open question set {wanted!r}")
+    entries = sorted(entries, key=lambda s: s.get("asked_at") or "")
+
+    notes = []
+    cards = []
+    for entry in entries:
+        thread, note = binding_thread(entry.get("session"))
+        if note:
+            notes.append(f"{entry['id']}: {note}")
+        cards.append({
+            "set": entry["id"],
+            "lane": entry["lane"],
+            "session": entry["session"],
+            "thread": thread,
+            "age": fmt_age(entry.get("asked_at")),
+            "text": card_text(entry),
+            "buttons": card_buttons(entry),
+        })
+
+    derived = []
+    if "--no-derived" not in flags:
+        derived, note = derived_plan_cards({s.get("session") for s in data["sets"]})
+        if note:
+            notes.append(note)
+
+    oc_log_extra("cards", str(len(cards)))
+    oc_log_extra("derived", str(len(derived)))
+    if flags.get("--json"):
+        print(json.dumps({"cards": cards, "derived": derived, "notes": notes},
+                         indent=2, ensure_ascii=False))
+        return 0
+    if not cards and not derived:
+        print("nothing to render")
+        return 0
+    for card in cards:
+        print(f"--- card {card['set']} -> {card['lane']} "
+              f"(session {card['session'][:8]}, thread {card['thread']}, {card['age']}) ---")
+        print(card["text"])
+        for row in card["buttons"]:
+            print("  [ " + " | ".join(b["text"] for b in row) + " ]")
+    if derived:
+        print(f"--- derived: {len(derived)} plan card(s) awaiting approval with no "
+              f"registered question ---")
+        for item in derived:
+            print(f"  {item['session'][:8]} thread {item['thread']}")
+    for note in notes:
+        print(f"NOTE {note}")
+    return 0
+
+# =============================================================================
+# publish — static HTML into a fresh unguessable token directory (7-day TTL)
+# =============================================================================
+PAGE_TTL_DAYS = 7
+
+def inline_md(text):
+    """Escape FIRST, then apply the two inline forms worth having. The page is
+    world-readable, so nothing reaches the output unescaped."""
+    safe = html.escape(str(text), quote=False)
+    safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
+    safe = re.sub(r"`([^`]+?)`", r"<code>\1</code>", safe)
+    return safe
+
+def markdown_to_html(text):
+    """A bounded renderer, NOT a full Markdown implementation. Fenced blocks,
+    tables, headings and paragraphs; a ```mermaid fence becomes a mermaid.ink
+    image (the design's chosen renderer), any other fence becomes a <pre>.
+    Richer Markdown is a renderer's job if wanted (@json-render is available on
+    the host) — this does not pretend to be one."""
+    import base64
+    lines = str(text).split("\n")
+    out, index = [], 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            lang = stripped[3:].strip()
+            body, index = [], index + 1
+            while index < len(lines) and not lines[index].strip().startswith("```"):
+                body.append(lines[index])
+                index += 1
+            index += 1
+            joined = "\n".join(body)
+            if lang == "mermaid":
+                encoded = base64.urlsafe_b64encode(
+                    joined.encode("utf-8")).decode("ascii")
+                out.append('<figure><img alt="diagram" '
+                           f'src="https://mermaid.ink/img/{encoded}"></figure>')
+            else:
+                out.append(f"<pre>{html.escape(joined)}</pre>")
+            continue
+        if stripped.startswith("|") and stripped.endswith("|"):
+            rows = []
+            while index < len(lines) and lines[index].strip().startswith("|"):
+                rows.append(lines[index].strip())
+                index += 1
+            cells_rows = [[c.strip() for c in r.strip("|").split("|")] for r in rows]
+            body = []
+            for position, cells in enumerate(cells_rows):
+                if all(c and set(c) <= set("-: ") for c in cells):
+                    continue
+                tag = "th" if position == 0 else "td"
+                body.append("<tr>" + "".join(
+                    f"<{tag}>{inline_md(c)}</{tag}>" for c in cells) + "</tr>")
+            out.append("<table>" + "".join(body) + "</table>")
+            continue
+        if stripped.startswith("### "):
+            out.append(f"<h4>{inline_md(stripped[4:])}</h4>")
+        elif stripped.startswith("## "):
+            out.append(f"<h3>{inline_md(stripped[3:])}</h3>")
+        elif stripped.startswith("# "):
+            out.append(f"<h2>{inline_md(stripped[2:])}</h2>")
+        elif stripped:
+            out.append(f"<p>{inline_md(stripped)}</p>")
+        index += 1
+    return "\n".join(out)
+
+PAGE_CSS = """
+body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem}
+section{border:1px solid #ccc;border-radius:8px;padding:1rem;margin:1rem 0}
+.opt{display:block;margin:.35rem 0}
+.rec{color:#0a0;font-weight:600}
+.desc table{border-collapse:collapse}
+.desc td,.desc th{border:1px solid #ccc;padding:.25rem .5rem}
+.desc img{max-width:100%}
+.age,.meta{color:#666;font-size:.85em}
+button{cursor:pointer}
+"""
+
+def build_page(entries, token, expires_at, action):
+    sections = []
+    for entry in entries:
+        for question in entry.get("questions", []):
+            if question_is_closed(question):
+                continue
+            fields = [
+                f'<input type="hidden" name="token" value="{html.escape(token)}">',
+                f'<input type="hidden" name="set" value="{html.escape(entry["id"])}">',
+                f'<input type="hidden" name="qid" value="{html.escape(question["qid"])}">',
+            ]
+            for index, option in enumerate(question.get("options") or []):
+                checked = " checked" if index == question.get("recommended") else ""
+                badge = ' <span class="rec">recommended</span>' if checked else ""
+                fields.append(
+                    f'<label class="opt"><input type="radio" name="choice" '
+                    f'value="{index}"{checked}> {html.escape(option)}{badge}</label>')
+            fields.append('<textarea name="text" rows="2" '
+                          'placeholder="free-text answer"></textarea>')
+            fields.append('<button type="submit" name="choice" value="clarify">'
+                          'Clarify</button>')
+            sections.append(
+                f'<section id="{html.escape(entry["id"])}-{html.escape(question["qid"])}">'
+                f'<h2>{inline_md(question["title"])}</h2>'
+                f'<div class="desc">{markdown_to_html(question["description"])}</div>'
+                f'<form method="post" action="{html.escape(action)}">'
+                + "".join(fields) + "</form>"
+                f'<p class="age">asked {fmt_age(entry.get("asked_at"))} &middot; '
+                f'lane {html.escape(entry["lane"])} &middot; '
+                f'set {html.escape(entry["id"])} {html.escape(question["qid"])}</p>'
+                "</section>")
+    return ("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
+            "<meta name=\"robots\" content=\"noindex, nofollow\">\n"
+            "<title>Open questions</title>\n"
+            f"<style>{PAGE_CSS}</style>\n"
+            "</head><body>\n<h1>Open questions</h1>\n"
+            f'<p class="meta">expires {html.escape(expires_at)}</p>\n'
+            + ("".join(sections) or "<p>No open questions.</p>")
+            + "\n</body></html>\n")
+
+def prune_pages():
+    """Delete token directories past their TTL. The token IS the credential, so
+    an expired directory is removed rather than left serving."""
+    import shutil
+    removed = []
+    root = pages_dir()
+    if not os.path.isdir(root):
+        return removed
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for name in sorted(os.listdir(root)):
+        meta_path = os.path.join(root, name, "meta.json")
+        if not os.path.isfile(meta_path):
+            continue
+        try:
+            with open(meta_path, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+        except Exception:
+            continue
+        expires = parse_iso(meta.get("expires_at"))
+        if expires and expires <= now:
+            shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+            removed.append(name)
+    return removed
+
+def page_is_live(token):
+    """(live, reason) — used by the selftest and by anything that needs to know
+    whether a token still serves."""
+    directory = os.path.join(pages_dir(), token)
+    meta_path = os.path.join(directory, "meta.json")
+    if not os.path.isfile(meta_path):
+        return False, f"no page for token {token!r}"
+    try:
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except Exception as exc:
+        return False, f"meta unreadable: {exc}"
+    expires = parse_iso(meta.get("expires_at"))
+    if not expires:
+        return False, "meta carries no expires_at"
+    if expires <= datetime.datetime.now(datetime.timezone.utc):
+        return False, f"expired at {meta.get('expires_at')}"
+    return True, f"live until {meta.get('expires_at')}"
+
+def cmd_publish(argv):
+    _, flags = parse_flags(argv, valued=["--set", "--action"],
+                           boolean=["--json", "--prune"])
+    action = flags.get("--action") or "/answer"
+    with RegisterLock():
+        data = read_register()
+    entries = [s for s in data["sets"] if s.get("status") == "open"]
+    if flags.get("--set"):
+        wanted = flags["--set"]
+        entries = [s for s in entries if s.get("id") == wanted]
+        if not entries:
+            die(1, f"no open question set {wanted!r}")
+    entries = sorted(entries, key=lambda s: s.get("asked_at") or "")
+    pruned = prune_pages() if flags.get("--prune") else []
+
+    if not entries:
+        if flags.get("--json"):
+            print(json.dumps({"published": None, "reason": "no open questions",
+                              "pruned": pruned}, indent=2))
+        else:
+            print("nothing to publish (no open questions)")
+        return 0
+
+    token = secrets.token_urlsafe(24)
+    created = datetime.datetime.now(datetime.timezone.utc)
+    expires = created + datetime.timedelta(days=PAGE_TTL_DAYS)
+    directory = os.path.join(pages_dir(), token)
+    os.makedirs(directory, exist_ok=True)
+    page = build_page(entries, token, expires.replace(microsecond=0).isoformat(), action)
+    with open(os.path.join(directory, "index.html"), "w", encoding="utf-8") as fh:
+        fh.write(page)
+    meta = {"token": token, "created_at": created.replace(microsecond=0).isoformat(),
+            "expires_at": expires.replace(microsecond=0).isoformat(),
+            "action": action, "sets": [e["id"] for e in entries],
+            "questions": sum(1 for e in entries for q in e.get("questions", [])
+                             if not question_is_closed(q))}
+    with open(os.path.join(directory, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+
+    oc_log_extra("token", token)
+    oc_log_extra("questions", str(meta["questions"]))
+    if flags.get("--json"):
+        print(json.dumps({"token": token, "path": directory, "meta": meta,
+                          "pruned": pruned}, indent=2))
+    else:
+        print(f"published {meta['questions']} question(s) to {directory}")
+        print(f"  token {token} (expires {meta['expires_at']})")
+        print(f"  action {action}")
+    if not flags.get("--json"):
+        for name in pruned:
+            print(f"  pruned expired page {name}")
+    return 0
+
+# =============================================================================
+# selftest
+# =============================================================================
+def selftest():
+    import shutil
+    import subprocess
+
+    fails = []
+
+    def ck(cond, msg):
+        print(("  ok   - " if cond else "  FAIL - ") + msg)
+        if not cond:
+            fails.append(msg)
+
+    tool = os.path.abspath(__file__)
+    root = tempfile.mkdtemp(prefix="oc-questions-selftest-")
+    env = dict(os.environ)
+    env["OC_QUESTIONS_DIR"] = os.path.join(root, "store")
+    # A DB path that does NOT exist forces the derived leg down its SKIP branch,
+    # which the selftest asserts is DISCLOSED — never a silent clean.
+    env["OC_QUESTIONS_DB"] = os.path.join(root, "absent.db")
+    env["OC_TOOLS_NOLOG"] = "1"
+
+    def run(*args):
+        proc = subprocess.run([tool] + list(args), env=env, capture_output=True,
+                              text=True, timeout=90)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def store_json():
+        with open(os.path.join(env["OC_QUESTIONS_DIR"], "open.json"),
+                  encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def get_set(sid):
+        """None instead of an exception: a missing set is a FAIL row, not a
+        traceback. A selftest that dies mid-way reports nothing at all."""
+        for item in store_json()["sets"]:
+            if item.get("id") == sid:
+                return item
+        return None
+
+    session_a = "11111111-2222-3333-4444-555555555555"
+    try:
+        # -- 1. ask -> list -------------------------------------------------
+        rc, out, _ = run("ask", "--lane", "Cron lane", "--session", session_a,
+                         "--questions-json", json.dumps([
+                             {"title": "Ship the second half?",
+                              "description": "**Context:** measured.",
+                              "options": ["Ship", "Hold"], "recommended": 1},
+                             {"title": "Which cadence?",
+                              "description": "Two options.",
+                              "options": ["6h", "12h"], "recommended": 0},
+                         ]))
+        ck(rc == 0, "ask registers a set (rc=%d)" % rc)
+        rc, out, _ = run("list")
+        ck(rc == 0 and "Ship the second half?" in out and "Which cadence?" in out,
+           "list shows the registered questions")
+
+        # -- 2. ORDER + PER-QUESTION RECOMMENDATIONS (owner criterion) ------
+        sets = store_json()["sets"]
+        ck(len(sets) == 1, "exactly one set registered (%d)" % len(sets))
+        entry = sets[0] if sets else {}
+        set_id = entry.get("id", "")
+        questions = entry.get("questions", [])
+        ck([q.get("qid") for q in questions] == ["q1", "q2"],
+           "question order is CALL order (q1, q2)")
+        ck(len(questions) == 2 and questions[0].get("recommended") == 1
+           and questions[1].get("recommended") == 0,
+           "per-question recommendations preserved (1 then 0, not shared)")
+        ck(len(set_id) == SET_ID_LEN, "set id is %d chars (%r)" % (SET_ID_LEN, set_id))
+
+        # -- 3. CONCURRENT ASK: two writers lose NEITHER (owner criterion) --
+        procs = [subprocess.Popen(
+            [tool, "ask", "--lane", "Race %d" % i, "--session",
+             "aaaaaaaa-bbbb-cccc-dddd-00000000000%d" % i,
+             "--title", "Race question %d" % i, "--description", "concurrent"],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for i in (1, 2)]
+        codes = [p.wait(timeout=90) for p in procs]
+        ck(codes == [0, 0], "two concurrent ask calls both exit 0 (%s)" % codes)
+        racers = [s for s in store_json()["sets"] if s["lane"].startswith("Race ")]
+        ck(len(racers) == 2,
+           "NEITHER concurrent set was lost (%d of 2 present)" % len(racers))
+        ck(len({s["id"] for s in store_json()["sets"]}) == 3,
+           "…and the ids are distinct (3 sets, 3 ids)")
+        ck(os.path.isfile(os.path.join(env["OC_QUESTIONS_DIR"], "open.json")),
+           "the atomic replace left a complete register, not a .tmp")
+
+        # -- 4. render: card spec, binding skip, 64-byte cap ---------------
+        rc, out, _ = run("render", "--set", set_id, "--json", "--no-derived")
+        card = json.loads(out)["cards"][0]
+        buttons = [b for row in card["buttons"] for b in row]
+        ck(len(buttons) == 6,
+           "card carries 2+2 option buttons plus one Clarify per question (%d)"
+           % len(buttons))
+        ck(all(len(b["callback_data"].encode()) <= CALLBACK_MAX_BYTES
+               for b in buttons),
+           "every callback_data is within the %d-byte cap" % CALLBACK_MAX_BYTES)
+        ck(parse_callback(buttons[0]["callback_data"]) == (set_id, "q1", "0"),
+           "callback_data round-trips to (set, qid, choice)")
+        rc, out, _ = run("render", "--set", set_id, "--json")
+        notes = json.loads(out)["notes"]
+        ck(any("SKIPPED" in n for n in notes),
+           "a missing binding/DB is DISCLOSED as a skip note, not read as clean")
+
+        # -- 5. answer, idempotence, clarify -------------------------------
+        rc, out, _ = run("answer", set_id, "q1", "1", "--via", "card")
+        ck(rc == 0 and "Hold" in out,
+           "answer records the OPTION TEXT, not the index (%r)" % out.strip()[:40])
+        rc, out, _ = run("answer", set_id, "q1", "1", "--via", "card")
+        ck(rc == 3, "re-submit on a closed question is rc=3, idempotent (rc=%d)" % rc)
+        rc, out, _ = run("answer", set_id, "q2", "clarify", "--text", "explain 12h")
+        ck(rc == 0, "clarify is recorded (rc=%d)" % rc)
+        current = get_set(set_id)
+        q2 = (current or {}).get("questions", [{}, {}])
+        q2 = q2[1] if len(q2) > 1 else {}
+        ck(q2.get("status") == "clarifying" and q2.get("answer") == "explain 12h",
+           "clarify does NOT close the question (status=%r)" % q2.get("status"))
+        ck(set_id in {s["id"] for s in store_json()["sets"]},
+           "…and the SET stays live while a question is merely clarifying")
+        rc, _, _ = run("answer", set_id, "q2", "0")
+        ck(rc == 0, "a later real answer closes the clarifying question")
+        ck(set_id not in {s["id"] for s in store_json()["sets"]},
+           "a fully answered set leaves the LIVE register")
+        archive = os.path.join(env["OC_QUESTIONS_DIR"], "archive.jsonl")
+        ck(os.path.isfile(archive) and set_id in open(archive, encoding="utf-8").read(),
+           "…and is appended to archive.jsonl (append-only)")
+
+        # -- 6. lint --------------------------------------------------------
+        rc, _, _ = run("ask", "--lane", session_a, "--session", session_a,
+                       "--title", "uuid lane", "--description", "x")
+        ck(rc == 2, "a session id as --lane is REFUSED (rc=%d)" % rc)
+        rc, _, _ = run("ask", "--lane", "Leaky lane", "--session", session_a,
+                       "--questions-json", json.dumps([
+                           {"title": "Leak", "description": "key at /root/x"}]))
+        ck(rc == 0, "a name lane with leaky text still registers (lint, not ask, judges it)")
+        rc, out, _ = run("lint", "--json")
+        findings = json.loads(out)["findings"]
+        ck(rc == 1 and any("secret" in f["why"] for f in findings),
+           "lint finds the secret pattern and returns rc=1")
+
+        # -- 7. gc: TTL expiry ---------------------------------------------
+        path = os.path.join(env["OC_QUESTIONS_DIR"], "open.json")
+        data = store_json()
+        for item in data["sets"]:
+            if item["lane"] == "Leaky lane":
+                item["asked_at"] = "2020-01-01T00:00:00+00:00"
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        rc, out, _ = run("gc", "--dry-run", "--json")
+        dry = json.loads(out)
+        ck(dry["expired"] >= 1 and dry["archived"] == 0,
+           "gc --dry-run reports the expiry without writing (expired=%d)" % dry["expired"])
+        rc, out, _ = run("gc", "--json")
+        result = json.loads(out)
+        ck(result["archived"] >= 1,
+           "gc archives the expired set (archived=%d)" % result["archived"])
+
+        # -- 8. publish: token, noindex, TTL, prune ------------------------
+        rc, _, _ = run("ask", "--lane", "Page lane", "--session", session_a,
+                       "--questions-json", json.dumps([
+                           {"title": "Rendered?",
+                            "description": "| option | cost |\n|---|---|\n"
+                                           "| 6h | 4/day |\n| 12h | 2/day |\n\n"
+                                           "```mermaid\nflowchart TD\n  A --> B\n```",
+                            "options": ["6h", "12h"], "recommended": 0}]))
+        ck(rc == 0, "a description with a table and a mermaid fence registers")
+        rc, out, _ = run("publish", "--json")
+        page = json.loads(out)
+        ck(rc == 0 and page["token"] and len(page["token"]) >= 20,
+           "publish mints an unguessable token (%r)" % (page["token"][:8] + "..."))
+        body = open(os.path.join(page["path"], "index.html"), encoding="utf-8").read()
+        ck("noindex" in body, "the page carries the noindex directive")
+        ck("<table>" in body, "a Markdown table in a description renders as a <table>")
+        ck("mermaid.ink" in body, "a ```mermaid fence renders through mermaid.ink")
+        meta = json.load(open(os.path.join(page["path"], "meta.json"), encoding="utf-8"))
+        created, expires = parse_iso(meta["created_at"]), parse_iso(meta["expires_at"])
+        ck(created and expires and (expires - created).days == PAGE_TTL_DAYS,
+           "the page TTL is %d days" % PAGE_TTL_DAYS)
+        rc, out, _ = run("render", "--set", set_id, "--json")
+        ck(rc == 1, "render --set on a closed/absent set is rc=1 (rc=%d)" % rc)
+
+        # expiry behaviour: backdate the meta, then prune
+        meta["expires_at"] = "2020-01-01T00:00:00+00:00"
+        with open(os.path.join(page["path"], "meta.json"), "w", encoding="utf-8") as fh:
+            json.dump(meta, fh)
+        rc, out, _ = run("publish", "--prune", "--json")
+        ck(not os.path.exists(page["path"]),
+           "an expired token directory is pruned by publish --prune")
+        ck(page["token"] in json.loads(out).get("pruned", []),
+           "…and the pruned token is reported, not removed silently")
+
+        # -- 9. the LOGGING path, unsuppressed -----------------------------
+        # This leg exists because every other leg suppresses the unified log, so
+        # oc_log_init returned BEFORE time.time(). A missing `import time`
+        # therefore left the tool green in fixtures while it crashed on every
+        # real invocation. A suppressed-log selftest cannot see that class.
+        logfile = os.path.join(root, "tools.log")
+        logenv = dict(env)
+        logenv.pop("OC_TOOLS_NOLOG", None)
+        logenv["OC_TOOLS_LOG"] = logfile
+        proc = subprocess.run([tool, "list"], env=logenv, capture_output=True,
+                              text=True, timeout=90)
+        ck(proc.returncode == 0,
+           "the UNSUPPRESSED logging path exits 0 (rc=%d %s)"
+           % (proc.returncode, proc.stderr.strip().splitlines()[-1:]))
+        rows = []
+        if os.path.isfile(logfile):
+            with open(logfile, encoding="utf-8") as fh:
+                rows = [json.loads(line) for line in fh if line.strip()]
+        ck(len(rows) == 1, "…and appends exactly one JSONL row (%d)" % len(rows))
+        ck(bool(rows) and rows[0].get("tool") == PROG
+           and "secs" in rows[0] and rows[0].get("exit") == 0,
+           "…carrying tool/secs/exit per the unified-log schema")
+
+        # -- 10. usage contract (the battery's edge cases) -----------------
+        rc, _, _ = run("--help")
+        ck(rc == 0, "--help exits 0 (rc=%d)" % rc)
+        rc, _, _ = run("--bogus")
+        ck(rc == 2, "unknown verb exits 2 (rc=%d)" % rc)
+        rc, _, _ = run("ask", "--lane", "X", "--session", "Y", "--nope")
+        ck(rc == 2, "unknown flag exits 2 (rc=%d)" % rc)
+        rc, _, _ = run("ask", "--lane", "X", "--session", "Y",
+                       "--title", "t", "--description", "d", "--recommended", "3")
+        ck(rc == 2, "a recommendation with NO options is refused (rc=%d)" % rc)
+        rc, _, _ = run("ask", "--lane", "X", "--session", "Y",
+                       "--title", "t", "--description", "d",
+                       "--option", "a", "--option", "b", "--recommended", "3")
+        ck(rc == 2, "a recommendation outside the option range is refused (rc=%d)" % rc)
+
+        # -- 10. a CORRUPT register is an error, never a silent reset --------
+        store = os.path.join(env["OC_QUESTIONS_DIR"], "open.json")
+        good = open(store, encoding="utf-8").read()
+        with open(store, "w", encoding="utf-8") as fh:
+            fh.write("{ not json")
+        rc, out, err = run("list")
+        ck(rc == 4, "a corrupt register is rc=4, not a silent reset (rc=%d)" % rc)
+        with open(store, encoding="utf-8") as fh:
+            survived = fh.read()
+        ck(survived == "{ not json",
+           "…and the tool did NOT overwrite it (the only copy of a parked question)")
+        with open(store, "w", encoding="utf-8") as fh:
+            fh.write(good)
+        rc, _, _ = run("list")
+        ck(rc == 0, "…and the restored register reads clean again")
+
+        if fails:
+            print("  %d FAILED" % len(fails))
+            return 1
+        print("  all checks passed")
+        return 0
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+USAGE = """oc-questions — the Open Questions register (#547)
+
+  ask      --lane <NAME> --session <id>
+           [--questions-file F | --questions-json J |
+            --title T --description D [--option O]... [--recommended N]]
+           [--ttl-days N] [--subject S] [--no-clarify] [--json]
+  answer   <set-id> <qid> <choice-index|clarify> [--text T] [--via card|page|cli]
+  list     [--lane NAME] [--session id] [--all] [--json] [--quiet]
+  render   [--set id] [--json] [--no-derived]
+  publish  [--set id] [--action URL] [--prune] [--json]
+  lint     [--json]
+  gc       [--dry-run] [--json]
+
+Store: <profile home>/questions/open.json (+ archive.jsonl, pages/<token>/).
+--lane is a topic NAME, never a session id. --session is the RETURN ADDRESS:
+the calling session, never a cron or renderer session.
+rc: 0 ok / 1 finding-or-not-found / 2 usage / 3 state-refused / 4 store-or-IO.
+"""
+
+def main(argv):
+    oc_log_init()
+    if not argv or argv[0] in ("--help", "-h", "help"):
+        sys.stdout.write(USAGE)
+        return 0
+    verb, rest = argv[0], argv[1:]
+    if verb in ("--selftest", "selftest"):
+        return selftest()
+    handlers = {"ask": cmd_ask, "answer": cmd_answer, "list": cmd_list,
+                "render": cmd_render, "publish": cmd_publish, "lint": cmd_lint,
+                "gc": cmd_gc}
+    handler = handlers.get(verb)
+    if handler is None:
+        sys.stderr.write("%s: unknown verb %r\n\n%s" % (PROG, verb, USAGE))
+        return 2
+    return handler(rest)
+
+if __name__ == "__main__":
+    _rc = main(sys.argv[1:])
+    oc_log_finish(_rc)
+    sys.exit(_rc)

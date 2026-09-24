@@ -1615,6 +1615,30 @@ SELF_ABS="$(readlink -f "$0" 2>/dev/null || echo "$0")"
   || bad "a receipt writer is missing the fail_log field ($SELF_ABS)"
 rm -rf "$FLT"
 
+# ---- 76. oc-questions (Open Questions register, #547) ------------------------
+# Owner-commissioned fleet instrument. The register is the ONLY sanctioned
+# "blocked on you" channel, so the two properties that make it trustworthy are
+# pinned in its own --selftest: concurrent `ask` calls lose NEITHER set (the
+# flock + atomic-replace cycle), and a multi-question set keeps CALL order with
+# PER-QUESTION recommendations. A Clarify action must not close the question —
+# the first version keyed the idempotence guard on "not open", which made a
+# clarified question unanswerable forever AND archived its whole set.
+section "oc-questions (Open Questions register)"
+run_selftest oc-questions
+"$TOOLS_DIR/oc-questions" --bogus >/dev/null 2>&1; [ $? -eq 2 ] \
+  && ok "unknown verb -> 2 (usage)" || bad "unknown verb -> expected 2"
+"$TOOLS_DIR/oc-questions" --help >/dev/null 2>&1; [ $? -eq 0 ] \
+  && ok "oc-questions --help rc=0" || bad "oc-questions --help failed"
+# The store must be injectable: a tool that defaulted into the skill repo would
+# have the battery commit a register.
+QDIR="$(mktemp -d)"
+OC_QUESTIONS_DIR="$QDIR" "$TOOLS_DIR/oc-questions" ask --lane "probe lane" \
+  --session "00000000-0000-0000-0000-000000000000" --title t --description d \
+  >/dev/null 2>&1
+[ -f "$QDIR/open.json" ] && ok "OC_QUESTIONS_DIR override honoured (store is injectable)" \
+  || bad "store override ignored — the selftest would write the real register"
+rm -rf "$QDIR"
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 finalize_fail_log
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s",\n  "fail_log": "%s"\n}\n' \
