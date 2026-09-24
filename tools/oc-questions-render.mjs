@@ -7,8 +7,10 @@
 // next render overwrites it.
 //
 // stdin: a json-render SPEC. stdout: an HTML FRAGMENT. Exit 3 = the spec was not
-// JSON, exit 4 = the render threw. The caller falls back to its own builder on
-// any non-zero exit, so this file can never leave the owner's page broken.
+// JSON, exit 4 = the render threw. The caller turns any non-zero exit into a
+// NON-ZERO publish that writes nothing, so a fault here fails the command and
+// the last good page keeps serving (owner order 2026-09-24: there is exactly
+// ONE builder, so the artifact can state its own provenance).
 //
 // No JSX and no build step: React.createElement only, so a plain .mjs runs as
 // written. The output carries NO <script> — the page stays a static artifact,
