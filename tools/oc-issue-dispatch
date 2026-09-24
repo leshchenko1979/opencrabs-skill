@@ -864,8 +864,10 @@ def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_pa
             has_open_claims = c_claims not in ("-", "", None)
             is_busy = has_open_claims or (dirty_trees > 0)
 
-        # Check topic and feature for domain affinity
-        feature = (w.get("feature") or "") + " " + (w.get("topic") or "")
+        # Check topic and feature for domain affinity. Topic is optional in
+        # workers-ledger.json; keep it explicit so a later topic cannot bypass
+        # the shared matcher silently.
+        feature = " ".join(filter(None, (w.get("feature"), w.get("topic"))))
 
         editor_lanes.append({
             "uuid": uuid,
@@ -888,11 +890,26 @@ def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_pa
     return editor_lanes
 
 
+def _keyword_matches(text, keyword):
+    """Match structured scope tokens literally, prose tokens by word."""
+    text = text.lower()
+    keyword = keyword.lower()
+    if any(mark in keyword for mark in "(:/"):
+        return keyword in text
+    return re.search(r"(?<![a-z0-9_])" + re.escape(keyword)
+                    + r"(?![a-z0-9_])", text) is not None
+
+
+def _domains_for_text(text):
+    text = text.lower()
+    return {domain for domain, kws in AFFINITY_KEYWORDS.items()
+            if any(_keyword_matches(text, kw) for kw in kws)}
+
+
 def detect_issue_domains(issue):
     """Domains an issue touches, from its title+body prose."""
-    text = (issue.get("title", "") + " " + issue.get("body", "")).lower()
-    return {domain for domain, kws in AFFINITY_KEYWORDS.items()
-            if any(kw in text for kw in kws)}
+    text = issue.get("title", "") + " " + issue.get("body", "")
+    return _domains_for_text(text)
 
 def role_owned_domains(lane):
     """Domains a lane OWNS by ROLE (fork #342), independent of its feature prose.
@@ -939,8 +956,7 @@ def score_affinity(issue, lane):
     # Identify which domains the issue and lane touch. The issue half is shared
     # with select_best_lane's owner-candidacy test, so it lives in ONE place.
     issue_domains = detect_issue_domains(issue)
-    lane_domains = {domain for domain, kws in AFFINITY_KEYWORDS.items()
-                    if any(kw in feature for kw in kws)}
+    lane_domains = _domains_for_text(feature)
 
     # Role-owned domains are part of the lane's IDENTITY, not of its prose.
     owned = role_owned_domains(lane)
@@ -1855,6 +1871,22 @@ def run_selftest():
                      "body": "the plan card update endpoint returns a stale revision"}
     assert_true("plan domain: a telegram plan-card issue does NOT gain the plan domain",
                 "plan" not in detect_issue_domains(issue_tg_card))
+
+    # #543: shared matcher preserves structured scope tokens while blocking
+    # incidental prose substrings on both issue and lane sides.
+    issue_bash_noise = {"title": "fix: should push finished", "body": ""}
+    assert_true("#543: prose sh does not match inside should/push/finished",
+                "bash" not in detect_issue_domains(issue_bash_noise))
+    issue_tools_scope = {"title": "fix(tools): dispatch affinity", "body": ""}
+    assert_true("#543: structured tools scope keeps substring matching",
+                "tools" in detect_issue_domains(issue_tools_scope))
+    lane_topic = {"feature": "generic lane", "topic": "sh"}
+    assert_true("#543: optional topic participates through shared matcher",
+                "bash" not in _domains_for_text(lane_topic["feature"]))
+    assert_true("#543: topic value is matched by shared matcher",
+                "bash" in _domains_for_text(lane_topic["topic"]))
+    assert_true("#543: shared matcher is the only keyword predicate",
+                _keyword_matches("should", "sh") is False and _keyword_matches("sh", "sh"))
 
     # Test 4: Selection when lane is busy
     lane_busy = {"uuid": "lane-busy", "feature": "telegram-buttons", "is_busy": True, "class": "ACTIVE"}
