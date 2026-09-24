@@ -80,9 +80,13 @@ const renderSpans = (list) => (list || []).map((s, i) => {
 
 const { registry } = defineRegistry(catalog, {
   components: {
+    // The TTL line is NOT rendered here: page_wrapper() emits it in the shell,
+    // above <main>, alongside the noindex and charset chrome. Rendering it here
+    // too printed the same expiry twice (owner report 2026-09-24). The spec
+    // still CARRIES expires_at -- the spec is the page's description and stays
+    // self-describing -- but the shell owns the one visible line.
     Page: ({ props, children }) => h('main', null,
       h('h1', null, props.title),
-      h('p', { className: 'meta' }, 'expires ' + props.expires_at),
       children),
     QuestionSet: ({ props, children }) => h('div', { className: 'set', 'data-set': props.set_id }, children),
     // The form carries token, set and qid as hidden inputs: the answer backend

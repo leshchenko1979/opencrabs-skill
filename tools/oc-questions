@@ -1857,6 +1857,14 @@ def selftest():
         _ages = set(re.findall(r"asked [0-9a-z.]* (ago|old)", body))
         ck(_ages == {"ago"},
            "the age paragraph is not double-worded (%r)" % (sorted(_ages),))
+        # owner report 2026-09-24 22:24Z: "Why two expiration lines?" Two
+        # emitters carried the same expiry -- the shell (page_wrapper) and the
+        # Page catalog component, which rendered props.expires_at as well. The
+        # shell owns the visible line; exactly one must reach the page.
+        _ttl = body.count('class="meta">expires')
+        ck(_ttl == 1,
+           "the page carries exactly ONE expiration line, not two (%d found)"
+           % _ttl)
         meta = json.load(open(os.path.join(page["path"], "meta.json"), encoding="utf-8"))
         created, expires = parse_iso(meta["created_at"]), parse_iso(meta["expires_at"])
         ck(created and expires and (expires - created).days == PAGE_TTL_DAYS,
