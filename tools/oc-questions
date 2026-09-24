@@ -727,6 +727,148 @@ def cmd_gc(argv):
     return 0
 
 # =============================================================================
+# notify — the RETURN PATH (#547). An answer must reach the calling session.
+# =============================================================================
+# Delivery is a SEPARATE verb, never folded into `answer`. `answer` is a pure
+# state mutation that holds RegisterLock; a network call inside that lock would
+# hold it for up to A2A_TIMEOUT seconds and block every other lane's ask/list —
+# on a store whose entire point is concurrent safety. Keeping it separate also
+# keeps rc honest: a delivery fault must not read as an answer fault.
+#
+# The destination is ALWAYS the session recorded in the register — never a
+# caller-supplied id, never a field from a browser. That is the security
+# property: a page or a card tap cannot redirect an answer to a third party.
+# There is deliberately no --session flag on this verb.
+#
+# Transport is the A2A gateway, NOT `opencrabs session notify`: the CLI hangs on
+# this host (rc=124, enqueues nothing) — fork issue #412.
+A2A_URL = os.environ.get("OC_QUESTIONS_A2A") or "http://127.0.0.1:18791/a2a/v1"
+A2A_TIMEOUT = int(os.environ.get("OC_QUESTIONS_A2A_TIMEOUT") or "20")
+NOTIFY_BODY_MAX = 3000
+
+def load_all_sets():
+    """Open sets PLUS archived ones. An answered set is normally ARCHIVED, so a
+    reader that only opens open.json cannot deliver the one answer that matters."""
+    sets = list(read_register()["sets"])
+    try:
+        with open(archive_path(), encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    sets.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except FileNotFoundError:
+        pass
+    return sets
+
+def find_set_anywhere(set_id):
+    for entry in load_all_sets():
+        if entry.get("id") == set_id:
+            return entry
+    return None
+
+def compose_answer_body(entry, qid=None):
+    questions = entry.get("questions") or []
+    if qid:
+        questions = [q for q in questions if q.get("qid") == qid]
+    answered = [q for q in questions
+                if q.get("answer") is not None
+                or q.get("status") in ("clarifying", "clarified")]
+    if not answered:
+        return None
+    lines = ["Open Questions — answer received (set %s, lane %s)"
+             % (entry.get("id"), entry.get("lane")), ""]
+    for question in answered:
+        lines.append("%s. %s" % (question.get("qid"), question.get("title")))
+        if question.get("answer") is None:
+            lines.append("   -> CLARIFY REQUESTED")
+        else:
+            lines.append("   -> %s" % (question.get("answer"),))
+        if question.get("answer_text"):
+            lines.append("   text: %s" % (question["answer_text"],))
+        lines.append("")
+    body = "\n".join(lines).strip()
+    if len(body) > NOTIFY_BODY_MAX:
+        body = body[:NOTIFY_BODY_MAX] + " (truncated)"
+    return body
+
+def a2a_deliver(session, body, mode="turn-end"):
+    import urllib.error
+    import urllib.request
+    payload = {"jsonrpc": "2.0", "id": "1", "method": "session/notify",
+               "params": {"session_id": session, "message": body, "mode": mode}}
+    request = urllib.request.Request(
+        A2A_URL, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=A2A_TIMEOUT) as response:
+            return response.status, response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001
+        return 0, "transport error: %s" % (exc,)
+
+def cmd_notify(argv):
+    positional, flags = parse_flags(
+        argv,
+        valued=["--set", "--lane", "--qid", "--mode"],
+        boolean=["--json", "--dry-run"],
+    )
+    set_id = flags.get("--set") or (positional[0] if positional else None)
+    lane = flags.get("--lane")
+    if not set_id and not lane:
+        die(2, "notify requires --set <set-id> or --lane <NAME>")
+    mode = flags.get("--mode") or "turn-end"
+    if mode not in ("turn-end", "interrupt", "quiet"):
+        die(2, "--mode must be turn-end, interrupt or quiet")
+
+    if set_id:
+        entry = find_set_anywhere(set_id)
+    else:
+        candidates = [s for s in load_all_sets() if s.get("lane") == lane]
+        entry = candidates[-1] if candidates else None
+    if entry is None:
+        die(1, "no question set %s in the register or the archive"
+            % (set_id or lane,))
+
+    session = (entry.get("session") or "").strip()
+    if not UUID_RE.fullmatch(session):
+        # Refuse rather than guess: a wrong destination leaks an answer to an
+        # unrelated lane, and the register is the only authority for it.
+        die(3, "set %s records no usable calling session — refusing to guess a "
+               "destination" % (entry.get("id"),))
+    body = compose_answer_body(entry, flags.get("--qid"))
+    if body is None:
+        die(1, "no answer recorded yet for set %s" % (entry.get("id"),))
+
+    if flags.get("--dry-run"):
+        if flags.get("--json"):
+            print(json.dumps({"set": entry.get("id"), "session": session,
+                              "mode": mode, "body": body},
+                             indent=2, ensure_ascii=False))
+        else:
+            print("would notify %s (set %s, %s):\n\n%s"
+                  % (entry.get("lane"), entry.get("id"), mode, body))
+        return 0
+
+    status, response = a2a_deliver(session, body, mode)
+    if flags.get("--json"):
+        print(json.dumps({"set": entry.get("id"), "session": session,
+                          "mode": mode, "http": status, "response": response},
+                         indent=2, ensure_ascii=False))
+    else:
+        print("notified %s (set %s) — http %s"
+              % (entry.get("lane"), entry.get("id"), status))
+    if status == 0:
+        return 4
+    if status >= 400:
+        return 3
+    return 0
+
+# =============================================================================
 # Session-binding lookups (read-only) — the card goes to the CALLER's own topic
 # =============================================================================
 def _session_db():
@@ -1350,6 +1492,82 @@ def selftest():
         rc, _, _ = run("list")
         ck(rc == 0, "…and the restored register reads clean again")
 
+        # -- 11. notify — the RETURN PATH (#547) ---------------------------
+        # Delivery is a SEPARATE verb: `answer` holds RegisterLock, so a
+        # network call inside it would block every other lane's ask/list for
+        # the whole timeout, on a store whose point is concurrent safety.
+        rc, _, err = run("notify")
+        ck(rc == 2, "notify with no --set/--lane is usage rc=2 (rc=%d)" % rc)
+        ck("requires --set" in err,
+           "…and the usage error names the required flag, not an unknown verb")
+
+        rc, out, _ = run("ask", "--lane", "Return lane", "--session", session_a,
+                         "--questions-json", json.dumps([
+                             {"title": "Ship it?", "description": "d",
+                              "options": ["Yes", "No"], "recommended": 0}]),
+                         "--json")
+        ck(rc == 0, "ask registers the return-path set (rc=%d)" % rc)
+        rset = json.loads(out)["id"]
+        rc, _, _ = run("notify", "--set", rset)
+        ck(rc == 1, "notify on an UNANSWERED set is rc=1, not a delivery (rc=%d)"
+           % rc)
+
+        rc, _, _ = run("answer", rset, "q1", "0")
+        ck(rc == 0, "answer the return-path set (rc=%d)" % rc)
+        ck(rset not in {s["id"] for s in store_json()["sets"]},
+           "…and the fully-answered set LEFT the live register (archived)")
+
+        # An answered set is normally ARCHIVED, so a reader that opens only
+        # open.json cannot deliver the one answer that matters.
+        rc, out, _ = run("notify", "--set", rset, "--dry-run", "--json")
+        ck(rc == 0, "notify resolves an ARCHIVED set (rc=%d)" % rc)
+        try:
+            payload = json.loads(out)
+        except Exception:  # noqa: BLE001
+            # A leg that CRASHES reports nothing about the legs AFTER it, so a
+            # missing payload is a FAIL row, never a traceback (see get_set).
+            payload = {}
+            ck(False, "notify --json emitted no JSON (the verb did not run)")
+        ck(payload.get("session") == session_a,
+           "…destination is the session recorded in the REGISTER")
+        ck("Yes" in (payload.get("body") or ""),
+           "…and the body carries the recorded answer")
+        ck(len(payload.get("body") or "") <= 3020, "…and the body is bounded")
+
+        rc, _, _ = run("notify", "--set", rset, "--dry-run",
+                       "--session", "99999999-9999-9999-9999-999999999999")
+        ck(rc == 2,
+           "a caller-supplied destination is REFUSED rc=2 — no redirect (rc=%d)"
+           % rc)
+
+        rc, _, _ = run("notify", "--set", rset, "--mode", "bogus", "--dry-run")
+        ck(rc == 2, "an unknown --mode is usage rc=2 (rc=%d)" % rc)
+
+        rc, _, _ = run("notify", "--set", "nosuch", "--dry-run")
+        ck(rc == 1, "an unknown set is rc=1 (rc=%d)" % rc)
+
+        # A set whose recorded session is not a session id must be REFUSED:
+        # delivering to a guessed destination leaks an answer to a stranger.
+        rc, out, _ = run("ask", "--lane", "No session lane",
+                         "--session", "not-a-uuid", "--title", "t",
+                         "--description", "d", "--option", "a", "--option", "b",
+                         "--json")
+        ck(rc == 0, "ask accepts a lane with a non-uuid session (rc=%d)" % rc)
+        nsid = json.loads(out)["id"]
+        run("answer", nsid, "q1", "0")
+        rc, _, _ = run("notify", "--set", nsid, "--dry-run")
+        ck(rc == 3, "a non-uuid destination is refused rc=3 (rc=%d)" % rc)
+
+        # A real delivery that cannot reach the lane must be a FAULT, never a
+        # silent success — otherwise a parked answer looks delivered.
+        dead = dict(env)
+        dead["OC_QUESTIONS_A2A"] = "http://127.0.0.1:1/a2a/v1"
+        proc = subprocess.run([tool, "notify", "--set", rset], env=dead,
+                              capture_output=True, text=True, timeout=90)
+        ck(proc.returncode == 4,
+           "an unreachable A2A endpoint is rc=4, never a false success (rc=%d)"
+           % proc.returncode)
+
         if fails:
             print("  %d FAILED" % len(fails))
             return 1
@@ -1365,6 +1583,9 @@ USAGE = """oc-questions — the Open Questions register (#547)
             --title T --description D [--option O]... [--recommended N]]
            [--ttl-days N] [--subject S] [--no-clarify] [--json]
   answer   <set-id> <qid> <choice-index|clarify> [--text T] [--via card|page|cli]
+  notify   --set <id> | --lane <NAME> [--qid Q] [--mode turn-end|interrupt|quiet]
+           [--dry-run] [--json]        the RETURN PATH: delivers the answer to
+                                       the session recorded in the register
   list     [--lane NAME] [--session id] [--all] [--json] [--quiet]
   render   [--set id] [--json] [--no-derived]
   publish  [--set id] [--action URL] [--prune] [--json]
@@ -1387,7 +1608,7 @@ def main(argv):
         return selftest()
     handlers = {"ask": cmd_ask, "answer": cmd_answer, "list": cmd_list,
                 "render": cmd_render, "publish": cmd_publish, "lint": cmd_lint,
-                "gc": cmd_gc}
+                "gc": cmd_gc, "notify": cmd_notify}
     handler = handlers.get(verb)
     if handler is None:
         sys.stderr.write("%s: unknown verb %r\n\n%s" % (PROG, verb, USAGE))
