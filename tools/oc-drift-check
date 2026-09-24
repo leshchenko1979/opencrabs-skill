@@ -177,6 +177,16 @@ cmd_drift() {
   if [ "$ack" = "1" ]; then
     OC_LEDGER="$LEDGER" OC_SKILL_DIR="$SKILL_DIR" "$_OC_DIR/oc-ledger" ack "$uuid" "$cur" || die 3 "ack failed (oc-ledger rc=$?)"
     echo "ack stamped for $uuid at $cur"
+    # #560: the verdict below must describe the state this command LEAVES, not
+    # the one it found. claimed_bare was read from the roster BEFORE the ack, so
+    # printing it afterwards produced "ack stamped ... at <cur>" immediately
+    # followed by "DRIFT: claimed <old> != live <cur>" in the same run -- a
+    # durable drift claim that the ack had just cleared, and one a lane quoting
+    # its own output would record as fact. Both the stale version AND the
+    # no-history flag are superseded by the ack that just landed.
+    claimed_bare="$cur"
+    claimed_src="ack stamped this run"
+    no_history=0
   fi
   if [ "$no_history" = "1" ]; then
     echo "NO-HISTORY: no last_acked recorded for $uuid (claimed side: $claimed_src) — treat as DRIFT, re-read SKILL.md + editor.md IN FULL before next phase boundary"
@@ -292,9 +302,29 @@ EOF
   chk "omit-arg-match-rc0" 0 "$RC"
   # --ack keeps stamping the LIVE version on the omit-arg path too
   jq '.workers[0].last_acked = {version:"0.4.57", at:"2026-01-01T00:00:00Z"}' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
-  RC=0; OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" "$AU" --ack --skill-dir "$T/skill" >/dev/null 2>&1 || RC=$?
-  chk "omit-arg-drift-rc1" 1 "$RC"
+  RC=0; OUT_ACK="$(OC_LEDGER="$T/state-ledger.json" OC_DEPLOY_STATE_DIR="$T" bash "$ME" "$AU" --ack --skill-dir "$T/skill" 2>&1)" || RC=$?
+  # #560: the verdict describes the state the command LEAVES. Before the fix the
+  # SAME run printed "ack stamped ... at 0.4.58" and then "DRIFT: claimed 0.4.57
+  # != live 0.4.58" -- a durable drift claim written straight after the ack that
+  # cleared it, and one a lane quoting its own output records as fact.
+  chk "omit-arg-ack-rc0" 0 "$RC"
+  case "$OUT_ACK" in *"NO-DRIFT"*) AN=yes ;; *) AN=no ;; esac
+  chk "omit-arg-ack-verdict-is-no-drift" "yes" "$AN"
+  # NOTE: a substring test for "DRIFT:" also matches the CLEAN line, because
+  # "NO-DRIFT: claimed ..." CONTAINS "DRIFT:". Anchored at line start instead --
+  # a pattern that cannot separate a verdict from its negation is not a test.
+  AD="$(printf '%s' "$OUT_ACK" | grep -c '^DRIFT:')"
+  chk "omit-arg-ack-prints-no-drift-line" "0" "$AD"
+  case "$OUT_ACK" in *"claimed side: ack stamped this run"*) AS=yes ;; *) AS=no ;; esac
+  chk "omit-arg-ack-names-the-ack-as-the-source" "yes" "$AS"
   chk "omit-arg-ack-stamps-live" "0.4.58" "$(jq -r '.workers[] | select(.uuid=="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") | .last_acked.version // "none"' "$T/state-ledger.json")"
+  # THE CONTROL ARM: without --ack the same drifted record must still FIRE, so
+  # the fix cannot be satisfied by making the sensor blind.
+  jq '.workers[0].last_acked = {version:"0.4.57", at:"2026-01-01T00:00:00Z"}' "$T/state-ledger.json" > "$T/l.tmp" && mv "$T/l.tmp" "$T/state-ledger.json"
+  RC=0; OUT_NA="$(OC_LEDGER="$T/state-ledger.json" bash "$ME" "$AU" --skill-dir "$T/skill" 2>&1)" || RC=$?
+  chk "omit-arg-no-ack-still-drifts-rc1" 1 "$RC"
+  case "$OUT_NA" in *"DRIFT: claimed 0.4.57"*) ND=yes ;; *) ND=no ;; esac
+  chk "omit-arg-no-ack-still-names-the-drift" "yes" "$ND"
   # ---- F (fork #447): source naming + advisory author-window note -----------
   # Every verdict must name the SOURCE of each side. The claimed-side paths
   # (argv vs recorded) must be DISTINGUISHABLE in the text: before this fix a
