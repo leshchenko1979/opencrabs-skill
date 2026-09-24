@@ -132,7 +132,7 @@ cmd_sweep() {
           # F10 (lens F, v0.4.72): tip sha must survive in the journal, not only in stdout TSV
           oc_log_extra branch-delete "$b@$tip"
         else
-          if echo "$err_out" | grep -qiE "used by worktree|checked out at"; then
+          if grep -qiE "used by worktree|checked out at" <<< "$err_out"; then
             action="held-by-worktree"
           else
             action="delete-failed"

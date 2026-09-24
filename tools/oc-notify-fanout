@@ -274,29 +274,29 @@ JSON
   # 1. Default roster (all 5 non-self workers): ONLY L1 sendable — L6 is live
   #    and forum-bound but RETIRED, so law 9 is the only guard that stops it.
   out="$(run_fanout)"
-  echo "$out" | grep -q "SENT $L1" && chk 0 sent-in-scope || chk 1 sent-in-scope
-  echo "$out" | grep -q "SKIP $L2 .*SCOPE" && chk 0 skip-bound-elsewhere || chk 1 skip-bound-elsewhere
-  echo "$out" | grep -q "SKIP $L3 .*SCOPE" && chk 0 skip-unbound || chk 1 skip-unbound
-  echo "$out" | grep -q "SKIP $L4" && chk 0 skip-malformed || chk 1 skip-malformed
-  echo "$out" | grep -q "SKIP $L5" && chk 0 skip-zero-seg || chk 1 skip-zero-seg
+  oc_has "$out" "SENT $L1" && chk 0 sent-in-scope || chk 1 sent-in-scope
+  grep -q "SKIP $L2 .*SCOPE" <<< "$out" && chk 0 skip-bound-elsewhere || chk 1 skip-bound-elsewhere
+  grep -q "SKIP $L3 .*SCOPE" <<< "$out" && chk 0 skip-unbound || chk 1 skip-unbound
+  oc_has "$out" "SKIP $L4" && chk 0 skip-malformed || chk 1 skip-malformed
+  oc_has "$out" "SKIP $L5" && chk 0 skip-zero-seg || chk 1 skip-zero-seg
   # LAW 9 (defect #6, 2026-09-12): L6 passes EVERY guard above it (uuid shape,
   # live session, forum binding) — the state filter is the only thing that can
   # stop it, which is what makes these two assertions non-vacuous. Remove the
   # guard on a throwaway copy and L6 is SENT (negative control, 2026-09-12).
-  echo "$out" | grep -q "SKIP $L6 .*INACTIVE(state=RETIRED)" && chk 0 skip-retired-row || chk 1 skip-retired-row
+  grep -q "SKIP $L6 .*INACTIVE(state=RETIRED)" <<< "$out" && chk 0 skip-retired-row || chk 1 skip-retired-row
   grep -qF "$L6" "$T/fake-notify-log" && chk 1 retired-never-sent || chk 0 retired-never-sent
   grep -qF "$L2" "$T/fake-notify-log" && chk 1 leak-bound-elsewhere || chk 0 leak-bound-elsewhere
   grep -qF "$L3" "$T/fake-notify-log" && chk 1 leak-unbound || chk 0 leak-unbound
 
   # LAW 17 (owner order 2026-09-13): dormancy/activity filter
   # L8 is a dormant editor without claim/worktree -> SKIP DORMANT
-  echo "$out" | grep -q "SKIP $L8 .*DORMANT(idle_hours=" && chk 0 skip-dormant-worker || chk 1 skip-dormant-worker
+  grep -q "SKIP $L8 .*DORMANT(idle_hours=" <<< "$out" && chk 0 skip-dormant-worker || chk 1 skip-dormant-worker
   grep -qF "$L8" "$T/fake-notify-log" && chk 1 dormant-never-sent || chk 0 dormant-never-sent
   # L9 is a dormant core role (toolsmith) -> core role bypasses dormancy and is SENT
-  echo "$out" | grep -q "SENT $L9" && chk 0 dormant-core-role-sent || chk 1 dormant-core-role-sent
+  oc_has "$out" "SENT $L9" && chk 0 dormant-core-role-sent || chk 1 dormant-core-role-sent
   grep -qF "$L9" "$T/fake-notify-log" && chk 0 dormant-core-role-notified || chk 1 dormant-core-role-notified
   # L10 is a dormant editor WITH active claim -> claim holder is preserved and SENT
-  echo "$out" | grep -q "SENT $L10" && chk 0 dormant-with-claim-sent || chk 1 dormant-with-claim-sent
+  oc_has "$out" "SENT $L10" && chk 0 dormant-with-claim-sent || chk 1 dormant-with-claim-sent
   grep -qF "$L10" "$T/fake-notify-log" && chk 0 dormant-with-claim-notified || chk 1 dormant-with-claim-notified
   # 1a2. DISCRIMINATING leg for the LAW-17 holder scan. The L10 assertions above
   #      CANNOT catch the defect they look like they cover: run_fanout exports
@@ -317,7 +317,7 @@ JSON
     OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$T/run-home" \
     HOME="$H" FAKE_NOTIFY_LOG="$T/fake-notify-log-1a2" \
       bash "$0" --title T --text "brief {{UUID}}" --no-stamp 2>&1)"
-  echo "$out" | grep -q "SENT $L10" && chk 0 law17-holder-from-argv-ledger || chk 1 law17-holder-from-argv-ledger
+  oc_has "$out" "SENT $L10" && chk 0 law17-holder-from-argv-ledger || chk 1 law17-holder-from-argv-ledger
   grep -qF "$L10" "$T/fake-notify-log-1a2" && chk 0 law17-holder-notified-argv-ledger || chk 1 law17-holder-notified-argv-ledger
   # 1b. The OTHER arm of law 9: an explicitly ACTIVE row must still be
   #     sendable. L1 above carries NO state key at all (the enroll default), so
@@ -337,14 +337,14 @@ JSON
     OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$T/run-state" \
     FAKE_NOTIFY_LOG="$T/fake-notify-log-1b" \
       bash "$0" --title T --text "brief {{UUID}}" --no-stamp 2>&1)"
-  echo "$out" | grep -q "SENT $L1" && chk 0 state-active-sendable || chk 1 state-active-sendable
+  oc_has "$out" "SENT $L1" && chk 0 state-active-sendable || chk 1 state-active-sendable
 
   # 2. Law-1 guard still fires: a brief with an unresolvable token aborts.
   out="$(OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
     OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$LEDG" \
     OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 \
     bash "$0" --title T --text "broken {{NOPE}} token" --no-stamp 2>&1)" || true
-  echo "$out" | grep -q "ABORT.*placeholder" && chk 0 law1-placeholder-abort || chk 1 law1-placeholder-abort
+  grep -q "ABORT.*placeholder" <<< "$out" && chk 0 law1-placeholder-abort || chk 1 law1-placeholder-abort
 
   # LAW 5 (defect: HQ report d72bd52d, 2026-09-12): the tool could not express
   # the law's quiet contract — hq.md §Duty 3 mandates delivery=quiet for ANY version
@@ -369,13 +369,13 @@ JSON
   # after the first send.
   rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
   out="$(OC_FANOUT_RUN_DIR="$T/run-mode-now" run_fanout --mode now 2>&1)" || true
-  echo "$out" | grep -q "invalid --mode 'now'" && chk 0 mode-now-refused || chk 1 mode-now-refused
+  oc_has "$out" "invalid --mode 'now'" && chk 0 mode-now-refused || chk 1 mode-now-refused
   grep -qF -- '--mode' "$T/fake-notify-log" && chk 1 mode-now-never-sends || chk 0 mode-now-never-sends
   rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
   OC_FANOUT_RUN_DIR="$T/run-mode-bogus" run_fanout --mode bogus >/dev/null 2>&1 || true
   grep -qF -- '--mode' "$T/fake-notify-log" && chk 1 mode-invalid-never-sends || chk 0 mode-invalid-never-sends
   out="$(OC_FANOUT_RUN_DIR="$T/run-mode-bogus2" run_fanout --mode bogus 2>&1)" || true
-  echo "$out" | grep -q "invalid --mode" && chk 0 mode-invalid-rejected || chk 1 mode-invalid-rejected
+  oc_has "$out" "invalid --mode" && chk 0 mode-invalid-rejected || chk 1 mode-invalid-rejected
 
   # LAW 16 (defect D-1, HQ 2026-09-12): self identity is DERIVED from the
   # invoking session, never the hardcoded lane uuid that shipped as the default
@@ -413,17 +413,17 @@ JSON
   # 3. Dry-run behaves identically for scope (no send attempted).
   rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
   out="$(run_fanout --dry-run)"
-  echo "$out" | grep -q "DRY $L1" && chk 0 dry-in-scope || chk 1 dry-in-scope
-  echo "$out" | grep -q "SKIP $L3 .*SCOPE" && chk 0 dry-scope-skip || chk 1 dry-scope-skip
+  oc_has "$out" "DRY $L1" && chk 0 dry-in-scope || chk 1 dry-in-scope
+  grep -q "SKIP $L3 .*SCOPE" <<< "$out" && chk 0 dry-scope-skip || chk 1 dry-scope-skip
   [ -s "$T/fake-notify-log" ] && chk 1 dry-no-send || chk 0 dry-no-send
 
   # 4. WAVE-GROUP-B: wave lock + idempotency (isolated run dir).
   RD="$T/run"; mkdir -p "$RD"
   # 4a. resume: run 1 sends L1 and records it in .sent; run 2 must SKIP DUPLICATE.
   out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
-  echo "$out" | grep -q "SENT $L1" && chk 0 wave1-sent || chk 1 wave1-sent
+  oc_has "$out" "SENT $L1" && chk 0 wave1-sent || chk 1 wave1-sent
   out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
-  echo "$out" | grep -q "SKIP $L1 .*DUPLICATE" && chk 0 resume-duplicate-skip || chk 1 resume-duplicate-skip
+  grep -q "SKIP $L1 .*DUPLICATE" <<< "$out" && chk 0 resume-duplicate-skip || chk 1 resume-duplicate-skip
   n_sends=$(grep -cF "$L1" "$T/fake-notify-log" || true)
   [ "$n_sends" = "1" ] && chk 0 exactly-one-send || chk 1 "exactly-one-send (got $n_sends)"
   # 4b. concurrent-refuse: a live lock (our own pid, fresh ts) refuses rc=7.
@@ -431,16 +431,16 @@ JSON
   printf '%s %s %s\n' "$$" "$(date +%s)" "$WID" > "$RD/wave-${WID}.lock"
   out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)" && rc7=0 || rc7=$?
   [ "$rc7" = "7" ] && chk 0 concurrent-refuse-rc7 || chk 1 "concurrent-refuse-rc7 (got rc=$rc7)"
-  echo "$out" | grep -q "already in progress" && chk 0 concurrent-refuse-names-holder || chk 1 concurrent-refuse-names-holder
+  oc_has "$out" "already in progress" && chk 0 concurrent-refuse-names-holder || chk 1 concurrent-refuse-names-holder
   # 4c. stale-clear: dead pid in the lockfile -> run proceeds, lock cleared.
   printf '999999 1 %s\n' "$WID" > "$RD/wave-${WID}.lock"
   out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)" && rcst=0 || rcst=$?
   [ "$rcst" = "0" ] && chk 0 stale-lock-cleared || chk 1 "stale-lock-cleared (got rc=$rcst)"
-  echo "$out" | grep -q "DUPLICATE" && chk 0 stale-run-still-idempotent || chk 1 stale-run-still-idempotent
+  oc_has "$out" "DUPLICATE" && chk 0 stale-run-still-idempotent || chk 1 stale-run-still-idempotent
   rm -f "$RD/wave-${WID}.sent"
   # 4d. fresh .sent after clear: run sends again (lock was the only blocker).
   out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
-  echo "$out" | grep -q "SENT $L1" && chk 0 post-clear-send || chk 1 post-clear-send
+  oc_has "$out" "SENT $L1" && chk 0 post-clear-send || chk 1 post-clear-send
 
   # 5. Ontology fold alias (2026-09-11, c586e61f): the HQ role string was
   #    `hq-supervisor`, now `hq`. A wave dispatched with the LEGACY selector must
@@ -461,11 +461,11 @@ JSON
       bash "$0" --title T --text "brief {{UUID}}" --no-stamp --roles "$1" 2>&1
   }
   out="$(fanout_roles hq "$T/run-hq1")"
-  echo "$out" | grep -q "SENT $L1" && chk 0 role-alias-new-selector || chk 1 role-alias-new-selector
+  oc_has "$out" "SENT $L1" && chk 0 role-alias-new-selector || chk 1 role-alias-new-selector
   out="$(fanout_roles hq-supervisor "$T/run-hq2")"
-  echo "$out" | grep -q "SENT $L1" && chk 0 role-alias-legacy-selector || chk 1 role-alias-legacy-selector
+  oc_has "$out" "SENT $L1" && chk 0 role-alias-legacy-selector || chk 1 role-alias-legacy-selector
   out="$(fanout_roles editor "$T/run-hq3")"
-  echo "$out" | grep -q "SENT $L1" && chk 1 role-alias-exact || chk 0 role-alias-exact
+  oc_has "$out" "SENT $L1" && chk 1 role-alias-exact || chk 0 role-alias-exact
 
   # 6. --text-file brief ASSEMBLY (defect fix 2026-09-11, HQ report d72bd52d).
   #    `brief="${text}"` read ONLY --text: text_file was validated (244) and
@@ -572,10 +572,10 @@ SLOWEOF
     OC_FANOUT_LEDGER="$T/ledg2.json" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=2 \
     OC_FANOUT_RUN_DIR="$T/run-timeout" FAKE_NOTIFY_LOG="$T/fns.log" \
     bash "$0" --title "TTO" --text "brief {{UUID}}" --no-stamp 2>&1; echo "RC=$?")"
-  echo "$tout" | grep -q "FAIL $L7 .*rc=124" && chk 0 timeout-bounds-hung-send || chk 1 timeout-bounds-hung-send
-  echo "$tout" | grep -q "SENT $L1" && chk 0 wave-continues-past-hung-lane || chk 1 wave-continues-past-hung-lane
-  echo "$tout" | grep -q "PARTIAL DELIVERY" && chk 0 partial-delivery-named || chk 1 partial-delivery-named
-  echo "$tout" | grep -q "RC=4" && chk 0 partial-wave-exit-4 || chk 1 partial-wave-exit-4
+  grep -q "FAIL $L7 .*rc=124" <<< "$tout" && chk 0 timeout-bounds-hung-send || chk 1 timeout-bounds-hung-send
+  oc_has "$tout" "SENT $L1" && chk 0 wave-continues-past-hung-lane || chk 1 wave-continues-past-hung-lane
+  oc_has "$tout" "PARTIAL DELIVERY" && chk 0 partial-delivery-named || chk 1 partial-delivery-named
+  oc_has "$tout" "RC=4" && chk 0 partial-wave-exit-4 || chk 1 partial-wave-exit-4
   # 10c. the manifest itself: one row per attempted lane, retired rows never.
   ls "$T"/run-default/wave-*.targets >/dev/null 2>&1 && chk 0 manifest-written || chk 1 manifest-written
   grep -qxF "$L1" "$T"/run-default/wave-*.targets && chk 0 manifest-has-attempted-lane || chk 1 manifest-has-attempted-lane
@@ -599,9 +599,9 @@ DEOF
     OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_IN_UNIT_CGROUP=1 OC_FANOUT_DETACH_CMD="$T/fake-detach" \
     OC_FANOUT_RUN_DIR="$T/run-detach" FAKE_NOTIFY_LOG="$T/fn-detach.log" \
     bash "$0" --title TD --text "brief {{UUID}}" --no-stamp 2>&1; echo "RC=$?")"
-  echo "$tout" | grep -q "RC=0" && chk 0 detach-reexec-rc0 || chk 1 detach-reexec-rc0
+  oc_has "$tout" "RC=0" && chk 0 detach-reexec-rc0 || chk 1 detach-reexec-rc0
   chk "$([ "$(grep -c DETACH-CALLED "$T/detach.log" 2>/dev/null)" = 1 ] && echo 0 || echo 1)" detach-called-once
-  echo "$tout" | grep -q "INSIDE opencrabs-ops.service" && chk 0 detach-names-unit || chk 1 detach-names-unit
+  grep -q "INSIDE opencrabs-ops.service" <<< "$tout" && chk 0 detach-names-unit || chk 1 detach-names-unit
   grep -q "$L1" "$T/fn-detach.log" 2>/dev/null && chk 0 detach-wave-delivered || chk 1 detach-wave-delivered
   # 15b. loop guard: a re-entered wave (OC_FANOUT_DETACHED=1) must NOT re-exec
   #      again — otherwise the detach recurses.
@@ -769,7 +769,7 @@ SEOF
 
   # (6) Unknown flag ergonomically lists candidates and --body/--body-file alias works
   unrec_out="$(OC_FANOUT_SELF="$L1" "$SELF" --bogus-flag 2>&1 || true)"
-  if echo "$unrec_out" | grep -q "valid flags: --title, --text/--body"; then
+  if oc_has "$unrec_out" "valid flags: --title, --text/--body"; then
     chk 0 unknown-flag-ergonomics
   else
     chk 1 "unknown-flag-ergonomics (out=$unrec_out)"

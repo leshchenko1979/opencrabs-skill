@@ -2752,9 +2752,9 @@ EOF
   chk "verbs-flag-contains-stamp" "true" "$(grep -qw stamp "$T/verbs.out" && echo true || echo false)"
   chk "verbs-flag-contains-roster" "true" "$(grep -qw roster "$T/verbs.out" && echo true || echo false)"
   out="$(bash "$ME" roster-enroll 2>&1 || true)"
-  chk "suggest-roster-enroll" "true" "$(echo "$out" | grep -q "did you mean 'enroll'?" && echo true || echo false)"
+  chk "suggest-roster-enroll" "true" "$(oc_has "$out" "did you mean 'enroll'?" && echo true || echo false)"
   out="$(bash "$ME" roster-amend 2>&1 || true)"
-  chk "suggest-roster-amend" "true" "$(echo "$out" | grep -q "did you mean 'promote' or 'enroll'?" && echo true || echo false)"
+  chk "suggest-roster-amend" "true" "$(oc_has "$out" "did you mean 'promote' or 'enroll'?" && echo true || echo false)"
 
   bash "$ME" events --since 2020-01-01T00:00:00Z > "$T/ev-s.out" 2>/dev/null; chk "events-since-past-rc" 0 $?
   chk "events-since-past-20" "20" "$(grep -c . "$T/ev-s.out")"

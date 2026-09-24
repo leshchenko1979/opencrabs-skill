@@ -103,7 +103,7 @@ JSON
   local out3
   out3="$("$SELF" --dir "$d/t3" 2>/dev/null)" || rc3=$?
   assert_eq "unthrottled watch returns 1" "1" "$rc3"
-  echo "$out3" | grep -q "UNTHROTTLED_WATCH"
+  oc_has "$out3" "UNTHROTTLED_WATCH"
   assert_eq "reports UNTHROTTLED_WATCH violation" "0" "$?"
 
   # Test 4: Nohup spawn -> 1
@@ -120,7 +120,7 @@ JSON
   local out4
   out4="$("$SELF" --dir "$d/t4" 2>/dev/null)" || rc4=$?
   assert_eq "nohup spawn returns 1" "1" "$rc4"
-  echo "$out4" | grep -q "NOHUP_SPAWN"
+  oc_has "$out4" "NOHUP_SPAWN"
   assert_eq "reports NOHUP_SPAWN violation" "0" "$?"
 
   # Test 5: Handrolled sleep loop -> 1
@@ -137,7 +137,7 @@ JSON
   local out5
   out5="$("$SELF" --dir "$d/t5" 2>/dev/null)" || rc5=$?
   assert_eq "handrolled loop returns 1" "1" "$rc5"
-  echo "$out5" | grep -q "HANDROLLED_SLEEP_LOOP"
+  oc_has "$out5" "HANDROLLED_SLEEP_LOOP"
   assert_eq "reports HANDROLLED_SLEEP_LOOP violation" "0" "$?"
 
   # Test 6: gh run watch --help is clean -> 0
@@ -196,9 +196,9 @@ JSON
   local out10
   out10="$("$SELF" --dir "$d/t10" 2>/dev/null)" || rc10=$?
   assert_eq "off-spec interval returns 1" "1" "$rc10"
-  echo "$out10" | grep -q "OFF_SPEC_INTERVAL"
+  oc_has "$out10" "OFF_SPEC_INTERVAL"
   assert_eq "reports OFF_SPEC_INTERVAL" "0" "$?"
-  echo "$out10" | grep -q "UNTHROTTLED_WATCH"
+  oc_has "$out10" "UNTHROTTLED_WATCH"
   assert_eq "off-spec is not mislabelled UNTHROTTLED_WATCH" "1" "$?"
 
   # Test 11: --since parses fractional-second +00:00 timestamps

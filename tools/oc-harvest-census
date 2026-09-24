@@ -1982,7 +1982,7 @@ EOF
   #    Doubles as the NEGATIVE CONTROL for 3d: fixture 132 reads COMPLETED (not
   #    REOPENED), so the merged refusal must stand.
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "132" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "REFUSED.*MERGED"; then
+  if [ "$rc" -eq 1 ] && grep -q "REFUSED.*MERGED" <<< "$out"; then
     ok "check merged unit -> REFUSED exit 1"
   else
     echo "  bad  - check merged unit expected rc=1, got rc=$rc ($out)"
@@ -1992,7 +1992,7 @@ EOF
   # 2. Check on IN_FLIGHT issue (#144) -> exits 1 REFUSED
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "144" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "REFUSED.*IN_FLIGHT"; then
+  if [ "$rc" -eq 1 ] && grep -q "REFUSED.*IN_FLIGHT" <<< "$out"; then
     ok "check in_flight unit -> REFUSED exit 1"
   else
     echo "  bad  - check in_flight unit expected rc=1, got rc=$rc ($out)"
@@ -2002,7 +2002,7 @@ EOF
   # 3. Check on UNHARVESTED issue (#200) -> exits 0 ELIGIBLE
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "200" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "check unharvested unit -> ELIGIBLE exit 0"
   else
     echo "  bad  - check unharvested unit expected rc=0, got rc=$rc ($out)"
@@ -2017,7 +2017,7 @@ EOF
   #     (`already MERGED upstream in PR #1990`) instead of returning ELIGIBLE.
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "199" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "numbering space: PR-space (#199) title does not key fork issue 199"
   else
     echo "  bad  - fork issue 199 expected rc=0 ELIGIBLE, got rc=$rc ($out)"
@@ -2034,7 +2034,7 @@ EOF
   #     leg returns rc=1 `already MERGED upstream in PR #1470`.
   rc=0
   out="$(OC_HARVEST_MOCK_ISSUE_STATE="$mock_issue_state_reopened" run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "132" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "merge refusal overridden" && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "merge refusal overridden" && oc_has "$out" "ELIGIBLE"; then
     ok "reopened live state: REOPENED target overrides the MERGED refusal"
   else
     echo "  bad  - reopened target 132 expected rc=0 with override note, got rc=$rc ($out)"
@@ -2044,7 +2044,7 @@ EOF
   # 3b. Check on FRESH FEATURE issue (#300) -> exits 1 REFUSED soak
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "300" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "within 24h feature soak window"; then
     ok "check fresh feature unit -> REFUSED 24h soak exit 1"
   else
     echo "  bad  - check fresh feature unit expected rc=1 with soak refusal, got rc=$rc ($out)"
@@ -2054,7 +2054,7 @@ EOF
   # 3c. Check on DEPENDENT SOAK unit (#400) -> exits 1 REFUSED HELD_DEPENDENT_SOAK
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "400" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_DEPENDENT_SOAK"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_DEPENDENT_SOAK"; then
     ok "check dependent soak unit -> REFUSED HELD_DEPENDENT_SOAK exit 1"
   else
     echo "  bad  - check dependent soak unit expected rc=1 HELD_DEPENDENT_SOAK, got rc=$rc ($out)"
@@ -2064,7 +2064,7 @@ EOF
   # 3d. Check on ACTIVE LANE CONFLICT unit (#500) -> exits 1 REFUSED HELD_IN_FLIGHT_LANE
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_IN_FLIGHT_LANE"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_IN_FLIGHT_LANE"; then
     ok "check in-flight lane conflict -> REFUSED HELD_IN_FLIGHT_LANE exit 1"
   else
     echo "  bad  - check in-flight lane conflict expected rc=1 HELD_IN_FLIGHT_LANE, got rc=$rc ($out)"
@@ -2078,8 +2078,8 @@ EOF
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
   fence_count="$(printf '%s\n' "$out" | grep -c 'HELD_IN_FLIGHT_LANE' || true)"
   if [ "$rc" -eq 1 ] && [ "$fence_count" -eq 2 ] \
-     && echo "$out" | grep -q 'claim #600' \
-     && echo "$out" | grep -q 'claim #704'; then
+     && oc_has "$out" 'claim #600' \
+     && oc_has "$out" 'claim #704'; then
     ok "full in-flight fence set: all overlapping claims reported (#533)"
   else
     echo "  bad  - full fence set expected rc=1 and claims #600/#704, got rc=$rc count=$fence_count ($out)"
@@ -2100,7 +2100,7 @@ EOF
   #      issue would take the own-claim `continue` branch and pass vacuously.
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "501" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "check registry-only in-flight overlap -> ELIGIBLE exit 0 (shared-registry exemption)"
   else
     echo "  bad  - check registry-only overlap expected rc=0 ELIGIBLE, got rc=$rc ($out)"
@@ -2120,10 +2120,10 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "702" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] \
-     && echo "$out" | grep -q "within 24h feature soak window" \
-     && echo "$out" | grep -q "HELD_IN_FLIGHT_LANE" \
-     && echo "$out" | grep -q "NOTE: 2 refusal legs apply" \
-     && echo "$out" | grep -q "binds the SOAK leg ONLY"; then
+     && oc_has "$out" "within 24h feature soak window" \
+     && oc_has "$out" "HELD_IN_FLIGHT_LANE" \
+     && oc_has "$out" "NOTE: 2 refusal legs apply" \
+     && oc_has "$out" "binds the SOAK leg ONLY"; then
     ok "multi-leg refusal: both legs reported, eligible_at qualified (#493)"
   else
     echo "  bad  - multi-leg refusal expected rc=1 with soak + HELD_IN_FLIGHT_LANE + NOTE, got rc=$rc ($out)"
@@ -2137,8 +2137,8 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "300" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] \
-     && echo "$out" | grep -q "within 24h feature soak window" \
-     && ! echo "$out" | grep -q "refusal legs apply"; then
+     && oc_has "$out" "within 24h feature soak window" \
+     && ! oc_has "$out" "refusal legs apply"; then
     ok "single-leg refusal: no multi-leg NOTE printed (control for #493)"
   else
     echo "  bad  - single-leg refusal expected rc=1 and no NOTE, got rc=$rc ($out)"
@@ -2155,8 +2155,8 @@ EOF
   export OC_LEDGER_DB="$mock_live_db"
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'holder_age=1.0h' \
-     && ! echo "$out" | grep -q 'DORMANT'; then
+  if [ "$rc" -eq 1 ] && grep -q 'holder_age=1.0h' <<< "$out" \
+     && ! oc_has "$out" 'DORMANT'; then
     ok "live holder fence reports age without DORMANT"
   else
     echo "  bad  - live holder expected rc=1 with age and no DORMANT, got rc=$rc ($out)"
@@ -2165,8 +2165,8 @@ EOF
   export OC_LEDGER_DB="$mock_dormant_db"
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'DORMANT' \
-     && echo "$out" | grep -q 'review/release dormant holder claim'; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" 'DORMANT' \
+     && oc_has "$out" 'review/release dormant holder claim'; then
     ok "dormant holder fence remains refusal with advisory"
   else
     echo "  bad  - dormant holder expected rc=1 with DORMANT advisory, got rc=$rc ($out)"
@@ -2181,8 +2181,8 @@ EOF
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "500" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] \
-     && echo "$out" | grep -q 'mutual in-flight cycle #500 <-> #600' \
-     && echo "$out" | grep -q 'older claim #500 keeps, newer yields'; then
+     && oc_has "$out" 'mutual in-flight cycle #500 <-> #600' \
+     && oc_has "$out" 'older claim #500 keeps, newer yields'; then
     ok "mutual cycle named with deterministic precedence (#535)"
   else
     echo "  bad  - cycle note expected rc=1 with cycle + precedence, got rc=$rc ($out)"
@@ -2190,7 +2190,7 @@ EOF
   fi
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "400" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && ! echo "$out" | grep -q 'mutual in-flight cycle'; then
+  if [ "$rc" -eq 1 ] && ! oc_has "$out" 'mutual in-flight cycle'; then
     ok "no cycle note without an own claim (control for #535)"
   else
     echo "  bad  - control expected rc=1 and no cycle note, got rc=$rc ($out)"
@@ -2236,7 +2236,7 @@ BLKEOF
   rc=0
   out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_blocker" OC_PLAN_DIRS="$plan_dir" \
         run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'blocker holds'; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" 'blocker holds'; then
     ok "leg (v) design-gate: plan approved_at=null -> blocker holds NOTE (#536)"
   else
     echo "  bad  - leg (v) design-gate hold expected rc=1 + 'blocker holds', got rc=$rc ($out)"
@@ -2249,7 +2249,7 @@ BLKEOF
   rc=0
   out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_blocker" OC_PLAN_DIRS="$plan_dir" \
         run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'recorded blocker has EXPIRED'; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" 'recorded blocker has EXPIRED'; then
     ok "leg (v) design-gate: plan approved -> blocker EXPIRED note, rc STILL 1 (#536)"
   else
     echo "  bad  - leg (v) expired design gate expected rc=1 + EXPIRED, got rc=$rc ($out)"
@@ -2268,7 +2268,7 @@ FLTEOF
   rc=0
   out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_flight" \
         run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'blocker may have EXPIRED'; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" 'blocker may have EXPIRED'; then
     ok "leg (v) code-in-flight: paths moved on origin/main -> may-EXPIRED note (#536)"
   else
     echo "  bad  - leg (v) flight-touched expected rc=1 + may-EXPIRED, got rc=$rc ($out)"
@@ -2287,7 +2287,7 @@ FLT2EOF
   rc=0
   out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_flight2" \
         run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'blocker holds'; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" 'blocker holds'; then
     ok "leg (v) code-in-flight control: no movement -> blocker holds (#536)"
   else
     echo "  bad  - leg (v) flight-untouched expected rc=1 + holds, got rc=$rc ($out)"
@@ -2306,7 +2306,7 @@ SKPEOF
   rc=0
   out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_skip" OC_PLAN_DIRS="$plan_dir" \
         run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'blocker NOT re-validated (skip)'; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" 'blocker NOT re-validated (skip)'; then
     ok "leg (v) unparseable blocker prints the SKIP DISCLOSURE, not a clean result (#536)"
   else
     echo "  bad  - leg (v) skip disclosure expected rc=1 + skip text, got rc=$rc ($out)"
@@ -2325,7 +2325,7 @@ NOTEOF
   rc=0
   out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_noflux" \
         run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "500" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q 'records no filing time'; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" 'records no filing time'; then
     ok "leg (v) in-flight without a filing time -> skip, never an unbounded window (#536)"
   else
     echo "  bad  - leg (v) no-filing-time expected rc=1 + skip text, got rc=$rc ($out)"
@@ -2336,7 +2336,7 @@ NOTEOF
   rc=0
   out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_blocker" OC_PLAN_DIRS="$plan_dir" \
         run_engine "check" "mock/repo" "$blocker_repo" "$mock_reg" "400" 2>&1)" || rc=$?
-  if ! echo "$out" | grep -q 'NOTE(blocker)'; then
+  if ! oc_has "$out" 'NOTE(blocker)'; then
     ok "leg (v) note appears ONLY beside its own fence (no fence -> no note) (#536)"
   else
     echo "  bad  - leg (v) blocker note printed without a fence ($out)"
@@ -2374,7 +2374,7 @@ PROSEEOF
 PROSEEOF
   rc=0
   out="$(OC_HARVEST_MOCK_LEDGER="$mock_ledger_prose" OC_HARVEST_MOCK_COMMITS="$mock_commits_prose" run_engine "check" "mock/repo" "$prose_repo" "$mock_reg" "701" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "prose-only mention does NOT fence a no-files claim (#307 negative control)"
   else
     echo "  bad  - prose-only mention must NOT fence, got rc=$rc ($out)"
@@ -2384,7 +2384,7 @@ PROSEEOF
   # 4. Check on CLOSED issue (#111) -> exits 0 ELIGIBLE_REWORK
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "111" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE_REWORK"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE_REWORK"; then
     ok "check closed unit -> ELIGIBLE_REWORK exit 0"
   else
     echo "  bad  - check closed unit expected rc=0, got rc=$rc ($out)"
@@ -2404,7 +2404,7 @@ PROSEEOF
   # 6. Scan outputs clean summary
   rc=0
   out="$(run_engine "scan" "mock/repo" "$selftest_tmp" "$mock_reg" "" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Upstream In-Flight PRs (1 open)"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "Upstream In-Flight PRs (1 open)"; then
     ok "scan classified output clean"
   else
     echo "  bad  - scan expected rc=0 with classified output, got rc=$rc ($out)"
@@ -2429,7 +2429,7 @@ PROSEEOF
   # 8. Check consults manual records
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "test-unit" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "manually recorded as filed in PR #999999"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "manually recorded as filed in PR #999999"; then
     ok "check consults manual records -> REFUSED exit 1"
   else
     echo "  bad  - check manual records expected rc=1, got rc=$rc ($out)"
@@ -2439,7 +2439,7 @@ PROSEEOF
   # 9. Unrelated target still ELIGIBLE with manual records
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "200" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "unrelated target still ELIGIBLE with manual records present"
   else
     echo "  bad  - unrelated target expected rc=0 ELIGIBLE, got rc=$rc ($out)"
@@ -2449,7 +2449,7 @@ PROSEEOF
   # 10. SHA prefix lookup tests
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "8888888" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "within 24h feature soak window"; then
     ok "sha lookup for fresh feature -> REFUSED 24h soak exit 1"
   else
     echo "  bad  - sha lookup for fresh feature expected rc=1 soak, got rc=$rc ($out)"
@@ -2458,7 +2458,7 @@ PROSEEOF
 
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "9999999" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "sha lookup for mature feature -> ELIGIBLE exit 0"
   else
     echo "  bad  - sha lookup for mature feature expected rc=0, got rc=$rc ($out)"
@@ -2468,7 +2468,7 @@ PROSEEOF
   # 11. Closed PR rework for fresh feature
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "112" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "within 24h feature soak window"; then
     ok "closed PR fresh feature -> REFUSED 24h soak exit 1"
   else
     echo "  bad  - closed PR fresh feature expected rc=1 soak, got rc=$rc ($out)"
@@ -2478,7 +2478,7 @@ PROSEEOF
   # 12. Closed PR that was squash-merged into upstream main (#133 / PR #1556) -> REFUSED MERGED exit 1
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "133" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "REFUSED: Target 133 is already MERGED upstream in PR #1556"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "REFUSED: Target 133 is already MERGED upstream in PR #1556"; then
     ok "closed PR squash-merged upstream -> REFUSED MERGED exit 1"
   else
     echo "  bad  - closed PR squash-merged upstream expected rc=1 REFUSED MERGED, got rc=$rc ($out)"
@@ -2490,7 +2490,7 @@ PROSEEOF
   # reported defect: a bogus HELD_DEPENDENT_SOAK for a 3-digit target).
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "262" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "#323 issue number is not a sha prefix -> ELIGIBLE exit 0"
   else
     echo "  bad  - #323 sha-prefix collision expected rc=0, got rc=$rc ($out)"
@@ -2502,7 +2502,7 @@ PROSEEOF
   # substring test answered a query for issue 192 with a marker for 24c192a5.
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "192" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "#323 issue number is not a subject substring -> ELIGIBLE exit 0"
   else
     echo "  bad  - #323 swap-marker subject collision expected rc=0, got rc=$rc ($out)"
@@ -2512,7 +2512,7 @@ PROSEEOF
   # 15. #323: a date stamp in the subject is not an issue reference.
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "202" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "#323 date stamp is not an issue reference -> ELIGIBLE exit 0"
   else
     echo "  bad  - #323 date-stamp subject collision expected rc=0, got rc=$rc ($out)"
@@ -2527,7 +2527,7 @@ PROSEEOF
   # must not attribute the commit to that issue.
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "429" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "#323 prose numeral is not an issue reference -> ELIGIBLE exit 0"
   else
     echo "  bad  - #323 prose-numeral fallback collision expected rc=0, got rc=$rc ($out)"
@@ -2540,7 +2540,7 @@ PROSEEOF
   # had simply been disabled.
   rc=0
   out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "271" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_DEPENDENT_SOAK"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_DEPENDENT_SOAK"; then
     ok "#323 explicit #n citation still matches -> HELD_DEPENDENT_SOAK exit 1"
   else
     echo "  bad  - positive control expected rc=1 HELD_DEPENDENT_SOAK, got rc=$rc ($out)"
@@ -2550,7 +2550,7 @@ PROSEEOF
   # 22. purge --dry-run lists the fixture row but leaves the registry intact
   rc=0
   out="$(bash "$0" purge --unit "test-unit" --state-file "$mock_reg" --dry-run 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "DRY-RUN: 1 of 1" && grep -q "test-unit" "$mock_reg"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "DRY-RUN: 1 of 1" && grep -q "test-unit" "$mock_reg"; then
     ok "purge --dry-run reports without removing"
   else
     echo "  bad  - purge --dry-run expected rc=0 + intact registry, got rc=$rc ($out)"
@@ -2560,7 +2560,7 @@ PROSEEOF
   # 23. purge removes the row; the manual-records gate stops refusing
   rc=0
   out="$(bash "$0" purge --unit "test-unit" --state-file "$mock_reg" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Purged 1 of 1"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "Purged 1 of 1"; then
     ok "purge removes matching manual_records row"
   else
     echo "  bad  - purge expected rc=0 with 1 removed, got rc=$rc ($out)"
@@ -2604,7 +2604,7 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_harvested" "$selftest_tmp/mock_reg_fx.json" "901" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE"; then
     ok "class-2 sub-rule: harvested parent falls through -> ELIGIBLE"
   else
     echo "  bad  - harvested-parent fixture expected rc=0 ELIGIBLE, got rc=$rc ($out)"
@@ -2627,7 +2627,7 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_unharvested" "$selftest_tmp/mock_reg_fx.json" "901" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_PARENT_UNHARVESTED"; then
     ok "class-2 sub-rule negative control: unharvested parent still REFUSED"
   else
     echo "  bad  - unharvested-parent fixture expected rc=1 HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
@@ -2655,7 +2655,7 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_nosym" "$selftest_tmp/mock_reg_fx.json" "902" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "UPSTREAM_VOID" && echo "$out" | grep -q "no declared subject"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "UPSTREAM_VOID" && oc_has "$out" "no declared subject"; then
     ok "declared-subject fallback: no symbol + no declaration -> REFUSED"
   else
     echo "  bad  - nosym no-declaration expected rc=1 UPSTREAM_VOID, got rc=$rc ($out)"
@@ -2667,7 +2667,7 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_nosym_subj" "$selftest_tmp/mock_reg_fx.json" "902" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE" && echo "$out" | grep -q "DECLARED subject"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE" && oc_has "$out" "DECLARED subject"; then
     ok "declared-subject fallback: Subject: trailer present upstream -> ELIGIBLE"
   else
     echo "  bad  - nosym Subject-trailer expected rc=0 ELIGIBLE, got rc=$rc ($out)"
@@ -2679,7 +2679,7 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_nosym" "$selftest_tmp/mock_reg_fx.json" "902" "base_fn" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE" && echo "$out" | grep -q "DECLARED subject"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE" && oc_has "$out" "DECLARED subject"; then
     ok "declared-subject fallback: --subject argument present upstream -> ELIGIBLE"
   else
     echo "  bad  - nosym --subject expected rc=0 ELIGIBLE, got rc=$rc ($out)"
@@ -2692,7 +2692,7 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_nosym" "$selftest_tmp/mock_reg_fx.json" "902" "no_such_symbol_9f2a" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "not present in adolfousier/main"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "not present in adolfousier/main"; then
     ok "declared-subject fallback negative control: absent declaration still REFUSED"
   else
     echo "  bad  - nosym absent-declaration expected rc=1, got rc=$rc ($out)"
@@ -2723,8 +2723,8 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_subj_absent" "$selftest_tmp/mock_reg_fx.json" "904" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "UPSTREAM_VOID: tested fork_only_fn" \
-     && ! echo "$out" | grep -q "none derived"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "UPSTREAM_VOID: tested fork_only_fn" \
+     && ! oc_has "$out" "none derived"; then
     ok "#253 shape: files upstream + subject absent -> REFUSED UPSTREAM_VOID (case (a))"
   else
     echo "  bad  - subject-absent fixture expected rc=1 UPSTREAM_VOID: tested fork_only_fn and NOT 'none derived', got rc=$rc ($out)"
@@ -2741,9 +2741,9 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_orphan_subj" "$selftest_tmp/mock_reg_fx.json" "905" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE" \
-     && echo "$out" | grep -q "ADVISORY: orphan path src/orphan_test.rs" \
-     && ! echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE" \
+     && grep -q "ADVISORY: orphan path src/orphan_test.rs" <<< "$out" \
+     && ! oc_has "$out" "HELD_PARENT_UNHARVESTED"; then
     ok "#341 shape: orphan path + subject upstream -> ELIGIBLE with orphan ADVISORY"
   else
     echo "  bad  - orphan-subject fixture expected rc=0 ELIGIBLE + orphan ADVISORY + no HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
@@ -2772,9 +2772,9 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_harv33" "$selftest_tmp/mock_reg_fx.json" "901" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "ELIGIBLE" \
-     && echo "$out" | grep -q "parent #900 already harvested" \
-     && ! echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "ELIGIBLE" \
+     && oc_has "$out" "parent #900 already harvested" \
+     && ! oc_has "$out" "HELD_PARENT_UNHARVESTED"; then
     ok "parent-harvested shape: sub-rule fires and NAMES the harvested parent #900"
   else
     echo "  bad  - harvested-parent fixture expected rc=0 ELIGIBLE + 'parent #900 already harvested' + no HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
@@ -2791,8 +2791,8 @@ PROSEEOF
   out="$(OC_HARVEST_MOCK_PRS='[]' OC_HARVEST_MOCK_COMMITS='' OC_HARVEST_MOCK_SQUASHED='' \
         OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
         run_engine "check" "mock/repo" "$fx_nosym34" "$selftest_tmp/mock_reg_fx.json" "902" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "tested none derived" \
-     && echo "$out" | grep -q "no declared subject"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "tested none derived" \
+     && oc_has "$out" "no declared subject"; then
     ok "inconclusive shape: derivation reported EMPTY ('tested none derived') + no declared subject"
   else
     echo "  bad  - inconclusive fixture expected rc=1 'tested none derived' + 'no declared subject', got rc=$rc ($out)"
@@ -2863,8 +2863,8 @@ PROSEEOF
   out="$(STATE_DIR="$fx_anchor_state" OC_HARVEST_NOW_TS=1789633800 \
         OC_HARVEST_MOCK_COMMITS="$fx_anchor_state/mock_commits_anchor.json" \
         run_engine "check" "mock/repo" "$fx_anchor" "$fx_anchor_state/mock_reg_anchor.json" "9904" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window" \
-     && echo "$out" | grep -q "age: 0.3h"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "within 24h feature soak window" \
+     && grep -q "age: 0.3h" <<< "$out"; then
     ok "soak anchor: a resolved swap anchor survives a foreign earlier smoke row (smoke fallback only at ts==0, #415)"
   else
     echo "  bad  - anchor fixture expected rc=1 'within 24h feature soak window' 'age: 0.3h', got rc=$rc ($out)"
@@ -2945,8 +2945,8 @@ PROSEEOF
   out="$(STATE_DIR="$fx_sm_state" OC_HARVEST_NOW_TS=1789010000 \
         OC_HARVEST_MOCK_COMMITS="$fx_sm_state/mock_commits_smoke.json" \
         run_engine "check" "mock/repo" "$fx_sm" "$fx_sm_state/mock_reg_smoke.json" "341" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "within 24h feature soak window" \
-     && echo "$out" | grep -q "age: 3.2h"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "within 24h feature soak window" \
+     && grep -q "age: 3.2h" <<< "$out"; then
     ok "smoke field precedence: a field reading issue=#402 does not anchor 341 from its prose (#415)"
   else
     echo "  bad  - smoke precedence fixture expected rc=1 'within 24h feature soak window' 'age: 3.2h', got rc=$rc ($out)"

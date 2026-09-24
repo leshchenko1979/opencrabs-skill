@@ -1388,7 +1388,7 @@ EOF
   # 1. Test #95 (empty diff vs adolfousier/main) -> REJECTED (rc 1)
   rc=0
   out="$(run_engine "vet" "$commit_95" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "ALREADY_MERGED_EMPTY_DIFF"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "ALREADY_MERGED_EMPTY_DIFF"; then
     echo "  ok 1 - vet #95 (empty diff) -> REJECTED exit 1"
   else
     echo "  bad 1 - vet #95 expected rc=1 ALREADY_MERGED_EMPTY_DIFF, got rc=$rc ($out)"
@@ -1398,7 +1398,7 @@ EOF
   # 2. Test #82 (patch-id / ancestor of upstream) -> REJECTED (rc 1)
   rc=0
   out="$(run_engine "vet" "$fork_commit_82" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "ALREADY_MERGED"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "ALREADY_MERGED"; then
     echo "  ok 2 - vet #82 (patch-id match) -> REJECTED exit 1"
   else
     echo "  bad 2 - vet #82 expected rc=1 ALREADY_MERGED, got rc=$rc ($out)"
@@ -1408,7 +1408,7 @@ EOF
   # 3. Test #52 (superseded audit) -> REJECTED (rc 1)
   rc=0
   out="$(run_engine "vet" "52" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "SUPERSEDED"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "SUPERSEDED"; then
     echo "  ok 3 - vet #52 (superseded) -> REJECTED exit 1"
   else
     echo "  bad 3 - vet #52 expected rc=1 SUPERSEDED, got rc=$rc ($out)"
@@ -1420,7 +1420,7 @@ EOF
   export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
   export OC_HARVEST_NOW_TS="1789010000"
   out="$(run_engine "vet" "$commit_83" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "APPROVED"; then
     echo "  ok 4 - vet #83 (novel diff) -> APPROVED exit 0"
   else
     echo "  bad 4 - vet #83 expected rc=0 APPROVED, got rc=$rc ($out)"
@@ -1432,7 +1432,7 @@ EOF
   export OC_HARVEST_MOCK_DEPLOYED_TS="1789000000"
   export OC_HARVEST_NOW_TS="1789010000"
   out="$(run_engine "vet" "$commit_300" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "SOAK_GATE_VIOLATION"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "SOAK_GATE_VIOLATION"; then
     echo "  ok 4b - vet #300 (fresh feat within soak window) -> REJECTED exit 1"
   else
     echo "  bad 4b - vet #300 expected rc=1 SOAK_GATE_VIOLATION, got rc=$rc ($out)"
@@ -1544,7 +1544,7 @@ EOF
 
   rc=0
   out="$(run_engine "vet" "$new_twin_sha" "$rebase_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "APPROVED"; then
     echo "  ok 4c - vet rebased twin -> APPROVED on pre-rebase swap (guards --stable patch-id mode + duplicate-sha dedup)"
   else
     echo "  bad 4c - vet rebased twin expected rc=0 APPROVED via twin fallback (guards patch-id --stable mode AND duplicate-sha dedup), got rc=$rc ($out)"
@@ -1553,7 +1553,7 @@ EOF
 
   rc=0
   out="$(run_engine "vet" "$new_fresh_sha" "$rebase_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "SOAK_GATE_VIOLATION"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "SOAK_GATE_VIOLATION"; then
     echo "  ok 4d - vet genuinely new post-rebase feat -> SOAK_GATE_VIOLATION exit 1"
   else
     echo "  bad 4d - vet new post-rebase feat expected rc=1 SOAK_GATE_VIOLATION (no twin), got rc=$rc ($out)"
@@ -1574,7 +1574,7 @@ EOF
 
   rc=0
   out="$(run_engine "vet" "$shifted_sha" "$rebase_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "APPROVED"; then
     echo "  ok 4e - vet rebased feat with changed patch-id -> APPROVED via smoke-verdicts.log issue-ref anchor (#292)"
   else
     echo "  bad 4e - vet rebased feat with changed patch-id expected rc=0 APPROVED via smoke-verdicts.log (#292), got rc=$rc ($out)"
@@ -1614,7 +1614,7 @@ EOF
 
   rc=0
   out="$(run_engine "vet" "$anchor_sha" "$anchor_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "SOAK_GATE_VIOLATION" && echo "$out" | grep -q "age: 0.3h"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "SOAK_GATE_VIOLATION" && grep -q "age: 0.3h" <<< "$out"; then
     echo "  ok 4f - a resolved swap anchor survives a foreign earlier smoke row (smoke fallback only at ts==0, #415)"
   else
     echo "  bad 4f - swap anchor must outrank a foreign earlier smoke row (want rc=1 SOAK_GATE_VIOLATION age: 0.3h), got rc=$rc ($out)"
@@ -1627,7 +1627,7 @@ EOF
   # 5. Dispatch to busy lane -> CAPACITY_EXHAUSTED (rc 4)
   rc=0
   out="$(run_engine "dispatch" "83" "$commit_83" "11111111-1111-1111-1111-111111111111" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "false" "true" 2>&1)" || rc=$?
-  if [ "$rc" -eq 4 ] && echo "$out" | grep -q "CAPACITY_EXHAUSTED"; then
+  if [ "$rc" -eq 4 ] && oc_has "$out" "CAPACITY_EXHAUSTED"; then
     echo "  ok 5 - dispatch to busy lane -> CAPACITY_EXHAUSTED exit 4"
   else
     echo "  bad 5 - dispatch to busy lane expected rc=4 CAPACITY_EXHAUSTED, got rc=$rc ($out)"
@@ -1638,7 +1638,7 @@ EOF
   rc=0
   export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
   out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "false" "true" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "22222222-2222-2222-2222-222222222222"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "22222222-2222-2222-2222-222222222222"; then
     echo "  ok 6 - dispatch auto-selects idle lane -> SUCCESS exit 0"
   else
     echo "  bad 6 - dispatch auto-selects idle lane expected rc=0 with idle editor, got rc=$rc ($out)"
@@ -1662,19 +1662,19 @@ EOF
   rm -f "$cursor_file"
   export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
   out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$spread_ledger" "false" "true" 2>&1)"
-  if ! echo "$out" | grep -q "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"; then
+  if ! oc_has "$out" "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"; then
     echo "  bad 6b - lane spread: no cursor should pick the first ordered lane, got: $out"
     return 1
   fi
   printf 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\n' > "$cursor_file"
   out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$spread_ledger" "false" "true" 2>&1)"
-  if ! echo "$out" | grep -q "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"; then
+  if ! oc_has "$out" "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"; then
     echo "  bad 6b - lane spread: cursor on aaaa should rotate to bbbb, got: $out"
     return 1
   fi
   printf 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\n' > "$cursor_file"
   out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$spread_ledger" "false" "true" 2>&1)"
-  if echo "$out" | grep -q "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"; then
+  if oc_has "$out" "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"; then
     echo "  ok 6b - lane spread rotates across idle lanes (head -> bbbb -> wrap to aaaa)"
   else
     echo "  bad 6b - lane spread: cursor on bbbb should wrap to aaaa, got: $out"
@@ -1850,7 +1850,7 @@ EOF
 
   rc=0
   out="$(run_engine "vet" "$commit_501" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_PARENT_UNHARVESTED"; then
     echo "  ok 8b - vet #501 (unharvested parent) -> REJECTED HELD_PARENT_UNHARVESTED exit 1"
   else
     echo "  bad 8b - vet #501 expected rc=1 HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
@@ -1859,7 +1859,7 @@ EOF
 
   rc=0
   out="$(run_engine "vet" "$commit_502" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_BLOCKED_BY_DEPENDENCY"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_BLOCKED_BY_DEPENDENCY"; then
     echo "  ok 8c - vet #502 (unharvested blocker) -> REJECTED HELD_BLOCKED_BY_DEPENDENCY exit 1"
   else
     echo "  bad 8c - vet #502 expected rc=1 HELD_BLOCKED_BY_DEPENDENCY, got rc=$rc ($out)"
@@ -1868,7 +1868,7 @@ EOF
 
   rc=0
   out="$(run_engine "vet" "$commit_503" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "APPROVED"; then
     echo "  ok 8d - vet #503 (merged parent/blocker) -> APPROVED exit 0"
   else
     echo "  bad 8d - vet #503 expected rc=0 APPROVED, got rc=$rc ($out)"
@@ -1878,7 +1878,7 @@ EOF
   # 8e. Test dispatch with --draft flag
   rc=0
   out="$(run_engine "dispatch" "503" "$commit_503" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "true" "true" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Draft: true (--draft)"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "Draft: true (--draft)"; then
     echo "  ok 8e - dispatch with --draft -> envelope carries Draft: true exit 0"
   else
     echo "  bad 8e - dispatch with --draft expected Draft: true in envelope, got rc=$rc ($out)"
@@ -1897,7 +1897,7 @@ EOF
 
   rc=0
   out="$(run_engine "vet" "$commit_188" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && echo "$out" | grep -q "HELD_PARENT_UNHARVESTED"; then
+  if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_PARENT_UNHARVESTED"; then
     echo "  ok 8f - vet #188 (deleting path introduced by unharvested fork commit #126) -> REJECTED HELD_PARENT_UNHARVESTED exit 1"
   else
     echo "  bad 8f - vet #188 expected rc=1 HELD_PARENT_UNHARVESTED, got rc=$rc ($out)"
@@ -1932,7 +1932,7 @@ EOF
   export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
   rc=0
   out="$(run_engine "vet" "$commit_601" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "APPROVED" && echo "$out" | grep -q "ADVISORY" && ! echo "$out" | grep -q "UPSTREAM_VOID"; then
+  if [ "$rc" -eq 0 ] && oc_has "$out" "APPROVED" && oc_has "$out" "ADVISORY" && ! oc_has "$out" "UPSTREAM_VOID"; then
     echo "  ok 8g - vet #601 (same-issue add+modify, path absent upstream) -> APPROVED with ADVISORY, exit 0"
   else
     echo "  bad 8g - vet #601 expected rc=0 APPROVED + ADVISORY and NO UPSTREAM_VOID, got rc=$rc ($out)"

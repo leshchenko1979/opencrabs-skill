@@ -114,7 +114,7 @@ if [ -n "$PORT" ]; then
   for psha in "${PCS[@]}"; do
     pid="$(git -C "$REPO" show "$psha" --format= -p 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
     if [ -z "$pid" ]; then echo -e "patch-id:$psha\tERROR: cannot compute patch-id (bad sha?)"; rc=1
-    elif echo "$BRANCH_PIDS" | grep -qF "$pid"; then echo -e "patch-id:$psha\tMATCH on $BRANCH"
+    elif oc_has "$BRANCH_PIDS" "$pid"; then echo -e "patch-id:$psha\tMATCH on $BRANCH"
     else echo -e "patch-id:$psha\tNO-MATCH on $BRANCH (not ported yet, or content drifted)"; rc=1; fi
   done
 fi
