@@ -1,5 +1,19 @@
 # Changelog — opencrabs-dev
 
+## v0.4.246 (2026-09-24)
+
+**Two law clauses from one Triage cycle: the SCOPE path test is a PREFIX test and the named path is EXISTENCE-TESTED, and an UNATTENDED session must not open a plan.**
+
+The two findings share one shape — a claim made without reading the object it is about. The patrol bucketed an in-scope issue out on a path it never resolved; and a cron worker re-asserted a blocker about a card that does not exist, for a third consecutive cycle.
+
+**Scope (Triage n=10690, item 1).** `triage.md` §Duty T4 now says `tools/**` means ANY path under `tools/` — `tools/lib/oc-notify.sh` is exactly as in-scope as `tools/oc-deploy`, and a reader testing only for the `tools/oc-*` shape buckets a genuine `tools/**` fix OUT — and that the named path must be **EXISTENCE-TESTED** (`git ls-files`), so a `tools/` string in prose is not mistaken for a fix surface. Verified first-hand before writing: `#433`'s body names `tools/lib/oc-notify.sh`, which exists (**7034 B**) and is tracked in the skill repo (`git ls-files` rc=0), so `#433` is **IN** scope despite the 06:00Z cycle listing it among *"OUT-OF-SCOPE INVERSIONS"* as *"surface not pinned in the body"*; of that cycle's declared *"three out-of-scope wires"* only **two** (`#419`, `#471`) were out of scope. The cron prompt carries the same line, so the executor cannot re-invert it.
+
+**Unattended plans (`fleet-directives.md`; origin [#510](https://github.com/leshchenko1979/opencrabs/issues/510), Triage item 2).** A session with **no channel binding** has no approval surface: `plan init` returns its own *"ask the user to approve"* guidance, the model complies and ends the turn, and the plan sits `Editing` with `approved_at: null` forever because no card exists to carry the tap. Measured on this profile: **6** plans in that state, **every one with 0 `plan_cards` rows AND 0 `session_bindings`** — four cron workers (`0af22fbc`, `b246ddbd`, `41ca47a9`, `e8389c6b`), one **A2A** session (`9d163421`), and one orphan plan file with no session row. That is **wider than #510's own table** (which names three, all cron) — the class is not cron-only. It is also **self-repeating**: the cron reuses its worker session, so each later fire re-reads the stranded plan and re-reports a blocker no surface can clear, and **three consecutive patrol cycles** closed with *"the plan card in this topic needs an Approve / /execute first"* while `plan_cards` held **zero** rows for that session and that topic (verified: 26 cards, none matching). The clause records that `init mode=checklist` is **not** a mitigation — it ALSO returns to `Editing` pending approval, so the sanctioned choice strands the session too. Tool-side fix stays #510 (plan-tool lane, design-gated); this is the law-side stop, and the patrol prompt now forbids `plan init` outright.
+
+**Bundled commits named in this range:** none — this range carries only this lane's two law commits, and the sweeper's own bookkeeping is skipped by the naming leg's subject rule.
+
+LOC: 3558 -> 3559 (net +1; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `e75e79e7` which reproduces the v0.4.245 entry's 3558 exactly). The whole change is `fleet-directives.md` 669 -> 670; `triage.md` is 402 before and after because the scope clause was EXTENDED in place rather than appended as a new line.
+
 ## v0.4.245 (2026-09-24)
 
 **Two rulings land: a CENSUS must re-validate a claim's recorded blocker, and COHORT ACCOUNTING must be a predicate rather than a hand-built table — and one CHANGELOG ordering defect is fixed in the same entry.**
