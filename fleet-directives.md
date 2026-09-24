@@ -17,7 +17,7 @@
 
 **Thematic index** (lens B-17/G-F9 v0.4.90 — file is flat; jump via section name). **[LANE] tag (v0.4.95):** sections every worker MUST read in full at spawn/compaction reload (editor.md/triage.md/toolsmith.md/hq.md RELOAD LAW v0.4.95). EXCEPTION (v0.4.96, lens B-F1): HQ re-reads THIS ENTIRE FILE IN FULL — it owns and rules on the directives; the other three roles may use this thematic-index minimum for non-[LANE] sections.
 
-**Owner holds & gates:** **Owner Push Freeze** (soaking groups held from upstream harvest) · **Discussion links + fix-approval gate** · **Stage-entry consent** · **Guard-Flag Escalation Law** · **Full-Gate Pre-PR Testing Law** · **Docs-Only LEG1 Gate Skip** · **Owner-Dependent Smoke Legs**
+**Owner holds & gates:** **Owner Push Freeze — RETIRED** (see its section; now SOAKING + global DEGRADED freeze) · **Discussion links + fix-approval gate** · **Stage-entry consent** · **Guard-Flag Escalation Law** · **Full-Gate Pre-PR Testing Law** · **Docs-Only LEG1 Gate Skip** · **Owner-Dependent Smoke Legs**
 
 **Roles & authority:** **Autonomous Priority Authority Law** · **Autonomous Editor Goal & Continuous Phase Execution Law** · **Claim Release & Superseded Plans** · **Early Claim** · **Designated Domain Affinity & Topic Context Focus Law** · **Strict Atomicity & Zero Bundling** · **PR naming convention**
 
@@ -31,73 +31,22 @@
 
 **Reload & orientation:** **Post-compaction skill reload & context manifest curation** · **Every turn ends with a "what now/next?" answer** · **Explain open questions & re-anchor context** · **Daemon no-reap**
 
-## Owner Push Freeze — soaking groups held from upstream harvest (owner order 2026-09-18) [LANE]
+## Owner Push Freeze — RETIRED (owner order 2026-09-24 21:04Z)
 
-**Owner order, verbatim:** *"freeze all these groups from pushing - I want to review them first and will release them later"* (2026-09-18 17:33Z), followed by the first and only release so far: *"Telegram flow cluster T6 - release for harvesting"* (18:01Z).
+**Owner order, verbatim:** *"Remove the freeze register. It's stale. Now the concepts are soaking and degraded state with global harvest freeze"* (OC DEV Factory, Triage topic, 2026-09-24T21:04Z).
 
-**What "these groups" are.** The owner was reading the delivered live-test plan (`/tmp/live-test-plan-2026-09-18.md`, board topic 30220, `msg=67358`) — the soak/test surface of the deployed binary (50 `feat` commits landed since 09-16 00:00). Its groups are the frozen set: **18 T-groups (T1–T18) + 7 Tier-3 items**. One group is released.
+The per-group register is **gone** — its `json` block, the T1–T18 / Tier-3 table, the T3 disputed-release ruling and the pre-freeze-PR ruling are all removed with this order. **Nothing reads a frozen group any more; no lane should look for one.**
 
-| State | Groups |
-|---|---|
-| **FROZEN** — no upstream push / harvest | **17 T-groups:** T1 (#299), T2 (#286), T3 (#291), T4 (#295), T5 (#285), T7 (#280/#289/#258), T8 (#234/#155), T9 (#1629/#233 — **MERGED upstream 2026-09-19 by the maintainer, harvest COMPLETE; ruling below**), T10 (#317), T11 (#247), T12 (#208/#228), T13 (#278), T14 (#298), T15 (#241), T16 (`[agent] default_provider`), T17 (#256), T18 (#150) · **7 Tier-3 items:** #290, #271, cron per-job in-flight guard, #264, #273, repeated-bash nudge, #345 |
-| **RELEASED** — harvest eligible | **T6 — Telegram flow cluster** (#250 🎯 telemetry marker, 🌐/🧠 tool classes, ⏰ cron icon, compact event labels, #232 telemetry bar, queued-message roll tag) |
+**The two concepts that replace it:**
 
-**Machine-readable source of truth (the #358 shape — HQ ruling 2026-09-19).** The block below is the ONLY home of the frozen/released data. Tools read it from HERE — never from the prose table, and never from a second file: a separate state-dir copy would be a second home for law data and would drift, which is precisely the contradiction this block exists to end (see the T3 ruling below). **`law_version` = the `SKILL.md` version at which this block last CHANGED; it is not re-stamped on every bump.**
+| Concept | Home | Meaning |
+|---|---|---|
+| **SOAKING** | `upstream-merge-runbook.md` §24-Hour Feature Soak | unchanged — a feature soaks before its harvest is staged |
+| **DEGRADED = GLOBAL harvest freeze** | `SKILL.md` §MODE REGISTER | under DEGRADED **no** upstream PR group is filed without explicit owner approval — the hold is GLOBAL, not per-group |
 
-**Reader status (2026-09-19): the fail-loud reader does NOT exist yet — this machinery leg is OPEN, not done.** `tools/**` is Toolsmith-owned, so this leg belongs to the Toolsmith lane and the build sits in their queue — the gap was reported to them by the #352 harvest lane on 2026-09-19, and HQ neither wrote the reader here nor dispatched a second copy of the report, because a duplicate report to the same owner is noise, not diligence. **Until it lands, the block is read by humans and the freeze rests on this law text plus lane discipline.** Required behaviour when built: extract the block from HERE and fail LOUD (`OWNER_PUSH_FREEZE_UNREADABLE`) when it is absent or malformed — never fall through to "nothing is frozen", because that direction silently releases all 18 groups. A tool that cannot read the block is NOT a tool that found nothing frozen.
+**Why the register was stale:** its own enforcement leg never existed (the fail-loud reader was never built), its machinery leg was vacuous (`oc-harvest-dispatch-4h` disabled), and MODE=DEGRADED already performed the same hold globally — a second mechanism for one concept. Its bookkeeping was a 2026-09-18 snapshot: T9 merged by the maintainer, one release ever (T6), T3 disputed and unresolved.
 
-```json
-{
-  "law_version": "0.4.221",
-  "owner_order": "2026-09-18 17:33Z",
-  "released": ["T6"],
-  "frozen": {
-    "T1": ["#299"], "T2": ["#286"], "T3": ["#291"], "T4": ["#295"], "T5": ["#285"],
-    "T7": ["#280", "#289", "#258"], "T8": ["#234", "#155"], "T9": ["#1629", "#233"],
-    "T10": ["#317"], "T11": ["#247"], "T12": ["#208", "#228"], "T13": ["#278"],
-    "T14": ["#298"], "T15": ["#241"], "T16": ["[agent] default_provider"],
-    "T17": ["#256"], "T18": ["#150"],
-    "TIER3": ["#290", "#271", "#264", "#273", "#345", "cron per-job in-flight guard", "repeated-bash nudge"]
-  },
-  "disputed_not_released": ["T3"],
-  "merged_by_maintainer": {
-    "T9": {"pr": 1629, "merged_at": "2026-09-19T16:18:50Z", "merged_by": "adolfousier",
-           "merge_commit": "0d9beb2bad2efa7ba26c9d9fcfbd90ea4b98b080",
-           "head": "9d2c9645a589405df6c4e89d222a7fe06708a0ff", "filed_at": "2026-09-18T02:30:54Z"}
-  }
-}
-```
-
-**T3 (#291) — a claimed release that is NOT a release (HQ ruling 2026-09-19).** Ledger `n=8670` (lane `63d775f9`, 2026-09-19T01:41:34Z) reads the owner's three-word message *"Overrule T3 release"* (2026-09-18 21:45:27Z) as READING (a) — "the freeze does not apply to T3, #291 released for harvest" — and is contradicted by the table above, which still shows T3 FROZEN. The ruling:
-
-- **The law text is authoritative; a ledger `note` is not.** A release is an OWNER action recorded in law, and Rule 2's bar is an *explicit* owner message naming the group "exactly as T6 did" (*"Telegram flow cluster T6 - release for harvesting"*). A lane's reading of an ambiguous message cannot meet that bar, so `n=8670` is an interpretation, not a release, and **T3 remains FROZEN**.
-- **The message is genuinely ambiguous — it parses two OPPOSITE ways** — and the lane's own note says so ("could be read as 'overrule the T3 release' (i.e. deny the release)"). Parsed as an object, "Overrule **T3 release**" annuls the release; parsed as an imperative, it annuls the freeze. The context cuts both ways: the owner had already approved filing at 10:20Z and pushed back on being asked ("What in the rules makes you ask me?"), yet the 17:33Z freeze came *after* that approval, and the question put to him was framed as a binary in which *silence* was the keep-frozen answer.
-- **Cost asymmetry fixes the standing state while it is open.** A wrongly-frozen group costs a delayed harvest — recoverable. A wrongly-released group files an upstream PR for a group the owner said he wanted to review first — not recoverable in the same sense. **Frozen is the only safe default.** Reinforcing it: T3 is the group the owner himself found defective on 2026-09-18 (the tool-roll header), and its fix is still soaking under lane `2ed8adeb`.
-- **The ambiguity is escalated to the owner** as a one-tap (keep frozen / release), and until he answers, **no harvest of #291 or its 21-target set may be staged or filed** — a green census does not change this (Rule 1: soak maturity elapsing is not a release). Whoever holds the owner's answer updates this block, the table above, and `disputed_not_released` in one commit.
-
-**The rule:**
-
-1. **No upstream push of a frozen group.** No upstream PR is filed for a frozen group's commits, and no lane stages one, until the owner releases that group by name. Soak maturity elapsing is not a release.
-2. **Release is an OWNER action, never a lane decision.** A group leaves the freeze only on an explicit owner message naming it — exactly as T6 did. Silence, a green census, a lane's own confidence, an idle editor, **or a lane's reading of an ambiguous owner message** never release a group. The released set grows one named group at a time, and currently holds exactly one member: **T6**. **The record of that action is the `json` block above, not a ledger `note`** — the T3 ruling below is the worked example of a note claiming a release the law does not grant.
-3. **The freeze binds the machinery, not just the prose.** Triage's harvest patrol (`oc-harvest-dispatch-4h`, job id `73158e43-3b04-4464-bf82-8d9065a191bb` — live expr `15 3,9,15,21 * * *`, i.e. every 6h, NOT the 4h this line used to claim; **and currently OFF under the owner's 2026-09-18T20:41:30Z pacemakers-off order**, so this leg is VACUOUS until that order lifts — the patrol cannot dispatch a frozen group while it is not running, and re-arming it is an owner decision, not a lane's) must not dispatch a frozen group; `oc-harvest-census` / `oc-harvest-dispatch` must read a frozen group as NOT harvest-eligible **by reading the `json` block above through the fail-loud reader — which DOES NOT EXIST YET (see the reader-status note above).** Verified 2026-09-19: neither tool contains any freeze awareness, so **a green `oc-harvest-census check <N>` is NOT evidence that a frozen group may be dispatched** — the census does not read the block, and until the reader lands this leg rests on lane discipline alone. An editor holding a frozen group's work stops short of Phase 7 (upstream PR filing).
-4. **This is NOT the carrier FREEZE of `upstream-merge-runbook.md §Remotes & sync` (2).** That one is mechanical (no sync while a carrier chain sits between dispatch and swap). This one is an owner hold on a feature group's harvest. Same word, different concept — write **owner push freeze (harvest hold)** when you mean this one.
-5. **Scope boundary — the freeze holds HARVEST, not development.** Lanes keep fixing, committing, shipping and smoking inside fork `main`; what is withheld is the upstream push of a frozen group. A defect found in a frozen group (e.g. the owner's 2026-09-18 finding that #291 puts the compaction result, not the latest thought, in the tool-roll header) is fixed and re-soaked normally — it stays frozen only at the harvest boundary.
-
-
-**Pre-freeze PRs are NOT reached by the freeze (HQ ruling 2026-09-19, answering the Editor lane "rich-formatting", #1230/#233 bundle).** Upstream PR [adolfousier/opencrabs#1629](https://github.com/adolfousier/opencrabs/pull/1629) — T9's harvest — was **MERGED by the maintainer at 2026-09-19T16:18:50Z** (merge commit `0d9beb2bad2efa7ba26c9d9fcfbd90ea4b98b080`, head `9d2c9645a589405df6c4e89d222a7fe06708a0ff`). It was filed `2026-09-18T02:30:54Z`, i.e. **15 h BEFORE the owner's freeze order** (`2026-09-18 17:33Z`), so no lane push ever happened under the freeze and this merge was `adolfousier`'s own action.
-
-The lane asked whether the freeze reaches a PR filed before it existed. It does not, and it cannot:
-
-- **A filed PR is the maintainer's to merge.** The freeze binds OUR machinery — it withholds *our* upstream push (Rule 1). Once a PR is filed it sits on his side of the wall, and merging it is his act, not a lane's harvest. No lane breached the freeze here.
-- **The filing itself predated the order.** `#1629` was filed 15 h before the freeze existed, so there was no hold for it to violate.
-- **Consequence for this block:** T9 is neither pending-frozen nor ours to harvest — its harvest is COMPLETE. It is recorded in `merged_by_maintainer` in the json block above and is NOT moved to `released`, because `released` means "the owner released this group for US to harvest" (Rule 2) and T9 needed no release: the maintainer had already shipped it.
-- **No heads-up was ever posted to that PR** — verified 2026-09-19: `gh api repos/adolfousier/opencrabs/issues/1629/comments` returns ZERO comments; the only event is the maintainer's own `COMMENTED` review at `2026-09-19T14:51:52Z`, **87 min before he merged**. The heads-up question is therefore MOOT rather than missed: the PR was reviewed and merged on its own merits.
-
-**Fork-side duty for T9 has ENDED** (`editor.md` Phase 6b item 6): #233/#237/#247/#265 carry no further fork maintenance and no fix rounds; all four fork issues are CLOSED.
-
-**Rationale (owner's own words):** *"I want to review them first"* — the soak groups ARE his live-test surface, and harvesting one before he has exercised it upstreams a feature he has not yet accepted.
-
-
+**Fork issue #358 is obsoleted by this removal** — it would build the fail-loud reader for a block that no longer exists.
 
 ## Discussion links + fix-approval gate (owner 2026-08-28 14:28Z)
 
@@ -548,10 +497,13 @@ The owner cannot see which lane is blocked on him: a parked decision exists only
 - **Register in the same turn you park.** A lane whose next action needs an owner decision calls `oc-questions ask` in the SAME turn it stops, naming itself and its ordered question set. A prose "blocked on you" line in the topic is NOT a registration — nothing aggregates it.
 - **The Register is the ONLY sanctioned blocked-on-you channel.** Do not open a parallel mechanism, and do not re-ask in the topic on a daily clock once registered: the register's `asked_at` age is what re-surfaces a question, so a repeated topic ping is noise rather than pressure.
 - **Each question has exactly two required inputs:** `title` and Markdown `description` (tables and Mermaid supported). A question MAY carry `options[]`, a `recommended` default, and a Clarify action; a free-text answer is always available, and Clarify never silently closes the question.
-- **The return address is the CALLING session id.** It must never be replaced by a cron session, a renderer session, or another lane. A card's `callback_data` routes to the session that SENT the card (`telegram_send.rs:1328`), so a substituted id orphans every answer — this is why the renderer runs as a persistent bound lane woken by cron, never as a cron session.
-- **Clearing is explicit.** A question closes when the owner answers it or the lane withdraws it. Silence is not an answer and closes nothing.
+- **The asking session id comes from the ENVIRONMENT, never typed.** `ask` reads `OPENCRABS_SESSION_ID` — the id the daemon set for the calling turn. It must never be replaced by a cron session, a renderer session, or another lane, because a substituted id orphans the answer. `--lane` names the TOPIC, never a uuid.
+- **Decisions are collected on the PAGE, not from card buttons (owner order 2026-09-24).** Cards with tappable buttons are RETIRED: a tap is dropped while the target session is mid-turn (#553, closed not-planned), so the page is the single aggregate surface. `ask` returns the open-question TOTAL and no card. The page posts each decision back to the lane that asked, resolving the destination from the REGISTER by set-id — never from the request body, so a crafted POST cannot redirect an answer.
+- **A Clarify is a request, and the lane owes an amendment.** Clarify never closes a question: its status becomes `clarifying` and the asking lane is notified. The lane MUST then `amend` it (revised title / description / options), which returns it to `open`. A clarifying question left unamended dead-ends the loop and the owner never sees the answer.
+- **Closure is mechanical wherever it can be.** Beyond an explicit answer or withdrawal, a question closes when the thing it asked about has moved: a named fork issue reading CLOSED closes it as `resolved_mechanically`, and an explicit `close_when` predicate closes on rc=0. An unreadable predicate prints a SKIP note and closes nothing — never a silent close. Silence is still not an answer.
+- **The page is re-rendered on every register mutation** — a new question, an answer, a clarify, an amendment — so it is never stale. The twice-daily cron sweeps expiry and mechanical closure; it is NOT the refresh path.
 
-Store: `~/.opencrabs/profiles/ops/questions/open.json`, with answered sets archived to `archive.jsonl`. Tool: `skills/opencrabs-dev/tools/oc-questions` — verbs `ask` · `answer` · `list` · `render` · `publish` · `lint` · `gc` (Toolsmith, `tools/**` carve-out). Fork issue #547 carries the build.
+Store: `~/.opencrabs/profiles/ops/questions/open.json`, with answered sets archived to `archive.jsonl`. Tool: `skills/opencrabs-dev/tools/oc-questions` — verbs `ask` · `answer` · `amend` · `list` · `publish` · `lint` · `gc` (Toolsmith, `tools/**` carve-out). Fork issue #547 carries the build.
 
 ## Upstream PR filing — base CI gate pre-claim (Duty-4 proposal, theme-1 lane, owner-approved 2026-09-06) [LANE]
 
