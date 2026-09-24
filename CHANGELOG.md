@@ -1,5 +1,35 @@
 # Changelog — opencrabs-dev
 
+## v0.4.245 (2026-09-24)
+
+**Two rulings land: a CENSUS must re-validate a claim's recorded blocker, and COHORT ACCOUNTING must be a predicate rather than a hand-built table — and one CHANGELOG ordering defect is fixed in the same entry.**
+
+The census finding is the sharper half because it produced a FALSE STATE, not merely a slow gate. This lane's own Duty-5 ruling (`n=10619`/`n=10620`, 2026-09-23) released two claims while describing one holder as "design-gated" — a free-text qualifier carried in the CLAIM ROW, which nothing re-reads. Measured first-hand after the holder corrected it: all four `#443` commits are ancestors of `origin/main` (`rc=0` each) and the change had SHIPPED before the ruling. So a claim's `what` text is a dated assertion, never live state, and a fence that repeats it verbatim launders a stale premise into a ruling.
+
+- **`triage.md`** — COHORT ACCOUNTING IS A PREDICATE, NOT A HAND-LIST: build the CLAIMED cohort from `oc_claims.open_claims` (`tools/lib/oc_claims.py`) and the DISPATCHED cohort from the dispatcher's own dedup memory; every in-scope issue lands in EXACTLY ONE bucket and the BUCKET TOTAL must equal the COVERAGE LIST, with the reconciliation line printed beside the cohorts. When the two disagree the LIST is wrong, not the buckets. Origin: THREE consecutive cycles shipped a hand-built table; the 2026-09-24 one reported 24 in-scope against its own 20-row coverage list, with `#312`/`#320`/`#363` (each carrying a live open claim) absent from the claimed cohort and `#327` filed as "unclaimed" while carrying live claim `n=8226` — that last one the third appearance of the same misfile.
+
+The census half is law routed to the Toolsmith rather than authored here (it is `tools/** CODE`): the fence must report the FULL set instead of breaking on the first match, bound a holder's liveness, name a mutual fence as ONE structural condition with stated precedence, and — the leg this entry exists for — report whether a fencing claim's RECORDED BLOCKER still holds. Implemented as `be486f38` (#533/#534/#535) and `0aba16bf` (#536); the dormancy treatment is QUALIFY, not CLEAR: the fence still refuses `rc=1` and prints `holder_age` + `DORMANT` + a release ADVISORY, because silently converting a refusal into a pass would undo the gate's whole purpose.
+
+**Instrument defect fixed in this entry — the CHANGELOG was out of order.** `v0.4.244` had been inserted BELOW `v0.4.243`, because its predecessor was anchored on the `v0.4.242` header instead of the file's top. A newest-first record that reads 243-then-244 tells a scanning reader the older entry is current. Reordered here; the cause is the anchor, not the content.
+
+**Bundled commits named in this range:** `be486f38` (#533, #534, #535 — the census fence legs) and `0aba16bf` (#536 — leg (v), the blocker re-validation), both `tools/**` and both the Toolsmith's. The range also carries `6cedb566`, a `runtime-artifacts sweep (B3)` bookkeeping commit with no issue ref by design, which the naming leg's sweeper-subject skip handles.
+
+LOC: 3557 -> 3558 (net +1; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `7efdde84` which reproduces the v0.4.244 entry's 3557 exactly). The whole change is `triage.md` 401 -> 402; no other corpus file changed. The CHANGELOG reorder is a block MOVE, so it does not affect any line count.
+
+## v0.4.244 (2026-09-23)
+
+**One law clause: `oc-ledger events` has a SECOND trap on the same verb — the 160-char body cap.**
+
+`events` caps every row's `what` body at 160 chars and discloses it on **stderr** (`events: N row(s) had 'what' truncated to 160 chars — rerun with --full`). The verb's FIRST trap — the ~21-row default window, which hid rows ENTIRELY — was fixed by the v0.4.241 law; this one hides the BODY of rows the reader can already see. Short values survive the cap (a `MODE:` row reads fine, which is why the MODE read needed no change); a ruling or work order does not — this lane's own `n=10620` work order is 1052 chars, so the default read returns its first 160 and its operative legs are invisible.
+
+The dangerous inference is ABSENCE: on 2026-09-23 a `grep -c` for a branch-name string over the events view returned **0** while `workers-ledger.json` carried it **7** times — a peer lane's correct correction was nearly contradicted on that false zero. The law now says to read a RULING with `--full`, never to conclude a row's absence from a capped read, and notes the disclosure rides **stderr**, so a read that discards stderr is silent and piping stdout alone leaves the warning on a stream the caller may not surface.
+
+Origin: editor lane `aaa8d8ae` corrected this lane's own `n=10619`/`n=10620` ruling records — a `branix/` vs `fix/` branch typo, and a `#443` premise that was stale because the change had SHIPPED before the ruling. Verified first-hand: all four `#443` commits (`7996d1d2e`, `df0035199`, `6c6367bc1`, `22b52d1e3`) are ancestors of `origin/main` (`rc=0` each), `origin/main == deployed.sha == 457ff4ff`, and the smoke row is `smoke-verdicts.log:1421` (`PARKED-OWNER-EYE`, run `35779915751`). The release was correct and overdue, but for the wrong stated reason: the claim's free-text blocker had expired and nothing re-validates it. A leg (v) — report whether a fencing claim's recorded blocker still holds — was routed to the Toolsmith as an addendum to the census work order.
+
+**Bundled commits named in this range:** `28657cf6` (#514), `a1410706` (#518), `b9b5e9a9` (#524) and `3b0008b1` (#528) — four tool fixes the Toolsmith landed after the v0.4.243 entry was written; all four carry issue refs, so all four are named here. The range also carries four `runtime-artifacts sweep (B3)` bookkeeping commits with no issue ref by design, which the naming leg's sweeper-subject skip handles.
+
+LOC: 3557 -> 3557 (net 0; the whole change is one bullet in `fleet-directives.md`, replaced 1:1). Predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `d61b3d52` (the v0.4.243 sync), which reproduces the v0.4.243 entry's 3557 exactly.
+
 ## v0.4.243 (2026-09-23)
 
 **Duty 4 cycle `20260922-c22` lands: seven convergence clusters from 57 claims, plus one instrument defect found while closing.**
@@ -16,20 +46,6 @@ The cycle polled 31/31 lanes and took 22 submissions / 57 claims (47 ACCEPT, 5 A
 **Bundled commits named in this range:** `0c39b940` (#517 — a red battery receipt now carries its transcript) and `873495a2` (#519 — the sync CHANGELOG gate gains a naming leg, WARN) and `e1438109` (#521 — that gate's anchor is pinned to sync commits, with a ledger window cross-check, a sweeper-subject skip and a self-commit skip). The range ALSO carries the sweeper's own bookkeeping commit `10ae2ef7` (`runtime-artifacts sweep (B3)`), which carries no issue ref by design and is not law — named here so the new naming leg's output is self-explaining rather than a mystery hit.
 
 LOC: 3494 -> 3557 (net +63). Predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `2c777374`, which reproduces the v0.4.242 entry's 3494 exactly. The change is `SKILL.md` 659 -> 708 (+49), `fleet-directives.md` 657 -> 669 (+12) and `upstream-merge-runbook.md` 425 -> 427 (+2); `hq.md` is 319 before and after (one line replaced by one line).
-
-## v0.4.244 (2026-09-23)
-
-**One law clause: `oc-ledger events` has a SECOND trap on the same verb — the 160-char body cap.**
-
-`events` caps every row's `what` body at 160 chars and discloses it on **stderr** (`events: N row(s) had 'what' truncated to 160 chars — rerun with --full`). The verb's FIRST trap — the ~21-row default window, which hid rows ENTIRELY — was fixed by the v0.4.241 law; this one hides the BODY of rows the reader can already see. Short values survive the cap (a `MODE:` row reads fine, which is why the MODE read needed no change); a ruling or work order does not — this lane's own `n=10620` work order is 1052 chars, so the default read returns its first 160 and its operative legs are invisible.
-
-The dangerous inference is ABSENCE: on 2026-09-23 a `grep -c` for a branch-name string over the events view returned **0** while `workers-ledger.json` carried it **7** times — a peer lane's correct correction was nearly contradicted on that false zero. The law now says to read a RULING with `--full`, never to conclude a row's absence from a capped read, and notes the disclosure rides **stderr**, so a read that discards stderr is silent and piping stdout alone leaves the warning on a stream the caller may not surface.
-
-Origin: editor lane `aaa8d8ae` corrected this lane's own `n=10619`/`n=10620` ruling records — a `branix/` vs `fix/` branch typo, and a `#443` premise that was stale because the change had SHIPPED before the ruling. Verified first-hand: all four `#443` commits (`7996d1d2e`, `df0035199`, `6c6367bc1`, `22b52d1e3`) are ancestors of `origin/main` (`rc=0` each), `origin/main == deployed.sha == 457ff4ff`, and the smoke row is `smoke-verdicts.log:1421` (`PARKED-OWNER-EYE`, run `35779915751`). The release was correct and overdue, but for the wrong stated reason: the claim's free-text blocker had expired and nothing re-validates it. A leg (v) — report whether a fencing claim's recorded blocker still holds — was routed to the Toolsmith as an addendum to the census work order.
-
-**Bundled commits named in this range:** `28657cf6` (#514), `a1410706` (#518), `b9b5e9a9` (#524) and `3b0008b1` (#528) — four tool fixes the Toolsmith landed after the v0.4.243 entry was written; all four carry issue refs, so all four are named here. The range also carries four `runtime-artifacts sweep (B3)` bookkeeping commits with no issue ref by design, which the naming leg's sweeper-subject skip handles.
-
-LOC: 3557 -> 3557 (net 0; the whole change is one bullet in `fleet-directives.md`, replaced 1:1). Predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `d61b3d52` (the v0.4.243 sync), which reproduces the v0.4.243 entry's 3557 exactly.
 
 ## v0.4.242 (2026-09-22)
 
