@@ -1,5 +1,19 @@
 # Changelog — opencrabs-dev
 
+## v0.4.247 (2026-09-24)
+
+**LEG-SCOPE — both landed arms are ISSUE-scoped by implementation, so ONE leg's `done` marks the WHOLE issue landed, and the remaining legs become undispatchable AND invisible.**
+
+`fleet-directives.md` §D1 now carries the leg-scope clause. Both landed arms — the ledger arm (`ledger_landed_issues()`) and the git arm (`fetch_landed_issues()`) — ask only *"did anything land for #N"*; neither asks *"did EVERY declared leg land"*. On an issue whose scope split names more than one owner, a `done` row stamped for one leg closes the claim (`oc_claims.open_claims(#N)` → **empty**, because `done` is a `LANDED_KIND`) and satisfies the ledger arm *and* the git arm at once, so the issue reads LANDED and every remaining leg can be neither dispatched (`RC_TARGETED_LANDED = 8`; `--allow-landed` is the escape hatch) nor **seen** — every sweep consumes the same predicate. The arms are not fixable one at a time: a leg-aware ledger arm changes nothing while the git arm vetoes on the same number.
+
+**Origin: [#393](https://github.com/leshchenko1979/opencrabs/issues/393)** (owner order 2026-09-19; found by Triage lane `530c29ec`, re-verified first-hand here). The issue's own body names three surfaces with three owners — Editor `src/**`, **Toolsmith `tools/**`**, HQ skill-markdown. The Editor leg landed (`07b6372c4`); the HQ law leg landed; and `done` row **n=10159** ("smoke PASS verified for issue #393") closed the issue for dispatch. Verified: `open_claims(393)` → **0 rows**, and the only landing row targeting 393 is `[(10159,'done')]`. The identity read is masked the same way — the skill-repo index carries #393 via `5b9609b3`, a **LAW** commit whose changed files are `SKILL.md`/`fleet-directives.md`/`hq.md`/`toolsmith.md`, **not one `tools/` file** — which is the existing IDENTITY leg applied per-SURFACE but never per-LEG.
+
+**The Toolsmith leg is unshipped AND actively pinned.** `--interrupt` (the pre-#393 boolean) is still passed by `tools/lib/oc-notify.sh` (the rc-3 retry) and `tools/oc-notify-fanout:1187`, and `tools/oc-deploy`'s selftest **FAILS** if the second verb call lacks `--interrupt` — the old shape is *asserted* — while #393's own target state prescribes `--interrupt` → `--mode interrupt`, live and valid today (`--mode` help: *"turn-end (default) | interrupt | quiet"*). **No ledger row ever claimed a `tools/` leg for #393**: either the migration is owed or its dropping was a decision, and neither is recorded.
+
+**Exposure, and the transferable half.** 46 of the 156 open fork issues carry a landing row (41 of them exactly one) — the population in which a partial landing can mask a leg. And the class was **not** found by any sweep: Triage caught it by re-deriving the cycle's own numbers against **independently asserted** expectations (24 OK / 1 MISMATCH). A sweep that re-derives its own predicate returns the predicate's answer.
+
+LOC: 3559 -> 3572 (net +13; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `7c0cbd2e` which reproduces the v0.4.246 entry's 3559 exactly). The whole change is `fleet-directives.md` 670 -> 683; no other corpus file changed.
+
 ## v0.4.246 (2026-09-24)
 
 **Two law clauses from one Triage cycle: the SCOPE path test is a PREFIX test and the named path is EXISTENCE-TESTED, and an UNATTENDED session must not open a plan.**
