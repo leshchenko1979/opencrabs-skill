@@ -1151,6 +1151,146 @@ def markdown_to_html(text):
         index += 1
     return "\n".join(out)
 
+# ---------------------------------------------------------------- json-render
+# The page is built as a typed SPEC and rendered by a Node process. The catalog
+# in oc-questions-render.mjs is a GUARDRAIL: a spec can only name a component
+# registered there, so an unknown type is rejected rather than rendering
+# nothing. The spec is therefore testable data -- its structure can be asserted
+# without parsing HTML.
+RENDER_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "oc-questions-render.mjs")
+# The Node process needs node_modules beside it, so it runs from the build dir.
+# Overridable so the selftest can point at a scratch tree.
+RENDER_TIMEOUT = 30
+
+def render_dir():
+    return (os.environ.get("OC_QUESTIONS_RENDER_DIR")
+            or os.path.join(store_dir(), "build"))
+
+def build_spec(entries, token, expires_at, action):
+    """The page as a json-render spec. FLAT: every element keyed in `elements`,
+    children are KEYS, and `root` names the top element."""
+    elements = {}
+    set_keys = []
+    for entry in entries:
+        set_id = entry["id"]
+        set_key = "set-" + set_id
+        question_keys = []
+        for question in entry.get("questions", []):
+            if question_is_closed(question):
+                continue
+            qid = question["qid"]
+            base = "%s-%s" % (set_id, qid)
+            options = question.get("options") or []
+            recommended = question.get("recommended")
+            children = [base + "-desc"]
+            for index in range(len(options)):
+                key = "%s-o%d" % (base, index)
+                elements[key] = {
+                    "type": "Option",
+                    "props": {"label": options[index], "value": str(index),
+                              "recommended": index == recommended},
+                    "children": []}
+                children.append(key)
+            children.append(base + "-text")
+            children.append(base + "-submit")
+            if question.get("clarify"):
+                children.append(base + "-clarify")
+            # The description is passed as an ALREADY-RENDERED fragment: the
+            # Markdown path stays in Python (tested, and mermaid.ink is proven),
+            # so a table and a mermaid fence ride through RichText untouched.
+            elements[base + "-desc"] = {
+                "type": "RichText",
+                "props": {"html": markdown_to_html(question.get("description") or "")},
+                "children": []}
+            elements[base + "-text"] = {
+                "type": "FreeText", "props": {"label": "free-text answer"},
+                "children": []}
+            elements[base + "-submit"] = {
+                "type": "Submit", "props": {"label": "Submit", "value": "submit"},
+                "children": []}
+            if question.get("clarify"):
+                elements[base + "-clarify"] = {
+                    "type": "Clarify", "props": {"label": "Clarify"}, "children": []}
+            elements[base] = {
+                "type": "Question",
+                "props": {"qid": qid, "title": question["title"],
+                          "recommendation": (options[recommended]
+                                             if options and recommended is not None
+                                             and 0 <= recommended < len(options)
+                                             else None),
+                          "token": token, "set": set_id, "action": action,
+                          "footer": "asked %s / lane %s / set %s %s"
+                                    % (fmt_age(entry.get("asked_at")), entry["lane"],
+                                       set_id, qid)},
+                "children": children}
+            question_keys.append(base)
+        elements[set_key] = {
+            "type": "QuestionSet",
+            "props": {"set_id": set_id, "lane": entry["lane"]},
+            "children": question_keys}
+        set_keys.append(set_key)
+    elements["page"] = {
+        "type": "Page",
+        "props": {"title": "Open questions", "expires_at": expires_at},
+        "children": set_keys}
+    return {"root": "page", "elements": elements}
+
+
+def render_via_node(spec):
+    """(html, None) on success, (None, reason) on ANY failure.
+
+    The Node file is copied into the build dir first (write-if-different) so the
+    bare ESM imports resolve against the node_modules that lives there. Every
+    fault -- no node, no build dir, non-zero exit, timeout, empty output -- is a
+    reason, never an exception: the caller falls back to its own builder, so a
+    Node fault cannot leave the page broken or partial."""
+    directory = render_dir()
+    if not os.path.isfile(RENDER_SRC):
+        return None, "renderer source missing"
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError as exc:
+        return None, "build dir unwritable (%s)" % exc.__class__.__name__
+    target = os.path.join(directory, "render.mjs")
+    try:
+        with open(RENDER_SRC, "r", encoding="utf-8") as fh:
+            wanted = fh.read()
+        current = None
+        if os.path.isfile(target):
+            with open(target, "r", encoding="utf-8") as fh:
+                current = fh.read()
+        if current != wanted:
+            with open(target, "w", encoding="utf-8") as fh:
+                fh.write(wanted)
+    except OSError as exc:
+        return None, "renderer copy failed (%s)" % exc.__class__.__name__
+    try:
+        proc = subprocess.run(
+            ["node", "render.mjs"],           # ARGV LIST: never shell=True
+            input=json.dumps(spec), capture_output=True, text=True,
+            cwd=directory,                    # explicit: never the caller's cwd
+            timeout=RENDER_TIMEOUT)
+    except FileNotFoundError:
+        return None, "node not installed"
+    except subprocess.TimeoutExpired:
+        return None, "renderer timed out"
+    except OSError as exc:
+        return None, "renderer spawn failed (%s)" % exc.__class__.__name__
+    if proc.returncode != 0:
+        # The LAST stderr line of a Node fault is its version banner, which says
+        # nothing about the cause. Prefer the Error line.
+        lines = [l for l in (proc.stderr or "").strip().splitlines() if l.strip()]
+        cause = next((l for l in lines if "Error" in l), None)
+        if cause is None and lines:
+            cause = lines[-1]
+        return None, "renderer rc=%d%s" % (proc.returncode,
+                                           (": " + cause.strip()) if cause else "")
+    if not proc.stdout.strip():
+        return None, "renderer produced no output"
+    return proc.stdout, None
+
+
 PAGE_CSS = """
 body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem}
 section{border:1px solid #ccc;border-radius:8px;padding:1rem;margin:1rem 0}
@@ -1163,7 +1303,10 @@ section{border:1px solid #ccc;border-radius:8px;padding:1rem;margin:1rem 0}
 button{cursor:pointer}
 """
 
-def build_page(entries, token, expires_at, action):
+def build_page_fallback(entries, token, expires_at, action):
+    """The Python builder. Kept as the FALLBACK for the json-render path: on any
+    Node fault the page is still produced, so a renderer outage degrades the
+    markup rather than the feature."""
     sections = []
     for entry in entries:
         for question in entry.get("questions", []):
@@ -1194,14 +1337,36 @@ def build_page(entries, token, expires_at, action):
                 f'lane {html.escape(entry["lane"])} &middot; '
                 f'set {html.escape(entry["id"])} {html.escape(question["qid"])}</p>'
                 "</section>")
+    body = ("".join(sections) or "<p>No open questions.</p>")
+    return page_wrapper(body, expires_at)
+
+def page_wrapper(body, expires_at):
+    """The page shell. Stays in Python deliberately: the noindex directive, the
+    charset, the inline CSS and the TTL line are tested here and must not change
+    just because the BODY is now rendered from a spec."""
     return ("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
             "<meta name=\"robots\" content=\"noindex, nofollow\">\n"
             "<title>Open questions</title>\n"
             f"<style>{PAGE_CSS}</style>\n"
-            "</head><body>\n<h1>Open questions</h1>\n"
+            "</head><body>\n"
             f'<p class="meta">expires {html.escape(expires_at)}</p>\n'
-            + ("".join(sections) or "<p>No open questions.</p>")
+            + body
             + "\n</body></html>\n")
+
+
+def build_page(entries, token, expires_at, action):
+    """The page body from a json-render spec, wrapped in the tested shell.
+
+    Falls back to build_page_fallback on ANY renderer fault and records the
+    reason in the unified log, so a degradation is visible rather than silent."""
+    spec = build_spec(entries, token, expires_at, action)
+    html_body, why = render_via_node(spec)
+    if html_body is None:
+        oc_log_extra("render_fallback", why)
+        return build_page_fallback(entries, token, expires_at, action)
+    oc_log_extra("renderer", "json-render")
+    return page_wrapper(html_body, expires_at)
+
 
 def prune_pages():
     """Delete token directories past their TTL. The token IS the credential, so
@@ -1440,6 +1605,20 @@ def selftest():
     env["OC_QUESTIONS_DB"] = os.path.join(root, "absent.db")
     env["OC_TOOLS_NOLOG"] = "1"
     env["OC_QUESTIONS_BASE_URL"] = PRODUCTION_BASE_URL
+    # The Node renderer resolves its bare imports against node_modules BESIDE
+    # the render file, so the fixture links the real installed tree into its own
+    # render dir. A symlink keeps the test from writing the live store while
+    # still exercising the json-render path rather than silently falling back.
+    fixture_render = os.path.join(root, "render")
+    real_modules = os.path.join(profile_home(), "questions", "build", "node_modules")
+    try:
+        os.makedirs(fixture_render, exist_ok=True)
+        link = os.path.join(fixture_render, "node_modules")
+        if os.path.isdir(real_modules) and not os.path.exists(link):
+            os.symlink(real_modules, link)
+    except OSError:
+        pass
+    env["OC_QUESTIONS_RENDER_DIR"] = fixture_render
 
     def run(*args):
         proc = subprocess.run([tool] + list(args), env=env, capture_output=True,
@@ -1716,6 +1895,76 @@ def selftest():
                            "--no-publish")
         ck(rc == 0, "the mutation succeeds regardless of the page (rc=%d)" % rc)
 
+        # -- 8b2. the json-render page (owner order 2026-09-24: "rewrite for
+        # json-render"). The page BODY is now a typed SPEC rendered by a Node
+        # process; the shell stays in Python. These are the four legs HQ asked
+        # for, plus the two properties that would break the live endpoint.
+        rc, out, _ = run("publish", "--json")
+        page = json.loads(out)
+        body = open(os.path.join(page["path"], "index.html"), encoding="utf-8").read()
+        ck(not re.search(r"<script", body, re.I),
+           "1. the rendered page carries NO <script> (the static property)")
+        ck('name="token"' in body and 'name="set"' in body and 'name="qid"' in body,
+           "2. the form carries token + set + qid as hidden inputs -- the submit "
+           "contract the answer backend reads")
+        ck('action="/answer"' in body,
+           "\u2026and the action is the absolute /answer path")
+        ck("noindex" in body, "\u2026and the noindex directive survives the rewrite")
+        # Per-question, because the page carries EVERY open set: a global count
+        # of "checked" measures the register size, not the recommendation.
+        # Per-question, because the page carries EVERY open set: a global count
+        # of "checked" measures the register size, not the recommendation. The
+        # assertion is attribute-ORDER agnostic on purpose: React emits
+        # checked="" BEFORE value, the Python fallback emits value="N" checked,
+        # and a leg that assumes one order tests the renderer's ordering rather
+        # than the recommendation.
+        radios = re.findall(r"<input[^>]*type=\"radio\"[^>]*>", body)
+        ck(bool(radios), "3. the page renders radio inputs")
+        checked = [r for r in radios if "checked" in r]
+        ck(len(checked) >= 1, "\u2026and a recommended option renders checked")
+        ck(len(checked) < len(radios),
+           "\u2026while a NON-recommended option does not (%d of %d checked)"
+           % (len(checked), len(radios)))
+        ck("<table>" in body and "mermaid.ink" in body,
+           "4. a Markdown table and a ```mermaid fence still reach the page "
+           "through RichText")
+
+        # The spec is DATA, so its structure is assertable without parsing HTML
+        # -- which is the whole reason for the rewrite.
+        spec = build_spec([{"id": "abc123", "lane": "L", "asked_at": None,
+                            "questions": [{"qid": "q1", "title": "T",
+                                           "description": "d",
+                                           "options": ["A", "B"],
+                                           "recommended": 1}]}],
+                          "tok", "2026-01-01T00:00:00+00:00", "/answer")
+        ck(spec["root"] == "page" and spec["elements"]["page"]["type"] == "Page",
+           "the spec has a named root element")
+        ck(spec["elements"]["abc123-q1-o1"]["props"]["recommended"] is True
+           and spec["elements"]["abc123-q1-o0"]["props"]["recommended"] is False,
+           "\u2026and the recommended option is marked in the SPEC, not in a string")
+        ck(all(isinstance(spec["elements"][k].get("children"), list)
+               for k in spec["elements"]),
+           "\u2026and every element carries a children LIST (the flat contract)")
+        ck(set(spec["elements"]) >= {"page", "set-abc123", "abc123-q1"},
+           "the spec nests page -> set -> question by KEY")
+
+        # The fallback: a renderer fault must degrade the markup, never break
+        # the page. Point the build dir somewhere unwritable.
+        broke = dict(env)
+        broke["OC_QUESTIONS_RENDER_DIR"] = "/proc/nonexistent/build"
+        proc = subprocess.run([tool, "publish", "--json"], env=broke,
+                              capture_output=True, text=True, timeout=120)
+        ck(proc.returncode == 0,
+           "a renderer fault does NOT fail publish (rc=%d)" % proc.returncode)
+        fb = json.loads(proc.stdout)
+        fbody = open(os.path.join(fb["path"], "index.html"), encoding="utf-8").read()
+        ck('name="token"' in fbody and 'name="set"' in fbody
+           and "<form" in fbody,
+           "\u2026and the FALLBACK page still carries the submit contract, so a "
+           "renderer outage degrades the markup rather than the feature")
+        ck(render_via_node({"root": "page", "elements": {}})[1] is not None,
+           "render_via_node reports a REASON on failure, never raises")
+
         # -- 8c. C5: amend -- the CLARIFY return leg. A Clarify click used to
         # dead-end: status=clarifying and the question could never be answered
         # again, so the loop never closed and the owner never saw the answer.
@@ -1823,6 +2072,31 @@ def selftest():
         ck(bool(rows) and rows[0].get("tool") == PROG
            and "secs" in rows[0] and rows[0].get("exit") == 0,
            "…carrying tool/secs/exit per the unified-log schema")
+
+        # WHICH renderer ran is observable ONLY in the log. The contract legs
+        # above pass on the Python fallback too -- MEASURED: forcing the fallback
+        # left all 114 legs green -- so without this leg nothing proves
+        # json-render is actually in use, which is the owner's directive.
+        pub_log = os.path.join(root, "publish.log")
+        if os.path.isfile(pub_log):
+            os.remove(pub_log)
+        pubenv = dict(logenv)
+        pubenv["OC_TOOLS_LOG"] = pub_log
+        proc = subprocess.run([tool, "publish"], env=pubenv, capture_output=True,
+                              text=True, timeout=120)
+        ck(proc.returncode == 0,
+           "publish under the unsuppressed log exits 0 (rc=%d)" % proc.returncode)
+        fields = []
+        if os.path.isfile(pub_log):
+            with open(pub_log, encoding="utf-8") as fh:
+                for line in fh:
+                    if line.strip():
+                        fields.append((json.loads(line).get("extra") or {}))
+        ck(any(f.get("renderer") == "json-render" for f in fields),
+           "publish records renderer=json-render -- the page is built from a "
+           "SPEC, not the fallback (%r)" % (fields[-1:] if fields else None,))
+        ck(not any("render_fallback" in f for f in fields),
+           "…and records NO fallback, so a silent degradation is visible")
 
         # -- 10. usage contract (the battery's edge cases) -----------------
         rc, _, _ = run("--help")
