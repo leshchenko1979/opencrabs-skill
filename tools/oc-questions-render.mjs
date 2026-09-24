@@ -106,7 +106,8 @@ const { registry } = defineRegistry(catalog, {
         props.headers.map((cell, i) => h('th', { key: i }, renderSpans(cell))));
       const body = props.rows.map((row, i) => h('tr', { key: i },
         row.map((cell, j) => h('td', { key: j }, renderSpans(cell)))));
-      return h('table', null, h('thead', null, head), h('tbody', null, body));
+      return h('div', { className: 'tblwrap' },
+        h('table', null, h('thead', null, head), h('tbody', null, body)));
     },
     Mermaid: ({ props }) => h('figure', null,
       h('img', { alt: 'diagram', src: 'https://mermaid.ink/img/' + b64url(props.code) })),

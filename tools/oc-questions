@@ -1324,20 +1324,29 @@ def render_via_node(spec):
 
 
 PAGE_CSS = """
-body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem}
+*{box-sizing:border-box}
+body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:0 auto;padding:1.5rem 1rem}
 section{border:1px solid #ccc;border-radius:8px;padding:1rem;margin:1rem 0}
-.opt{display:block;margin:.35rem 0}
+.opt{display:block;margin:.5rem 0;padding:.2rem 0}
 .rec{color:#0a0;font-weight:600}
-form table{border-collapse:collapse;margin:.5rem 0}
-form td,form th{border:1px solid #ccc;padding:.25rem .5rem}
-form img{max-width:100%}
-form pre{background:#f6f6f6;padding:.5rem;overflow-x:auto}
+form table{border-collapse:collapse;margin:0}
+form td,form th{border:1px solid #ccc;padding:.25rem .5rem;text-align:left}
+form img{max-width:100%;height:auto}
+form pre{background:#f6f6f6;padding:.5rem;overflow-x:auto;max-width:100%}
 form ul,form ol{margin:.4rem 0 .4rem 1.2rem}
 .age,.meta{color:#666;font-size:.85em}
 form{margin:.6rem 0}
-textarea{display:block;width:100%;box-sizing:border-box;margin:.4rem 0;font:inherit}
-form button{margin-right:.5rem}
-button{cursor:pointer}
+textarea{display:block;width:100%;margin:.4rem 0;font:inherit}
+form button{margin-right:.5rem;margin-top:.4rem}
+button{cursor:pointer;padding:.5rem 1rem;font:inherit}
+.tblwrap{overflow-x:auto;max-width:100%;margin:.5rem 0}
+@media (max-width:40rem){
+body{padding:1rem .75rem}
+section{padding:.75rem;margin:.75rem 0}
+form td,form th{padding:.35rem .4rem}
+.opt{padding:.4rem 0}
+form button{width:100%;margin:.3rem 0}
+}
 """
 
 def page_wrapper(body, expires_at):
@@ -1345,6 +1354,7 @@ def page_wrapper(body, expires_at):
     charset, the inline CSS and the TTL line are tested here and must not change
     just because the BODY is now rendered from a spec."""
     return ("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
             "<meta name=\"robots\" content=\"noindex, nofollow\">\n"
             "<title>Open questions</title>\n"
             f"<style>{PAGE_CSS}</style>\n"
@@ -1821,6 +1831,22 @@ def selftest():
         ck("noindex" in body, "the page carries the noindex directive")
         ck("<table>" in body, "a Markdown table in a description renders as a <table>")
         ck("mermaid.ink" in body, "a ```mermaid fence renders through mermaid.ink")
+        ck('class="tblwrap"' in body,
+           "\u2026and the table is wrapped in a scroll container (renderer-side, "
+           "so a wide table cannot blow the viewport open)")
+        # owner report 2026-09-24 21:05Z: "not mobile friendly". Root cause: the
+        # shell declared NO viewport at all, so a phone laid the page out at a
+        # ~980px virtual width and zoomed out to fit -- tiny text, desktop
+        # geometry. The stylesheet was desktop-only besides.
+        ck('name="viewport"' in body and "width=device-width" in body,
+           "the page declares a viewport (absent it a phone renders at ~980px "
+           "and zooms out -- the owner-visible 'not mobile friendly')")
+        ck("@media (max-width:40rem)" in body,
+           "\u2026and the stylesheet carries a narrow-screen breakpoint")
+        ck("*{box-sizing:border-box}" in body,
+           "\u2026and a box-sizing reset so padding cannot overflow the viewport")
+        ck(".tblwrap{overflow-x:auto" in body,
+           "\u2026and the scroll wrapper has a rule to go with it")
         # owner-visible misrender: the emitted form had NO stylesheet rule at
         # all, so a bare <textarea> (inline, ~20 columns by default) collapsed
         # the free-text field and both buttons onto one line.
