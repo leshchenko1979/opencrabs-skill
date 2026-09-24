@@ -238,7 +238,49 @@ DEMO
   [ "$(wc -l < "$L3")" -eq 1 ] \
     && ok "a 'selftest' VALUE does not suppress a real invocation (M2-21)" \
     || bad "non-first 'selftest' silenced a real invocation (M2-21)"
+  # ---- #537: oc_has — SIGPIPE-free literal substring test --------------------
+  # The fleet's `echo "$out" | grep -q PAT` assertion is a latent FALSE NEGATIVE
+  # under pipefail: `grep -q` exits at the FIRST match, the writer takes SIGPIPE,
+  # and the pipeline reports 141 DESPITE the match. oc_has matches inside the
+  # shell — no pipe, so the status cannot be the writer's. The needle is QUOTED
+  # in the case arm: unquoted, real tokens in this corpus are PARSE-TIME syntax
+  # errors (`Draft: true (--draft)`, `age: 0.3h`), not wrong matches.
+  OHF="$d/oc_has.out"
+  TOOLS_DIR="$TOOLS_DIR" bash -c '
+    set -u; set -o pipefail
+    . "$TOOLS_DIR/lib/oc-log.sh"
+    r() { if oc_has "$2" "$3"; then g=0; else g=1; fi
+          if [ "$g" = "$4" ]; then printf "ok %s\n" "$1"
+          else printf "FAIL %s (want=%s got=%s)\n" "$1" "$4" "$g"; fi; }
+    r present       "the fix is in origin/main"    "origin/main"            0
+    r absent        "the fix is in origin/main"    "nowhere"                1
+    r parens        "Draft: true (--draft) here"   "Draft: true (--draft)"  0
+    r space         "state backlog=11 (>= 10) now" "backlog=11 (>= 10)"     0
+    r empty         "anything at all"              ""                       0
+    r metachar      "a*b?c[d] literal"             "*b?c[d]"                0
+    r glob-literal  "plain text"                   "*"                      1
+  ' > "$OHF" 2>&1
+  while IFS= read -r _ohl; do
+    case "$_ohl" in
+      ok\ *)   ok "oc_has: ${_ohl#ok }" ;;
+      FAIL\ *) bad "oc_has: ${_ohl#FAIL }" ;;
+    esac
+  done < "$OHF"
+  # size-independence: a 2 MB payload must still read as a match (the idiom is
+  # 40/40 wrong on exactly this shape; oc_has is deterministic here).
+  OHL="$(TOOLS_DIR="$TOOLS_DIR" bash -c '
+    set -u; set -o pipefail
+    . "$TOOLS_DIR/lib/oc-log.sh"
+    big="$(printf "HIT\n"; head -c 2000000 /dev/zero | tr "\0" "x")"
+    oc_has "$big" HIT && echo MATCH || echo MISS
+  ' 2>&1)"
+  [ "$OHL" = "MATCH" ] && ok "oc_has: 2 MB payload with newline after match -> MATCH (idiom: 40/40 wrong)" \
+    || bad "oc_has: 2 MB payload -> '$OHL'"
+  [ "$(grep -c '^oc_has()' "$TOOLS_DIR/lib/oc-log.sh")" -eq 1 ] \
+    && ok "oc_has: defined exactly once in lib/oc-log.sh" \
+    || bad "oc_has: definition count is not 1"
   rm -rf "$d"
+
 else
   bad "lib/oc-log.sh missing"
 fi

@@ -172,3 +172,32 @@ oc_session_trailer() { # stdin/arg: commit message text; stdout: uuid or empty
   printf '%s\n' "$msg" | git interpret-trailers --parse 2>/dev/null \
     | sed -n 's/^[Ss]ession-[Ii][Dd]:[[:space:]]*//p' | tail -1
 }
+
+# oc_has <haystack> <needle> — LITERAL substring test; rc 0 present / 1 absent.
+# (#537) The SIGPIPE-free replacement for the fleet's `echo "$out" | grep -q PAT`
+# idiom, which under `set -o pipefail` is a latent FALSE NEGATIVE: `grep -q`
+# exits at the FIRST match and closes the pipe, the writer (`echo`/`printf`, a
+# shell builtin) then takes SIGPIPE, and the pipeline's status becomes 141 —
+# not 0 — so the compound is false EVEN THOUGH THE PATTERN MATCHED. Whether it
+# fires is a race gated by payload size and by whether a newline follows the
+# match; 129 sites in the echo form and 78 in the printf form carry the class.
+#
+# `case` matches inside the shell itself — no pipe, no second process, so the
+# status is the comparison's alone and cannot be the writer's.
+#
+# The needle is QUOTED inside the case arm. That is what makes it a literal
+# substring rather than a pattern, and it is load-bearing: unquoted, real tokens
+# from this corpus are PARSE-TIME syntax errors, not wrong matches —
+#     case "$out" in *Draft: true (--draft)*)  -> syntax error near `true'
+#     case "$out" in *age: 0.3h*)              -> syntax error near `0.3h*'
+#
+# Quoting also makes glob metacharacters in the needle literal: a needle of `*`
+# matches a literal `*`, NOT "anything" — the deliberate difference from grep,
+# which would read it as a pattern. An EMPTY needle matches everything (every
+# string contains the empty string), mirroring `grep -q ""`.
+#
+# Safe under `set -u` (both params default) and `set -o pipefail` (no pipeline).
+oc_has() { # <haystack> <needle> -> 0 present / 1 absent
+  case "${1:-}" in *"${2:-}"*) return 0 ;; *) return 1 ;; esac
+}
+
