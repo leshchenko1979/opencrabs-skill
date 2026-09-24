@@ -278,7 +278,26 @@ AFFINITY_KEYWORDS = {
     # zero false positives. A bare "tools/" was REJECTED: it fires on 60 and also
     # matches nine daemon-source tokens (src/**/tools/*.rs), which are Editor
     # territory and must never accrue affinity for this lane.
-    "tools": ["(tools):", "tools/oc-", "tools/lib/", "tools/tests/"]
+    "tools": ["(tools):", "tools/oc-", "tools/lib/", "tools/tests/"],
+    # The plan tool (fork #529). Chosen by MEASUREMENT, same method as `tools`
+    # above. Ground truth = the issue TITLE carries the `(plan)` scope prefix
+    # (3 open issues: #374, #506, #510). Scored over the 159 open fork issues:
+    #   `(plan):` alone ......... fires 3, precision 100%, recall 100%
+    #   + `plan-tool` ........... fires 4, precision  75% (adds #529, a tools/
+    #                             issue that names the surface — harmless: the
+    #                             toolsmith lane still wins it on ownership)
+    #   + `plan card` / `plan tool` .. precision 33% / 30% — every extra hit is a
+    #                             TELEGRAM-rendering issue that merely mentions a
+    #                             plan card (#290, #334, #399, #402). REJECTED:
+    #                             that would hand the plan lane affinity for
+    #                             telegram work, the exact mixing this law exists
+    #                             to prevent.
+    # Both keywords are needed and they work on DIFFERENT SIDES: `(plan):` is how
+    # an ISSUE declares the domain, and `plan-tool` is how the LANE does — its
+    # feature string is "plan-tool (#1231 re-stick relay)", which contains no
+    # scope prefix. No ROLE_DOMAINS entry is needed (unlike #342's toolsmith,
+    # whose feature named no tools/ token): the lane-side match works on prose.
+    "plan": ["(plan):", "plan-tool", "plan_cards"],
 }
 
 # Role-owned domains (fork #342, Design I step 18 -- sufficiency leg). A lane's
@@ -1798,6 +1817,44 @@ def run_selftest():
     assert_eq("Busy non-owner does not displace an idle editor",
               select_best_lane(issue_tools, [lane_editor_busy, dict(lane_editor_verbose, uuid="lane-editor-idle")])["uuid"],
               "lane-editor-idle")
+
+    # Test 3e: the PLAN domain (fork #529, live mis-route). #506 was dispatched to
+    # an unrelated editor lane on 2026-09-23 while the plan-tool lane sat idle.
+    # Settled by simulation, not inference: the DEGRADED path (classify failed ->
+    # every lane busy) makes select_best_lane return None, i.e. NO dispatch is
+    # possible, so a dispatch having occurred EXCLUDES it. The mis-route was the
+    # 0-score TIE: with every >0 scorer busy, 18 lanes scored exactly 0 and the
+    # stable sort on score alone left roster order to decide -- and the plan-tool
+    # lane sat at roster index 4 against the receiver's 2. Replaying that shape
+    # now picks the plan lane.
+    issue_plan = {"number": 506, "labels": [],
+                  "title": "fix(plan): complete and start in one parallel block clobber each other",
+                  "body": "the tool returns a SUCCESS receipt for a mutation that never persists"}
+    lane_plan = {"uuid": "lane-plan", "feature": "plan-tool (#1231 re-stick relay)",
+                 "is_busy": False, "busy_known": True, "class": "IDLE"}
+    lane_generic = {"uuid": "lane-suggest", "feature": "suggest-options",
+                    "is_busy": False, "busy_known": True, "class": "IDLE"}
+    assert_true("plan domain: the scope prefix gives the issue the plan domain",
+                "plan" in detect_issue_domains(issue_plan))
+    s_plan = score_affinity(issue_plan, lane_plan)
+    s_generic = score_affinity(issue_plan, lane_generic)
+    assert_true("plan domain: the plan lane scores strictly above an unrelated lane",
+                s_plan > s_generic)
+    assert_eq("plan domain: selection picks the plan lane", 
+              select_best_lane(issue_plan, [lane_generic, lane_plan])["uuid"], "lane-plan")
+    # The lane-side match is PROSE (its feature says 'plan-tool'), not role-owned:
+    # unlike #342's toolsmith there is no ROLE_DOMAINS entry, so this leg proves
+    # the keyword path carries the lane half on its own.
+    assert_true("plan domain: the lane half comes from its feature prose, not a role binding",
+                "toolsmith" not in ROLE_DOMAINS or "plan" not in ROLE_DOMAINS.get("toolsmith", ()))
+    # And the domain must NOT be handed to a telegram-rendering issue that merely
+    # mentions a plan card -- measured: 'plan card' / 'plan tool' fire on #290,
+    # #334, #399, #402 and were REJECTED for exactly this.
+    issue_tg_card = {"number": 290, "labels": [],
+                     "title": "fix(telegram): fallback to in-place HTML edit on plan card update error",
+                     "body": "the plan card update endpoint returns a stale revision"}
+    assert_true("plan domain: a telegram plan-card issue does NOT gain the plan domain",
+                "plan" not in detect_issue_domains(issue_tg_card))
 
     # Test 4: Selection when lane is busy
     lane_busy = {"uuid": "lane-busy", "feature": "telegram-buttons", "is_busy": True, "class": "ACTIVE"}
