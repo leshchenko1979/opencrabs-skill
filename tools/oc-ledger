@@ -231,7 +231,13 @@ _is_uuid() { # $1 -> rc 0 iff a canonical 8-4-4-4-12 lowercase-hex uuid
 #   sweep is the one actor that stages rows it did not write, so it is the one
 #   that owes the sentence.  pacemakers-off is a bare-name MARKER, not a log: the
 #   glossary declares markers TRACKED and it was likewise carried by nothing.
-STATE_TRACKED_PATHS="tools.log baseline.json orders.json journal deployed.sha deployed.meta.json fanout.state oc-deploy oc-deploy-shadow.log oc-deploy-shadow.archive.log health-rotation.json smoke-verdicts.log reviews evidence pacemakers-off"
+# #540: runs/ is LIVE RUNTIME STATE (a finished lane's in-flight record is
+# deleted when it completes) and reports/ is actively written; both were
+# tracked-but-unswept, so a DELETION in either was unreachable by every commit
+# path and the sweep still printed success. Chosen by LIVENESS, not by age —
+# the historical evidence dirs (fd-split-*, incident-evidence-*, rescue-299-*,
+# archive/) stay out on purpose: moving them is a migration, not a tool fix.
+STATE_TRACKED_PATHS="tools.log baseline.json orders.json journal deployed.sha deployed.meta.json fanout.state oc-deploy oc-deploy-shadow.log oc-deploy-shadow.archive.log health-rotation.json smoke-verdicts.log reviews evidence pacemakers-off runs reports"
 # The harvest-state class (v0.4.237, HQ ruling 2026-09-22) is a SEPARATE
 # variable: it carries glob metacharacters and must reach git QUOTED and
 # DIRECTLY — an unquoted expansion pathname-expands against the CALLER's cwd.
@@ -350,6 +356,98 @@ $(printf '%s\n' "$bullet" | grep -o '`[^`]*`' | tr -d '`')
 EOF
   [ "$unclass" -gt 0 ] && echo "state-tracked: note — $unclass backticked span(s) in the TRACKED bullet are not path-shaped (commands/parentheticals) and were not classified. Disclosed so the skip is never silent." >&2
   [ "$gap" -eq 0 ] && echo "state-tracked: every name declared TRACKED in SKILL.md is carried by the sweep list." >&2
+  return 0
+}
+
+# state_out_of_scope_audit (#540) — the INVERSE of state_tracked_audit.
+# That one runs declaration -> mechanism (a name the glossary declares that the
+# sweep does not carry). This one runs mechanism -> its own blind spot: tracked
+# files in the state repo that NEITHER the sweep list NOR the glossary names.
+# Such a file is unreachable by EVERY commit path (there is no `git add -A` on
+# the state repo), so it can be DELETED and the sanctioned verb still reports
+# success — measured live 2026-09-24 on runs/in-flight/<uuid>.json, where
+# `commit-pending --bundle` committed tools.log and left the deletion untouched.
+#
+# DIRTY out-of-scope files are FINDINGS; the untouched remainder is a COUNT. The
+# mass is historical evidence that has not changed since an explicit `git add`
+# put it there, and a leg that cried wolf on it would be ignored — which is
+# worse than no leg.
+#
+# Models the UNION of every commit path, not just the list: workers-ledger.json
+# is staged by its OWN path and is deliberately absent from STATE_TRACKED_PATHS,
+# so a list-only leg would falsely flag the most-committed file in the repo.
+#
+# WARN-only and rc 0 always — same posture and same reason as state_tracked_audit.
+state_out_of_scope_audit() { # Prints findings to stderr; ALWAYS rc 0 (never a gate).
+  local sd; sd="$(STATE_DIR)"
+  if [ ! -d "$sd/.git" ]; then
+    echo "state-out-of-scope: NOTE — inverse check SKIPPED: $sd is not a git repo. This is NOT a clean result and NOT a finding." >&2
+    return 0
+  fi
+  local d; d="$(mktemp -d 2>/dev/null)" || return 0
+  if ! git -C "$sd" ls-files > "$d/all" 2>/dev/null; then
+    echo "state-out-of-scope: NOTE — inverse check SKIPPED: 'git ls-files' failed in $sd. This is NOT a clean result." >&2
+    rm -rf "$d"; return 0
+  fi
+  # Union of EVERY commit path (see the header note).
+  # Scope model — matched against what the SWEEP actually does, not a loose
+  # approximation. `git status --porcelain -- orders.json` matches the ROOT
+  # orders.json only, so `archive/orders.json` is genuinely unswept and must NOT
+  # read as carried. The basename test therefore applies to the GLOB ONLY:
+  # `*-state.md` is a git pathspec whose `*` crosses directories, so basename
+  # matching is right for it and wrong for the literal list entries. Testing
+  # every entry against the basename (the shape state_tracked_audit uses for a
+  # different purpose — comparing declared TOKENS) silently marked
+  # archive/orders.json as carried: a false NEGATIVE, i.e. a clean receipt over
+  # an unswept file, which is the exact class this leg exists to expose.
+  local mech="$STATE_TRACKED_PATHS workers-ledger.json"
+  local f top base m g hit
+  : > "$d/out"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+      */*) top="${f%%/*}"; base="${f##*/}" ;;
+      *)   top="$f";       base="$f" ;;
+    esac
+    hit=0
+    for m in $mech; do
+      [ "$f" = "$m" ] && { hit=1; break; }
+      [ "$top" = "$m" ] && { hit=1; break; }
+    done
+    if [ "$hit" -eq 0 ]; then
+      for g in $STATE_TRACKED_GLOB; do
+        # the glob carries metacharacters, so it must stay UNQUOTED here
+        case "$base" in $g) hit=1; break ;; esac
+      done
+    fi
+    [ "$hit" -eq 1 ] && continue
+    printf '%s\n' "$f" >> "$d/out"
+  done < "$d/all"
+
+  local total out_n dirty_n=0 p
+  total="$(wc -l < "$d/all" | tr -d ' ')"
+  out_n="$(wc -l < "$d/out" | tr -d ' ')"
+  if [ "$out_n" -eq 0 ]; then
+    echo "state-out-of-scope: every one of the $total tracked file(s) is carried by a commit path." >&2
+    rm -rf "$d"; return 0
+  fi
+  # grep -Fxq reads a FILE here, never a pipe, so pipefail cannot see a SIGPIPE.
+  git -C "$sd" status --porcelain > "$d/status" 2>/dev/null
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    p="${p:3}"
+    case "$p" in *" -> "*) p="${p##* -> }" ;; esac
+    if grep -Fxq -- "$p" "$d/out" 2>/dev/null; then
+      dirty_n=$((dirty_n + 1))
+      echo "state-out-of-scope: WARN — '$p' is tracked but carried by NO commit path, and is DIRTY in the worktree; no commit path can reconcile it (#540)." >&2
+    fi
+  done < "$d/status"
+  if [ "$dirty_n" -eq 0 ]; then
+    echo "state-out-of-scope: $out_n of $total tracked file(s) sit outside every commit path, none DIRTY — historical mass, a count and not a finding (#540)." >&2
+  else
+    echo "state-out-of-scope: $dirty_n DIRTY out-of-scope file(s) reported above; $((out_n - dirty_n)) further file(s) sit outside every commit path untouched (historical mass, a count and not a finding)." >&2
+  fi
+  rm -rf "$d"
   return 0
 }
 
@@ -944,6 +1042,10 @@ cmd_sync() {
   # #514: the state-dir glossary is edited by the SAME law commits a sync ships,
   # so this is the boundary where a declared-but-uncarried name first exists.
   state_tracked_audit
+  # #540: the INVERSE direction at the same boundary — a tracked file that no
+  # commit path carries can be deleted silently, so it is checked where the
+  # declaration audit already runs rather than left to a hand-run patrol.
+  state_out_of_scope_audit
   # step check: equal (re-sync) or third-component +1 only; --catch-up (T2
   # verdict n=1695, HQ-approved 2026-09-06) relaxes ONLY the step size for the
   # shipped-ahead dead zone — the doc-first gate above still pins v to the
@@ -1986,6 +2088,69 @@ ACKEOF
   _bout="$(SKILL_DIR="$T/auditskill" bash -c '. '"$T"'/auditfn.sh; state_tracked_audit' 2>&1)"
   [ "$(printf '%s' "$_bout" | grep -c '^state-tracked: WARN')" = "1" ] && ok || bad "state-tracked-audit-warns-once"
   printf '%s' "$_bout" | grep -q "bogus-new-record.json" && ok || bad "state-tracked-audit-names-the-gap"
+  # ---- #540: the INVERSE audit — tracked files NO commit path carries -------
+  # state_tracked_audit runs declaration -> mechanism. This runs the other way:
+  # tracked files that NEITHER the sweep list NOR the glossary names. Such a file
+  # is unreachable by every commit path, so it can be DELETED and the sanctioned
+  # verb still reports success (measured live on runs/in-flight/<uuid>.json).
+  chk "state-out-of-scope-single-source" "1" "$(grep -c '^state_out_of_scope_audit()' "$ME")"
+  awk '/^state_out_of_scope_audit\(\)/,/^}$/' "$ME" > "$T/scope_fn.sh"
+  # STATE_DIR is a FUNCTION in the tool, so the harness supplies its own.
+  _scope() { SD="$1" STATE_TRACKED_PATHS="$STATE_TRACKED_PATHS" STATE_TRACKED_GLOB="$STATE_TRACKED_GLOB" \
+    bash -c 'STATE_DIR() { printf "%s\n" "$SD"; }; . '"$T"'/scope_fn.sh; state_out_of_scope_audit' 2>&1; }
+  # (a) SKIP path: not a git repo -> a NOTE that SAYS it is not clean
+  mkdir -p "$T/notgit"
+  _sout="$(_scope "$T/notgit")"
+  printf '%s' "$_sout" | grep -q 'SKIPPED' && ok || bad "state-out-of-scope-skip-note"
+  printf '%s' "$_sout" | grep -q 'NOT a clean result' && ok || bad "state-out-of-scope-skip-not-silent"
+  # (b) THE FINDING. Vacuous-guard first: the probe must be BOTH tracked AND
+  #     dirty, or the assertion below would pass without the fix.
+  mkdir -p "$T/state/archive-540probe"
+  printf 'probe\n' > "$T/state/archive-540probe/thing.txt"
+  git -C "$T/state" add archive-540probe/thing.txt
+  git -C "$T/state" commit -q -m "probe: out-of-scope tracked file (#540)"
+  rm "$T/state/archive-540probe/thing.txt"
+  [ "$(git -C "$T/state" status --porcelain -- archive-540probe/thing.txt)" != "" ] \
+    && ok || bad "state-out-of-scope-probe-not-dirty"
+  _sout="$(_scope "$T/state")"
+  printf '%s' "$_sout" | grep -q 'archive-540probe/thing.txt' \
+    && ok || bad "state-out-of-scope-reports-dirty-out-of-scope"
+  printf '%s' "$_sout" | grep -q '^state-out-of-scope: WARN' \
+    && ok || bad "state-out-of-scope-warns-on-dirty"
+  # (c) AC3 — workers-ledger.json is staged by its OWN path and is deliberately
+  #     absent from STATE_TRACKED_PATHS, so a list-only leg would falsely flag
+  #     the most-committed file in the repo. Make it DIRTY and prove silence.
+  printf '\n' >> "$T/state/workers-ledger.json"
+  [ "$(git -C "$T/state" status --porcelain -- workers-ledger.json)" != "" ] \
+    && ok || bad "state-out-of-scope-ledger-probe-not-dirty"
+  _sout="$(_scope "$T/state")"
+  printf '%s' "$_sout" | grep -q 'workers-ledger.json' \
+    && bad "state-out-of-scope-false-positives-on-ledger" || ok
+  git -C "$T/state" checkout -- workers-ledger.json
+  # (d) the COUNT arm: an out-of-scope file that is TRACKED but NOT dirty is
+  #     historical mass — a count, not a finding. The leg must not cry wolf.
+  #     (The first version of this leg asserted the count line while the fixture
+  #     held NO out-of-scope file at all, so it exercised the all-carried arm
+  #     instead and failed — the arms need separate fixtures.)
+  printf 'kept\n' > "$T/state/archive-540probe/keep.txt"
+  git -C "$T/state" add archive-540probe/keep.txt
+  git -C "$T/state" commit -q -m "probe: clean out-of-scope file (#540)"
+  git -C "$T/state" rm -q --cached archive-540probe/thing.txt 2>/dev/null
+  git -C "$T/state" commit -q -m "probe: drop the dirty out-of-scope file (#540)"
+  _sout="$(_scope "$T/state")"
+  printf '%s' "$_sout" | grep -q '^state-out-of-scope: WARN' \
+    && bad "state-out-of-scope-warns-when-clean" || ok
+  printf '%s' "$_sout" | grep -q 'not a finding' \
+    && ok || bad "state-out-of-scope-count-arm-labelled"
+  # (e) the all-carried arm: no out-of-scope file at all -> the clean line, and
+  #     it must still SAY what it checked rather than print nothing (a leg that
+  #     prints nothing when clean cannot be told from one that did not run).
+  rm -rf "$T/state/archive-540probe"
+  git -C "$T/state" rm -q --cached archive-540probe/keep.txt 2>/dev/null
+  git -C "$T/state" commit -q -m "probe: drop the clean out-of-scope file (#540)"
+  _sout="$(_scope "$T/state")"
+  printf '%s' "$_sout" | grep -q 'every one of' \
+    && ok || bad "state-out-of-scope-all-carried-arm"
   # 32c: mirror push (v0.4.50) — a configured origin receives branch + tags;
   # bare fixture remote stands in for GitHub (offline selftest rule)
   git init -q --bare "$T/mirror.git"

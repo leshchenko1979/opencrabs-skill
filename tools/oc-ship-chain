@@ -243,7 +243,7 @@ shipchain_compiled_md_set() {
   # leak out of a path-resolver is the kind of bug that surfaces a hundred lines
   # later in an unrelated `git` call.
   (
-    cd "$FORK_REPO" 2>/dev/null || exit 0
+    cd "$FORK_REPO" 2>/dev/null || { printf '%s\n' "__OC_DERIVE_FAILED__"; exit 0; }
     grep -rloE 'include_(str|bytes)!\([[:space:]]*"[^"]+\.md"' src --include=*.rs 2>/dev/null \
       | while IFS= read -r rs; do
           grep -oE 'include_(str|bytes)!\([[:space:]]*"[^"]+\.md"' "$rs" 2>/dev/null \
@@ -290,10 +290,25 @@ shipchain_docs_only() {
   paths="$(git -C "$FORK_REPO" diff --name-only "$base" "$SHA" 2>/dev/null || true)"
   [ -n "$paths" ] || return 1                   # empty diff: gate (conservative)
   compiled="$(shipchain_compiled_md_set)"
+  # Fail CLOSED when the set cannot be derived. The derivation's own failure path
+  # used to print nothing, which is indistinguishable from a legitimate "this
+  # repo compiles in no markdown" — so a failed derivation made every markdown
+  # path look non-compiled and the gate was SKIPPED. That is the same shape as
+  # the rest of this family: an unverifiable check must never read as clean.
+  case "$compiled" in
+    *__OC_DERIVE_FAILED__*) return 1 ;;
+  esac
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     case "$p" in *.md) ;; *) return 1 ;; esac   # any non-markdown -> gate
-    printf '%s\n' "$compiled" | grep -qxF "$p" && return 1   # compiled -> gate
+    # #537: NO PIPE. `printf ... | grep -q` under `set -o pipefail` is a latent
+    # FALSE NEGATIVE — grep -q exits at the first match, printf takes SIGPIPE,
+    # and the pipeline reports 141, so the `&& return 1` never fires and a
+    # COMPILED markdown path is treated as docs-only, SKIPPING the CI gate.
+    # Measured in the battery: eval-docs-skip-compiled-rc1 wanted rc=1 and got 0
+    # with README.md listed as docs-only (README.md is include_str!'d from
+    # src/lib.rs, so touching it changes compiled output and MUST gate).
+    grep -qxF "$p" <<< "$compiled" && return 1   # compiled -> gate
   done <<EOF
 $paths
 EOF
@@ -1934,6 +1949,32 @@ EOF
   RC=0; OUT="$(OC_SHIPCHAIN_IMPL=0 OC_FORK_REPO="$T/clone" bash "$SELF" --eval-docs-skip "$CMDSHA" 2>&1)" || RC=$?
   check_rc "eval-docs-skip-compiled-rc1" "$RC" 1
   case "$OUT" in *"GATE-REQUIRED"*) ok "eval-docs-skip-compiled-msg" ;; *) bad "eval-docs-skip-compiled-msg: $OUT" ;; esac
+
+  # 20d-bis (#537). The compiled-md set is derived by cd'ing into the fork repo
+  # and grepping src/ for include_str!/include_bytes! of markdown. Its failure
+  # path used to print NOTHING, which is indistinguishable from a legitimate
+  # "this repo compiles in no markdown" — so a failed derivation made every
+  # markdown path look non-compiled and the gate was SKIPPED. The sentinel makes
+  # the two cases separable, and shipchain_docs_only fails CLOSED on it.
+  # The function must be EXTRACTED, not called in place: this selftest body is
+  # eval'd at line 229, before the script reaches the definition, so no function
+  # defined later in the file exists here.
+  sed -n '/^shipchain_compiled_md_set()/,/^}$/p' "$SELF" > "$T/set_fn.sh"
+  if [ -s "$T/set_fn.sh" ]; then
+    _sent="$(FORK_REPO="$T/oc-537-does-not-exist" bash -c '. '"$T"'/set_fn.sh; shipchain_compiled_md_set' 2>/dev/null)"
+    case "$_sent" in
+      *__OC_DERIVE_FAILED__*) ok "compiled-md-set: unenterable repo -> sentinel (fail-closed signal)" ;;
+      *) bad "compiled-md-set: unenterable repo gave '$_sent' (empty reads as no-compiled-md)" ;;
+    esac
+    mkdir -p "$T/oc-537-emptysrc/src"
+    _sent2="$(FORK_REPO="$T/oc-537-emptysrc" bash -c '. '"$T"'/set_fn.sh; shipchain_compiled_md_set' 2>/dev/null)"
+    case "$_sent2" in
+      *__OC_DERIVE_FAILED__*) bad "compiled-md-set: sentinel on a LEGITIMATELY empty set" ;;
+      *) ok "compiled-md-set: enterable repo with no compiled md -> empty, no sentinel" ;;
+    esac
+  else
+    bad "compiled-md-set: extraction from \$SELF produced nothing (leg cannot run)"
+  fi
 
   # 20e. RANGE vs TIP (defect #322, editor lane #286 report). The skip must
   #      judge the WHOLE range the chain fast-forwards into main, not the tip
