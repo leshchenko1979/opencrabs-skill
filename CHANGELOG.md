@@ -14,6 +14,8 @@ The per-group freeze register is GONE. Removed with it: the `json` block that wa
 
 The `oc-ship-chain` / `oc-roster` hits for "freeze" are the **carrier** fork-rebase freeze — a different concept, untouched.
 
+**Bundled in this range and named here per the v0.4.239 law (the C8 leg flagged them):** the Open Questions renderer port — `57006627` (#547 CLI), `96ebe4d0` (#547 notify/return path), `038667e9` (#547 C1-C7 owner directives), `88b70103` (#547 json-render page rewrite). All Toolsmith work on fork issue #547; none is law and none touches the files this entry describes.
+
 LOC: 3584 -> 3536 (net -48; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `ca600ee2` which reproduces the v0.4.247 entry's 3572 exactly). The whole change is `fleet-directives.md` 695 -> 647; `SKILL.md` 708 -> 708 (the MODE REGISTER sentence is an IN-LINE append to an existing line, so it changes no line count).
 
 ## v0.4.248 (2026-09-24)
