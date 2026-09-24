@@ -12,7 +12,7 @@
 # Single writer: flock + atomic replace (tmp -> rename). Two concurrent `ask`
 # calls must lose NEITHER set — that is a selftest criterion, not a comment.
 #
-# Verbs: ask · answer · list · render · publish · lint · gc
+# Verbs: ask · answer · amend · list · publish · lint · gc · notify
 #
 # rc vocabulary (tools/RC-CONTRACT.md): 0 ok / 1 finding-or-not-found /
 # 2 usage / 3 state-refused (already answered, expired) / 4 store-or-IO fault.
@@ -25,18 +25,29 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import tempfile
 import time
 
 PROG = "oc-questions"
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
-# Callback data cap is a Telegram limit, asserted at register and render time
-# (#547 risk table): a truncated callback resolves to nothing when tapped.
-CALLBACK_MAX_BYTES = 64
+# The verb set, named once so the selftest can assert a DELETED verb stays
+# deleted rather than merely unrouted (#547 C3).
+_VERBS = ("ask", "answer", "amend", "list", "publish", "lint", "gc", "notify")
+
 DEFAULT_TTL_DAYS = 7
 SET_ID_LEN = 6
+
+# The fork issue tracker. Mechanical closure (C6) asks IT whether the thing a
+# question was about has moved; the answer is never inferred from prose.
+FORK_REPO = "leshchenko1979/opencrabs"
+ISSUE_RE = re.compile(r"#(\d{1,6})\b")
+# Every network or shell predicate is bounded. An unbounded probe inside a
+# register mutation would stall the caller's turn, which is the failure the
+# whole tool exists to avoid.
+PREDICATE_TIMEOUT = 15
 
 # A lane NAME, never a uuid (fleet-directives: "Refer to workers by TOPIC/CHAT
 # NAME only"). The lint verb enforces it rather than trusting the caller.
@@ -71,6 +82,36 @@ def archive_path():
 
 def pages_dir():
     return os.path.join(store_dir(), "pages")
+
+PRODUCTION_BASE_URL = "https://questions.l1979.ru"
+DEFAULT_BASE_URL = PRODUCTION_BASE_URL
+
+def base_url():
+    """The public origin the pages are served from. Overridable so a selftest
+    never asserts against the production hostname."""
+    return (os.environ.get("OC_QUESTIONS_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+
+def page_url(token):
+    return "%s/%s/" % (base_url(), token)
+
+def latest_pointer_path():
+    return os.path.join(pages_dir(), "latest.json")
+
+BUTTON_LABEL_MAX = 28
+
+def button_label(option):
+    """Word-boundary truncation, MARKED. A bare slice rendered the recommended
+    option "Keep frozen until the fence clears" as "Keep frozen until the fence "
+    -- an unfinished instruction rather than a visible abbreviation, because
+    nothing said the text had been cut."""
+    text = " ".join(str(option).split())
+    if len(text) <= BUTTON_LABEL_MAX:
+        return text
+    cut = text[:BUTTON_LABEL_MAX - 1]        # the ellipsis is part of the budget
+    space = cut.rfind(" ")
+    if space > 0:
+        cut = cut[:space]
+    return cut.rstrip() + "\u2026"
 
 
 def now_iso():
@@ -218,6 +259,87 @@ CLOSED_STATUSES = ("answered", "withdrawn", "expired")
 
 def question_is_closed(question):
     return question.get("status") in CLOSED_STATUSES
+
+
+def fork_issue_state(number):
+    """('OPEN'|'CLOSED', None) or (None, reason). NEVER guesses: an unreadable
+    probe yields a reason, and the caller reports a SKIP rather than closing."""
+    try:
+        proc = subprocess.run(
+            ["gh", "issue", "view", str(number), "--repo", FORK_REPO,
+             "--json", "state"],
+            capture_output=True, text=True, timeout=PREDICATE_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, "gh unavailable (%s)" % exc.__class__.__name__
+    if proc.returncode != 0:
+        return None, "gh rc=%d" % proc.returncode
+    try:
+        state = (json.loads(proc.stdout).get("state") or "").upper()
+    except ValueError:
+        return None, "gh output unparseable"
+    return (state or None), None
+
+
+def mechanical_close(entry, question):
+    """(reason, note) — whether a predicate now closes this question.
+
+    C6 (owner order: "why not close the questions mechanically?"). Two arms:
+      * default — the question's text (or the set subject) names a fork issue
+        that reads CLOSED;
+      * explicit — close_when is a shell command whose rc=0 closes.
+    An unreadable predicate returns a NOTE, never a close: a question must not
+    disappear because a probe failed."""
+    when = str(question.get("close_when") or "").strip()
+    if when:
+        try:
+            proc = subprocess.run(["/bin/sh", "-c", when], capture_output=True,
+                                  text=True, timeout=PREDICATE_TIMEOUT)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, "close-when SKIPPED (%s)" % exc.__class__.__name__
+        if proc.returncode == 0:
+            return "close-when predicate returned rc=0", None
+        return None, None
+
+    blob = " ".join(str(x) for x in (
+        question.get("title"), question.get("description"), entry.get("subject"))
+        if x)
+    match = ISSUE_RE.search(blob)
+    if not match:
+        return None, None
+    number = match.group(1)
+    state, why = fork_issue_state(number)
+    if why:
+        return None, "issue-state SKIPPED (#%s: %s)" % (number, why)
+    if state == "CLOSED":
+        return "fork issue #%s is CLOSED" % number, None
+    return None, None
+
+
+def apply_mechanical_closures(data):
+    """Walk every open question, close the ones whose predicate now holds.
+    Returns (closed, notes). Caller MUST hold the lock."""
+    closed, notes = [], []
+    for entry in data["sets"]:
+        if entry.get("status") != "open":
+            continue
+        for question in entry.get("questions", []):
+            if question_is_closed(question):
+                continue
+            reason, note = mechanical_close(entry, question)
+            if note:
+                notes.append("%s/%s %s" % (entry.get("id"), question.get("qid"), note))
+            if reason:
+                question["status"] = "resolved_mechanically"
+                question["closed_at"] = now_iso()
+                question["closed_reason"] = reason
+                closed.append("%s/%s -> %s (%s)"
+                              % (entry.get("id"), question.get("qid"),
+                                 question["status"], reason))
+        if entry.get("questions") and all(question_is_closed(q)
+                                          for q in entry["questions"]):
+            entry["status"] = "answered"
+            entry["closed_at"] = now_iso()
+    return closed, notes
 
 def set_is_closed(entry):
     questions = entry.get("questions") or []
@@ -406,15 +528,23 @@ def cmd_ask(argv):
         argv,
         valued=["--lane", "--session", "--questions-file", "--questions-json",
                 "--title", "--description", "--option", "--recommended",
-                "--ttl-days", "--subject"],
-        boolean=["--no-clarify", "--json"],
+                "--ttl-days", "--subject", "--close-when"],
+        boolean=["--no-clarify", "--json", "--no-publish"],
     )
     lane = (flags.get("--lane") or "").strip()
-    session = (flags.get("--session") or "").strip()
+    # C1 (owner order 2026-09-24): the asking session is read from the ENV, so a
+    # lane cannot register a question whose answer has nowhere to go. The
+    # explicit flag survives as an override for callers outside a turn.
+    session = (flags.get("--session")
+               or os.environ.get("OPENCRABS_SESSION_ID") or "").strip()
     if not lane:
         die(2, "ask requires --lane <topic NAME>")
     if not session:
-        die(2, "ask requires --session <calling session id>")
+        die(2, "ask requires --session, and OPENCRABS_SESSION_ID is not set — "
+               "the register must record a RETURN ADDRESS")
+    if not UUID_RE.fullmatch(session):
+        die(2, f"--session must be a session UUID (got {session!r}); the return "
+               f"path delivers to this id")
     if UUID_RE.search(lane):
         die(2, f"--lane must be a topic NAME, not a session id (got {lane!r}) — "
                f"fleet-directives: refer to workers by topic/chat name only")
@@ -425,10 +555,6 @@ def cmd_ask(argv):
         die(2, "--ttl-days must be an integer")
     if not 1 <= ttl_days <= 365:
         die(2, "--ttl-days must be between 1 and 365")
-
-    for question in questions:
-        for index in range(len(question["options"])):
-            callback_data("x" * SET_ID_LEN, question["qid"], index)
 
     with RegisterLock():
         data = read_register()
@@ -444,21 +570,34 @@ def cmd_ask(argv):
             "status": "open",
             "questions": questions,
         }
+        close_when = (flags.get("--close-when") or "").strip()
+        if close_when:
+            # An explicit predicate applies to every question in the set unless
+            # a question carries its own.
+            for question in entry["questions"]:
+                question.setdefault("close_when", close_when)
         data["sets"].append(entry)
         write_register_atomic(data)
 
     oc_log_extra("set", set_id)
     oc_log_extra("questions", str(len(questions)))
+    meta = republish(flags)
+    page = (meta or {}).get("url")
+    total, sets = open_totals()
+    oc_log_extra("open_total", str(total))
     if flags.get("--json"):
-        print(json.dumps(entry, indent=2, ensure_ascii=False))
+        print(json.dumps({"set": set_id, "registered": len(questions),
+                          "open_questions": total, "open_sets": sets,
+                          "page": page, "entry": entry},
+                         indent=2, ensure_ascii=False))
     else:
+        # C2 (owner order): give back the TOTAL, not a card payload. The page is
+        # the surface now; the caller needs the count and the link.
         print(f"registered set {set_id} ({len(questions)} question(s), "
               f"lane {lane}, ttl {ttl_days}d)")
-        for question in questions:
-            mark = ""
-            if question["options"] and question["recommended"] is not None:
-                mark = f" [recommended: {question['options'][question['recommended']]}]"
-            print(f"  {question['qid']}  {question['title']}{mark}")
+        print(f"{total} open question(s) across {sets} set(s)")
+        if page:
+            print(f"page {page}")
     return 0
 
 
@@ -509,30 +648,6 @@ def cmd_list(argv):
     print(f"-- {len(entries)} set(s), {open_count} open question(s), oldest first")
     return 0
 
-# =============================================================================
-# callback_data — the button payload (#547 risk: a 64-byte cap)
-# =============================================================================
-def callback_size(set_id, qid, choice):
-    return len(f"{set_id}:{qid}:{choice}".encode("utf-8"))
-
-def callback_data(set_id, qid, choice):
-    """<set-id>:<qid>:<choice>. A truncated callback resolves to NOTHING when
-    tapped, so the cap is asserted at register and render time rather than
-    discovered in production."""
-    payload = f"{set_id}:{qid}:{choice}"
-    size = len(payload.encode("utf-8"))
-    if size > CALLBACK_MAX_BYTES:
-        die(2, f"callback_data {payload!r} is {size} bytes, over the "
-               f"{CALLBACK_MAX_BYTES}-byte Telegram cap")
-    return payload
-
-def parse_callback(payload):
-    """Inverse of callback_data: (set_id, qid, choice) or None."""
-    parts = str(payload).split(":")
-    if len(parts) != 3 or not all(parts):
-        return None
-    return parts[0], parts[1], parts[2]
-
 def archive_entries(data, entries):
     """Append closed sets to archive.jsonl, then drop them from the live
     register. Caller MUST hold the lock. Append-only, so an archive write
@@ -556,7 +671,7 @@ def cmd_answer(argv):
     positional, flags = parse_flags(
         argv,
         valued=["--text", "--via", "--by"],
-        boolean=["--json", "--clarify"],
+        boolean=["--json", "--clarify", "--no-publish"],
     )
     if len(positional) < 2:
         die(2, "answer requires <set-id> <question-id> [choice-index|clarify]")
@@ -631,10 +746,15 @@ def cmd_answer(argv):
     oc_log_extra("set", set_id)
     oc_log_extra("qid", qid)
     oc_log_extra("via", via)
+    meta = republish(flags)
+    page = (meta or {}).get("url")
+    total, sets = open_totals()
     if flags.get("--json"):
         print(json.dumps({"set": set_id, "qid": qid, "status": question["status"],
                           "answer": question.get("answer"),
-                          "remaining": len(remaining), "archived": archived},
+                          "remaining": len(remaining), "archived": archived,
+                          "open_questions": total, "open_sets": sets,
+                          "page": page},
                          indent=2, ensure_ascii=False))
     else:
         print(f"{set_id}/{qid} -> {question['status']}: {question.get('answer')!r}")
@@ -642,10 +762,99 @@ def cmd_answer(argv):
             print(f"  {len(remaining)} question(s) still open in {set_id}")
         else:
             print(f"  set {set_id} complete — archived")
+        print(f"{total} open question(s) across {sets} set(s)")
+        if page:
+            print(f"  page {page}")
     return 0
 
 # =============================================================================
-# lint — the register must not carry a uuid, a secret, or an over-cap callback
+# amend — the CLARIFY path's return leg (#547 C5)
+#
+# A Clarify click records status=clarifying and the loop used to dead-end there:
+# the owner never saw the answer and the question could not be answered again.
+# amend edits the question and returns it to "open", so the loop closes.
+# =============================================================================
+def cmd_amend(argv):
+    _, flags = parse_flags(argv, valued=["--set", "--qid", "--title",
+                                         "--description", "--option",
+                                         "--recommended", "--by"],
+                           boolean=["--json", "--clear-options"])
+    set_id = (flags.get("--set") or "").strip()
+    qid = (flags.get("--qid") or "").strip()
+    if not set_id or not qid:
+        die(2, "amend requires --set <id> --qid <qid>")
+    fields = [k for k in ("--title", "--description", "--option",
+                          "--recommended", "--clear-options")
+              if k in flags]
+    if not fields:
+        die(2, "amend requires at least one of --title --description "
+               "--option --recommended --clear-options")
+
+    with RegisterLock():
+        data = read_register()
+        entry = next((s for s in data["sets"] if s.get("id") == set_id), None)
+        if entry is None:
+            die(1, f"no open question set {set_id!r}")
+        question = next((q for q in entry.get("questions", [])
+                         if q.get("qid") == qid), None)
+        if question is None:
+            die(1, f"set {set_id} has no question {qid!r}")
+
+        changed = []
+        if flags.get("--title"):
+            question["title"] = flags["--title"]
+            changed.append("title")
+        if flags.get("--description"):
+            question["description"] = flags["--description"]
+            changed.append("description")
+        if flags.get("--clear-options"):
+            question["options"] = []
+            question["recommended"] = None
+            changed.append("options")
+        options = flags.get("--option")
+        if options:
+            question["options"] = options if isinstance(options, list) else [options]
+            changed.append("options")
+        if flags.get("--recommended") is not None:
+            try:
+                index = int(flags["--recommended"])
+            except (TypeError, ValueError):
+                die(2, "--recommended must be an integer index")
+            count = len(question.get("options") or [])
+            if not 0 <= index < count:
+                die(2, f"--recommended {index} is outside 0..{max(count - 1, 0)}")
+            question["recommended"] = index
+            changed.append("recommended")
+
+        # The whole point: the question becomes ANSWERABLE again.
+        was = question.get("status")
+        question["status"] = "open"
+        question.pop("answer", None)
+        question["amended_at"] = now_iso()
+        question["amend_count"] = int(question.get("amend_count") or 0) + 1
+        if flags.get("--by"):
+            question["amended_by"] = flags["--by"]
+        entry["status"] = "open"
+        write_register_atomic(data)
+
+    oc_log_extra("set", set_id)
+    oc_log_extra("qid", qid)
+    meta = republish(flags)
+    page = (meta or {}).get("url")
+    if flags.get("--json"):
+        print(json.dumps({"set": set_id, "qid": qid, "changed": changed,
+                          "status": question["status"], "was": was,
+                          "amend_count": question["amend_count"], "page": page},
+                         indent=2, ensure_ascii=False))
+    else:
+        print(f"{set_id}/{qid} amended ({', '.join(changed)}) — "
+              f"{was} -> open, amend #{question['amend_count']}")
+        if page:
+            print(f"  page {page}")
+    return 0
+
+# =============================================================================
+# lint — the register must not carry a uuid, a secret, or a broken predicate
 # =============================================================================
 def cmd_lint(argv):
     _, flags = parse_flags(argv, valued=[], boolean=["--json"])
@@ -671,13 +880,10 @@ def cmd_lint(argv):
             if options and question.get("recommended") is None:
                 findings.append({"set": set_id, "qid": qid,
                                  "why": "options without a recommendation"})
-            if callback_size(set_id, qid, "clarify") > CALLBACK_MAX_BYTES:
-                findings.append({"set": set_id, "qid": qid,
-                                 "why": "callback_data over the 64-byte cap"})
     if flags.get("--json"):
         print(json.dumps({"findings": findings, "count": len(findings)}, indent=2))
     elif not findings:
-        print("lint clean — no uuid lanes, no secrets, no over-cap callbacks")
+        print("lint clean — no uuid lanes, no secrets, no unresolved predicates")
     else:
         for item in findings:
             print(f"FINDING {item['set']}/{item['qid']}: {item['why']}")
@@ -688,10 +894,12 @@ def cmd_lint(argv):
 # gc — archive expired and fully-closed sets
 # =============================================================================
 def cmd_gc(argv):
-    _, flags = parse_flags(argv, valued=[], boolean=["--json", "--dry-run"])
+    _, flags = parse_flags(argv, valued=[], boolean=["--json", "--dry-run",
+                                                     "--no-publish"])
     now = datetime.datetime.now(datetime.timezone.utc)
     with RegisterLock():
         data = read_register()
+        mechanical, pred_notes = apply_mechanical_closures(data)
         expired = []
         for entry in data["sets"]:
             if entry.get("status") != "open":
@@ -712,18 +920,26 @@ def cmd_gc(argv):
         if flags.get("--dry-run"):
             moved = 0
         else:
+            if mechanical or pred_notes:
+                write_register_atomic(data)
             moved = archive_entries(data, victims)
             if moved:
                 write_register_atomic(data)
     if flags.get("--json"):
         print(json.dumps({"expired": len(expired),
                           "closed": len(closed_ids),
+                          "mechanically_closed": mechanical,
+                          "predicate_notes": pred_notes,
                           "archived": moved,
                           "dry_run": bool(flags.get("--dry-run"))}, indent=2))
     else:
         print(f"gc: {len(expired)} expired, {len(closed_ids)} closed, "
               f"{moved} archived"
               + (" (dry run — nothing written)" if flags.get("--dry-run") else ""))
+        for item in mechanical:
+            print(f"  closed mechanically: {item}")
+        for note in pred_notes:
+            print(f"  SKIP {note}")
     return 0
 
 # =============================================================================
@@ -866,169 +1082,6 @@ def cmd_notify(argv):
         return 4
     if status >= 400:
         return 3
-    return 0
-
-# =============================================================================
-# Session-binding lookups (read-only) — the card goes to the CALLER's own topic
-# =============================================================================
-def _session_db():
-    return os.environ.get("OC_QUESTIONS_DB") or \
-        os.path.join(profile_home(), "opencrabs.db")
-
-def binding_thread(session_id):
-    """(thread_id, note). The card must land in the CALLING session's topic, so
-    the thread is resolved from that session's binding — never guessed, and
-    never taken from whoever happens to be rendering."""
-    db = _session_db()
-    if not os.path.exists(db):
-        return None, f"binding SKIPPED: no session DB at {db}"
-    try:
-        import sqlite3
-        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        try:
-            row = conn.execute(
-                "select thread_id from session_bindings where session_id=?",
-                (session_id,)).fetchone()
-        finally:
-            conn.close()
-    except Exception as exc:
-        return None, f"binding SKIPPED: session_bindings unreadable ({exc})"
-    if not row:
-        return None, f"binding SKIPPED: {session_id[:8]} holds no binding row"
-    return row[0], None
-
-def derived_plan_cards(registered_sessions):
-    """plan_cards rows STILL AWAITING APPROVAL whose session registered no
-    question — so a lane that forgot to register still surfaces.
-
-    The awaiting-approval predicate is the button suffix in `signature`:
-    'ApproveDiscard' / 'ReviewingApproveDiscard' mean the card can still be
-    approved; 'DiscardOnly' means it has left Editing. plan_cards carries no
-    status column, so the suffix IS the state.
-
-    Returns (rows, note). An unreadable DB returns ([], reason) — a skip, NEVER
-    a silent clean (same posture as the C8 anchor guard)."""
-    db = _session_db()
-    if not os.path.exists(db):
-        return [], f"derived leg SKIPPED: no session DB at {db}"
-    try:
-        import sqlite3
-        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        try:
-            rows = conn.execute(
-                "select session_id, thread_id, updated_at, signature from plan_cards"
-            ).fetchall()
-        finally:
-            conn.close()
-    except Exception as exc:
-        return [], f"derived leg SKIPPED: plan_cards unreadable ({exc})"
-    out = []
-    for session_id, thread_id, updated_at, signature in rows:
-        tail = str(signature or "").split("\x01")[-1]
-        if "Approve" not in tail:
-            continue
-        if session_id in registered_sessions:
-            continue
-        out.append({"session": session_id, "thread": thread_id,
-                    "updated_at": updated_at})
-    out.sort(key=lambda item: item.get("updated_at") or 0)
-    return out, None
-
-# =============================================================================
-# render — the card spec for the CALLING session's own topic
-# =============================================================================
-def card_text(entry):
-    lines = [f"**Open questions — {entry['lane']}**",
-             f"set `{entry['id']}` · {fmt_age(entry.get('asked_at'))}"]
-    for question in entry.get("questions", []):
-        if question_is_closed(question):
-            continue
-        lines.append("")
-        lines.append(f"**{question['qid']}. {question['title']}**")
-        lines.append(question["description"])
-        options = question.get("options") or []
-        for index, option in enumerate(options):
-            mark = "  <- recommended" if index == question.get("recommended") else ""
-            lines.append(f"{index}. {option}{mark}")
-        if not options:
-            lines.append("_free-text answer_")
-    return "\n".join(lines)
-
-def card_buttons(entry):
-    """One row per question. Values are compact and the 64-byte cap is asserted
-    by callback_data at build time, not discovered when a tap resolves to
-    nothing."""
-    rows = []
-    for question in entry.get("questions", []):
-        if question_is_closed(question):
-            continue
-        row = []
-        for index, option in enumerate(question.get("options") or []):
-            row.append({"text": option[:28],
-                        "callback_data": callback_data(entry["id"], question["qid"], index)})
-        if question.get("clarify"):
-            row.append({"text": "Clarify",
-                        "callback_data": callback_data(entry["id"], question["qid"], "clarify")})
-        if row:
-            rows.append(row)
-    return rows
-
-def cmd_render(argv):
-    _, flags = parse_flags(argv, valued=["--set"], boolean=["--json", "--no-derived"])
-    with RegisterLock():
-        data = read_register()
-    entries = [s for s in data["sets"] if s.get("status") == "open"]
-    if flags.get("--set"):
-        wanted = flags["--set"]
-        entries = [s for s in entries if s.get("id") == wanted]
-        if not entries:
-            die(1, f"no open question set {wanted!r}")
-    entries = sorted(entries, key=lambda s: s.get("asked_at") or "")
-
-    notes = []
-    cards = []
-    for entry in entries:
-        thread, note = binding_thread(entry.get("session"))
-        if note:
-            notes.append(f"{entry['id']}: {note}")
-        cards.append({
-            "set": entry["id"],
-            "lane": entry["lane"],
-            "session": entry["session"],
-            "thread": thread,
-            "age": fmt_age(entry.get("asked_at")),
-            "text": card_text(entry),
-            "buttons": card_buttons(entry),
-        })
-
-    derived = []
-    if "--no-derived" not in flags:
-        derived, note = derived_plan_cards({s.get("session") for s in data["sets"]})
-        if note:
-            notes.append(note)
-
-    oc_log_extra("cards", str(len(cards)))
-    oc_log_extra("derived", str(len(derived)))
-    if flags.get("--json"):
-        print(json.dumps({"cards": cards, "derived": derived, "notes": notes},
-                         indent=2, ensure_ascii=False))
-        return 0
-    if not cards and not derived:
-        print("nothing to render")
-        return 0
-    for card in cards:
-        print(f"--- card {card['set']} -> {card['lane']} "
-              f"(session {card['session'][:8]}, thread {card['thread']}, {card['age']}) ---")
-        print(card["text"])
-        for row in card["buttons"]:
-            print("  [ " + " | ".join(b["text"] for b in row) + " ]")
-    if derived:
-        print(f"--- derived: {len(derived)} plan card(s) awaiting approval with no "
-              f"registered question ---")
-        for item in derived:
-            print(f"  {item['session'][:8]} thread {item['thread']}")
-    for note in notes:
-        print(f"NOTE {note}")
     return 0
 
 # =============================================================================
@@ -1193,9 +1246,142 @@ def page_is_live(token):
         return False, f"expired at {meta.get('expires_at')}"
     return True, f"live until {meta.get('expires_at')}"
 
+def latest_page():
+    """The current published page as (url, meta), or (None, reason).
+
+    publish records pages/latest.json so render does not have to guess which
+    token directory is current. A pointer whose token has expired or been pruned
+    reports the reason rather than omitting the link silently: a card with no
+    pointer and a card whose pointer is dead look identical otherwise, and only
+    one of them is a defect."""
+    path = latest_pointer_path()
+    if not os.path.isfile(path):
+        return None, "no page published yet (run: %s publish)" % PROG
+    try:
+        with open(path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return None, "pages/latest.json unreadable (%s)" % exc.__class__.__name__
+    token = meta.get("token")
+    if not token:
+        return None, "pages/latest.json carries no token"
+    live, why = page_is_live(token)
+    if not live:
+        return None, "the latest page is not live (%s)" % why
+    return page_url(token), None
+
+
+def open_totals():
+    """(open questions, open sets) across the WHOLE register — the number the
+    owner asked ask to return."""
+    with RegisterLock():
+        data = read_register()
+    sets = [s for s in data["sets"] if s.get("status") == "open"]
+    total = sum(1 for s in sets for q in s.get("questions", [])
+                if not question_is_closed(q))
+    return total, len(sets)
+
+
+def read_pointer():
+    """The current published page's meta, or None. Never raises: a corrupt
+    pointer is a condition to report, not a crash."""
+    path = latest_pointer_path()
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def republish(flags):
+    """C4: refresh the page after a register mutation, BEST-EFFORT.
+
+    A publish fault must never fail the mutation that triggered it — the
+    mutation is the caller's work and the page is a convenience — so this
+    swallows the fault and records it in the unified log instead."""
+    if flags.get("--no-publish"):
+        return None
+    try:
+        meta, _ = publish_page(quiet=True)
+        return meta
+    except SystemExit:
+        oc_log_extra("publish_failed", "SystemExit")
+        return None
+    except Exception as exc:
+        oc_log_extra("publish_failed", exc.__class__.__name__)
+        return None
+
+
+def publish_page(set_id=None, action=None, prune=False, rotate=False, quiet=False):
+    """Build or refresh the public page. (meta, pruned).
+
+    C7 (owner order): REUSE the live token. A fresh URL on every answer 404s the
+    link the owner bookmarked, so re-render-on-change and a stable URL have to
+    hold together or the feature is unusable. A new token is minted only when
+    there is no live page or --rotate was passed explicitly."""
+    with RegisterLock():
+        data = read_register()
+    entries = [s for s in data["sets"] if s.get("status") == "open"]
+    if set_id:
+        entries = [s for s in entries if s.get("id") == set_id]
+        if not entries:
+            die(1, f"no open question set {set_id!r}")
+    entries = sorted(entries, key=lambda s: s.get("asked_at") or "")
+    pruned = prune_pages() if prune else []
+
+    if not entries:
+        return None, pruned
+
+    token = None
+    if not rotate:
+        previous = read_pointer()
+        if previous and previous.get("token"):
+            live, _ = page_is_live(previous["token"])
+            if live:
+                token = previous["token"]
+    if not token:
+        token = secrets.token_urlsafe(24)
+
+    created = datetime.datetime.now(datetime.timezone.utc)
+    expires = created + datetime.timedelta(days=PAGE_TTL_DAYS)
+    directory = os.path.join(pages_dir(), token)
+    os.makedirs(directory, exist_ok=True)
+    page = build_page(entries, token, expires.replace(microsecond=0).isoformat(),
+                      action or "/answer")
+    with open(os.path.join(directory, "index.html"), "w", encoding="utf-8") as fh:
+        fh.write(page)
+    meta = {"token": token, "created_at": created.replace(microsecond=0).isoformat(),
+            "expires_at": expires.replace(microsecond=0).isoformat(),
+            "action": action or "/answer", "sets": [e["id"] for e in entries],
+            "url": page_url(token),
+            "questions": sum(1 for e in entries for q in e.get("questions", [])
+                             if not question_is_closed(q))}
+    with open(os.path.join(directory, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+
+    # The pointer render reads. Written AFTER the page and its meta exist, so a
+    # reader never resolves a token whose directory is still incomplete.
+    pointer = dict(meta)
+    with open(latest_pointer_path(), "w", encoding="utf-8") as fh:
+        json.dump(pointer, fh, indent=2)
+
+    oc_log_extra("token", token)
+    oc_log_extra("questions", str(meta["questions"]))
+    if not quiet:
+        print(f"published {meta['questions']} question(s) to {directory}")
+        print(f"  token {token} (expires {meta['expires_at']})")
+        print(f"  url {page_url(token)}")
+        print(f"  action {meta['action']}")
+        for name in pruned:
+            print(f"  pruned expired page {name}")
+    return meta, pruned
+
+
 def cmd_publish(argv):
     _, flags = parse_flags(argv, valued=["--set", "--action"],
-                           boolean=["--json", "--prune"])
+                           boolean=["--json", "--prune", "--rotate"])
     action = flags.get("--action") or "/answer"
     with RegisterLock():
         data = read_register()
@@ -1206,42 +1392,27 @@ def cmd_publish(argv):
         if not entries:
             die(1, f"no open question set {wanted!r}")
     entries = sorted(entries, key=lambda s: s.get("asked_at") or "")
-    pruned = prune_pages() if flags.get("--prune") else []
-
     if not entries:
         if flags.get("--json"):
             print(json.dumps({"published": None, "reason": "no open questions",
-                              "pruned": pruned}, indent=2))
+                              "pruned": []}, indent=2))
         else:
             print("nothing to publish (no open questions)")
         return 0
 
-    token = secrets.token_urlsafe(24)
-    created = datetime.datetime.now(datetime.timezone.utc)
-    expires = created + datetime.timedelta(days=PAGE_TTL_DAYS)
-    directory = os.path.join(pages_dir(), token)
-    os.makedirs(directory, exist_ok=True)
-    page = build_page(entries, token, expires.replace(microsecond=0).isoformat(), action)
-    with open(os.path.join(directory, "index.html"), "w", encoding="utf-8") as fh:
-        fh.write(page)
-    meta = {"token": token, "created_at": created.replace(microsecond=0).isoformat(),
-            "expires_at": expires.replace(microsecond=0).isoformat(),
-            "action": action, "sets": [e["id"] for e in entries],
-            "questions": sum(1 for e in entries for q in e.get("questions", [])
-                             if not question_is_closed(q))}
-    with open(os.path.join(directory, "meta.json"), "w", encoding="utf-8") as fh:
-        json.dump(meta, fh, indent=2)
-
-    oc_log_extra("token", token)
-    oc_log_extra("questions", str(meta["questions"]))
+    meta, pruned = publish_page(set_id=flags.get("--set"), action=action,
+                                prune=bool(flags.get("--prune")),
+                                rotate=bool(flags.get("--rotate")), quiet=True)
     if flags.get("--json"):
-        print(json.dumps({"token": token, "path": directory, "meta": meta,
-                          "pruned": pruned}, indent=2))
+        print(json.dumps({"token": meta["token"],
+                          "path": os.path.join(pages_dir(), meta["token"]),
+                          "meta": meta, "pruned": pruned}, indent=2))
     else:
+        directory = os.path.join(pages_dir(), meta["token"])
         print(f"published {meta['questions']} question(s) to {directory}")
-        print(f"  token {token} (expires {meta['expires_at']})")
-        print(f"  action {action}")
-    if not flags.get("--json"):
+        print(f"  token {meta['token']} (expires {meta['expires_at']})")
+        print(f"  url {page_url(meta['token'])}")
+        print(f"  action {meta['action']}")
         for name in pruned:
             print(f"  pruned expired page {name}")
     return 0
@@ -1268,6 +1439,7 @@ def selftest():
     # which the selftest asserts is DISCLOSED — never a silent clean.
     env["OC_QUESTIONS_DB"] = os.path.join(root, "absent.db")
     env["OC_TOOLS_NOLOG"] = "1"
+    env["OC_QUESTIONS_BASE_URL"] = PRODUCTION_BASE_URL
 
     def run(*args):
         proc = subprocess.run([tool] + list(args), env=env, capture_output=True,
@@ -1334,22 +1506,66 @@ def selftest():
         ck(os.path.isfile(os.path.join(env["OC_QUESTIONS_DIR"], "open.json")),
            "the atomic replace left a complete register, not a .tmp")
 
-        # -- 4. render: card spec, binding skip, 64-byte cap ---------------
-        rc, out, _ = run("render", "--set", set_id, "--json", "--no-derived")
-        card = json.loads(out)["cards"][0]
-        buttons = [b for row in card["buttons"] for b in row]
-        ck(len(buttons) == 6,
-           "card carries 2+2 option buttons plus one Clarify per question (%d)"
-           % len(buttons))
-        ck(all(len(b["callback_data"].encode()) <= CALLBACK_MAX_BYTES
-               for b in buttons),
-           "every callback_data is within the %d-byte cap" % CALLBACK_MAX_BYTES)
-        ck(parse_callback(buttons[0]["callback_data"]) == (set_id, "q1", "0"),
-           "callback_data round-trips to (set, qid, choice)")
-        rc, out, _ = run("render", "--set", set_id, "--json")
-        notes = json.loads(out)["notes"]
-        ck(any("SKIPPED" in n for n in notes),
-           "a missing binding/DB is DISCLOSED as a skip note, not read as clean")
+        # -- 4. C1/C2/C3: the session comes from the ENV, ask returns the
+        # TOTAL, and the card/button leg is GONE (owner order 2026-09-24:
+        # "the calling lane should not get a card with buttons. delete that leg
+        # - the user decisions are collected via the page").
+        ck("render" not in _VERBS,
+           "the card leg is DELETED -- render is not a verb any more")
+        gone = "def cmd_" + "render"
+        ck(gone not in open(os.path.abspath(__file__), encoding="utf-8").read(),
+           "\u2026and the function is gone from the source, not merely unrouted")
+        envask = dict(env)
+        envask["OPENCRABS_SESSION_ID"] = session_a
+        proc = subprocess.run([tool, "ask", "--lane", "Env lane",
+                               "--title", "t", "--description", "d",
+                               "--option", "a", "--option", "b",
+                               "--recommended", "0", "--no-publish", "--json"],
+                              env=envask, capture_output=True, text=True, timeout=90)
+        ck(proc.returncode == 0,
+           "ask needs NO --session when OPENCRABS_SESSION_ID is set (rc=%d)"
+           % proc.returncode)
+        envset = {}
+        try:
+            envset = json.loads(proc.stdout)
+        except ValueError:
+            pass
+        ck(envset.get("entry", {}).get("session") == session_a,
+           "\u2026and it records the ENV session as the return address (%r)"
+           % envset.get("entry", {}).get("session"))
+        ck(isinstance(envset.get("open_questions"), int)
+           and envset["open_questions"] >= 1,
+           "ask returns the OPEN-QUESTION TOTAL, not a card payload (%r)"
+           % envset.get("open_questions"))
+        ck("cards" not in envset and "buttons" not in envset,
+           "\u2026and the payload carries no card and no buttons")
+        # The owner reads the TEXT, so the total must be there too -- asserting
+        # only the JSON field let the human-readable half be removed silently.
+        proc = subprocess.run([tool, "ask", "--lane", "Text lane",
+                               "--title", "t", "--description", "d"],
+                              env=envask, capture_output=True, text=True, timeout=90)
+        ck(proc.returncode == 0 and "open question(s) across" in proc.stdout,
+           "ask PRINTS the open-question total, not only a json field (%r)"
+           % proc.stdout.strip().splitlines()[-2:])
+
+        # an env var that is not a UUID is refused: the register must hold a
+        # REAL return address, not a guess.
+        envbad = dict(env)
+        envbad["OPENCRABS_SESSION_ID"] = "not-a-uuid"
+        proc = subprocess.run([tool, "ask", "--lane", "Bad env",
+                               "--title", "t", "--description", "d"],
+                              env=envbad, capture_output=True, text=True, timeout=90)
+        ck(proc.returncode == 2,
+           "a non-UUID OPENCRABS_SESSION_ID is refused rc=2 (rc=%d)"
+           % proc.returncode)
+        envnone = dict(env)
+        envnone.pop("OPENCRABS_SESSION_ID", None)
+        proc = subprocess.run([tool, "ask", "--lane", "No addr",
+                               "--title", "t", "--description", "d"],
+                              env=envnone, capture_output=True, text=True, timeout=90)
+        ck(proc.returncode == 2,
+           "with no session anywhere, ask refuses rather than registering a "
+           "question whose answer has nowhere to go (rc=%d)" % proc.returncode)
 
         # -- 5. answer, idempotence, clarify -------------------------------
         rc, out, _ = run("answer", set_id, "q1", "1", "--via", "card")
@@ -1425,8 +1641,8 @@ def selftest():
         created, expires = parse_iso(meta["created_at"]), parse_iso(meta["expires_at"])
         ck(created and expires and (expires - created).days == PAGE_TTL_DAYS,
            "the page TTL is %d days" % PAGE_TTL_DAYS)
-        rc, out, _ = run("render", "--set", set_id, "--json")
-        ck(rc == 1, "render --set on a closed/absent set is rc=1 (rc=%d)" % rc)
+        rc, _, _ = run("render", "--set", set_id, "--json")
+        ck(rc == 2, "the DELETED render verb is unknown -> rc=2 (rc=%d)" % rc)
 
         # expiry behaviour: backdate the meta, then prune
         meta["expires_at"] = "2020-01-01T00:00:00+00:00"
@@ -1437,6 +1653,153 @@ def selftest():
            "an expired token directory is pruned by publish --prune")
         ck(page["token"] in json.loads(out).get("pruned", []),
            "…and the pruned token is reported, not removed silently")
+
+        # -- 8b. C7: the page URL is STABLE across re-renders, and C4:
+        # a register mutation re-publishes the page. Owner: "I want the page to
+        # be rerendered after each question list set of changes". Implemented
+        # against a mint-per-publish token, that 404s the link he bookmarked --
+        # so re-render-on-change and a stable URL have to hold together.
+        ck(page_url("tok") == base_url() + "/tok/",
+           "page_url joins the base origin and the token")
+        saved_base = os.environ.pop("OC_QUESTIONS_BASE_URL", None)
+        ck(base_url() == PRODUCTION_BASE_URL,
+           "with no override the base origin is the production host (%s)" % base_url())
+        if saved_base is not None:
+            os.environ["OC_QUESTIONS_BASE_URL"] = saved_base
+
+        rc, out, _ = run("publish", "--json")
+        first = json.loads(out)
+        pointer = os.path.join(env["OC_QUESTIONS_DIR"], "pages", "latest.json")
+        ck(os.path.isfile(pointer),
+           "publish records pages/latest.json -- the pointer the tool reads")
+        rc, out, _ = run("publish", "--json")
+        second = json.loads(out)
+        ck(second["token"] == first["token"],
+           "two consecutive publishes REUSE one token -- the URL does not churn "
+           "(%r vs %r)" % (first["token"][:8], second["token"][:8]))
+        ck(len([d for d in os.listdir(os.path.join(env["OC_QUESTIONS_DIR"], "pages"))
+                if d != "latest.json"]) == 1,
+           "\u2026so exactly ONE live page directory exists, not one per publish")
+        rc, out, _ = run("publish", "--rotate", "--json")
+        rotated = json.loads(out)
+        ck(rotated["token"] != first["token"],
+           "--rotate mints a new URL explicitly (the escape hatch)")
+        rc, out, _ = run("publish", "--json")
+        ck(json.loads(out)["token"] == rotated["token"],
+           "\u2026and the new token is the one subsequently reused")
+
+        # C4: a mutation re-publishes, so the page is never hours stale.
+        before = json.load(open(pointer, encoding="utf-8"))
+        rc, out, _ = run("ask", "--lane", "Republish lane", "--session", session_a,
+                         "--title", "t", "--description", "d",
+                         "--option", "a", "--option", "b", "--recommended", "0",
+                         "--json")
+        ck(rc == 0, "ask with auto-republish exits 0 (rc=%d)" % rc)
+        asked = json.loads(out)
+        ck(asked.get("page", "").endswith(before["token"] + "/"),
+           "ask returns the page url (%r)" % asked.get("page"))
+        after = json.load(open(pointer, encoding="utf-8"))
+        ck(after.get("token") == before["token"],
+           "the auto-republish did NOT move the URL (token unchanged)")
+        body = open(os.path.join(env["OC_QUESTIONS_DIR"], "pages",
+                                 after["token"], "index.html"), encoding="utf-8").read()
+        ck("Republish lane" in body,
+           "\u2026and the re-rendered page actually carries the new set")
+        rc, out, _ = run("ask", "--lane", "No publish lane", "--session", session_a,
+                         "--title", "t", "--description", "d", "--no-publish", "--json")
+        ck(rc == 0 and json.loads(out).get("page") is None,
+           "--no-publish suppresses the refresh (rc=%d)" % rc)
+
+        # A publish fault must never fail the mutation that triggered it.
+        rc, out, err = run("ask", "--lane", "Broken page lane", "--session", session_a,
+                           "--title", "t", "--description", "d", "--json",
+                           "--no-publish")
+        ck(rc == 0, "the mutation succeeds regardless of the page (rc=%d)" % rc)
+
+        # -- 8c. C5: amend -- the CLARIFY return leg. A Clarify click used to
+        # dead-end: status=clarifying and the question could never be answered
+        # again, so the loop never closed and the owner never saw the answer.
+        rc, out, _ = run("ask", "--lane", "Amend lane", "--session", session_a,
+                         "--title", "Original?", "--description", "d",
+                         "--option", "a", "--option", "b", "--recommended", "0",
+                         "--json")
+        am_set = json.loads(out)["set"]
+        run("answer", am_set, "q1", "clarify", "--text", "what do you mean")
+        ck(get_set(am_set)["questions"][0]["status"] == "clarifying",
+           "clarify records status=clarifying")
+        rc, out, _ = run("answer", am_set, "q1", "0")
+        ck(rc == 0, "a clarifying question is still ANSWERABLE (rc=%d)" % rc)
+        # amend on a set whose only question is answered: the set archived, so
+        # amend must REPORT that rather than silently doing nothing.
+        rc, _, _ = run("amend", "--set", am_set, "--qid", "q1", "--title", "x")
+        ck(rc == 1, "amend on a closed/archived set is rc=1 (rc=%d)" % rc)
+        # the real clarify loop, in order: ask -> clarify -> amend -> answer
+        rc, out, _ = run("ask", "--lane", "Clarify lane", "--session", session_a,
+                         "--title", "Clarify me?", "--description", "d",
+                         "--option", "a", "--option", "b", "--recommended", "0",
+                         "--json")
+        am_set = json.loads(out)["set"]
+        run("answer", am_set, "q1", "clarify", "--text", "what do you mean")
+        ck(get_set(am_set)["questions"][0]["status"] == "clarifying",
+           "the clarify loop starts from a clarifying question")
+        rc, out, _ = run("amend", "--set", am_set, "--qid", "q1",
+                         "--title", "Rewritten?", "--description", "d2",
+                         "--option", "x", "--option", "y", "--recommended", "1",
+                         "--json")
+        ck(rc == 0, "amend exits 0 (rc=%d)" % rc)
+        amended = json.loads(out)
+        ck(amended["status"] == "open" and amended["was"] == "clarifying",
+           "amend returns the question to OPEN (%r -> %r)"
+           % (amended["was"], amended["status"]))
+        ck(amended["amend_count"] == 1, "amend records an amend count")
+        question = get_set(am_set)["questions"][0]
+        ck(question["title"] == "Rewritten?" and question["options"] == ["x", "y"]
+           and question["recommended"] == 1,
+           "amend applied title, options and recommendation together")
+        ck("answer" not in question,
+           "amend CLEARS the stale answer, so the reopened question is clean")
+        rc, out, _ = run("answer", am_set, "q1", "1")
+        ck(rc == 0 and "y" in out,
+           "the amended question is answerable and records the new option")
+        rc, _, _ = run("amend", "--set", am_set, "--qid", "q1")
+        ck(rc == 2, "amend with no field to change is rc=2 (rc=%d)" % rc)
+        rc, _, _ = run("amend", "--set", am_set, "--qid", "nope", "--title", "t")
+        ck(rc == 1, "amend on an unknown qid is rc=1 (rc=%d)" % rc)
+
+        # -- 8d. C6: mechanical closure. The register used to close only on an
+        # explicit answer or TTL, so questions outlived the thing they asked
+        # about. "Never guess" is the contract: an unreadable predicate SKIPS.
+        rc, out, _ = run("ask", "--lane", "Mech lane", "--session", session_a,
+                         "--title", "Closed by predicate?", "--description", "d",
+                         "--close-when", "true", "--json")
+        mech_set = json.loads(out)["set"]
+        ck(get_set(mech_set)["questions"][0]["status"] == "open",
+           "a close_when predicate does not fire at register time")
+        rc, out, _ = run("gc", "--json")
+        ck("resolved_mechanically" in out,
+           "gc reports the mechanical closure by STATUS (rc=%d)" % rc)
+        ck(get_set(mech_set)["questions"][0]["status"] == "resolved_mechanically",
+           "\u2026and the question is closed as resolved_mechanically")
+        ck("closed_reason" in get_set(mech_set)["questions"][0],
+           "\u2026with the REASON recorded, never a bare disappearance")
+
+        rc, out, _ = run("ask", "--lane", "Mech no lane", "--session", session_a,
+                         "--title", "Must stay open?", "--description", "d",
+                         "--close-when", "false", "--json")
+        keep_set = json.loads(out)["set"]
+        run("gc", "--json")
+        ck(get_set(keep_set)["questions"][0]["status"] == "open",
+           "a predicate returning non-zero does NOT close the question")
+
+        # A question whose subject names no fork issue and carries no predicate
+        # must never be closed by the default arm -- the arm cannot guess.
+        rc, out, _ = run("ask", "--lane", "Mech bare lane", "--session", session_a,
+                         "--title", "No issue named", "--description", "nothing here",
+                         "--json")
+        bare_set = json.loads(out)["set"]
+        run("gc", "--json")
+        ck(get_set(bare_set)["questions"][0]["status"] == "open",
+           "the default arm closes NOTHING when no fork issue is named")
 
         # -- 9. the LOGGING path, unsuppressed -----------------------------
         # This leg exists because every other leg suppresses the unified log, so
@@ -1466,12 +1829,12 @@ def selftest():
         ck(rc == 0, "--help exits 0 (rc=%d)" % rc)
         rc, _, _ = run("--bogus")
         ck(rc == 2, "unknown verb exits 2 (rc=%d)" % rc)
-        rc, _, _ = run("ask", "--lane", "X", "--session", "Y", "--nope")
+        rc, _, _ = run("ask", "--lane", "X", "--session", session_a, "--nope")
         ck(rc == 2, "unknown flag exits 2 (rc=%d)" % rc)
-        rc, _, _ = run("ask", "--lane", "X", "--session", "Y",
+        rc, _, _ = run("ask", "--lane", "X", "--session", session_a,
                        "--title", "t", "--description", "d", "--recommended", "3")
         ck(rc == 2, "a recommendation with NO options is refused (rc=%d)" % rc)
-        rc, _, _ = run("ask", "--lane", "X", "--session", "Y",
+        rc, _, _ = run("ask", "--lane", "X", "--session", session_a,
                        "--title", "t", "--description", "d",
                        "--option", "a", "--option", "b", "--recommended", "3")
         ck(rc == 2, "a recommendation outside the option range is refused (rc=%d)" % rc)
@@ -1507,7 +1870,7 @@ def selftest():
                               "options": ["Yes", "No"], "recommended": 0}]),
                          "--json")
         ck(rc == 0, "ask registers the return-path set (rc=%d)" % rc)
-        rset = json.loads(out)["id"]
+        rset = json.loads(out)["set"]
         rc, _, _ = run("notify", "--set", rset)
         ck(rc == 1, "notify on an UNANSWERED set is rc=1, not a delivery (rc=%d)"
            % rc)
@@ -1546,17 +1909,27 @@ def selftest():
         rc, _, _ = run("notify", "--set", "nosuch", "--dry-run")
         ck(rc == 1, "an unknown set is rc=1 (rc=%d)" % rc)
 
-        # A set whose recorded session is not a session id must be REFUSED:
-        # delivering to a guessed destination leaks an answer to a stranger.
-        rc, out, _ = run("ask", "--lane", "No session lane",
-                         "--session", "not-a-uuid", "--title", "t",
-                         "--description", "d", "--option", "a", "--option", "b",
-                         "--json")
-        ck(rc == 0, "ask accepts a lane with a non-uuid session (rc=%d)" % rc)
-        nsid = json.loads(out)["id"]
-        run("answer", nsid, "q1", "0")
+        # A session that is not a session id must be REFUSED at REGISTER time
+        # (C1): delivering to a guessed destination leaks an answer to a
+        # stranger, and a register that holds a bad address can never deliver.
+        rc, _, _ = run("ask", "--lane", "No session lane",
+                       "--session", "not-a-uuid", "--title", "t",
+                       "--description", "d", "--option", "a", "--option", "b")
+        ck(rc == 2, "ask REFUSES a non-UUID session (rc=%d)" % rc)
+        # …and the notify verb still refuses one that somehow got in, so the
+        # guard exists at BOTH ends.
+        nsid = json.loads(run("ask", "--lane", "Guard lane",
+                              "--session", session_a, "--title", "t",
+                              "--description", "d", "--json")[1])["set"]
+        store_file = os.path.join(env["OC_QUESTIONS_DIR"], "open.json")
+        raw = json.load(open(store_file, encoding="utf-8"))
+        for entry in raw["sets"]:
+            if entry["id"] == nsid:
+                entry["session"] = "not-a-uuid"
+        json.dump(raw, open(store_file, "w", encoding="utf-8"))
         rc, _, _ = run("notify", "--set", nsid, "--dry-run")
-        ck(rc == 3, "a non-uuid destination is refused rc=3 (rc=%d)" % rc)
+        ck(rc == 3, "a non-uuid destination is refused rc=3 at the return end "
+                    "too (rc=%d)" % rc)
 
         # A real delivery that cannot reach the lane must be a FAULT, never a
         # silent success — otherwise a parked answer looks delivered.
@@ -1578,23 +1951,31 @@ def selftest():
 
 USAGE = """oc-questions — the Open Questions register (#547)
 
-  ask      --lane <NAME> --session <id>
+  ask      --lane <NAME> [--session <id>]
            [--questions-file F | --questions-json J |
             --title T --description D [--option O]... [--recommended N]]
-           [--ttl-days N] [--subject S] [--no-clarify] [--json]
+           [--ttl-days N] [--subject S] [--no-clarify] [--close-when CMD]
+           [--no-publish] [--json]
+           The asking session is read from OPENCRABS_SESSION_ID; --session is
+           an override for callers outside a turn. Prints the open-question
+           TOTAL and the page URL -- there is no card.
   answer   <set-id> <qid> <choice-index|clarify> [--text T] [--via card|page|cli]
+           [--no-publish]
+  amend    --set <id> --qid <qid> [--title T] [--description D]
+           [--option O]... [--recommended N] [--clear-options]
+           the CLARIFY return leg: edits the question and reopens it
   notify   --set <id> | --lane <NAME> [--qid Q] [--mode turn-end|interrupt|quiet]
            [--dry-run] [--json]        the RETURN PATH: delivers the answer to
                                        the session recorded in the register
   list     [--lane NAME] [--session id] [--all] [--json] [--quiet]
-  render   [--set id] [--json] [--no-derived]
-  publish  [--set id] [--action URL] [--prune] [--json]
+  publish  [--set id] [--action URL] [--prune] [--rotate] [--json]
+           reuses the live token; --rotate mints a new URL explicitly
   lint     [--json]
-  gc       [--dry-run] [--json]
+  gc       [--dry-run] [--json]        also applies mechanical closure
 
 Store: <profile home>/questions/open.json (+ archive.jsonl, pages/<token>/).
---lane is a topic NAME, never a session id. --session is the RETURN ADDRESS:
-the calling session, never a cron or renderer session.
+The PAGE is the owner surface. --lane is a topic NAME, never a session id.
+--session is the RETURN ADDRESS: the calling session, never a cron or renderer.
 rc: 0 ok / 1 finding-or-not-found / 2 usage / 3 state-refused / 4 store-or-IO.
 """
 
@@ -1606,9 +1987,12 @@ def main(argv):
     verb, rest = argv[0], argv[1:]
     if verb in ("--selftest", "selftest"):
         return selftest()
-    handlers = {"ask": cmd_ask, "answer": cmd_answer, "list": cmd_list,
-                "render": cmd_render, "publish": cmd_publish, "lint": cmd_lint,
+    handlers = {"ask": cmd_ask, "answer": cmd_answer, "amend": cmd_amend,
+                "list": cmd_list, "publish": cmd_publish, "lint": cmd_lint,
                 "gc": cmd_gc, "notify": cmd_notify}
+    if set(handlers) != set(_VERBS):
+        sys.stderr.write("%s: verb set drifted from _VERBS\n" % PROG)
+        return 2
     handler = handlers.get(verb)
     if handler is None:
         sys.stderr.write("%s: unknown verb %r\n\n%s" % (PROG, verb, USAGE))
