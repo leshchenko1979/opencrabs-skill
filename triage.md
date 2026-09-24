@@ -304,6 +304,7 @@ editor designs and PARKS at the owner gate; it does NOT open `/goal`). Exit
 line: `triaged=N · dispatched=M · expanded=K · parked=P · waiting=0`.
 
 - **Checkable Completion Formula**: `DONE = open fork issues queried via gh issue list + diffed against open ledger claim rows (oc_claims.open_claims / oc-ledger claims <N>) + all unclaimed issues routed via wire envelope or escalated to HQ.`
+- **Cohort accounting is a PREDICATE, not a hand-list** (HQ ruling 2026-09-24, v0.4.245 — THREE consecutive cycles, Triage n=10686). Build the claimed cohort from the canonical predicate (`oc_claims.open_claims`, `tools/lib/oc_claims.py`) and the dispatched cohort from the dispatcher's own dedup memory — never from recollection, and never by hand. **Every in-scope issue lands in EXACTLY ONE bucket, and the bucket total MUST equal the coverage list**; when the two disagree the LIST is wrong, not the buckets. Print the reconciliation line beside the cohorts, so a reader can tell an accounted omission from a forgotten one. Origin: the 2026-09-24 cycle reported 24 in-scope against a 20-row coverage list, with three live-claim issues absent from the claimed cohort entirely.
 
 ## Duty T6 — Registry writes: schema + seed rules (moved from hq.md Duty 2, lens B-F10 v0.4.96)
 
