@@ -541,6 +541,18 @@ When engaging the owner — especially when time has elapsed since the dialogue 
 - **Never merely mention or index open questions:** A bare note stating that *"open questions Q1–Q5 remain"* or *"requires owner answers to the 5 design questions"* provides zero actionable context, forces the owner to reconstruct context, and wastes a turn prompting *"explain open questions"*.
 - **Explain the most important open question:** The lane MUST explain the most critical open question directly in the message — stating its core dilemma, the trade-off, and the lane's recommended default — so the owner can decide immediately without digging through past history.
 
+## Open Questions register — the sanctioned "blocked on you" channel (owner-commissioned 2026-09-24) [LANE]
+
+The owner cannot see which lane is blocked on him: a parked decision exists only as prose in that lane's own topic, with no aggregate, no ordering by age, and no one-tap answer. The Register is the fix; this clause is the lane-side contract.
+
+- **Register in the same turn you park.** A lane whose next action needs an owner decision calls `oc-questions ask` in the SAME turn it stops, naming itself and its ordered question set. A prose "blocked on you" line in the topic is NOT a registration — nothing aggregates it.
+- **The Register is the ONLY sanctioned blocked-on-you channel.** Do not open a parallel mechanism, and do not re-ask in the topic on a daily clock once registered: the register's `asked_at` age is what re-surfaces a question, so a repeated topic ping is noise rather than pressure.
+- **Each question has exactly two required inputs:** `title` and Markdown `description` (tables and Mermaid supported). A question MAY carry `options[]`, a `recommended` default, and a Clarify action; a free-text answer is always available, and Clarify never silently closes the question.
+- **The return address is the CALLING session id.** It must never be replaced by a cron session, a renderer session, or another lane. A card's `callback_data` routes to the session that SENT the card (`telegram_send.rs:1328`), so a substituted id orphans every answer — this is why the renderer runs as a persistent bound lane woken by cron, never as a cron session.
+- **Clearing is explicit.** A question closes when the owner answers it or the lane withdraws it. Silence is not an answer and closes nothing.
+
+Store: `~/.opencrabs/profiles/ops/questions/open.json`, with answered sets archived to `archive.jsonl`. Tool: `skills/opencrabs-dev/tools/oc-questions` — verbs `ask` · `answer` · `list` · `render` · `publish` · `lint` · `gc` (Toolsmith, `tools/**` carve-out). Fork issue #547 carries the build.
+
 ## Upstream PR filing — base CI gate pre-claim (Duty-4 proposal, theme-1 lane, owner-approved 2026-09-06) [LANE]
 
 Before filing an upstream PR, read base-main CI gate state with the owning
