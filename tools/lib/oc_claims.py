@@ -635,6 +635,27 @@ def commit_files(repo_path, shas):
                 if line:
                     files.add(line)
     return sorted(files)
+def order_commits_parents_first(repo_path, shas):
+    """Order commits parents-first; timestamps break ties among ready commits."""
+    unique = list(dict.fromkeys(s for s in (shas or []) if s))
+    if len(unique) < 2:
+        return unique
+    wanted = set(unique)
+    parents, timestamps = {}, {}
+    for sha in unique:
+        parts = _git(repo_path, 'show', '-s', '--format=%ct %P', sha).strip().split()
+        timestamps[sha] = int(parts[0]) if parts and parts[0].isdigit() else 0
+        parents[sha] = set(parts[1:]) & wanted
+    ordered, remaining = [], set(unique)
+    while remaining:
+        ready = [sha for sha in remaining if not (parents.get(sha, set()) & remaining)]
+        if not ready:
+            ready = list(remaining)
+        sha = sorted(ready, key=lambda item: (timestamps.get(item, 0), item))[0]
+        ordered.append(sha)
+        remaining.remove(sha)
+    return ordered
+
 
 def resolve_issue_files(repo_path, iss, ref="--all", index=None):
     """Files touched by the commits anchoring to fork issue ``iss``.

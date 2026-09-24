@@ -1135,7 +1135,10 @@ elif action == 'dispatch':
     iss_num = v.get('issue')
     iss_str = f'#{iss_num}' if iss_num else issue_arg
     slug = v.get('slug', 'harvest-fix')
-    commits_str = ' '.join(v.get('commits', [commits_arg]))
+    raw_commits = v.get('commits', [commits_arg])
+    ordered_commits = oc_claims.order_commits_parents_first(repo_path, raw_commits)
+    commits_str = ' '.join(ordered_commits)
+
     branch_name = f'leshchenko1979/fix/{slug}'
     
     rc, base_sha, _ = run_cmd(['git', '-C', repo_path, 'rev-parse', base_ref])
@@ -1169,7 +1172,31 @@ elif action == 'dispatch':
     # They never block a dispatch — an orphan path is what an upstream PR is for.
     _adv = v.get('advisories') or []
     adv_section = ('\nPackaging Advisories (weigh at port time; NOT a gate failure):\n' + '\n'.join('  - ' + a for a in _adv) + '\n') if _adv else ''
-    contract_line = f'Contract: AUTO-SHIP on GREEN CI gate. File PR ({contract_mode}) on {upstream_repo}:main citing gate run ID, link fork {iss_str}, include dependency notices if applicable, notify Triage. Note: Under relaxed PR-Freeze Law, PR bodies may be updated with gh pr edit --body-file to add/maintain dependency notices.'
+    def read_harvest_mode(ledger_file):
+        '''Fail closed to DEGRADED when the live mode cannot be read.'''
+        ledger_tool = os.path.join(os.environ.get('OC_TOOLS_DIR', ''), 'oc-ledger')
+        if not ledger_tool or not os.path.exists(ledger_tool):
+            return 'DEGRADED'
+        try:
+            res = subprocess.run([ledger_tool, 'events', '--n', '2000', '--kind', 'note', '--full'],
+                                 capture_output=True, text=True, timeout=10)
+        except Exception:
+            return 'DEGRADED'
+        if res.returncode != 0:
+            return 'DEGRADED'
+        for line in reversed(res.stdout.splitlines()):
+            upper = line.upper()
+            if 'MODE:HIGH-TRUST' in upper or 'MODE: HIGH-TRUST' in upper:
+                return 'HIGH-TRUST'
+            if 'MODE:DEGRADED' in upper or 'MODE: DEGRADED' in upper:
+                return 'DEGRADED'
+        return 'DEGRADED'
+
+    harvest_mode = read_harvest_mode(ledger_file)
+    if harvest_mode == 'HIGH-TRUST':
+        contract_line = f'Mode: HIGH-TRUST. Contract: AUTO-SHIP on GREEN CI gate. File PR ({contract_mode}) on {upstream_repo}:main citing gate run ID, link fork {iss_str}, include dependency notices if applicable, notify Triage.'
+    else:
+        contract_line = f'Mode: DEGRADED. Contract: prepare and validate the harvest, but PARK the upstream PR for explicit owner approval; do not auto-file or auto-ship. Global harvest freeze applies under the MODE REGISTER.'
 
     envelope = f'''[HARVEST DISPATCH: {iss_str}]
 Target Issue: {iss_str} ({slug})
@@ -1646,7 +1673,38 @@ EOF
   fi
   unset OC_HARVEST_MOCK_DEPLOYED_TS
 
-  # 6b. Lane spread (#276): auto-selection rotates across idle lanes instead of pinning
+  # 6a. MODE REGISTER: DEGRADED is fail-closed and HIGH-TRUST permits auto-ship.
+  local mode_ledger="$st_dir/ledger-mode.json"
+  jq '.events += [{"n":99,"t":"2026-09-24T00:00:00Z","kind":"note","by":"hq","what":"MODE: HIGH-TRUST"}]' "$mock_ledger" > "$mode_ledger"
+  export OC_LEDGER="$mode_ledger"
+  export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
+  out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "false" "true" 2>&1)"
+  if [ "$?" -eq 0 ] && oc_has "$out" "Mode: HIGH-TRUST" && oc_has "$out" "Contract: AUTO-SHIP"; then
+    echo "  ok 6a - HIGH-TRUST dispatch carries AUTO-SHIP contract"
+  else
+    echo "  bad 6a - HIGH-TRUST contract missing or wrong: $out"
+    return 1
+  fi
+  jq 'del(.events[-1])' "$mode_ledger" > "$mode_ledger.tmp" && mv "$mode_ledger.tmp" "$mode_ledger"
+  out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mode_ledger" "false" "true" 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ] && oc_has "$out" "Mode: DEGRADED" && ! oc_has "$out" "AUTO-SHIP" && oc_has "$out" "owner approval" && ! oc_has "$out" "relaxed PR-Freeze Law"; then
+    echo "  ok 6a-2 - missing MODE fails closed to DEGRADED"
+  else
+    echo "  bad 6a-2 - missing MODE must fail closed: rc=$rc ($out)"
+    return 1
+  fi
+  export OC_LEDGER="$st_dir/missing-ledger.json"
+  out="$(run_engine "dispatch" "83" "$commit_83" "none" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "$mock_ledger" "false" "true" 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ] && oc_has "$out" "Mode: DEGRADED" && ! oc_has "$out" "AUTO-SHIP"; then
+    echo "  ok 6a-3 - unreadable ledger fails closed"
+  else
+    echo "  bad 6a-3 - unreadable MODE must fail closed: rc=$rc ($out)"
+    return 1
+  fi
+  unset OC_LEDGER OC_HARVEST_MOCK_DEPLOYED_TS
+
   # every unit of a cycle onto the first available editor.
   local spread_ledger="$st_dir/ledger-spread.json"
   cat << 'EOF' > "$spread_ledger"

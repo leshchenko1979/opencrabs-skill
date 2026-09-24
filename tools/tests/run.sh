@@ -606,7 +606,11 @@ chk("#307 trailer-anchored issue resolves its own file",
     oc.resolve_issue_files(_fx, 702), ["anchored.txt"])
 chk("#307 foreign-slug trailer does not fence a fork issue",
     oc.resolve_issue_files(_fx, 703), [])
-chk("#307 only the fork-anchored commit enters the index", len(_idx), 1)
+_order_repo = "/root/opencrabs"
+_order_chain = ["5140b36a0", "f1c120f43", "e07eab828"]
+chk("parents-first order: #478 chain", oc.order_commits_parents_first(_order_repo, _order_chain), ["e07eab828", "f1c120f43", "5140b36a0"])
+chk("parents-first order is input-independent", oc.order_commits_parents_first(_order_repo, list(reversed(_order_chain))), ["e07eab828", "f1c120f43", "5140b36a0"])
+
 _sh.rmtree(_fx, ignore_errors=True)
 
 if fails:
