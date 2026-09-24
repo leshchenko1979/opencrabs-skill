@@ -140,10 +140,10 @@ def fmt_age(asked_at):
     if hours is None:
         return "age unknown"
     if hours < 1:
-        return f"{int(hours * 60)}m old"
+        return f"{int(hours * 60)}m ago"
     if hours < 48:
-        return f"{hours:g}h old"
-    return f"{hours / 24:.1f}d old"
+        return f"{hours:g}h ago"
+    return f"{hours / 24:.1f}d ago"
 
 
 def empty_register():
@@ -1300,6 +1300,9 @@ section{border:1px solid #ccc;border-radius:8px;padding:1rem;margin:1rem 0}
 .desc td,.desc th{border:1px solid #ccc;padding:.25rem .5rem}
 .desc img{max-width:100%}
 .age,.meta{color:#666;font-size:.85em}
+form{margin:.6rem 0}
+textarea{display:block;width:100%;box-sizing:border-box;margin:.4rem 0;font:inherit}
+form button{margin-right:.5rem}
 button{cursor:pointer}
 """
 
@@ -1816,6 +1819,16 @@ def selftest():
         ck("noindex" in body, "the page carries the noindex directive")
         ck("<table>" in body, "a Markdown table in a description renders as a <table>")
         ck("mermaid.ink" in body, "a ```mermaid fence renders through mermaid.ink")
+        # owner-visible misrender: the emitted form had NO stylesheet rule at
+        # all, so a bare <textarea> (inline, ~20 columns by default) collapsed
+        # the free-text field and both buttons onto one line.
+        for _rule in ("form{", "textarea{", "form button{"):
+            ck(_rule in body, "the stylesheet carries the %s rule" % _rule)
+        # the age helper already ended in a unit word, so the call sites'
+        # "asked " prefix rendered the double-worded "asked 1.7h old".
+        _ages = set(re.findall(r"asked [0-9a-z.]* (ago|old)", body))
+        ck(_ages == {"ago"},
+           "the age paragraph is not double-worded (%r)" % (sorted(_ages),))
         meta = json.load(open(os.path.join(page["path"], "meta.json"), encoding="utf-8"))
         created, expires = parse_iso(meta["created_at"]), parse_iso(meta["expires_at"])
         ck(created and expires and (expires - created).days == PAGE_TTL_DAYS,
