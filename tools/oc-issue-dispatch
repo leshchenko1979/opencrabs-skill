@@ -264,7 +264,30 @@ AFFINITY_KEYWORDS = {
     "telegram": ["telegram", "button", "formatting", "photo", "rich", "topic", "markup", "markdown", "reply", "menu", "stream", "draft", "message", "channel"],
     "mermaid": ["mermaid", "diagram", "chart", "flowchart", "graphviz", "render", "rendering", "visual"],
     "db": ["db", "database", "sqlite", "vacuum", "retention", "ttl", "messages", "prune", "maintenance", "compaction", "cleanup", "storage", "sql", "migration"],
-    "bash": ["bash", "sh", "exec", "retry", "loop", "guard", "env", "process", "child", "signal", "subshell", "cli"],
+    # The shell/CLI-tool surface (fork #546, after #543's boundary matcher). Chosen
+    # by MEASUREMENT, same method as `tools`/`plan` below. The pre-#546 list
+    # ("bash","sh","exec","retry","loop","guard","env","process","child","signal",
+    # "subshell","cli") was generic engineering prose, and it broke the -50 arm in
+    # TWO directions at once:
+    #   (i) ISSUE side -- it fired on 156 of the 163 open fork issues (96%), so a
+    #       bash-"specialized" lane could not be penalised on ANY issue;
+    #  (ii) LANE side -- 7 of the 9 armed lanes held the domain PURELY from an
+    #       incidental word in their own feature string ("rich-resume-guard",
+    #       "harvest retry-429 ladder", "streaming-guard", "#32 loop-guard",
+    #       "#92 demoted-host guard", "owns tools/ CLI", "compaction signal"),
+    #       so lanes with no shell work at all were marked specialized in it.
+    # Itemised precision (fires / hits on shell-tool truth, measured
+    # 2026-09-24T16:4xZ over those 163 issues; truth = the 7 whose subject IS the
+    # bash-tool surface: #294 #327 #345 #469 #471 #512 #537):
+    #   loop 39/2  guard 43/3  retry 23/0  process 32/0  signal 21/1  cli 28/1
+    #   child 9/0  exec 4/0    env 4/1     sh 12/3      bash 19/6
+    #   spill 4/3  pipefail 2/1  subshell 2/0
+    # Kept tokens NAME the surface; the generic ones are REJECTED -- "guard" and
+    # "loop" measure English, not shell tooling. Measured effect of the narrowing:
+    # fires 156 -> 22 of 163 (96% -> 13.5%) at 7/7 truth recall. A body that merely
+    # QUOTES a command still matches on "bash" (13 of the 22): bodies are noisy by
+    # nature, and tightening further would drop real issues before it dropped noise.
+    "bash": ["bash", "subshell", "spill", "pipefail"],
     "config": ["config", "toml", "setting", "options", "parse", "yaml", "schema", "serde", "types"],
     "cron": ["cron", "schedule", "job", "timer", "isolation", "scheduler", "trigger"],
     "memory": ["memory", "vector", "search", "embedding", "codegraph", "graph", "store", "similarity"],
@@ -1792,6 +1815,10 @@ def run_selftest():
         "feature": "harvest upstream port census sweep telegram notify queue delivery router bash cli exec dispatch",
         "raw": {"role": "editor"},
     }
+    lane_tools_prose = {
+        "uuid": "lane-tools-prose", "class": "ACTIVE", "is_busy": False,
+        "feature": "(tools): dispatch affinity", "raw": {"role": "editor"},
+    }
     s_owner = score_affinity(issue_tools, lane_toolsmith)
     s_verbose = score_affinity(issue_tools, lane_editor_verbose)
     assert_true("Role-owned domain: surface owner scores positive on its own issue", s_owner > 0)
@@ -1807,7 +1834,14 @@ def run_selftest():
     finally:
         ROLE_DOMAINS["toolsmith"] = _saved_role_domain
     assert_true("Role-owned domain: unbound surface owner loses its own issue", s_unbound < s_owner)
-    assert_true("Role-owned domain: unbound surface owner does not beat the verbose editor", s_unbound <= s_verbose)
+    # Retargeted by #546. The old form compared against lane_editor_verbose, which
+    # shared the issue's domain ONLY through the pre-#546 over-firing ("oc-log.sh"
+    # -> the 2-char "sh" token): the leg passed BECAUSE of the defect, and under the
+    # narrowed vocabulary that lane is correctly penalised (-50). The invariant is
+    # that prose alone cannot substitute for the role binding, so compare against a
+    # lane whose prose NAMES the surface -- s_unbound 3 vs s_prose 26.
+    assert_true("Role-owned domain: unbound surface owner does not outrank a prose domain match",
+                s_unbound <= score_affinity(issue_tools, lane_tools_prose))
 
     # Test 3d: the ownership override must survive BUSY (fork #342, live-misroute
     # leg). Measured 2026-09-20: the toolsmith lane scored 93 on #451 while every
@@ -1829,9 +1863,16 @@ def run_selftest():
 
     # Mutation kill B: an idle editor outranks a busy NON-owner, so the override
     # cannot widen into a general "busy lanes are candidates" change.
-    lane_editor_busy = dict(lane_editor_verbose, is_busy=True, busy_known=True)
+    # Fixtures retargeted by #546 for the same reason as the leg above: the verbose
+    # lane is now penalised on a tools issue, which destroyed this kill's contrast.
+    # Generic lanes keep it: both score 0, so the busy-first order decides, and a
+    # widened override picks the busy lane and reddens this leg.
+    lane_editor_busy = {"uuid": "lane-editor-busy", "class": "ACTIVE", "is_busy": True,
+                        "busy_known": True, "feature": "generic editor", "raw": {"role": "editor"}}
+    lane_editor_idle = {"uuid": "lane-editor-idle", "class": "ACTIVE", "is_busy": False,
+                        "feature": "generic editor", "raw": {"role": "editor"}}
     assert_eq("Busy non-owner does not displace an idle editor",
-              select_best_lane(issue_tools, [lane_editor_busy, dict(lane_editor_verbose, uuid="lane-editor-idle")])["uuid"],
+              select_best_lane(issue_tools, [lane_editor_busy, lane_editor_idle])["uuid"],
               "lane-editor-idle")
 
     # Test 3e: the PLAN domain (fork #529, live mis-route). #506 was dispatched to
@@ -1880,13 +1921,39 @@ def run_selftest():
     issue_tools_scope = {"title": "fix(tools): dispatch affinity", "body": ""}
     assert_true("#543: structured tools scope keeps substring matching",
                 "tools" in detect_issue_domains(issue_tools_scope))
-    lane_topic = {"feature": "generic lane", "topic": "sh"}
+    lane_topic = {"feature": "generic lane", "topic": "spill"}
     assert_true("#543: optional topic participates through shared matcher",
                 "bash" not in _domains_for_text(lane_topic["feature"]))
     assert_true("#543: topic value is matched by shared matcher",
                 "bash" in _domains_for_text(lane_topic["topic"]))
     assert_true("#543: shared matcher is the only keyword predicate",
                 _keyword_matches("should", "sh") is False and _keyword_matches("sh", "sh"))
+
+    # #546: the bash vocabulary names the SHELL-TOOL surface, not generic English.
+    # The pre-#546 list broke the -50 arm on BOTH sides: it fired on 156/163 open
+    # issues, and 7 of the 9 armed lanes held the domain purely from an incidental
+    # word in their own feature string. These legs pin the real feature strings.
+    for _generic in ("rich-resume-guard",
+                     "harvest retry-429 ladder",
+                     "streaming-guard #105 transfer: rebase+gate feat/streaming-empty-finish-guard",
+                     "#92 demoted-host guard",
+                     "#438 local half - skill curation (compaction signal / token bound / mechanical shed)",
+                     "TOOLSMITH lane: owns tools/ CLI (oc-ledger, oc-deploy, oc-prchecks)"):
+        assert_true("#546: prose feature %r does NOT arm the bash domain" % _generic[:38],
+                    "bash" not in _domains_for_text(_generic))
+    for _shell in ("bash tool env carries no session identity",
+                   "subshell env missing",
+                   "tool-output spill dir has no retention policy",
+                   "pipefail battery leg reports FAIL on a successful match"):
+        assert_true("#546: shell surface %r DOES arm the bash domain" % _shell[:38],
+                    "bash" in _domains_for_text(_shell))
+    assert_true("#546: a lane naming the bash tool layer keeps the domain",
+                "bash" in _domains_for_text(
+                    "shared variation_directive() in nudge.rs, bash Layer 3 + loop-guard nudge"))
+    assert_true("#546: generic prose issue does not gain the bash domain",
+                "bash" not in detect_issue_domains(
+                    {"title": "fix(telegram): normalise text-presentation glyphs in the flow chrome",
+                     "body": "the phantom guard re-opens a turn and the retry loop repeats it"}))
 
     # Test 4: Selection when lane is busy
     lane_busy = {"uuid": "lane-busy", "feature": "telegram-buttons", "is_busy": True, "class": "ACTIVE"}
