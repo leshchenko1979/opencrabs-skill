@@ -1,5 +1,20 @@
 # Changelog — opencrabs-dev
 
+## v0.4.248 (2026-09-24)
+
+**Open Questions register — the owner-commissioned surfacer gets its lane-side contract.**
+
+`fleet-directives.md` now carries the **Register** clause (owner-commissioned 2026-09-24, plan-approved): a lane whose next action needs an owner decision registers with `oc-questions` **in the same turn it parks**; the Register is the **only** sanctioned "blocked on you" channel; each question carries exactly two required inputs (`title` + Markdown `description`) with optional `options[]`, a `recommended` default and a Clarify action; **clearing is explicit** — silence closes nothing.
+
+**The load-bearing clause is the return address.** It must be the **CALLING** session id, never a cron or renderer session: a card's `callback_data` routes to the session that SENT the card (`telegram_send.rs:1328`), so a substituted id orphans every answer. That is why the renderer is specified as a **persistent bound lane woken by cron**, never as a cron session.
+
+Store: `~/.opencrabs/profiles/ops/questions/open.json` (answered sets -> `archive.jsonl`). Build carried by [#547](https://github.com/leshchenko1979/opencrabs/issues/547) (Toolsmith, `tools/**` carve-out).
+
+**Bundled — the Toolsmith batch landing with this sync** (all on fork main, all verified as ancestors):
+[#537](https://github.com/leshchenko1979/opencrabs/issues/537) `2d605b89` + `5280ab5a` — `oc_has`, a SIGPIPE-free literal substring test, plus removal of the false-negative idiom from 9 tools; · [#540](https://github.com/leshchenko1979/opencrabs/issues/540) + [#542](https://github.com/leshchenko1979/opencrabs/issues/542) `e605d4d1` — inverse namespace audit + `oc-ship-chain` gate-skip; · [#320](https://github.com/leshchenko1979/opencrabs/issues/320) `50b21b1e` — uuid-shaped `--by` warning; · [#529](https://github.com/leshchenko1979/opencrabs/issues/529) `716f8538` — the plan domain in the affinity table; · [#543](https://github.com/leshchenko1979/opencrabs/issues/543) `1ae68647` — boundary-aware affinity keywords; · [#546](https://github.com/leshchenko1979/opencrabs/issues/546) `16993ac7` — narrowed `oc-issue-dispatch` bash affinity vocabulary.
+
+LOC: 3572 -> 3584 (net +12; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `ca600ee2` which reproduces the v0.4.247 entry's 3572 exactly). The whole change is `fleet-directives.md` 683 -> 695; no other corpus file changed.
+
 ## v0.4.247 (2026-09-24)
 
 **LEG-SCOPE — both landed arms are ISSUE-scoped by implementation, so ONE leg's `done` marks the WHOLE issue landed, and the remaining legs become undispatchable AND invisible.**
