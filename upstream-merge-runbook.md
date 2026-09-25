@@ -55,10 +55,8 @@ per-commit at replay time.
      until sync cutover (Step 7 migrates any pending lane branches).
    - **Pre-sync snapshot**: Record the pre-sync fork `main` SHA in the ledger BEFORE any
      force-push; it is the rollback point.
-   - **Role resolution is NOT `oc-roster`.** Use
-     `oc-ledger roster --live --role <role>`. `oc-roster`'s `--role` flag is
-     accepted and silently ignored (rc 0, no stderr, unfiltered output) — pointing
-     role resolution at it breaks dispatch fleet-wide.
+   - **Role resolution — canonical home `hq.md` (`LIVE STATUS IS NEVER STORED`).**
+     Use `oc-ledger roster --live --role <role>`.
    - **`DONE = Carrier deploy chain is idle, fork main push freeze is active, and pre-sync rollback SHA is recorded in ledger.`**
 2. Branch `sync/upstream-YYYYMMDD` off `origin/main`.
    - **`DONE = sync/upstream-YYYYMMDD branch created off origin/main.`**

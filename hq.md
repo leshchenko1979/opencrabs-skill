@@ -103,7 +103,7 @@ answers "who is alive right now".
 | Routine version bump (default, v0.4.172) | **JIT pull-absorption** (advisory `n=5322`, owner order 2026-09-14): Routine version bumps do NOT emit mass fanout pings across dormant lanes. The core daemon harness automatically injects a JIT turn-start skill hint whenever an active skill diffs on disk (shipped in `#210`, commit `acb8c5e6`). Active lanes absorb the diff and execute `oc-drift-check <uuid> --ack` at their own natural boundaries without session churn. |
 | Breaking security/process shift or fleet halt | **`[ALL]` broadcast wave (`turn-end`)** via `oc-notify-fanout --title "CRITICAL SKILL SHIFT — v<v>"` — rules whose absence produces immediate procedural or security breaches. `now` is RETIRED and fails the delivery outright (#373); `interrupt` is the URGENT tier (`interrupt: true` is its legacy alias) — precedence framing, never deferred, but NOT pre-emption. A CRITICAL wave sends `turn-end` like any other, and against a mid-turn target it QUEUES for the next tool-loop boundary regardless of tier: the tier changes the FRAMING the target sees at that boundary, not the boundary itself. |
 | Explicit owner reload order | **`PUSH-ALL-QUIET` broadcast wave** via `oc-notify-fanout --title "SKILL CHANGE — v<v>"` (generates per-lane briefs, self-uuid reload instruction, DB-validated targets, ledger stamp). |
-| Confirm law (probe-verified 2026-09-07; mode enum corrected 2026-09-19) | `delivery=quiet` + `confirm=true` is a NO-OP watch — quiet always returns instantly with a deferred verdict + notify_id; confirm only watches synchronous states. Routine pushes: `turn-end` (THE default), NO confirm, fire-and-forget (drift-check is the comprehension guard). The `delivery.mode` enum is exactly `[turn-end, interrupt, quiet]` — `now` is RETIRED and **FAILS the delivery outright** (`notify_policy.rs` returns Err, fork issue #373), and `interrupt` is the URGENT tier (`interrupt: true` is its legacy alias): same delivery point, precedence framing, never deferred, but NOT pre-emption. There is NO blocking-watch mode: a CRITICAL notify sends `turn-end` like any other, and against a mid-turn target it QUEUES for the next tool-loop boundary regardless of tier |
+| Confirm law (probe-verified 2026-09-07; mode enum corrected 2026-09-19) | `delivery=quiet` + `confirm=true` is a NO-OP watch — quiet always returns instantly with a deferred verdict + notify_id; confirm only watches synchronous states. Routine pushes: `turn-end` (THE default), NO confirm, fire-and-forget (drift-check is the comprehension guard). Mode semantics: `fleet-directives.md §Cross-lane message delivery discipline` (canonical). There is NO blocking-watch mode: a CRITICAL notify sends `turn-end` like any other, and against a mid-turn target it QUEUES for the next tool-loop boundary regardless of tier |
 | Worker >3 versions behind, acting substantively | targeted notify (mechanical drift and ack-row reads don't count) |
 
 
@@ -129,13 +129,9 @@ Bump propagation mechanics (B-F4 v0.4.96 — moved out of the table cell):
 > Delivery discipline per SKILL.md §session_notify mechanics (DELIVERY ≠
 > QUEUE ACCEPTANCE canonical there): live roster check SAME turn; silent
 > target → one retry → ledger event note; `target_session` = FULL UUID only.
-> Delivery cadence per fleet-directives (RE-RULED owner order 2026-09-19): `turn-end` IS
-> the default — an idle target wakes on it immediately, so it loses nothing `now` ever
-> delivered; `quiet` is a deliberate choice for batch/fan-out notices whose ack contract is
-> the ledger. `now` is RETIRED and FAILS the delivery outright (`notify_policy.rs` returns
-> Err; the schema's `delivery.mode` enum is exactly `[turn-end, interrupt, quiet]`). `interrupt: true`
-> is the legacy alias for the URGENT tier — precedence framing, never deferred, and still NOT
-> pre-emption (fork issue #393).
+> Delivery cadence and mode semantics: `fleet-directives.md §Cross-lane message delivery
+> discipline` (canonical). `turn-end` IS the default; `now` is RETIRED and fails the
+> delivery outright.
 - **Checkable Completion Formula**: `DONE = oc-notify-fanout (or session_notify) executed + same-turn receipts verified (target confirmed woke or deferred receipt id recorded).`
 
 ## Duty 4 — Poll workers for skill input (Direct Persistence & Ledger Intake)
@@ -180,12 +176,9 @@ or record them onto the ledger via `oc-ledger stamp proposal "ADD|CHANGE <rule> 
 On protocol disputes — role boundaries, exception clauses, gate semantics —
 HQ issues BINDING rulings, each logged as an event entry in
 `workers-ledger.json` (`rulings`) with evidence and reasoning. Owner veto
-overrides retroactively. Precedents: ROLE_EXCEPTION #1 waived-once,
-condition-2 unevidenced; fabrication deviation #3 processing + P1/P2 routing;
-RULING-CORRECTION #1: PR-open denial ruling was overturned by consent msg
-found in-topic AFTER issuing — lesson lives in SKILL.md §Hard rules (CONSENT REGISTER)
-(deploy gate retired 2026-08-28; the lesson survives for NON-deploy ruling
-discipline: never deny from codified text without checking the live record).
+overrides retroactively. The standing lesson — never deny from codified text without
+checking the live record — lives in `SKILL.md §Hard rules (CONSENT REGISTER)`; the
+precedents behind it are in `CHANGELOG.md`.
 - **Checkable Completion Formula**: `DONE = ruling reasoning recorded in workers-ledger.json rulings event + notification delivered to involved lanes via session_notify.`
 
 ## Duty 6 — Periodic subagent skill review
