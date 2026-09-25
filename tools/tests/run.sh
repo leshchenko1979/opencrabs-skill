@@ -1636,11 +1636,40 @@ run_selftest oc-questions
 # The store must be injectable: a tool that defaulted into the skill repo would
 # have the battery commit a register.
 QDIR="$(mktemp -d)"
-OC_QUESTIONS_DIR="$QDIR" "$TOOLS_DIR/oc-questions" ask --lane "probe lane" \
-  --session "00000000-0000-0000-0000-000000000000" --title t --description d \
+# The lane is resolved from the asking session's OWN binding, so the fixture
+# needs a real session DB -- and an UNBOUND session is refused by design.
+python3 - "$QDIR/sessions.db" <<'PYDB'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.executescript("""
+create table session_bindings (session_id text primary key, channel text not null,
+  chat_id text not null, thread_id integer, updated_at integer not null default 0);
+create table channel_messages (id text primary key, channel text not null,
+  channel_chat_id text not null, topic_name text, created_at integer not null,
+  thread_id text);
+""")
+c.execute("insert into session_bindings (session_id,channel,chat_id,thread_id,updated_at)"
+          " values (?,?,?,?,0)",
+          ("00000000-0000-0000-0000-000000000000", "telegram", "-100", 1))
+c.execute("insert into channel_messages (id,channel,channel_chat_id,topic_name,"
+          "created_at,thread_id) values (?,?,?,?,?,?)",
+          ("m1", "telegram", "-100", "probe lane", 1, "1"))
+c.commit()
+PYDB
+OC_QUESTIONS_DIR="$QDIR/store" OC_QUESTIONS_DB="$QDIR/sessions.db" \
+  OPENCRABS_SESSION_ID="00000000-0000-0000-0000-000000000000" \
+  "$TOOLS_DIR/oc-questions" ask --factory probe --title t --description d \
   >/dev/null 2>&1
-[ -f "$QDIR/open.json" ] && ok "OC_QUESTIONS_DIR override honoured (store is injectable)" \
+[ -f "$QDIR/store/open.json" ] && ok "OC_QUESTIONS_DIR override honoured (store is injectable)" \
   || bad "store override ignored — the selftest would write the real register"
+# --lane was REMOVED (owner order 2026-09-25): the lane is derived from the
+# session's binding, so a caller cannot label itself.
+OC_QUESTIONS_DIR="$QDIR/store" OC_QUESTIONS_DB="$QDIR/sessions.db" \
+  OPENCRABS_SESSION_ID="00000000-0000-0000-0000-000000000000" \
+  "$TOOLS_DIR/oc-questions" ask --factory probe --lane x --title t --description d \
+  >/dev/null 2>&1
+[ $? -eq 2 ] && ok "oc-questions REJECTS the removed --lane flag" \
+  || bad "removed --lane flag was accepted"
 rm -rf "$QDIR"
 
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL

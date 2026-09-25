@@ -45,7 +45,7 @@ const spans = z.array(span);
 const catalog = defineCatalog(schema, {
   components: {
     Page: { props: z.object({ title: z.string(), expires_at: z.string() }), description: 'Page root' },
-    QuestionSet: { props: z.object({ set_id: z.string(), lane: z.string() }), description: 'One lane block' },
+    QuestionSet: { props: z.object({ set_id: z.string(), lane: z.string(), anchor: z.string(), open: z.number().int() }), description: 'One lane block' },
     Question: { props: z.object({
       qid: z.string(), title: z.string(), recommendation: z.string().nullable(),
       token: z.string(), set: z.string(), action: z.string(), footer: z.string(),
@@ -88,22 +88,35 @@ const { registry } = defineRegistry(catalog, {
     Page: ({ props, children }) => h('main', null,
       h('h1', null, props.title),
       children),
-    QuestionSet: ({ props, children }) => h('div', { className: 'set', 'data-set': props.set_id }, children),
+    // The LANE section (owner order 2026-09-25): a STABLE anchor so the owner
+    // can be handed a URL pointing at one lane's questions. The anchor arrives
+    // in the spec, so the page and the CLI cannot disagree about it, and a lane
+    // whose questions are all answered still renders its section.
+    QuestionSet: ({ props, children }) => h('section',
+      { id: props.anchor, className: 'set', 'data-set': props.set_id },
+      h('h2', null, props.lane + ' — ' + props.open + ' open'),
+      children),
     // The form carries token, set and qid as hidden inputs: the answer backend
     // reads all three, and dropping any of them silently stops the page
     // submitting -- the one regression that would break the live endpoint. The
     // description blocks are children of the form, which is where the pre-port
     // page carried them.
     Question: ({ props, children }) => h('section', { id: props.set + '-' + props.qid },
-      h('h2', null, props.title),
+      h('h3', null, props.title),
       props.recommendation ? h('p', { className: 'rec' }, 'recommended: ' + props.recommendation) : null,
       // hx-*: the form swaps THIS question's own block in place instead of
       // navigating away (owner question 2026-09-24). The section id below is
       // the swap target. Inert without the vendored htmx, in which case the
       // form submits as a normal POST -- so the no-JS path is unaffected.
+      //
+      // The target is an ATTRIBUTE selector, not '#id'. A CSS selector may not
+      // start with a digit, so a set id like `19f2d7` made '#19f2d7-q1'
+      // invalid and htmx threw on querySelectorAll -- reported live by the
+      // owner 2026-09-25. An attribute selector is valid for ANY id, so no
+      // future factory key can break the swap.
       h('form', { method: 'post', action: props.action,
                   'hx-post': props.action,
-                  'hx-target': '#' + props.set + '-' + props.qid,
+                  'hx-target': "[id='" + props.set + '-' + props.qid + "']",
                   'hx-swap': 'outerHTML' },
         h('input', { type: 'hidden', name: 'token', value: props.token }),
         h('input', { type: 'hidden', name: 'set', value: props.set }),
