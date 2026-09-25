@@ -764,10 +764,16 @@ def cmd_list(argv):
             lane = question.get("lane") or entry.get("lane") or "unknown"
             lanes.setdefault(lane, []).append((entry, question))
 
-    total_open = sum(1 for pairs in lanes.values() for (_e, q) in pairs
-                     if not question_is_closed(q))
     if flags.get("--lane"):
         lanes = {k: v for k, v in lanes.items() if k == flags["--lane"]}
+
+    # Counted AFTER the filter: the header must describe what is SHOWN, not the
+    # fleet. Pre-fix `list --lane X` printed the fleet total against the
+    # filtered lane count ("7 open ... across 1 lane(s)" for a lane holding
+    # zero), which sends a reader looking for questions that are not there.
+    # Same mis-scope reached --json (open_questions vs a filtered lanes[]).
+    total_open = sum(1 for pairs in lanes.values() for (_e, q) in pairs
+                     if not question_is_closed(q))
 
     if flags.get("--json"):
         rows = []
@@ -795,7 +801,12 @@ def cmd_list(argv):
     for lane in sorted(lanes):
         pairs = lanes[lane]
         n_open = sum(1 for (_e, q) in pairs if not question_is_closed(q))
-        print(f"{lane} — {n_open} open")
+        n_closed = len(pairs) - n_open
+        # A lane with 0 open still lists its answered rows (unless --quiet), so
+        # the subtotal names that history rather than reading as a disagreement
+        # between the heading and the rows beneath it.
+        suffix = f", {n_closed} closed (history)" if n_closed and "--quiet" not in flags else ""
+        print(f"{lane} — {n_open} open{suffix}")
         for (entry, question) in pairs:
             if "--quiet" in flags and question_is_closed(question):
                 continue

@@ -1,5 +1,95 @@
 # Changelog — opencrabs-dev
 
+## v0.4.258 — Duty-6 cycle c24: 79 findings triaged, the 24-item law batch landed, and the codification gap closed
+
+**What this version is.** Duty 6 cycle `20260925-c24` ran 11 lenses (corpus hash
+`dc1118418af2…`, 12 files / 186 sections) and produced **79 findings** — 47 on the law
+corpus, 28 on `tools/**`, 2 owner decisions, and 2 cosmetic. The first cut of the
+codification plan named only **24 items** and silently dropped 17 law findings from
+reviewers A, H and D. The owner caught it ("we had 70+ findings. Your plan contains
+much less"), the plan was extended to 12 tasks, and this version lands the result.
+
+**The gap, named so it is not repeated.** My own verdict's "Codification plan" grouped
+findings by *theme* and named the converged subset, which made a partial plan look
+complete. The fix is mechanical: enumerate every finding ID and assert the partition
+sums to the finding count. `57 ACCEPT + 5 AMENDMENT + 5 ALREADY COVERED + 0 REJECT = 57`
+held for the Duty-4 cycle the day before; nothing asserted the equivalent for Duty 6.
+
+**Landed, by file.**
+
+- **`review-lenses.md`** (`57bfb719`) — the catalogue's own brain-scrub self-reference
+  named a heading that does not exist (three lenses found it independently); EFFICIENCY
+  was declared a sixth FAMILY while the method's map recognises five, so it is demoted
+  to a RULE BLOCK; eight provenance-sediment sites stripped.
+- **`hq.md`** (`9246a3c9`, and `d88a66ea`) — the dead `§CONSENT REGISTER` ref (it is a
+  BULLET under `## Hard rules`); the `:238` claim that every brief names exclusions and
+  carries a mechanical slice, **both false** of the artifact (2 of 11 briefs carry an
+  EXCLUDES clause, 0 carry a slice — the slice rides the spawn prompt); the cadence
+  paragraph's stale `oc-ledger:913`/`:914-915` citations (**~365 lines off** — the regex
+  is at `:1278` inside `cmd_cadence`); the close-form example missing the **leading `v`**
+  its own regex requires; and the two-`reviews/`-roots rule (**D-F5**: the state-repo
+  root is canonical, the skill-repo root is frozen — three cycle ids exist in BOTH, so a
+  sweep keyed on the id alone would hit the frozen copy).
+- **`SKILL.md`** (`c26be37f`, `d88a66ea`) — six findings including the router summary
+  denying the fifth role file; plus the **owner's UNION delta** (the issue-cluster
+  definition built its dependency leg from the COMMIT/FILE graph alone and closed with an
+  exclusivity clause that foreclosed the gh relationship graph — amended to the union,
+  with the closure asymmetry recorded: transitive file overlap collapses the whole delta
+  to 3 components, so only 1-HOP overlap is usable); plus the **#580 per-surface ruling**
+  (Telegram flood limits are enforced per surface, so a 429 pauses only the offending
+  arm — the ruling existed only in `governor.rs` and in NO skill file, which is why a
+  lane came within one step of proposing an aggregate gate that would have reversed it).
+- **`editor.md`** (`2e5a7191`, `97f8d57c`) — three findings, then six more the verdict
+  dropped: the restated Telegram-surface enumeration (cut to the editor delta), the
+  Rollcall re-enumeration (reduced to a pointer), four `§ISSUE ROUTING` re-points, the
+  `Role Boundaries` heading unified with `toolsmith.md`, and the `Telegram surface`
+  section names disambiguated (three files named three different sections the same way).
+- **`fleet-directives.md`** (`2fa67fc7`, `d88a66ea`) — four findings: the trailer-retention
+  rule now mandates the TOOL (`oc-attrib --trailers-only`) instead of a hand-rolled
+  `git log | interpret-trailers`; two dead `§Autonomous closure` refs re-pointed to
+  `triage.md §Duty T5`; six provenance-sediment sites stripped; and the duplicate
+  role-resolution sentence **deleted rather than deduped — it was FALSE** (the runbook
+  claimed `oc-roster --role` is "accepted and silently ignored"; measured rc=0 and
+  byte-identical to the canonical form).
+- **`upstream-merge-runbook.md`** (`eeba63af`, `d88a66ea`, `c291bdae`) — the ledger-hygiene
+  block **promoted out from under a RETIRED heading** (live law a reader would have
+  skipped); the "All 15 resume jobs" count restated as a POPULATION with its predicate
+  (it could not be re-derived from its own parenthetical: 12+3+1=16, one left armed); and
+  the resume-idiom mechanism sentence corrected — **"Nothing tracks it for you" was
+  falsified by #508 within a day**, so the obligation is kept while its reason is fixed
+  (the sweep is EVENT-driven, and 0 of 58 cron rows invoke `commit-pending`).
+- **`README.md`** (`af265896`) — the §Layout rows described `editor.md` as owning Phases
+  0–7b and `harvest.md` as 7b/7c, both wrong since the v0.4.250 role split; `tools/instruments/`
+  was missing.
+- **`triage.md`** (`eeba63af`) — both retired-duty tombstones now name their successor.
+- **The gh-relation read trap** (`6c1c29c4`) — reported by Triage and **reproduced
+  first-hand**: `gh api … --jq '.parent.number'` returns a confident null for EVERY issue
+  (#434 → null, while `--json parent` → 332), and the null is indistinguishable from "no
+  parent". It produced one recorded false negative and defeated a GUARD that used it to
+  skip already-parented issues. A verification instrument and a guard need the same
+  authority.
+- **`99917304`** (Toolsmith) — the v0.4.255 `tools/` regroup's two **silent** regressions,
+  both mine: `oc-claims-single-source` derived its root from `dirname(__file__)`, so after
+  the regroup it scanned **1 of 36** units and still printed `ok`; `oc-watcher-audit`'s
+  primary `lib/` reach broke and was masked by a hardcoded fallback inside a bare
+  `except Exception: pass`. Fixed at the root derivation (walk up to the dir holding
+  `lib/oc-root.sh`) plus a root-IDENTITY assertion, because no arithmetic leg can catch a
+  narrowed root. Also `oc-lint-laws` gains the two legs whose absence let #575 ship, and
+  `oc_tools_dir` gains the symlink guard the bootstrap calls load-bearing.
+
+**Bundled commits (13).** `99917304` (#589/#591) · `57bfb719` · `9246a3c9` · `c26be37f` ·
+`2e5a7191` · `eeba63af` · `2fa67fc7` · `af265896` · `97f8d57c` · `d88a66ea` · `6c1c29c4` ·
+`c291bdae` · `4d4a612b`.
+
+LOC (8-file corpus, `sum(1 for _ in open(f, encoding='utf-8'))`, per the v0.4.253 convention): **3610 -> 3645** (+35). Anchor `8c31a293` reproduces 3610 exactly. Per file: `SKILL.md` 730 -> 767 (+37) · `fleet-directives.md` 650 -> 646 (-4) · `editor.md` 534 -> 531 (-3) · `hq.md` 333 -> 337 (+4) · `upstream-merge-runbook.md` 430 -> 431 (+1). The corpus EXCLUDES `review-lenses.md` and `CHANGELOG.md`; transposing those two files is the scope error that produced a wrong figure earlier in this session, so the membership is stated here rather than assumed.
+
+**Not landed, stated rather than omitted.** The **2 owner decisions** (B-H1: the runbook is
+46.8 % a retired section with live law nested inside it; B-H2: `SKILL.md` past its own line
+budget) are held for the owner. **J-F1** was reassigned out of the HQ batch — its fix is in
+`tools/tests/run.sh`, which is Toolsmith code. **F-M4** was honestly **not reproduced** by
+the Toolsmith rather than silently "fixed". And 76 of the 79 findings remain open beyond
+the ones above; the full disposition is in `reviews/20260925-c24/VERDICT.md`.
+
 ## v0.4.257 — two dead law anchors fixed, and ISSUE CLUSTER enters the ontology (reviewer H + Triage)
 
 **Both reported independently, both verified at source before a word was written.** The class is the same: a citation that resolves to nothing, which is worse than no citation, because a reader follows it and finds an empty room.
