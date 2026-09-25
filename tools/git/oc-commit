@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-commit — C5 (lens C, Duty-6 2026-08-31): gated commit wrapper enforcing
+# the three per-commit laws of editor.md in one place (lens G regroup v0.4.70: detached-HEAD + signing → §Phase 4, writer-exclusivity → §Phase 2):
+#   1. HEAD-attached check (refuses detached HEAD — incident class)
+#   2. Session-Id trailer from OC_ACTOR (refuses unset actor)
+#   3. Issue-Ref trailer derived from the actor's latest ledger claim event
+#      (same derivation as `oc-ledger confirm`; override with --issue N)
+#      #501: the derivation picks the NEWEST open claim, so it is a GUESS when
+#      the actor holds several. A derived ref that contradicts the branch name
+#      or the subject's trailing (#N) is REFUSED, not silently preferred —
+#      measured 2026-09-25, lane a5b34466 committed #500 work under
+#      `Issue-Ref: #548` and the wrapper posted an implementation comment onto
+#      #548 (a durable false attribution, corrected by hand).
+# NEVER stages anything — the stage-only-your-paths rule is untouched; it
+# refuses when the index is empty instead of improvising a stage.
+#
+# Usage:
+#   oc-commit -m <msg> [-m <msg>...] [--issue N] [--repo <path>]
+#             [--no-comment] [--state <text>] | --selftest
+#
+# E2 finding 2 (v0.4.72): the post leg is FOLDED — after a gated commit the
+# one-implementation-comment (owner law 2026-08-28 22:54Z) is posted via the
+# oc-issue-log composer (delegated, never re-implemented). --no-comment is
+# for drills/selftests; OC_COMMIT_COMMENT=0 is the env equivalent. A commit
+# that landed but whose comment failed is rc 5 (LOUD — never silently skip
+# the owner law; commit is NOT rolled back).
+#
+# #428 (2026-09-20): a NON-BLOCKING close-keyword scan over the caller's -m
+# bodies. GitHub's default-branch parser closes an issue when a body carries a
+# close keyword (close[sd] / fix(e[sd]) / resolve[sd]) followed by #N, and it
+# cannot read negation — so honest-limit prose the process itself requires
+# ("part B alone does NOT fix #321") closed fork issue #321 ELEVEN SECONDS
+# after the ff-merge, with no upstream PR at all. The scan WARNS on stderr,
+# naming the matched shape and classifying it (class=negated / class=genuine),
+# and NEVER changes the exit code: it is advisory, never a gate — shape 1 of
+# the #428 disposition, scoped. Shape 3 (a code-span exemption) is NOT encoded
+# here: it is an unprobed hypothesis about the parser, and belief is not
+# evidence.
+#
+# Exit codes: 0 committed+commented · 2 usage · 3 gate-fail (detached HEAD /
+#             no actor / nothing staged / no issue derivable / derived ref
+#             contradicts the branch or subject) · 4
+#             git-commit failure · 5 commit landed but comment FAILED
+# Env: OC_ACTOR (required) · OC_LEDGER (ledger override) · OC_TOOLS_LOG
+# =============================================================================
+set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-commit" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() { echo "usage: $0 -m <msg> [-m <msg>...] [--issue N] [--repo <path>] [--no-comment] [--state <text>] | --selftest" >&2; exit 2; }
+
+if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
+  d="$(mktemp -d)" || exit 3
+  trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  # ledger fixture: worker f1c7c0de-0000-4000-8000-000000000149 has a claim mentioning #149.
+  # (#441) The actor is a CANONICAL uuid because claim-ref now validates its
+  # argument domain — it used to be the non-uuid u-fix, which the verb
+  # rejects at rc 2. The ledger's by-prose must CONTAIN the actor:
+  # _latest_claim_issue still selects with contains($u), the substring
+  # behaviour #441 kept by decision (shape 1), because the composed
+  # role-plus-uuid form derive_by emits needs that substring to resolve.
+  cat > "$d/wl.json" <<'JSON'
+{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[
+ {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor f1c7c0de-0000-4000-8000-000000000149 (topic 29947)","what":"claimed Duty-6 fix for #149 trailer test"},
+ {"t":"2026-08-31T10:01:00Z","kind":"claim","by":"other worker","what":"unrelated"}]}
+JSON
+  R="$d/repo"; git init -q -b main "$R"
+  git -C "$R" -c user.email=t@t -c user.name=T commit -q --allow-empty -m seed
+  OC="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"; export OC_LEDGER="$d/wl.json"
+  # 1. unset OC_ACTOR and OPENCRABS_SESSION_ID -> 3
+  STUB_OK="$d/il-ok"; printf '#!/usr/bin/env bash
+echo "posted on $1"
+' > "$STUB_OK"; chmod +x "$STUB_OK"
+  STUB_FAIL="$d/il-fail"; printf '#!/usr/bin/env bash
+exit 3
+' > "$STUB_FAIL"; chmod +x "$STUB_FAIL"
+  export OC_ISSUE_LOG_BIN="$STUB_OK"
+  ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR -u OPENCRABS_SESSION_ID "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: unset OC_ACTOR != 3" >&2; exit 1; }
+  # 1b. OPENCRABS_SESSION_ID fallback works -> 0
+  ( cd "$R" && echo x > f && git add f && env -u OC_ACTOR OPENCRABS_SESSION_ID=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "test: fallback" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: OPENCRABS_SESSION_ID fallback != 0" >&2; exit 1; }
+  # 1c. (#441) a NON-uuid actor: the derivation must fail rc 3 and the verb's
+  #     domain diagnostic must reach the caller's stderr (it names claims N),
+  #     rather than a bare "no OPEN claim". This is the domain guard's blast
+  #     radius on THIS tool, pinned.
+  ( cd "$R" && echo x1c > f1c && git add f1c && OC_ACTOR=u-fix "$OC" -m "test: non-uuid actor" --repo "$R" ) >/dev/null 2>"$d/1c.err"
+  [ $? -eq 3 ] || { echo "selftest: non-uuid actor must not derive (want 3)" >&2; exit 1; }
+  grep -q "is not a session uuid" "$d/1c.err" || { echo "selftest: non-uuid actor domain diagnostic must reach the caller" >&2; exit 1; }
+  # 2. detached HEAD -> 3
+  ( cd "$R" && git checkout -q --detach && echo y > g && git add g \
+      && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: detached HEAD != 3" >&2; exit 1; }
+  ( cd "$R" && git checkout -q main && git reset -q )
+  # 3. nothing staged -> 3
+  OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m test --repo "$R" >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: nothing-staged != 3" >&2; exit 1; }
+  # 4. success: trailers derived (Session-Id + Issue-Ref #149 from claim) + comment posted via stub
+  ( cd "$R" && echo z > h && git add h && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: trailers" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: gated commit failed" >&2; exit 1; }
+  # 4b. comment leg folded: stub fails -> rc 5 (commit landed, comment FAILED)
+  ( cd "$R" && echo q > k && git add k && OC_ISSUE_LOG_BIN="$STUB_FAIL" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: comment-fail" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 5 ] || { echo "selftest: comment-fail-after-commit != 5" >&2; exit 1; }
+  # 4c. --no-comment skips the post leg entirely (stub-fail but rc 0)
+  ( cd "$R" && echo r > l && git add l && OC_ISSUE_LOG_BIN="$STUB_FAIL" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: drill" --no-comment --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: --no-comment drill != 0" >&2; exit 1; }
+  LOG="$(git -C "$R" log -1 --format=%B)"
+  printf '%s' "$LOG" | grep -q "Session-Id: f1c7c0de-0000-4000-8000-000000000149" || { echo "selftest: Session-Id trailer missing" >&2; exit 1; }
+  printf '%s' "$LOG" | grep -q "Issue-Ref: #149" || { echo "selftest: Issue-Ref #149 missing" >&2; exit 1; }
+  # 5. explicit --issue overrides derivation
+  ( cd "$R" && echo w > i && git add i && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: override" --issue 42 --repo "$R" ) >/dev/null 2>&1
+  git -C "$R" log -1 --format=%B | grep -q "Issue-Ref: #42" || { echo "selftest: --issue override missing" >&2; exit 1; }
+  # 6. claim without #N and no --issue -> 3
+  cat > "$d/wl2.json" <<'JSON'
+{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[
+ {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor f1c7c0de-0000-4000-8000-000000000149","what":"claim with no issue ref"}]}
+JSON
+  ( cd "$R" && echo v > j && git add j && OC_LEDGER="$d/wl2.json" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: no-issue-derivable != 3" >&2; exit 1; }
+  # 6b. (#335) claim CLOSED by a later done row -> 3, and NO comment is posted
+  #     onto the finished issue; an explicit --issue still commits, because that
+  #     is the lane taking the decision on the record.
+  cat > "$d/wl3.json" <<'JSON'
+{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[
+ {"t":"2026-08-31T10:00:00Z","kind":"claim","by":"editor f1c7c0de-0000-4000-8000-000000000149","what":"CLAIM #149 — finished work"},
+ {"t":"2026-08-31T11:00:00Z","kind":"done","by":"editor f1c7c0de-0000-4000-8000-000000000149","what":"done #149 — shipped and released"}]}
+JSON
+  ( cd "$R" && echo t > t1 && git add t1 && OC_LEDGER="$d/wl3.json" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m test --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 3 ] || { echo "selftest: closed-claim derivation != 3" >&2; exit 1; }
+  ( cd "$R" && echo t > t2 && git add t2 && OC_LEDGER="$d/wl3.json" OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: explicit" --issue 42 --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: closed-claim + --issue override != 0" >&2; exit 1; }
+  git -C "$R" log -1 --format=%B | grep -q "Issue-Ref: #42" \
+    || { echo "selftest: closed-claim --issue override trailer missing" >&2; exit 1; }
+  # 6c. (#346) a message that ALREADY carries the trailers must not get them twice.
+  #     git's trailer.ifexists default compares only the NEIGHBOURING trailer, so
+  #     the second append (Issue-Ref) collides with a caller-supplied copy while
+  #     the first (Session-Id) does not -- hence -c trailer.ifexists=replace.
+  #     Verified as a matrix in a scratch repo: message tail x value class. A
+  #     first repro attempt was VACUOUS because its message ended in Session-Id.
+  _dup() { # $1=label: exactly one of each key, derived values authoritative
+    git -C "$R" log -1 --format="%(trailers)" | grep -c '^Session-Id:' | grep -qx 1 \
+      || { echo "selftest: duplicate/absent Session-Id ($1)" >&2; exit 1; }
+    git -C "$R" log -1 --format="%(trailers)" | grep -c '^Issue-Ref:' | grep -qx 1 \
+      || { echo "selftest: duplicate/absent Issue-Ref ($1)" >&2; exit 1; }
+    git -C "$R" log -1 --format="%(trailers)" | grep -q '^Session-Id: f1c7c0de-0000-4000-8000-000000000149$' \
+      || { echo "selftest: derived Session-Id did not win ($1)" >&2; exit 1; }
+    git -C "$R" log -1 --format="%(trailers)" | grep -q '^Issue-Ref: #149$' \
+      || { echo "selftest: derived Issue-Ref did not win ($1)" >&2; exit 1; }
+  }
+  ( cd "$R" && echo d1 > d1 && git add d1 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: caller already carries the trailers
+
+Issue-Ref: #149
+" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: dup same-value commit != 0" >&2; exit 1; }
+  _dup "same value"
+  ( cd "$R" && echo d2 > d2 && git add d2 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: caller carries FOREIGN values
+
+Issue-Ref: #999
+Session-Id: a-foreign-session
+" --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: dup foreign-value commit != 0" >&2; exit 1; }
+  _dup "foreign value"
+  # 7. usage
+  OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: no args != 2" >&2; exit 1; }
+  # 8. (#428) close-keyword hazard scan — an ADVISORY that names the matched
+  #    shape and NEVER changes the exit code. The scan is what stands between an
+  #    honest-limit sentence and GitHub's parser closing the issue 11 s after the
+  #    ff-merge (fork #321), so the CLASS is asserted, not merely "a warning".
+  E="$d/428.err"
+  # 8a. the honest-limit case — the shape sits inside a NEGATION. The parser
+  #     cannot read negation, so this is the exact shape of the #321 incident: it
+  #     must warn class=negated, name the shape, AND still land rc=0.
+  ( cd "$R" && echo k1 > k1 && git add k1 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: budget honesty
+
+Part B alone does NOT fix #321." --no-comment --repo "$R" ) >/dev/null 2>"$E"
+  [ $? -eq 0 ] || { echo "selftest: #428-negated-rc0 the commit must still land" >&2; exit 1; }
+  grep -q 'class=negated' "$E" || { echo "selftest: #428-negated-class negation scoping" >&2; exit 1; }
+  grep -q "shape='fix #321'" "$E" || { echo "selftest: #428-negated-names-shape the warning must name it" >&2; exit 1; }
+  grep -q 'class=genuine' "$E" && { echo "selftest: #428-negated-not-genuine a negated shape was classified as a genuine close" >&2; exit 1; }
+  # 8b. no close-keyword shape anywhere -> NO warning at all (a scan that cries
+  #     wolf on ordinary prose is a scan nobody reads)
+  ( cd "$R" && echo k2 > k2 && git add k2 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: tidy the fixtures, no issue references here" --no-comment --repo "$R" ) >/dev/null 2>"$E"
+  [ $? -eq 0 ] || { echo "selftest: #428-clean-rc0" >&2; exit 1; }
+  grep -q 'close-keyword' "$E" && { echo "selftest: #428-clean-silent a body with no close-keyword shape must not warn" >&2; exit 1; }
+  # 8c. the same shape OUTSIDE any negation -> class=genuine, still rc 0
+  ( cd "$R" && echo k3 > k3 && git add k3 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix: land it
+
+This closes #321 for real." --no-comment --repo "$R" ) >/dev/null 2>"$E"
+  [ $? -eq 0 ] || { echo "selftest: #428-genuine-rc0" >&2; exit 1; }
+  grep -q 'class=genuine' "$E" || { echo "selftest: #428-genuine-class a bare close keyword must warn as genuine" >&2; exit 1; }
+  # 9. (#501) the derived ref is cross-checked against the branch and subject.
+  #    9a. DISAGREEMENT -> 3. Fixture branch names #777 while the derived claim
+  #        is #149: the 2026-09-25 shape (work on #500 committed under #548
+  #        because #548 was that actor's newest open claim).
+  git -C "$R" checkout -q -b fix/777-dup-turn
+  ( cd "$R" && echo m1 > m1 && git add m1 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix(x): land the thing (#777)" --no-comment --repo "$R" ) >/dev/null 2>"$d/501.err"
+  [ $? -eq 3 ] || { echo "selftest: #501 branch/subject contradiction != 3" >&2; exit 1; }
+  grep -q '#777' "$d/501.err" || { echo "selftest: #501 must name the contradicting issue" >&2; exit 1; }
+  grep -q '#149' "$d/501.err" || { echo "selftest: #501 must name the derived ref" >&2; exit 1; }
+  grep -q -- '--issue' "$d/501.err" || { echo "selftest: #501 must state the remedy" >&2; exit 1; }
+  #    9b. AGREEMENT -> 0. The check must not fire on the ordinary path, where
+  #        branch and subject both name the derived issue.
+  git -C "$R" checkout -q -b fix/149-agree
+  ( cd "$R" && echo m2 > m2 && git add m2 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix(x): land the thing (#149)" --no-comment --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: #501 agreement must commit (rc 0)" >&2; exit 1; }
+  #    9c. --issue is the override and skips the cross-check entirely
+  ( cd "$R" && echo m3 > m3 && git add m3 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix(x): land the thing (#777)" --issue 42 --no-comment --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: #501 --issue override != 0" >&2; exit 1; }
+  #    9d. NO SIGNAL -> 0. A subject with no trailing (#N) on a neutral branch
+  #        leaves the derivation standing: the check refuses on CONTRADICTION
+  #        only, never on absence. NOTE: `checkout -` is NOT neutral here — it
+  #        returns to fix/777-dup-turn, whose branch candidate would still fire
+  #        (measured while writing this leg, which is why it names main).
+  git -C "$R" checkout -q main
+  ( cd "$R" && echo m4 > m4 && git add m4 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: no ref here" --no-comment --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: #501 no-signal must commit (rc 0)" >&2; exit 1; }
+  echo "selftest OK"; exit 0
+fi
+
+REPO="$(pwd)"; MSGS=(); ISSUE=""; ISSUE_EXPLICIT=0; NO_COMMENT=0; CSTATE=""; MBODY=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    # #428: the body text is ALSO accumulated — MBODY is the scan's input. MSGS
+    # stays the verbatim passthrough to `git commit`; the accumulation is purely
+    # additive and changes nothing git itself receives.
+    -m) [ -n "${2:-}" ] || usage; MSGS+=("$1" "$2"); MBODY="${MBODY}${2}"$'\n'; shift 2 ;;
+    --issue) ISSUE="${2:-}"; [ -n "$ISSUE" ] || usage; ISSUE_EXPLICIT=1; shift 2 ;;
+    --repo) REPO="${2:-}"; [ -n "$REPO" ] || usage; shift 2 ;;
+    --no-comment) NO_COMMENT=1; shift ;;
+    --state) CSTATE="${2:-}"; [ -n "$CSTATE" ] || usage; shift 2 ;;
+    -h|--help) echo "usage: $0 -m <msg> [-m <msg>...] [--issue N] [--repo <path>] [--no-comment] [--state <text>] | --selftest"; exit 0 ;;
+    selftest) bash "$0" --selftest; exit $? ;;
+    *) usage ;;
+  esac
+done
+[ ${#MSGS[@]} -ge 2 ] || usage
+git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 \
+  || { echo "gate-fail: not a git repo: $REPO" >&2; exit 3; }
+G="git -C $REPO"
+
+# gate 1: HEAD attached (incident class: commits landing nowhere)
+$G symbolic-ref -q HEAD >/dev/null 2>&1 \
+  || { echo "gate-fail: DETACHED HEAD in $REPO — attach a branch first" >&2; exit 3; }
+# gate 2: actor present (defaults to OPENCRABS_SESSION_ID when OC_ACTOR is unset)
+OC_ACTOR="${OC_ACTOR:-${OPENCRABS_SESSION_ID:-}}"
+[ -n "$OC_ACTOR" ] || { echo "gate-fail: OC_ACTOR unset — Session-Id trailer cannot be derived" >&2; exit 3; }
+# gate 3: something staged (never stages anything itself)
+$G diff --cached --quiet 2>/dev/null \
+  && { echo "gate-fail: nothing staged — stage your paths first (stage-only-your-paths rule)" >&2; exit 3; }
+
+# derive Issue-Ref from the actor's latest OPEN claim (#335).
+# `--open` is load-bearing: a claim whose issue already carries a done/close row
+# is RELEASED, and deriving the ref from it (the old behaviour) posted the
+# post-commit implementation comment onto a FINISHED issue. An explicit --issue
+# still overrides — that is the lane taking the decision on the record.
+DERIVE_ERR=""
+if [ -z "$ISSUE" ]; then
+  OC_LEDGER_BIN="$OC_TOOLS_DIR/state/oc-ledger"
+  if ! ISSUE="$("$OC_LEDGER_BIN" claim-ref "$OC_ACTOR" --open 2>/dev/null)"; then
+    ISSUE=""
+    # second call only on the failure path, to surface the verb's diagnostic
+    DERIVE_ERR="$("$OC_LEDGER_BIN" claim-ref "$OC_ACTOR" --open 2>&1 >/dev/null || true)"
+  fi
+fi
+if [ -n "$ISSUE" ]; then
+  printf '%s' "$ISSUE" | grep -Eq '^[0-9]+$' || { echo "gate-fail: bad --issue '$ISSUE'" >&2; exit 3; }
+  echo "issue-ref: #$ISSUE (from ${OC_LEDGER:+override ledger}${OC_LEDGER:-canonical ledger})" >&2
+else
+  echo "gate-fail: no OPEN claim with #N by $OC_ACTOR and no --issue passed${DERIVE_ERR:+ — $DERIVE_ERR}" >&2
+  echo "          claim the issue first, or pass --issue <N> to commit against it explicitly" >&2
+  exit 3
+fi
+
+# --- #501: cross-check the DERIVED ref against the caller's own statements ----
+# `claim-ref --open` returns the actor's NEWEST open claim, so the derivation is
+# a GUESS whenever the actor holds more than one. Measured 2026-09-25 (lane
+# a5b34466): work on #500 — branch `fix/500-...`, subject ending `(#500)` — was
+# committed under `Issue-Ref: #548` because #548 was that actor's newest claim,
+# and the wrapper then posted an implementation comment onto #548. The trailer
+# and the comment were both durable false attributions, corrected by hand.
+#
+# The branch name and the subject's trailing (#N) are POSITIVE assertions about
+# which issue the work belongs to, so a disagreement with the derived ref is not
+# a tie to break — it is a contradiction, and picking silently is what caused the
+# harm. The wrapper refuses and names both; `--issue N` remains the override for
+# the case where the lane really does mean the other issue.
+if [ "$ISSUE_EXPLICIT" = 0 ]; then
+  _br="$($G rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  _br_issue="$(printf '%s' "$_br" | grep -oE '(feat|fix|ci|chore|test|docs|refactor)/[0-9]+-' | tail -n 1 | grep -oE '[0-9]+' || true)"
+  _subj="$(printf '%s' "$MBODY" | head -n 1 | sed 's/[[:space:]]*$//')"
+  _subj_issue="$(printf '%s' "$_subj" | grep -oE '\(#[0-9]+\)$' | tr -dc '0-9' || true)"
+  _conflict=""
+  for _c in "$_br_issue" "$_subj_issue"; do
+    [ -n "$_c" ] || continue
+    [ "$_c" = "$ISSUE" ] && continue
+    case " $_conflict " in *" $_c "*) continue ;; esac
+    _conflict="${_conflict}${_conflict:+, }$_c"
+  done
+  if [ -n "$_conflict" ]; then
+    echo "gate-fail: derived Issue-Ref #$ISSUE contradicts the branch/subject (#$_conflict)" >&2
+    echo "          branch '$_br' · subject '$_subj'" >&2
+    echo "          the derivation takes the NEWEST open claim, which is a guess with several held." >&2
+    echo "          pass --issue <N> to commit against the intended issue explicitly (#501)." >&2
+    exit 3
+  fi
+fi
+
+# --- #428 close-keyword hazard scan — ADVISORY: it warns, it never gates -----
+# GitHub's default-branch commit parser closes an issue when the body carries a
+# close keyword followed by #N, and it CANNOT read negation. Honest-limit prose
+# is therefore a close keyword TO THE PARSER: fork issue #321 was closed ELEVEN
+# SECONDS after the ff-merge of the commit whose body said "Part B alone does
+# NOT fix #321" — no upstream PR existed, and any harvest gate keyed on issue
+# STATE reads CLOSED and goes permanently silent (fork #428).
+#
+# SCOPED, per the #428 disposition (shape 1): the shape is classified by a
+# negation marker in the six words preceding it ON ITS OWN LINE, and BOTH
+# classes warn — the class carried is message wording, never detection
+# strength. A negation idiom this list does not know still warns, as
+# class=genuine, so nothing passes silently. Limits stated rather than hidden:
+# the negation window is the SAME LINE (a marker on the previous line does not
+# scope a shape here); the keywords are the ASCII close/fix/resolve families;
+# and a code span is NOT exempted — shape 3 is an unprobed hypothesis about
+# the parser and is deliberately not encoded. Every limit degrades the
+# WARNING, and a warning only costs a re-read.
+CLOSE_RE='(^|[^A-Za-z])((close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]*#[0-9]+)'
+NEG_RE='(^|[^A-Za-z])(not|never|cannot|without|nor|neither)([^A-Za-z]|$)'
+scan_close_keywords() { # $1 = the caller's -m bodies; warns on stderr, always returns 0
+  local body="$1" line ln=0 match shape prefix win start n i
+  local -a toks=()
+  while IFS= read -r line; do
+    ln=$((ln + 1))
+    while IFS= read -r match; do
+      [ -n "$match" ] || continue
+      shape="${match#[^A-Za-z]}"          # drop the lookahead separator char
+      prefix="${line%%"$shape"*}"          # the words ahead of the shape
+      read -ra toks <<< "$prefix" || true
+      n=${#toks[@]}; start=$(( n > 6 ? n - 6 : 0 )); win=""
+      for ((i = start; i < n; i++)); do win="$win ${toks[i]}"; done
+      if printf '%s' "$win" | grep -Eqi "$NEG_RE"; then
+        printf 'warn: close-keyword(#428) class=negated line=%s shape=%s\n' "$ln" "'$shape'" >&2
+        printf "      the parser cannot read negation: this body may close %s when it lands on the default branch (measured 2026-09-19 — an ff-merge closed fork issue #321 11 s later, with no upstream PR). Non-blocking; the commit proceeds.\n" "$shape" >&2
+      else
+        printf 'warn: close-keyword(#428) class=genuine line=%s shape=%s\n' "$ln" "'$shape'" >&2
+        printf "      no negation scopes this shape: this body really DOES close %s when it reaches the default branch. Non-blocking; the commit proceeds.\n" "$shape" >&2
+      fi
+    done < <(printf '%s\n' "$line" | grep -Eoi "$CLOSE_RE" 2>/dev/null || true)
+  done <<< "$body"
+  return 0
+}
+scan_close_keywords "$MBODY"
+
+# gated commit
+if $G -c trailer.ifexists=replace commit --trailer "Session-Id: $OC_ACTOR" --trailer "Issue-Ref: #$ISSUE" "${MSGS[@]}"; then
+  CSHA="$($G rev-parse --short HEAD)"
+  echo "committed on $($G rev-parse --abbrev-ref HEAD): $CSHA (actor $OC_ACTOR, issue #$ISSUE)"
+  # folded post leg (E2 finding 2): one implementation comment per commit
+  if [ "$NO_COMMENT" = 0 ] && [ "${OC_COMMIT_COMMENT:-1}" = 1 ]; then
+    IL="${OC_ISSUE_LOG_BIN:-$OC_TOOLS_DIR/issue/oc-issue-log}"
+    if "$IL" "$ISSUE" "$CSHA" ${CSTATE:+--state "$CSTATE"} --repo "${OC_ISSUE_LOG_REPO:-leshchenko1979/opencrabs}" --repo-path "$REPO" >/dev/null 2>&1; then
+      echo "implementation comment posted on #$ISSUE"
+    else
+      echo "COMMENT FAILED after commit $CSHA — post it NOW: $IL $ISSUE $CSHA --state '<verification>'" >&2
+      exit 5
+    fi
+  fi
+  exit 0
+fi
+echo "git commit failed (see git output above)" >&2
+exit 4

@@ -1,0 +1,2847 @@
+#!/usr/bin/env python3
+"""
+tools/issue/oc-issue-dispatch — mechanized fork issue vetting, lane selection, and dispatch.
+
+Usage:
+  oc-issue-dispatch --auto [--dry-run] [--repo <path>] [--ledger <file>]
+  oc-issue-dispatch <issue-number> [--to <session-uuid>] [--dry-run] [--repo <path>] [--ledger <file>]
+  oc-issue-dispatch --selftest
+  oc-issue-dispatch --help
+
+--auto eligibility filters (each bypassable, see the flags below):
+  claim-gated/parked  an issue carrying claim-gate markers
+  LANDED (#337)       the fix already shipped -- a fork-space commit on
+                      origin/main references it, OR the ledger holds a
+                      done/close row targeting it.  --allow-landed bypasses.
+  ALREADY-DISPATCHED  the issue was wired to a lane within the last 7 days and
+  (#337)              not yet acked.  --redispatch bypasses.
+  REOPENED (#414)     an issue GitHub reports with stateReason=REOPENED OVERRIDES
+                      the LANDED and ALREADY-DISPATCHED arms -- both are
+                      INFERENCES about state (an Issue-Ref trailer on
+                      origin/main, or this tool's own past dispatch) and a
+                      reopen is a deliberate act that contradicts them.  No flag
+                      needed; the summary reports each override against the arm
+                      it defeated.
+
+Environment overrides (liveness, #451):
+  OC_DISPATCH_NOTIFY_TIMEOUT  per-notify wall-clock budget in seconds (default 120).
+                              The tool KILLS a notify at this bound and reports it
+                              as UNVERIFIED, never FAILED -- see dispatch_to_lane.
+  OC_DISPATCH_RECEIPT_GRACE   seconds to keep re-reading session-notify.journal for
+                              a receipt after the send (default 30).
+  OC_DISPATCH_MOCK_ISSUES     path to a JSON file of issue objects, replacing BOTH
+                              GitHub reads (the open-issue list and the single-issue
+                              lookup). The offline seam for the #483 fetch paths.
+
+The open-issue list is a WINDOW (OPEN_ISSUES_LIMIT), never an exhaustive set: a
+targeted dispatch for a number outside it resolves that ONE issue by direct
+lookup, and REFUSES when even that fails. A stub is never constructed, because a
+fabricated title with an EMPTY body makes the claim gate and the affinity
+scoring evaluate nothing (#483).
+
+A dispatch's ceiling is therefore the notify budget PLUS the receipt grace (150s
+by default), on top of the gh/roster reads that precede it. An outer `timeout`
+shorter than that kills the run MID-SEND -- which is how a slow run was reported
+as hanging "with no output and no side effect". Two behaviours address that: the
+tool announces its budget before every send, and it line-buffers stdout, so a
+killed run leaves the evidence of where it died instead of a 0-byte file.
+
+Exit codes:
+  0: Success / Approved / Dispatched
+  1: Rejected / Vetting failed / a TARGETED issue could not be resolved (#483)
+  2: Invalid arguments / CLI error
+  3: Delivery / session_notify failed, or an upstream gh READ failed
+  4: Capacity exhausted / No available idle lane
+"""
+
+import os
+import sys
+import io
+import json
+import re
+import argparse
+import subprocess
+import shutil
+import sqlite3
+import time
+import datetime
+import tempfile
+import fcntl
+import signal
+import collections
+import contextlib
+
+def _resolve_tools_dir():
+    """tools/ root at ANY depth (twin of lib/oc-root.sh). Never raises."""
+    start = os.path.abspath(__file__ if '__file__' in globals() else (sys.argv[0] or "."))
+    d = os.path.dirname(start)
+    here = d
+    while d and d != "/":
+        if os.path.isfile(os.path.join(d, "lib", "oc-root.sh")) and not os.path.islink(os.path.join(d, "lib")):
+            return d
+        if os.path.basename(d) == "tools":
+            break
+        d = os.path.dirname(d)
+    return here
+
+
+TOOL_DIR = os.environ.get("OC_TOOLS_DIR") or _resolve_tools_dir()
+DEFAULT_REPO = os.path.expanduser("~/opencrabs")
+DEFAULT_LEDGER = os.environ.get(
+    "OC_DEV_STATE",
+    os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")
+)
+if not os.path.exists(DEFAULT_LEDGER):
+    DEFAULT_LEDGER = os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")
+DEFAULT_LEDGER_FILE = os.path.join(DEFAULT_LEDGER, "workers-ledger.json")
+
+# The claim predicate is NOT local to this tool (#329). `tools/lib/oc_claims.py`
+# is its single implementation, shared with oc-ledger, oc-roster and
+# oc-harvest-dispatch — the module exists precisely because four inlined copies
+# had drifted apart. This file kept a fifth, and it was the one whose answer
+# REFUSES a lane its issue: an unanchored scan of the whole note read a body
+# citation as a claim, so `n=8034` (claiming #302, mentioning #290 in a
+# parenthetical) reported the OPEN issue #290 as taken. Importing the canonical
+# module also gets the structured `issues` field and the closure predicate, so a
+# claim that has since been closed no longer blocks dispatch forever.
+sys.path.insert(0, os.path.join(TOOL_DIR, "lib"))
+try:
+    import oc_claims
+except ImportError as _e:  # pragma: no cover — loud, never a silent fallback
+    sys.stderr.write(
+        "oc-issue-dispatch: cannot import tools/lib/oc_claims.py (%s) — the "
+        "canonical claim predicate is missing; refusing to guess claim state\n" % _e)
+    sys.exit(2)
+
+# Unified tools log (D0, 2026-08-28; parity with lib/oc-log.sh)
+_LOG_ENABLED = False
+_LOG_TOOL = "oc-issue-dispatch"
+_LOG_ARGS = ""
+_LOG_EXTRA = {}
+_LOG_START = 0.0
+_LOG_FINISHED = False
+
+
+def _is_selftest():
+    args_str = f" {' '.join(sys.argv[1:])} "
+    if " --selftest " in args_str:
+        return True
+    if len(sys.argv) > 1 and sys.argv[1] == "selftest":
+        return True
+    return False
+
+
+def oc_log_init(tool_name="oc-issue-dispatch"):
+    global _LOG_ENABLED, _LOG_TOOL, _LOG_ARGS, _LOG_EXTRA, _LOG_START, _LOG_FINISHED
+    _LOG_TOOL = tool_name
+    _LOG_ARGS = " ".join(sys.argv[1:])
+    _LOG_EXTRA = {}
+    _LOG_FINISHED = False
+    if " --no-log " in f" {_LOG_ARGS} ":
+        os.environ["OC_TOOLS_NOLOG"] = "1"
+    if _is_selftest():
+        os.environ["OC_TOOLS_NOLOG"] = "1"
+    if os.environ.get("OC_TOOLS_NOLOG", "0") == "1":
+        _LOG_ENABLED = False
+        return
+
+    _LOG_ENABLED = True
+    _LOG_START = time.time()
+    _oc_log_flood_guard()
+
+    def _sig_handler(signum, frame):
+        sig_map = {signal.SIGTERM: ("TERM", 143), signal.SIGINT: ("INT", 130), signal.SIGHUP: ("HUP", 129)}
+        sig_name, exit_code = sig_map.get(signum, (f"SIG{signum}", 128 + signum))
+        oc_log_extra("signal", sig_name)
+        oc_log_finish(exit_code)
+        sys.exit(exit_code)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, _sig_handler)
+        except Exception:
+            pass
+
+
+def _oc_log_flood_guard():
+    if os.environ.get("OC_NO_FLOODGUARD", "0") == "1" or _is_selftest():
+        return
+    logf = os.environ.get(
+        "OC_TOOLS_LOG",
+        os.path.join(
+            os.environ.get("OC_DEV_STATE", os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")),
+            "tools.log"
+        )
+    )
+    if not os.path.isfile(logf):
+        return
+    cutoff = time.time() - 120
+    failed_count = 0
+    args_prefix = _LOG_ARGS[:500]
+    try:
+        with open(logf, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+        for line in lines[-300:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                if (
+                    row.get("tool") == _LOG_TOOL
+                    and row.get("args", "")[:500] == args_prefix
+                    and int(row.get("exit", 0)) != 0
+                ):
+                    ts_str = row.get("ts", "")
+                    if ts_str.endswith("Z"):
+                        ts_val = datetime.datetime.fromisoformat(ts_str[:-1] + "+00:00").timestamp()
+                    else:
+                        ts_val = datetime.datetime.fromisoformat(ts_str).timestamp()
+                    if ts_val >= cutoff:
+                        failed_count += 1
+            except Exception:
+                continue
+        if failed_count >= 4:
+            sys.stderr.write(
+                f"FLOOD-GUARD (rc 8): {_LOG_TOOL} with identical args already failed {failed_count}x in the last 120s — refusing to run again.\n"
+                f"  Fix the underlying failure, change the args, or set OC_NO_FLOODGUARD=1 to bypass (and say why in the lane journal).\n"
+            )
+            sys.exit(8)
+    except SystemExit:
+        raise
+    except Exception:
+        pass
+
+
+def oc_log_extra(key, value):
+    global _LOG_EXTRA
+    if not _LOG_ENABLED:
+        return
+    _LOG_EXTRA[str(key)] = str(value)
+
+
+def oc_log_finish(exit_code=0):
+    global _LOG_FINISHED
+    if not _LOG_ENABLED or _LOG_FINISHED:
+        return
+    _LOG_FINISHED = True
+    end_time = time.time()
+    secs = round(end_time - (_LOG_START if _LOG_START > 0 else end_time), 1)
+    actor = os.environ.get("OC_ACTOR") or os.environ.get("OPENCRABS_SESSION_ID") or "unknown"
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    log_entry = {
+        "ts": ts,
+        "tool": _LOG_TOOL,
+        "actor": actor,
+        "args": _LOG_ARGS[:500],
+        "exit": int(exit_code) if isinstance(exit_code, int) else 1,
+        "secs": secs,
+        "extra": _LOG_EXTRA
+    }
+    line = json.dumps(log_entry, separators=(",", ":"))
+
+    logf = os.environ.get(
+        "OC_TOOLS_LOG",
+        os.path.join(
+            os.environ.get("OC_DEV_STATE", os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs-dev")),
+            "tools.log"
+        )
+    )
+    try:
+        os.makedirs(os.path.dirname(logf), exist_ok=True)
+        lock_file = f"{logf}.lock"
+        try:
+            with open(lock_file, "a") as lf:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                try:
+                    with open(logf, "a", encoding="utf-8") as f:
+                        f.write(f"{line}\n")
+                        f.flush()
+                finally:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            with open(logf, "a", encoding="utf-8") as f:
+                f.write(f"{line}\n")
+                f.flush()
+    except Exception:
+        pass
+
+
+# Topic keywords and domain affinities
+AFFINITY_KEYWORDS = {
+    "telegram": ["telegram", "button", "formatting", "photo", "rich", "topic", "markup", "markdown", "reply", "menu", "stream", "draft", "message", "channel"],
+    "mermaid": ["mermaid", "diagram", "chart", "flowchart", "graphviz", "render", "rendering", "visual"],
+    "db": ["db", "database", "sqlite", "vacuum", "retention", "ttl", "messages", "prune", "maintenance", "compaction", "cleanup", "storage", "sql", "migration"],
+    # The shell/CLI-tool surface (fork #546, after #543's boundary matcher). Chosen
+    # by MEASUREMENT, same method as `tools`/`plan` below. The pre-#546 list
+    # ("bash","sh","exec","retry","loop","guard","env","process","child","signal",
+    # "subshell","cli") was generic engineering prose, and it broke the -50 arm in
+    # TWO directions at once:
+    #   (i) ISSUE side -- it fired on 156 of the 163 open fork issues (96%), so a
+    #       bash-"specialized" lane could not be penalised on ANY issue;
+    #  (ii) LANE side -- 7 of the 9 armed lanes held the domain PURELY from an
+    #       incidental word in their own feature string ("rich-resume-guard",
+    #       "harvest retry-429 ladder", "streaming-guard", "#32 loop-guard",
+    #       "#92 demoted-host guard", "owns tools/ CLI", "compaction signal"),
+    #       so lanes with no shell work at all were marked specialized in it.
+    # Itemised precision (fires / hits on shell-tool truth, measured
+    # 2026-09-24T16:4xZ over those 163 issues; truth = the 7 whose subject IS the
+    # bash-tool surface: #294 #327 #345 #469 #471 #512 #537):
+    #   loop 39/2  guard 43/3  retry 23/0  process 32/0  signal 21/1  cli 28/1
+    #   child 9/0  exec 4/0    env 4/1     sh 12/3      bash 19/6
+    #   spill 4/3  pipefail 2/1  subshell 2/0
+    # Kept tokens NAME the surface; the generic ones are REJECTED -- "guard" and
+    # "loop" measure English, not shell tooling. Measured effect of the narrowing:
+    # fires 156 -> 22 of 163 (96% -> 13.5%) at 7/7 truth recall. A body that merely
+    # QUOTES a command still matches on "bash" (13 of the 22): bodies are noisy by
+    # nature, and tightening further would drop real issues before it dropped noise.
+    "bash": ["bash", "subshell", "spill", "pipefail"],
+    "config": ["config", "toml", "setting", "options", "parse", "yaml", "schema", "serde", "types"],
+    "cron": ["cron", "schedule", "job", "timer", "isolation", "scheduler", "trigger"],
+    "memory": ["memory", "vector", "search", "embedding", "codegraph", "graph", "store", "similarity"],
+    "skills": ["skill", "manifest", "compaction", "slash", "prompt", "context", "instruction"],
+    "notify": ["notify", "queue", "delivery", "router", "session", "push", "wake", "stall", "drain"],
+    "harvest": ["harvest", "upstream", "port", "cherry-pick", "census", "sweep"],
+    # The tools/ CLI surface (fork #342). Keywords were chosen by MEASUREMENT, not
+    # guesswork: scored over the 125 open fork issues against ground truth "names a
+    # path that exists under tools/** or carries the (tools): scope prefix" (45
+    # issues), this list fires on exactly those 45 -- 100% precision, 100% recall,
+    # zero false positives. A bare "tools/" was REJECTED: it fires on 60 and also
+    # matches nine daemon-source tokens (src/**/tools/*.rs), which are Editor
+    # territory and must never accrue affinity for this lane.
+    "tools": ["(tools):", "tools/oc-", "tools/lib/", "tools/tests/", "tools/ship/", "tools/harvest/", "tools/state/", "tools/audit/", "tools/git/", "tools/notify/", "tools/issue/", "tools/smoke/"],
+    # The plan tool (fork #529). Chosen by MEASUREMENT, same method as `tools`
+    # above. Ground truth = the issue TITLE carries the `(plan)` scope prefix
+    # (3 open issues: #374, #506, #510). Scored over the 159 open fork issues:
+    #   `(plan):` alone ......... fires 3, precision 100%, recall 100%
+    #   + `plan-tool` ........... fires 4, precision  75% (adds #529, a tools/
+    #                             issue that names the surface — harmless: the
+    #                             toolsmith lane still wins it on ownership)
+    #   + `plan card` / `plan tool` .. precision 33% / 30% — every extra hit is a
+    #                             TELEGRAM-rendering issue that merely mentions a
+    #                             plan card (#290, #334, #399, #402). REJECTED:
+    #                             that would hand the plan lane affinity for
+    #                             telegram work, the exact mixing this law exists
+    #                             to prevent.
+    # Both keywords are needed and they work on DIFFERENT SIDES: `(plan):` is how
+    # an ISSUE declares the domain, and `plan-tool` is how the LANE does — its
+    # feature string is "plan-tool (#1231 re-stick relay)", which contains no
+    # scope prefix. No ROLE_DOMAINS entry is needed (unlike #342's toolsmith,
+    # whose feature named no tools/ token): the lane-side match works on prose.
+    "plan": ["(plan):", "plan-tool", "plan_cards"],
+    # The goal subsystem (fork #568). Chosen by MEASUREMENT, same method as
+    # `tools`/`plan` above. Ground truth = the issue TITLE carries the `(goal):`
+    # scope prefix (7 open issues: #299 #300 #364 #456 #473 #480 #567), scored
+    # over the 166 open fork issues. A loose sweep for `src/brain/goal` anywhere
+    # in the body added 2 more (#372, #489) and both are PROSE MENTIONS, not fix
+    # surfaces -- #372's path sits inside a pasted log line, #489's is a
+    # code-index example -- so the prefix is the DECLARATION and the path is not.
+    #   (goal): ........... fires 7,  precision 100%, recall 100%
+    #   + goal-subsystem .. fires 7,  precision 100%, recall 100% (0 issue fires)
+    #   + goal_state ...... fires 9,  precision  78% -- adds #344/#372, prose
+    #   + bare "goal" ..... fires 16, precision  44% -- measures English
+    #   + src/brain/goal .. fires 9,  precision  78% -- prose mentions only
+    # Two tokens, one per side -- the `plan` domain's shape: `(goal):` is how an
+    # ISSUE declares the domain, and `goal-subsystem` is how the LANE does (the
+    # goal lane's feature string carries no scope prefix). Both are needed: the
+    # prefix alone scores 100/100 on issues but leaves the lane UNREACHABLE,
+    # which is the live defect this entry fixes -- #567 was proposed to a
+    # suggest-options lane while the subsystem's own owner could not be matched.
+    # NOT COVERED HERE: the -50 mismatch arm. `specialized_domains` is a
+    # hardcoded set that does not include `goal`, so a non-goal issue can still
+    # be dumped on this lane; adding a domain to this table does not reach it.
+    "goal": ["(goal):", "goal-subsystem"],
+}
+
+# Role-owned domains (fork #342, Design I step 18 -- sufficiency leg). A lane's
+# registered feature string is free prose and need not name the surface it OWNS,
+# so affinity keyed on keywords alone is one-sided: the toolsmith feature reads
+# "owns tools/ CLI (oc-ledger, oc-deploy, ...)", which contains none of the four
+# tools/ tokens, so the lane never gained the domain its own issues carry and
+# scored 23 against an editor's 63. Binding the domain to the ROLE closes that
+# asymmetry at its source, instead of padding the keyword list until prose
+# happens to match. Only surfaces a lane actually OWNS belong here.
+ROLE_DOMAINS = {
+    "toolsmith": ("tools",),
+}
+
+
+def check_journal_receipt(target_uuid, start_epoch, journal_path=None, poll_grace_secs=0,
+                          send_budget_secs=0):
+    """
+    Verify if a delivery receipt for target_uuid exists in session-notify.journal
+    since start_epoch. Supports a polling grace window for slow async daemon writes.
+
+    `send_budget_secs` anchors the window to the SEND instead of to the moment
+    this helper runs. That matters because the caller has usually just burned the
+    whole notify timeout: measuring the grace from HERE would add a second,
+    unrelated delay rather than covering the remainder of the send's own budget.
+    A budget already spent yields exactly one pass, so a run that was SIGTERM'd
+    far past its budget does not block here.
+    """
+    if not journal_path:
+        journal_path = os.path.expanduser("~/.opencrabs/profiles/ops/logs/session-notify.journal")
+        if not os.path.exists(journal_path):
+            journal_path = os.path.expanduser("~/.opencrabs/logs/session-notify.journal")
+
+    if send_budget_secs > 0:
+        deadline = start_epoch + send_budget_secs
+        if deadline < time.time():
+            deadline = time.time()
+    else:
+        deadline = time.time() + (poll_grace_secs if poll_grace_secs > 0 else 0)
+    while True:
+        if os.path.exists(journal_path):
+            try:
+                with open(journal_path, "r", encoding="utf-8", errors="replace") as f:
+                    tail = collections.deque(f, maxlen=JOURNAL_TAIL_LINES)
+                for line in reversed(tail):
+                    parts = line.strip().split("\t")
+                    if len(parts) >= 5:
+                        ts_str, caller, tgt, outcome, exit_str = parts[:5]
+                        t_val = tgt.split("=", 1)[1] if "=" in tgt else tgt
+                        o_val = outcome.split("=", 1)[1] if "=" in outcome else outcome
+                        e_val = exit_str.split("=", 1)[1] if "=" in exit_str else exit_str
+                        if t_val == target_uuid and o_val in ("delivered", "injected", "redirected", "queued") and e_val == "0":
+                            try:
+                                dt = datetime.datetime.fromisoformat(ts_str)
+                                if dt.timestamp() >= start_epoch - 5:
+                                    return True
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+        if time.time() >= deadline:
+            break
+        time.sleep(2)
+    return False
+
+
+def run_cmd(cmd, cwd=None, env=None, timeout=60):
+    try:
+        p = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=cwd,
+            env=env,
+            timeout=timeout
+        )
+        return p.returncode, p.stdout, p.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", f"Command timed out after {timeout}s"
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def extract_claimed_issues(ledger_data):
+    """
+    Issue numbers with a still-OPEN claim in workers-ledger.json.
+
+    Delegates to the canonical predicate (tools/lib/oc_claims.py, #329). The
+    previous inline copy differed from it in TWO ways, both of which made this
+    gate refuse work that no lane holds:
+
+      * it scanned the WHOLE `what` for references, so an issue merely MENTIONED
+        in a claim note read as claimed (#329's 13 phantoms);
+      * it returned EVERY claim row ever written, never applying the closure
+        predicate — so an issue whose claim had long since been closed stayed
+        "claimed" and was never dispatchable again.
+
+    Read-only; no ledger mutation.
+    """
+    return {tok for claim in oc_claims.open_claims(ledger_data.get("events", []))
+            for tok in claim["tokens"]}
+
+
+CLAIM_GATE_PATTERNS = [
+    r"no claim without fresh approval",
+    r"not scheduled work",
+    r"filed for idea-box ranking",
+    r"idea-box ranked",
+    r"do not claim",
+    r"blocked on owner",
+    r"requires? owner approval before claim",
+]
+
+CLAIM_GATE_LABELS = {
+    "idea-box",
+    "parked",
+    "hold",
+    "on-hold",
+    "needs-approval",
+}
+
+
+def check_issue_claim_gate(issue):
+    """
+    Check if an issue carries an explicit claim gate, idea-box ranking directive,
+    or label that prevents autonomous dispatch to worker lanes.
+    Returns (is_gated: bool, reason: str).
+    """
+    labels = [l.get("name", "").lower() for l in issue.get("labels", [])]
+    for lbl in labels:
+        if lbl in CLAIM_GATE_LABELS:
+            return True, f"label:{lbl}"
+
+    body = issue.get("body") or ""
+    for pat in CLAIM_GATE_PATTERNS:
+        m = re.search(pat, body, re.IGNORECASE)
+        if m:
+            return True, f"pattern:'{m.group(0)}'"
+
+    return False, ""
+
+
+#: How many open issues the fetch may return (#483). gh paginates internally for
+#: any limit above 100, so this is a CEILING on what the tool can see, never a
+#: page size. The old hardcoded 100 was neither: the fork carried 149 open
+#: issues on 2026-09-21, so ~49 sat outside every call and a targeted dispatch
+#: for one of them fell through to a fabricated title with an EMPTY body.
+OPEN_ISSUES_LIMIT = 1000
+
+#: The JSON fields every issue read requests. ONE literal, so the LIST fetch and
+#: the SINGLE-ISSUE fetch cannot drift into different shapes (#483).
+ISSUE_JSON_FIELDS = "number,title,labels,body,stateReason,state"
+
+
+def _env_mock_issues():
+    """Issues from OC_DISPATCH_MOCK_ISSUES (a JSON file), or None when unset.
+
+    The offline seam for the two fetch paths below. The selftest has no gh, so
+    without it a fetch defect can only be tested in production.
+    """
+    path = os.environ.get("OC_DISPATCH_MOCK_ISSUES")
+    if not path:
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def _warn_if_window_full(issues):
+    """Say so when the returned window may be TRUNCATED (#483).
+
+    A full window and a complete list are indistinguishable at the call site,
+    which is the half of #483 that no amount of pagination removes: the limit is
+    a ceiling, so the honest move is to report hitting it rather than to let a
+    caller read a bounded list as an exhaustive one.
+    """
+    if len(issues) >= OPEN_ISSUES_LIMIT:
+        print(f"WARNING: gh returned {len(issues)} open issues, exactly the "
+              f"{OPEN_ISSUES_LIMIT}-issue window — the list may be TRUNCATED, and an "
+              f"issue outside it cannot be told apart from a missing one. Raise "
+              f"OPEN_ISSUES_LIMIT before trusting this window.", file=sys.stderr)
+
+
+def fetch_open_issues(repo_path, mock_issues=None):
+    """Every OPEN issue on the fork, or None when the fetch itself FAILED.
+
+    None -- never [] -- on failure, because collapsing the two is what let
+    cmd_targeted fabricate metadata for an issue it had simply not fetched
+    (#483): "gh could not answer" and "there are no open issues" lead to
+    opposite decisions and were the same value.
+
+    The window is OPEN_ISSUES_LIMIT, and gh paginates internally for any limit
+    above 100, so this is a CEILING on what the tool can see rather than a page
+    size. The old hardcoded 100 was neither: the fork carried 149 open issues on
+    2026-09-21, so ~49 sat outside every call.
+    """
+    if mock_issues is not None:
+        _warn_if_window_full(mock_issues)
+        return mock_issues
+
+    try:
+        mocked = _env_mock_issues()
+    except Exception as e:
+        print(f"ERROR: cannot read OC_DISPATCH_MOCK_ISSUES: {e}", file=sys.stderr)
+        return None
+    if mocked is not None:
+        _warn_if_window_full(mocked)
+        return mocked
+
+    cmd = ["gh", "issue", "list", "--repo", "leshchenko1979/opencrabs", "--state", "open",
+           "--limit", str(OPEN_ISSUES_LIMIT), "--json", ISSUE_JSON_FIELDS]
+    rc, stdout, stderr = run_cmd(cmd, cwd=repo_path)
+    if rc != 0:
+        print(f"ERROR: Failed to fetch issues via gh: {stderr.strip()}", file=sys.stderr)
+        return None
+    try:
+        issues = json.loads(stdout)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Failed to decode gh output: {e}", file=sys.stderr)
+        return None
+    _warn_if_window_full(issues)
+    return issues
+
+
+def fetch_issue(repo_path, number, mock_issues=None):
+    """ONE issue by number, whatever the size of the open-issue list (#483).
+
+    The authoritative lookup for a TARGETED dispatch. The list fetch is a
+    WINDOW, so an absent number means "outside the window" at best -- and the
+    old code answered that absence with a stub (title `Issue #N`, body "") that
+    then fed the claim gate and the affinity scoring. Returns the issue dict, or
+    None when the lookup failed or no such issue exists: NEVER a stub.
+    """
+    if mock_issues is not None:
+        return next((i for i in mock_issues if i.get("number") == number), None)
+
+    try:
+        mocked = _env_mock_issues()
+    except Exception as e:
+        print(f"ERROR: cannot read OC_DISPATCH_MOCK_ISSUES: {e}", file=sys.stderr)
+        return None
+    if mocked is not None:
+        return next((i for i in mocked if i.get("number") == number), None)
+
+    cmd = ["gh", "issue", "view", str(number), "--repo", "leshchenko1979/opencrabs",
+           "--json", ISSUE_JSON_FIELDS]
+    rc, stdout, stderr = run_cmd(cmd, cwd=repo_path)
+    if rc != 0:
+        print(f"ERROR: could not resolve issue #{number} via gh issue view: {stderr.strip()}",
+              file=sys.stderr)
+        return None
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Failed to decode gh output: {e}", file=sys.stderr)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Landed-work detection + dispatch memory (#337)
+#
+# `--auto` derived eligibility from CLAIM ROWS ALONE, so an issue whose fix had
+# already shipped was re-proposed for dispatch (Triage, 2026-09-18, all four
+# proposed). Two independent arms, either of which marks an issue landed:
+#
+#   (A) origin/main carries a commit referencing it, or
+#   (B) the ledger holds a LANDING-kind row targeting it.
+#
+# The two arms are genuinely independent, and each carries issues the other
+# misses — measured against the live ledger + origin/main 2026-09-18:
+#
+#   arm A (git) 193   arm B (ledger) 103   both 63
+#   arm A only  130   ARM B ONLY     40
+#
+# All four Triage-reported issues (#291/#297/#302/#324) are caught by BOTH arms:
+# each has a genuine `Issue-Ref: #N` commit on origin/main AND a ledger landing
+# row. Do not attribute them to one arm — the honest statement is that both arms
+# independently caught all four. Arm B earns its place on the 40 issues that
+# carry NO git reference at all (a `done`/`close` row with no commit naming the
+# issue), which a git-only filter would re-propose for dispatch.
+#
+# ARM A IS SCOPED TO FORK-SPACE COMMITS (Session-Id trailer present). origin/main
+# is a fork branch that also carries upstream's history, and upstream's PR
+# numbers live in a DIFFERENT namespace that OVERLAPS the low fork range: a
+# plain `#N` scan of all 2118 commits found upstream commits citing #29 and #268
+# as PR numbers, both of which are REAL fork issue numbers. Measured 2026-09-18:
+# 452/455 fork commits carry Session-Id, 0/73 upstream commits in the #1600s do.
+# Without the scope an upstream PR citation silently marks fork issue #29 or
+# #268 landed and starves it of dispatch — the wrong direction of error.
+# ---------------------------------------------------------------------------
+
+DISPATCH_WINDOW_DAYS = 7
+
+def _env_positive_int(name, default):
+    """A positive int from the environment, else `default`. Garbage -> default.
+
+    A malformed override must not take the tool down: an empty value or a typo is
+    a configuration slip, not a reason to refuse to dispatch.
+    """
+    try:
+        value = int(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+#: Wall-clock bound on ONE notify attempt. A notify that hits this bound is
+#: KILLED, not failed: lib/oc-notify.sh gives its CLI leg its own budget
+#: (OC_NOTIFY_CLI_TIMEOUT, default 90s) and then falls through to an A2A leg that
+#: can still land the message, so a kill at THIS bound does not mean the send
+#: failed. That is why a timeout is reported as UNVERIFIED rather than FAILED
+#: (#S; the lib's own budget is #466).
+#: Overridable (#451): under an outer `timeout N` an operator sets this BELOW N,
+#: or the wrapper kills the run mid-send and the dispatch is neither reported nor
+#: recorded -- the reported "hang with no output and no side effect".
+NOTIFY_TIMEOUT_SECS = _env_positive_int("OC_DISPATCH_NOTIFY_TIMEOUT", 120)
+
+#: Wall-clock bound on the ONE `oc-roster classify` call this tool routes on.
+#: `oc-roster` allows ITSELF 120s for the same DB read (tools/state/oc-roster:154), so
+#: an outer bound BELOW that kills work the inner tool was still doing -- the
+#: outer number has to be at least the inner one or the inner one is
+#: unreachable (#390). Measured live on this box, three consecutive IDLE runs:
+#: 9.76s / 16.50s / 17.36s -- a 1.78x swing with nothing else changing, so the
+#: old 60s had 3.5-6x headroom at best and none under carrier-build load, which
+#: is exactly when a cron fires this tool.
+#: Overridable (#390) so an operator under an outer `timeout N` can shorten it.
+ROSTER_TIMEOUT_SECS = _env_positive_int("OC_DISPATCH_ROSTER_TIMEOUT", 120)
+
+#: How long to keep re-reading the journal for a receipt after the send.
+#: Overridable (#451) for the same reason as NOTIFY_TIMEOUT_SECS.
+RECEIPT_GRACE_SECS = _env_positive_int("OC_DISPATCH_RECEIPT_GRACE", 30)
+
+#: Journal lines kept while scanning for a receipt. The journal is append-only
+#: and reaches megabytes, so it is streamed through a bounded deque rather than
+#: slurped (host rule: stream, never read() a whole file into a list).
+JOURNAL_TAIL_LINES = 60
+
+#: Exit code for "the send may have landed but no receipt was seen". Deliberately
+#: distinct from 3 (nothing sent) because the two need OPPOSITE operator action:
+#: an unverified dispatch IS recorded and must not be re-sent, a failed one is NOT
+#: recorded and must be retried. Collapsing them is what duplicated dispatches (#S).
+RC_UNVERIFIED = 6
+
+#: #370: the TARGETED path now runs the same eligibility arms as --auto, so its
+#: two refusals need codes of their own. They must NOT reuse 6: that code means
+#: "the send MAY have landed, the dispatch IS recorded, do NOT re-send", which is
+#: the OPPOSITE operator action from a refusal that sent nothing. Collapsing them
+#: is the same defect RC_UNVERIFIED's own note warns about. Registered in
+#: tools/docs/RC-CONTRACT.md.
+RC_TARGETED_LANDED = 8
+RC_TARGETED_ALREADY_DISPATCHED = 9
+
+#: Greppable marker for a dispatch that routed WITHOUT an affinity table (#390).
+#: ONE home, so a caller can count degraded runs with `grep -c '^DEGRADED:'`.
+DEGRADED_MARKER = "DEGRADED"
+
+
+def report_roster_degraded(rc, err, budget):
+    """Announce that the affinity table is unavailable, on BOTH streams (#390).
+
+    The WARN this replaces went to stderr ONLY, and a cron-driven invocation
+    discards stderr -- so a run that lost affinity routing left no trace at all
+    and `classify_ok=False` was recorded nowhere. The marker also goes to stdout,
+    where a caller can COUNT it, and it names the BUDGET because a timeout under
+    load is the case this exists for.
+    """
+    detail = (err or "").strip() or f"rc={rc}"
+    for stream in (sys.stdout, sys.stderr):
+        print(f"{DEGRADED_MARKER}: affinity table unavailable -- oc-roster classify "
+              f"failed (budget {budget}s, {detail}); routing WITHOUT affinity "
+              f"(every lane treated busy).", file=stream)
+
+
+_ISSUE_REF_VALUE_RE = re.compile(r"#([0-9]+)")
+
+#: The dispatch row this tool writes (see dispatch_to_lane). Kept in one place
+#: so the writer and the dedup reader cannot drift apart.
+DISPATCH_ROW_RE = re.compile(
+    r"dispatch issue #([0-9]+) to (?:editor|lane)\s+([0-9a-fA-F-]{8,})",
+    re.IGNORECASE)
+
+#: A dispatch row written BEFORE the send blocks, so an operator asking "did
+#: this already run?" gets a hit during the window instead of a clean zero.
+#: Measured 2026-09-25: the settled row is written only after the send returns,
+#: and the send can block for roster(120s)+send(120s)+grace(30s) against a 120s
+#: caller timeout -- so the tool STRUCTURALLY outlives its caller, and during
+#: that window every available check (`messages`, `notify_queue`, the ledger)
+#: reads absence. An operator re-sent by hand and the tool's own envelope landed
+#: 19s later: two envelopes for one issue.
+#:
+#: The dedup reader SKIPS these. That is load-bearing: an rc=2 `no_route` is the
+#: one PROVEN non-delivery and is deliberately NOT recorded so a retry stays
+#: correct, and counting an in-flight row as settled would suppress that retry
+#: for the whole 7-day window -- trading a visible duplicate for a silent loss.
+INFLIGHT_ROW_RE = re.compile(r"\bIN FLIGHT\b", re.IGNORECASE)
+
+def _parse_ledger_ts(value):
+    """A ledger row's timestamp as an aware datetime, or None if unparseable."""
+    try:
+        ts = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=datetime.timezone.utc)
+
+def fetch_landed_issues(repo_path, mock_landed=None):
+    """Issue numbers whose fix is already on origin/main (fork space only)."""
+    if mock_landed is not None:
+        return {int(n) for n in mock_landed}
+
+    fmt = ("%H%x1f%s%x1f"
+           "%(trailers:key=Issue-Ref,valueonly,separator=%x2C)%x1f"
+           "%(trailers:key=Session-Id,valueonly,separator=%x2C)")
+    rc, out, err = run_cmd(
+        ["git", "log", "origin/main", "--no-merges", f"--format={fmt}"],
+        cwd=repo_path, timeout=60)
+    if rc != 0:
+        print(f"WARN: cannot read origin/main for landed-work detection "
+              f"(rc={rc}): {err.strip()}", file=sys.stderr)
+        return set()
+
+    landed = set()
+    for line in out.splitlines():
+        parts = line.split("\x1f")
+        if len(parts) < 4:
+            continue
+        subj, iref, sess = parts[1], parts[2], parts[3]
+        if not sess.strip():
+            continue            # upstream space — a different number namespace
+        for value in iref.split(","):
+            value = value.strip()
+            if not value:
+                continue
+            # `adolfousier/opencrabs#1419` is an EXPLICIT upstream citation: only
+            # bare refs and leshchenko1979/opencrabs-qualified ones are ours.
+            if "/" in value and not value.startswith("leshchenko1979/opencrabs#"):
+                continue
+            for num in _ISSUE_REF_VALUE_RE.findall(value):
+                landed.add(int(num))
+        m = re.search(r"\(#([0-9]+)\)\s*$", subj.strip())
+        if m:
+            landed.add(int(m.group(1)))
+    return landed
+
+def ledger_landed_issues(ledger_data):
+    """Issue numbers TARGETED by a LANDING ledger row (#337 arm B).
+
+    Two independent constraints, both required:
+
+    * `oc_claims.LANDED_KINDS` — NOT `CLOSING_KINDS`. The latter is claim
+      bookkeeping: `confirm`/`unclaim`/`reject` close a claim without any work
+      shipping, so using it here suppresses issues that are still open and
+      still dispatchable (#248, #253, #268 were all wrongly filtered before
+      this narrowing). See the LANDED_KINDS docstring in tools/lib/oc_claims.py.
+
+    * `row["targets"]` — the canonical primary-target predicate, not every
+      reference in the row: a done row that merely MENTIONS a second issue in
+      prose does not land it (#329's phantom class).
+    """
+    rows = oc_claims.parse_events(ledger_data.get("events", []))
+    out = set()
+    for row in rows:
+        if row["kind"] in oc_claims.LANDED_KINDS:
+            out.update(row["targets"])
+    return out
+
+def recent_dispatches(ledger_data, window_days=DISPATCH_WINDOW_DAYS):
+    """{issue: (lane, ts)} for dispatch rows inside the window (#337 dedup).
+
+    Each `--auto` run previously started from scratch, so an issue already wired
+    to a lane but not yet acked was wired to a SECOND lane. The window bounds
+    the memory: past it, a dispatch is treated as expired and the issue becomes
+    dispatchable again.
+    """
+    rows = oc_claims.parse_events(ledger_data.get("events", []))
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=window_days))
+    out = {}
+    for row in rows:
+        # An attempt that has STARTED is not an attempt that has SETTLED: the
+        # in-flight row exists so an operator can see a running dispatch, and
+        # it must not suppress a retry (see INFLIGHT_ROW_RE).
+        if INFLIGHT_ROW_RE.search(row["what"]):
+            continue
+        m = DISPATCH_ROW_RE.search(row["what"])
+        if not m:
+            continue
+        ts = _parse_ledger_ts(row["t"])
+        if ts is None or ts < cutoff:
+            continue
+        issue = int(m.group(1))
+        if issue not in out or ts > out[issue][1]:
+            out[issue] = (m.group(2), ts)
+    return out
+
+def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_path=None):
+    """
+    Retrieve workers, identifying idle editors and their topic affinity.
+    Validates existence against the sessions SQLite database to filter phantom workers.
+    """
+    classify_rows = {}
+    classify_ok = False
+    if mock_classify is not None:
+        classify_ok = True
+        for r in mock_classify.get("rows", []):
+            classify_rows[r.get("uuid")] = r
+    else:
+        roster_bin = os.path.join(TOOL_DIR, "state/oc-roster")
+        if os.path.exists(roster_bin):
+            rc, out, err = run_cmd([roster_bin, "classify", "--json"],
+                                   timeout=ROSTER_TIMEOUT_SECS)
+            if rc == 0:
+                try:
+                    cdata = json.loads(out)
+                    for r in cdata.get("rows", []):
+                        classify_rows[r.get("uuid")] = r
+                    classify_ok = True
+                except Exception as e:
+                    print(f"WARN: Failed to parse oc-roster classify output: {e}", file=sys.stderr)
+                    report_roster_degraded(rc, f"unparseable output: {e}", ROSTER_TIMEOUT_SECS)
+            else:
+                report_roster_degraded(rc, err, ROSTER_TIMEOUT_SECS)
+        else:
+            # A MISSING oc-roster is the same degradation as a failed one, and was
+            # equally silent (#390): classify_ok stayed False with no output at all.
+            report_roster_degraded(127, f"no such tool: {roster_bin}", ROSTER_TIMEOUT_SECS)
+
+    # Validate sessions existence against SQLite database (or mock_sessions in tests)
+    known_sessions = None
+    if mock_sessions is not None:
+        known_sessions = set(mock_sessions)
+    else:
+        target_db = db_path or os.environ.get(
+            "OC_DEV_DB",
+            os.environ.get(
+                "OC_ROSTER_DB",
+                os.path.expanduser("~/.opencrabs/profiles/ops/opencrabs.db")
+            )
+        )
+        if os.path.exists(target_db):
+            try:
+                con = sqlite3.connect(f"file:{target_db}?mode=ro", uri=True)
+                cur = con.cursor()
+                cur.execute(
+                    "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%')"
+                )
+                known_sessions = {row[0] for row in cur.fetchall()}
+                con.close()
+            except Exception as e:
+                # If DB read fails, do not hard-crash, but report warning on stderr
+                print(f"WARN: Failed to query sessions DB for liveness check: {e}", file=sys.stderr)
+
+    workers = ledger_data.get("workers", [])
+    editor_lanes = []
+
+    # Map workers with their active state
+    for w in workers:
+        # A lane that OWNS a work surface is a candidate, not only role=editor: the
+        # Toolsmith owns tools/** (fork #342). Roles owning no affinity domain (hq,
+        # triage) deliberately stay out -- admitting them could only add zero-score
+        # candidates, which is the misroute class this fix exists to remove.
+        if w.get("role") not in ("editor", "toolsmith"):
+            continue
+        uuid = w.get("uuid")
+        if not uuid:
+            continue
+
+        # Prune phantom workers whose UUID is absent from sessions DB
+        if known_sessions is not None and uuid not in known_sessions:
+            continue
+
+        c_info = classify_rows.get(uuid, {})
+        c_class = c_info.get("class")  # ACTIVE, IDLE, UNKNOWN
+        dirty_trees = c_info.get("dirty", 0)
+        c_worktrees = c_info.get("worktrees", "-")
+        c_claims = c_info.get("claims", "-")
+
+        # Determine if lane is busy:
+        # If oc-roster classify failed completely, default to busy (conservative safety)
+        # to avoid misrouting or colliding with busy lanes.
+        if not classify_ok:
+            is_busy = True
+        else:
+            # Busy if: has open claims in classify, or dirty trees > 0
+            # Note: Stale/inactive worktrees on disk (without open claims or dirty files) do NOT make a lane busy.
+            has_open_claims = c_claims not in ("-", "", None)
+            is_busy = has_open_claims or (dirty_trees > 0)
+
+        # Check topic and feature for domain affinity. Topic is optional in
+        # workers-ledger.json; keep it explicit so a later topic cannot bypass
+        # the shared matcher silently.
+        feature = " ".join(filter(None, (w.get("feature"), w.get("topic"))))
+
+        editor_lanes.append({
+            "uuid": uuid,
+            "topic": w.get("topic"),
+            "topic_id": w.get("topic_id"),
+            "feature": feature,
+            "class": c_class or "UNKNOWN",
+            "claims": c_claims,
+            "worktrees": c_worktrees,
+            "is_busy": is_busy,
+            # Whether is_busy is a REAL reading. When classify fails every lane
+            # defaults to busy (conservative safety, above); that unknown state must
+            # not be read by the surface-owner override in select_best_lane as
+            # "this owner is merely queued", or a broken classify would re-enable
+            # dispatch exactly when we cannot tell who is free.
+            "busy_known": classify_ok,
+            "raw": w
+        })
+
+    return editor_lanes
+
+
+def _keyword_matches(text, keyword):
+    """Match structured scope tokens literally, prose tokens by word."""
+    text = text.lower()
+    keyword = keyword.lower()
+    if any(mark in keyword for mark in "(:/"):
+        return keyword in text
+    return re.search(r"(?<![a-z0-9_])" + re.escape(keyword)
+                    + r"(?![a-z0-9_])", text) is not None
+
+
+def _domains_for_text(text):
+    text = text.lower()
+    return {domain for domain, kws in AFFINITY_KEYWORDS.items()
+            if any(_keyword_matches(text, kw) for kw in kws)}
+
+
+def detect_issue_domains(issue):
+    """Domains an issue touches, from its title+body prose."""
+    text = issue.get("title", "") + " " + issue.get("body", "")
+    return _domains_for_text(text)
+
+def role_owned_domains(lane):
+    """Domains a lane OWNS by ROLE (fork #342), independent of its feature prose.
+
+    The role lives on the RAW worker record: get_worker_roster's lane dicts expose
+    uuid/topic/topic_id/feature/class/claims/worktrees/is_busy/raw and carry NO
+    top-level "role" key, so read it from raw -- and degrade to no owned domain
+    when raw is absent, which is the shape of the synthetic lanes in the selftest.
+    """
+    return set(ROLE_DOMAINS.get((lane.get("raw") or {}).get("role"), ()))
+
+def owner_candidate_for(lane, issue_domains):
+    """True when this lane's ROLE owns one of the issue's domains (fork #342).
+
+    Ownership outranks the idle preference: a claim or a dirty tree on the owner
+    means the issue QUEUES for the lane that will actually fix it, which is
+    strictly better than handing it to a zero-affinity editor lane -- the live
+    misroute this exists to close (measured 2026-09-20: the toolsmith lane scored
+    93 on #451 while every editor scored 0-3, yet was excluded as busy and the
+    issue went to a score-0 editor).
+
+    Guarded on busy_known: when oc-roster classify FAILS, get_worker_roster marks
+    every lane busy by conservative default, and that unknown state must never be
+    read as "the owner is merely queued".
+
+    ONE predicate, called from every site that decides candidacy (select_best_lane
+    and both pre-filters) -- a second copy is what let the two disagree.
+    """
+    if not lane.get("busy_known", True):
+        return False
+    return bool(role_owned_domains(lane).intersection(issue_domains))
+
+def score_affinity(issue, lane):
+    """
+    Score affinity between issue title/labels/body and lane feature/domain.
+    Returns:
+      score: integer. High positive = strong match. Negative = domain conflict / mismatch.
+    """
+    title = issue.get("title", "").lower()
+    body = issue.get("body", "").lower()
+    text = title + " " + body
+    feature = lane.get("feature", "").lower()
+
+    # Identify which domains the issue and lane touch. The issue half is shared
+    # with select_best_lane's owner-candidacy test, so it lives in ONE place.
+    issue_domains = detect_issue_domains(issue)
+    lane_domains = _domains_for_text(feature)
+
+    # Role-owned domains are part of the lane's IDENTITY, not of its prose.
+    owned = role_owned_domains(lane)
+    lane_domains |= owned
+
+    # If lane is specialized in domain(s) that directly conflict with the issue
+    # e.g., lane is dedicated to mermaid or photo rendering, but issue is pure db/persistence
+    # Enforce penalty to avoid dumping mismatched tasks onto specialized feature lanes
+    specialized_domains = {"mermaid", "cron", "db", "memory", "bash"}
+    lane_specialized = lane_domains.intersection(specialized_domains)
+    if (lane_specialized
+            and not lane_specialized.intersection(issue_domains)
+            and not owned.intersection(issue_domains)):
+        # Lane is specialized in a domain absent from this issue
+        return -50
+
+    score = 0
+    # Direct token matches
+    for domain in issue_domains.intersection(lane_domains):
+        score += 20
+
+    # A lane that OWNS a surface wins its own domain outright (fork #342). The 20
+    # above is symmetric and loses to prose: an editor whose feature string merely
+    # mentions three of the issue's domains banks 60, against the surface owner's
+    # 23. Ownership is a stronger signal than vocabulary overlap, so it is weighted
+    # decisively -- large enough to beat the prose accumulation it competes with.
+    if issue_domains.intersection(owned):
+        score += 70
+
+    # Specific keyword matching
+    for word in re.findall(r'[a-z0-9_-]{4,}', feature):
+        if word in ("with", "from", "branch", "lane", "owner", "shipped", "fork", "main", "feature", "issue"):
+            continue
+        if word in text:
+            score += 3
+
+    return score
+
+
+def select_best_lane(issue, candidate_lanes, allow_fallback=False):
+    """
+    Select the best idle lane for an issue respecting designated domain affinity.
+    Does not dump mismatched issues onto specialized topic lanes.
+    """
+    issue_domains = detect_issue_domains(issue)
+
+    # Filter idle lanes. A lane that OWNS this issue's domain stays a candidate
+    # even when busy: see owner_candidate_for.
+    available = [lane for lane in candidate_lanes
+                 if not lane["is_busy"] or owner_candidate_for(lane, issue_domains)]
+    if not available:
+        # Fallback: lanes with class ACTIVE or IDLE but no dirty/worktree
+        available = [lane for lane in candidate_lanes if lane["class"] in ("ACTIVE", "IDLE") and not lane["is_busy"]]
+
+    if not available:
+        return None
+
+    # Score available lanes
+    scored = []
+    for lane in available:
+        s = score_affinity(issue, lane)
+        scored.append((s, lane))
+
+    # Sort descending by score
+    scored.sort(key=lambda x: x[0], reverse=True)
+    
+    # If the highest score is negative or zero, check if we allow arbitrary fallback.
+    # By default, lanes with score < 0 (domain conflict) are strictly forbidden.
+    # If highest score is <= 0 and lane has specialized feature, refuse to misroute.
+    best_score, best_lane = scored[0]
+    if best_score < 0 and not allow_fallback:
+        return None
+    if best_score == 0:
+        # Check if lane has specialized feature
+        lane_feat = best_lane.get("feature", "").lower()
+        if any(d in lane_feat for d in ("mermaid", "vector", "cron", "sqlite", "compaction", "loop-guard")) and not allow_fallback:
+            # Avoid polluting specialized topic with zero affinity
+            # Look for a generic lane among scored
+            generic_candidates = [l for s, l in scored if s >= 0 and not any(d in l.get("feature", "").lower() for d in ("mermaid", "vector", "cron", "sqlite", "compaction", "loop-guard"))]
+            if generic_candidates:
+                return generic_candidates[0]
+            return None
+
+    return best_lane
+
+
+def format_wire_envelope(issue):
+    """
+    Format wire envelope conforming to v0.4.169 Zero-Ack law and explicit refusal affordance.
+    """
+    num = issue.get("number")
+    title = issue.get("title", "").strip()
+    
+    # Generate clean branch slug
+    # Remove fix(...): or feat(...): prefix
+    slug_text = re.sub(r'^(?:fix|feat|chore|bug|refactor|docs)(?:\([^\)]+\))?:\s*', '', title, flags=re.IGNORECASE)
+    slug = re.sub(r'[^a-zA-Z0-9]+', '-', slug_text).strip('-').lower()
+    if len(slug) > 35:
+        slug = slug[:35].rstrip('-')
+    if not slug:
+        slug = "patch"
+    branch_target = f"fix/{num}-{slug}"
+
+    envelope = f"""[ISSUE DISPATCH: #{num}]
+Target Issue: #{num} ({title})
+Issue URL: https://github.com/leshchenko1979/opencrabs/issues/{num}
+Branch Target: {branch_target}
+Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed. If occupied, gate-blocked, or domain-mismatched, reply with [REFUSE: <reason>]."""
+    return envelope, branch_target
+
+
+def _stamp_dispatch(issue_num, target_uuid, unverified=False, rc=0):
+    """Record a dispatch in the ledger -- on BOTH paths (#S).
+
+    `recent_dispatches()` keys on exactly this row, so a dispatch that is not
+    recorded here is invisible to the 7-day dedup window and the issue is wired
+    to a SECOND lane on the next `--auto`. A send that may have landed must
+    therefore still be recorded; it is marked unverified rather than omitted.
+
+    The text must keep matching `DISPATCH_ROW_RE` (defined above) or the dedup
+    reader cannot see it -- that regex is the reader half of this writer.
+    """
+    ledger_bin = os.path.join(TOOL_DIR, "state/oc-ledger")
+    if not os.path.exists(ledger_bin):
+        return
+    suffix = (f" \u2014 sent, receipt unverified (rc={rc})" if unverified
+              else " \u2014 wire zero-ack claim-first")
+    stamp_text = f"Triage dispatch issue #{issue_num} to editor {target_uuid[:8]}{suffix}"
+    # A1: inherit the ambient environment so oc-ledger's derive_by() resolves
+    # the ACTUAL dispatching session. Forcing the actor to a bare role label
+    # here was a trap: derive_by() resolves UUIDs only and classifies any
+    # non-hex/non-dash value as a LABEL it never resolves, so every dispatch
+    # row was stamped 'unrostered-actor triage' while OPENCRABS_SESSION_ID
+    # held the resolvable uuid (98 rows measured; issue #328).
+    run_cmd([ledger_bin, "stamp", "note", stamp_text])
+
+
+def _stamp_inflight(issue_num, target_uuid, budget_secs):
+    """Record that a send has STARTED, before it blocks. See INFLIGHT_ROW_RE.
+
+    Deliberately worded with the literal `IN FLIGHT` marker the dedup reader
+    keys on, so the two halves cannot drift: if this text stops carrying the
+    marker the reader stops skipping it, and a proven non-delivery would then
+    suppress its own retry.
+    """
+    ledger_bin = os.path.join(TOOL_DIR, "state/oc-ledger")
+    if not os.path.exists(ledger_bin):
+        return
+    try:
+        run_cmd([ledger_bin, "stamp", "note",
+                 f"Triage dispatch issue #{issue_num} to editor {target_uuid[:8]}"
+                 f" \u2014 IN FLIGHT (send started, budget {budget_secs}s)"],
+                timeout=30)
+    except Exception:  # noqa: BLE001 -- best-effort by contract
+        pass
+
+def classify_notify_rc(receipt_seen, rc):
+    """Pure predicate: what does a notify attempt's rc MEAN? (#S)
+
+    Returns 0 when a journal receipt settles it as delivered, 3 when the send
+    provably did NOT happen, or RC_UNVERIFIED when the transport is ambiguous.
+
+    Non-delivery is the SPECIAL case, not the default -- the allowlist below
+    holds exactly ONE code, because only rc 2 positively asserts "nothing sent,
+    nothing created". Every other non-zero rc is ambiguous about delivery:
+      2   -- `no_route`: the one PROVEN non-delivery. NOT recorded, so a retry
+             is correct.
+      124 -- our own timeout; the wrapper is killed while the CLI child may
+             already have accepted the send (#451).
+      4   -- a CATCH-ALL: a2a disabled, unreachable, bad response, usage errors
+             and retired modes all land here (#418), and it delivered for 2 of 4
+             lanes in a measured wave while reporting failure (#433).
+      <0  -- run_cmd returns the RAW returncode, so a signal-killed wrapper
+             surfaces as a negative rc.
+      1   -- ambiguous: "the wrapper exited 1" or "run_cmd raised".
+
+    The bias is deliberate: a duplicate dispatch is silent and hard to detect,
+    while a 7-day suppression is visible and recoverable.
+    """
+    if receipt_seen:
+        return 0
+    if rc == 2:
+        return 3
+    return RC_UNVERIFIED
+
+def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_path=DEFAULT_LEDGER_FILE,
+                     notify_timeout=NOTIFY_TIMEOUT_SECS):
+    """
+    Deliver wire envelope to target session via lib/oc-notify.sh and stamp ledger.
+
+    Returns 0 (delivered, receipt seen), RC_UNVERIFIED (the send may have landed
+    but no receipt was seen -- the dispatch IS recorded so the next run does not
+    re-wire it) or 3 (nothing sent -- NOT recorded, so a retry is correct).
+
+    Only rc 2 (`no_route`) counts as proof of non-delivery, because it is the one
+    rc that asserts "nothing sent, nothing created". Every other non-zero rc is
+    ambiguous about delivery, and a timeout is deliberately not a failure:
+    lib/oc-notify.sh gives its CLI leg its own budget (OC_NOTIFY_CLI_TIMEOUT,
+    default 90s -- #466) and then falls through to a direct A2A leg that can
+    still land the message, so a kill at THIS bound leaves the send genuinely
+    ambiguous and the receipt may simply land after the poll window. Reporting
+    that as FAILED produced both
+    duplication vectors (#S): the next `--auto` re-dispatched an already-delivered
+    issue, and an operator reading "nothing delivered" re-sent it by hand.
+    """
+    if dry_run:
+        print(f"[DRY-RUN] Would notify session {target_uuid} for issue #{issue_num}")
+        return 0
+
+    notify_script = os.path.join(TOOL_DIR, "lib/oc-notify.sh")
+    title = f"[ISSUE DISPATCH: #{issue_num}]"
+
+    t0 = time.time()
+    # Announce the send and its budget BEFORE blocking on it (#451): this call
+    # can block for notify_timeout, and if the send does not return 0 it is
+    # followed by up to RECEIPT_GRACE_SECS of receipt polling. An outer `timeout`
+    # set below that ceiling kills the run mid-send, and the dispatch is then
+    # neither reported nor recorded -- the reported "hang with no output and no
+    # side effect".
+    print(f"Dispatching issue #{issue_num} -> {target_uuid[:8]} "
+          f"(notify budget {notify_timeout}s + {RECEIPT_GRACE_SECS}s receipt grace)")
+    # BEFORE the send blocks: a row an operator can find DURING the run. Without
+    # it the ledger is silent for the whole window and "still running" is
+    # indistinguishable from "never ran" (HQ report 2026-09-25). Best-effort --
+    # a stamp fault must never abort a dispatch that is about to go out.
+    _stamp_inflight(issue_num, target_uuid, notify_timeout + RECEIPT_GRACE_SECS)
+    if os.path.exists(notify_script):
+        rc, out, err = run_cmd([notify_script, target_uuid, envelope, title], timeout=notify_timeout)
+        label = "lib/oc-notify.sh"
+    else:
+        # Direct CLI fallback if lib/oc-notify.sh missing. The subcommand is
+        # `session notify` (two words) and the envelope is a --text payload; the
+        # old `session-notify ... <uuid> <envelope>` form is not a command this
+        # CLI has, so this leg could never deliver (#S).
+        notify_bin = os.path.expanduser("~/.cargo/bin/opencrabs")
+        if not os.path.exists(notify_bin):
+            notify_bin = "/usr/local/bin/opencrabs"
+        cmd = [notify_bin, "session", "notify", "--profile", "ops", "--mode", "turn-end",
+               "--title", title, "--text", envelope, target_uuid]
+        rc, out, err = run_cmd(cmd, timeout=notify_timeout)
+        label = "session notify"
+
+    if rc != 0:
+        # Fallback receipt check against session-notify.journal in case the
+        # wrapper was killed while the send was already in flight.
+        grace = notify_timeout + RECEIPT_GRACE_SECS
+        if rc == 124:
+            print(f"NOTE: {label} hit its {notify_timeout}s bound and was killed; "
+                  f"polling for a receipt for another {RECEIPT_GRACE_SECS}s "
+                  f"(window {grace}s) before calling the send unverified.",
+                  file=sys.stderr)
+        receipt_seen = check_journal_receipt(target_uuid, t0, send_budget_secs=grace)
+        verdict = classify_notify_rc(receipt_seen, rc)
+        if verdict == 0:
+            rc = 0
+        elif verdict == RC_UNVERIFIED:
+            print(f"WARN: {label} failed (rc={rc}) and no receipt for "
+                  f"{target_uuid[:8]} is in session-notify.journal yet -- the send "
+                  f"may still land.", file=sys.stderr)
+            _stamp_dispatch(issue_num, target_uuid, unverified=True, rc=rc)
+            return RC_UNVERIFIED
+        else:
+            print(f"ERROR: {label} failed (rc={rc}): {err.strip()}", file=sys.stderr)
+            return 3
+
+    _stamp_dispatch(issue_num, target_uuid, unverified=False, rc=rc)
+    return 0
+
+
+
+def is_reopened(issue):
+    """#414 — did the issue carry GitHub's stateReason=REOPENED?
+
+    `stateReason` is present only for CLOSED issues in gh's `issue list` schema,
+    so on an OPEN issue it is the marker that the issue was closed and later
+    reopened. Absent (or any other value) means "not reopened".
+    """
+    return str(issue.get("stateReason") or "").upper() == "REOPENED"
+
+
+def evaluate_issue_arms(iss, landed, recent):
+    """Arm decision for ONE issue — the single-issue core of the eligibility seam.
+
+    Extracted from classify_dispatch_arms (#370) so the TWO entry points share ONE
+    predicate. `--auto` consulted the landed and dedup arms; the TARGETED form
+    (`oc-issue-dispatch <N>`, which the harvest patrol uses) called neither, so an
+    already-landed issue was re-proposed and an issue already wired to a lane was
+    wired to a SECOND one — the exact double-dispatch #337 was filed to stop. The
+    fix for #337 was wired into one path and the other was left as-is, which is
+    why the arithmetic lives here now rather than inline in either caller.
+
+    Returns `(events, dispatchable)` where `events` is the ordered list of arm
+    events this ONE issue produced (see classify_dispatch_arms for the vocabulary)
+    and `dispatchable` says whether it survives every arm.
+    """
+    is_gated, reason = check_issue_claim_gate(iss)
+    if is_gated:
+        return [("gated", iss, reason)], False
+    return evaluate_landed_and_dedup_arms(iss, landed, recent)
+
+
+def evaluate_landed_and_dedup_arms(iss, landed, recent):
+    """The LANDED and DEDUP arms for ONE issue, shared by both entry points (#370).
+
+    Split from evaluate_issue_arms because the CLAIM gate above is the one arm the
+    two paths treat differently: `--targeted` carries `--force` to bypass it, while
+    `--auto` does not. The landed and dedup arms have no such difference — they are
+    the same question on both paths — so they live here and neither caller may
+    re-implement them.
+
+    #414 — a REOPENED issue OVERRIDES both arms, because both are INFERENCES about
+    state: `landed` comes from artifacts (an `Issue-Ref` trailer on origin/main, or
+    a ledger landing row) and `recent` records only OUR OWN past dispatch, whereas a
+    reopen is a DELIBERATE act that contradicts them. The override is part of THIS
+    function, not of either caller, so the targeted path cannot lose it.
+    """
+    events = []
+    num = iss.get("number")
+    reopened = is_reopened(iss)
+    if num in landed and not reopened:
+        return [("landed", iss, None)], False
+    if num in landed and reopened:
+        events.append(("reopened", iss, "landed"))
+    if num in recent and not reopened:
+        events.append(("dedup", iss, recent[num]))
+        return events, False
+    if num in recent and reopened:
+        events.append(("reopened", iss, "dedup"))
+    return events, True
+
+def classify_dispatch_arms(unclaimed, landed, recent):
+    """Partition `unclaimed` across the four dispatch arms, in evaluation order.
+
+    Extracted from cmd_auto so the arm arithmetic is testable without gh, a repo
+    checkout, or a ledger. Evaluation order is claim-gate -> landed -> dedup, and
+    it is load-bearing: an issue skipped by an earlier arm NEVER reaches a later
+    one, so the four arms partition `unclaimed` (they are disjoint, and
+    gated + landed + dedup + dispatchable == len(unclaimed)).
+
+    #414 — a REOPENED issue OVERRIDES the landed arm and the dedup arm. Both are
+    INFERENCES about state: `landed` is derived from artifacts (an `Issue-Ref`
+    trailer on origin/main, or a ledger landing row) and `recent` records only
+    OUR OWN past dispatch. A reopen is a DELIBERATE act that contradicts both, so
+    it wins. Without the landed override the misreferenced close is PERMANENT —
+    the poison that produced the wrong close still sits on origin/main, so the arm
+    re-marks the issue landed on every scan and the sweep never re-wires it (#199
+    was closed on b10ca242f, which touches 0 files under src/a2a/). Without the
+    dedup override the fix merely moves the stranding one arm over (#324 defeats
+    the landed arm and is then suppressed by dedup memory).
+
+    Returns (events, dispatchable):
+      events       ordered list of tuples, one per non-dispatchable issue PLUS
+                   one per REOPENED override that FIRED, in the SAME order
+                   cmd_auto prints them:
+                     ("gated",    issue, reason)
+                     ("landed",   issue, None)
+                     ("dedup",    issue, (lane, ts))
+                     ("reopened", issue, "landed" | "dedup")
+                   An issue reading landed AND present in `recent` yields TWO
+                   "reopened" events — one per arm it defeated.
+      dispatchable the issues that survive every arm, in input order
+    """
+    events = []
+    dispatchable = []
+    for iss in unclaimed:
+        # #370: the per-issue decision lives in evaluate_issue_arms() so BOTH
+        # entry points run ONE predicate; this loop is the multi-issue driver.
+        evs, ok = evaluate_issue_arms(iss, landed, recent)
+        events.extend(evs)
+        if ok:
+            dispatchable.append(iss)
+    return events, dispatchable
+
+
+def summarize_arms(events, dispatchable):
+    """Tally the arm events into the counters cmd_auto reports.
+
+    Split out so the reported NUMBERS are testable offline, not just the events
+    they come from. A number must travel with its predicate: the two override
+    counts defeat DIFFERENT arms, so they are counted and reported SEPARATELY.
+    Reporting one merged total as "defeated the landed arm" was wrong for the
+    dedup half (measured 2026-09-19: 4 override events, only 3 defeated landed).
+
+    Returns a dict with keys gated/landed/dedup/landed_override/dedup_override.
+    """
+    return {
+        "gated": sum(1 for k, _, _ in events if k == "gated"),
+        "landed": sum(1 for k, _, _ in events if k == "landed"),
+        "dedup": sum(1 for k, _, _ in events if k == "dedup"),
+        "landed_override": sum(1 for k, _, arm in events
+                               if k == "reopened" and arm == "landed"),
+        "dedup_override": sum(1 for k, _, arm in events
+                              if k == "reopened" and arm == "dedup"),
+    }
+
+
+def cmd_auto(args):
+    """
+    Automatic issue dispatch:
+    1. Reads open issues from GitHub.
+    2. Reads open claims from ledger.
+    3. Finds unclaimed issues.
+    4. Finds idle editor lanes.
+    5. Matches topic affinities and dispatches.
+    """
+    ledger_file = args.ledger or DEFAULT_LEDGER_FILE
+    if not os.path.exists(ledger_file):
+        print(f"ERROR: Ledger file not found at {ledger_file}", file=sys.stderr)
+        return 2
+
+    with open(ledger_file, "r") as f:
+        ledger_data = json.load(f)
+
+    claimed_issues = extract_claimed_issues(ledger_data)
+    open_issues = fetch_open_issues(args.repo)
+    if open_issues is None:
+        print("ERROR: could not fetch open issues from gh — refusing to judge eligibility "
+              "against a window that FAILED to load (an empty list and a failed fetch "
+              "lead to opposite decisions).", file=sys.stderr)
+        return 3
+    if not open_issues:
+        print("No open issues found.")
+        return 0
+
+    unclaimed = [iss for iss in open_issues if iss.get("number") not in claimed_issues]
+
+    # #337 arms A+B — an issue whose fix is already on origin/main, or which the
+    # ledger already closed, is not work, whether or not a claim row exists.
+    # `done`-stamped issues read as unclaimed under closer-aware claim semantics,
+    # which is exactly how landed work was re-proposed.
+    if args.allow_landed:
+        landed = set()
+    else:
+        landed = fetch_landed_issues(args.repo) | ledger_landed_issues(ledger_data)
+
+    # #337 dedup — every run previously started from scratch, so an issue wired
+    # to a lane but not yet acked was wired to a SECOND lane.
+    recent = {} if args.redispatch else recent_dispatches(ledger_data)
+
+    # #414: the arm arithmetic lives in classify_dispatch_arms() so it is testable
+    # offline (see the selftest leg); cmd_auto is now only a printer.
+    events, dispatchable = classify_dispatch_arms(unclaimed, landed, recent)
+
+    counts = summarize_arms(events, dispatchable)
+    gated_count = counts["gated"]
+    landed_count = counts["landed"]
+    dedup_count = counts["dedup"]
+    landed_override_count = counts["landed_override"]
+    dedup_override_count = counts["dedup_override"]
+
+    if args.dry_run:
+        for kind, iss, detail in events:
+            num = iss.get("number")
+            if kind == "gated":
+                print(f"Skipping gated issue #{num}: {iss.get('title')} ({detail})")
+            elif kind == "landed":
+                print(f"Skipping landed issue #{num}: {iss.get('title')} "
+                      f"(fix already on origin/main, or closed in the ledger)")
+            elif kind == "dedup":
+                lane, ts = detail
+                print(f"Skipping already-dispatched issue #{num}: {iss.get('title')} "
+                      f"(wired to {lane[:8]} at {ts.strftime('%Y-%m-%dT%H:%M:%SZ')})")
+            elif detail == "landed":
+                print(f"REOPENED override on issue #{num}: {iss.get('title')} "
+                      f"(reads landed but stateReason=REOPENED — the landed arm "
+                      f"yields to the reopen)")
+            else:
+                lane, ts = recent[num]
+                print(f"REOPENED override on issue #{num}: {iss.get('title')} "
+                      f"(re-dispatched despite the {lane[:8]} wiring at "
+                      f"{ts.strftime('%Y-%m-%dT%H:%M:%SZ')} — a reopen defeats the "
+                      f"dedup memory)")
+
+    override_note = ""
+    if landed_override_count or dedup_override_count:
+        override_note = (f" ({landed_override_count} REOPENED override(s) defeated "
+                         f"the landed arm, {dedup_override_count} defeated the "
+                         f"dedup arm)")
+    print(f"Found {len(open_issues)} open issues: {len(unclaimed)} unclaimed, "
+          f"{gated_count} claim-gated/parked, {landed_count} landed/closed, "
+          f"{dedup_count} already-dispatched, {len(dispatchable)} dispatchable."
+          + override_note)
+    if not dispatchable:
+        print("No dispatchable issues found. All unclaimed issues are claim-gated or claimed.")
+        return 0
+
+    editor_lanes = get_worker_roster(ledger_data)
+    # A lane that OWNS a domain some dispatchable issue touches stays a candidate
+    # even when busy (fork #342). Without this the pre-filter drops the surface
+    # owner BEFORE select_best_lane can score it, which is the live misroute: the
+    # owner lane is busy whenever it has work -- i.e. exactly when its own issues
+    # are the ones needing routing.
+    wanted_domains = set()
+    for _iss in dispatchable:
+        wanted_domains |= detect_issue_domains(_iss)
+    available_lanes = [l for l in editor_lanes
+                       if not l["is_busy"] or owner_candidate_for(l, wanted_domains)]
+    print(f"Candidate roster: {len(editor_lanes)} registered, {len(available_lanes)} idle/available.")
+
+    if not available_lanes:
+        print("CAPACITY_EXHAUSTED: No idle editor lanes available for dispatch.", file=sys.stderr)
+        return 4
+
+    dispatched_count = 0
+    assigned_lanes = set()
+
+    # Wall-clock budget for the whole run (#S). Without one, a hung notify costs
+    # NOTIFY_TIMEOUT_SECS per issue and the operator's outer `timeout N` wrapper
+    # SIGTERMs the run mid-send -- which is exactly how a slow run turns into an
+    # unverified delivery. With one, the per-issue timeout shrinks to what is left
+    # and the loop stops cleanly instead of being killed mid-flight.
+    run_deadline = None
+    if getattr(args, "budget_secs", 0) and args.budget_secs > 0:
+        run_deadline = time.time() + args.budget_secs
+
+
+    for issue in dispatchable:
+        # Pick candidate lanes that haven't just been assigned in this run
+        candidates = [l for l in available_lanes if l["uuid"] not in assigned_lanes]
+        if not candidates:
+            print("All available idle lanes have been assigned in this cycle.")
+            break
+
+        best_lane = select_best_lane(issue, candidates, allow_fallback=args.force)
+        if not best_lane:
+            print(f"Skipping issue #{issue.get('number')}: No available lane with matching domain affinity (pass --force to override).")
+            continue
+
+        assigned_lanes.add(best_lane["uuid"])
+        envelope, branch = format_wire_envelope(issue)
+        num = issue["number"]
+
+        print(f"\nDispatching issue #{num}: {issue['title']}")
+        print(f"  Target: {best_lane['uuid']} (topic {best_lane['topic']})")
+        print(f"  Branch: {branch}")
+        print("  Payload:")
+        for line in envelope.splitlines():
+            print(f"    | {line}")
+
+        notify_timeout = NOTIFY_TIMEOUT_SECS
+        if run_deadline is not None:
+            remaining = int(run_deadline - time.time())
+            if remaining <= 0:
+                print("Run budget exhausted; stopping before the outer wrapper kills a send mid-flight.")
+                break
+            # The send is followed by up to RECEIPT_GRACE_SECS of receipt polling
+            # (#451), so the notify budget must leave room for that grace INSIDE
+            # the remaining run budget -- otherwise a "budgeted" run still
+            # overshoots its own deadline by the grace.
+            notify_timeout = max(15, min(NOTIFY_TIMEOUT_SECS, remaining - RECEIPT_GRACE_SECS))
+
+        rc = dispatch_to_lane(best_lane["uuid"], envelope, num, dry_run=args.dry_run,
+                              ledger_path=ledger_file, notify_timeout=notify_timeout)
+        if rc == RC_UNVERIFIED:
+            print(f"  Delivery UNVERIFIED for issue #{num} -- sent, receipt not in the journal yet; "
+                  f"RECORDED, so the next run will not re-dispatch it.")
+        elif rc != 0:
+            print(f"  Delivery FAILED for issue #{num} -- nothing sent, not recorded; safe to retry.")
+        else:
+            dispatched_count += 1
+            if args.dry_run:
+                print(f"  [DRY-RUN] Planned dispatch for issue #{num} -> {best_lane['uuid']}")
+            else:
+                print(f"  Delivery SUCCESS for issue #{num}")
+
+    print(f"\nSummary: {dispatched_count} issue(s) dispatched.")
+    return 0
+
+
+def resolve_target_issue(repo_path, issue_num, open_issues):
+    """The issue a TARGETED dispatch acts on, plus a diagnostic note. (#483)
+
+    Returns ``(issue, note)``. ``note`` is "" when the fetched window answered,
+    else a sentence naming where the issue came from; ``issue`` is None when the
+    number cannot be resolved at all -- NEVER a stub.
+
+    Split out of cmd_targeted so the resolution RULE is testable without a lane,
+    a ledger or a notify: the regression this exists for is not "the fetch is
+    wrong" but "an out-of-window number was answered with a fabricated title and
+    an EMPTY body", which then fed the claim gate and the affinity scoring.
+    """
+    if open_issues is not None:
+        for iss in open_issues:
+            if iss.get("number") == issue_num:
+                return iss, ""
+
+    # The fetched list is a WINDOW: it cannot tell "not in the list" from "no
+    # such issue", so resolve the ONE issue directly instead of guessing.
+    resolved = fetch_issue(repo_path, issue_num)
+    if not resolved:
+        return None, ""
+    window = f"{len(open_issues)} listed" if open_issues is not None else "the list read FAILED"
+    note = (f"NOTE: issue #{issue_num} was outside the fetched open-issue window "
+            f"({window}) and was resolved by a direct lookup.")
+    st = str(resolved.get("state") or "").upper()
+    if st and st != "OPEN":
+        note += (f" NOTE: it resolves with state={st}, not OPEN — dispatching it "
+                 f"anyway because the number was named explicitly.")
+    return resolved, note
+
+
+def cmd_targeted(args):
+    """
+    Targeted dispatch for a specific issue number.
+    """
+    ledger_file = args.ledger or DEFAULT_LEDGER_FILE
+    if not os.path.exists(ledger_file):
+        print(f"ERROR: Ledger file not found at {ledger_file}", file=sys.stderr)
+        return 2
+
+    with open(ledger_file, "r") as f:
+        ledger_data = json.load(f)
+
+    issue_num = args.issue
+    open_issues = fetch_open_issues(args.repo)
+
+    # #483: an out-of-window number used to be answered with a STUB (title
+    # `Issue #N`, body "") -- so a real, open, labelled issue was dispatched
+    # under a fabricated title, and every downstream consumer of those fields
+    # (the claim gate, the affinity scoring) then evaluated NOTHING. Resolve the
+    # ONE issue by direct lookup instead, and REFUSE when even that fails: an
+    # unresolvable target is a rejection, never a placeholder.
+    target_issue, note = resolve_target_issue(args.repo, issue_num, open_issues)
+    if note:
+        print(note, file=sys.stderr)
+    if not target_issue:
+        print(f"ERROR: issue #{issue_num} could not be resolved on "
+              f"leshchenko1979/opencrabs — it was not in the fetched open-issue list "
+              f"and `gh issue view` did not resolve it either. Refusing to dispatch: "
+              f"a fabricated title/body would make the claim gate and affinity "
+              f"scoring run blind. Check the number, and that the issue is OPEN and "
+              f"lives in this repo's issue space.", file=sys.stderr)
+        return 1
+
+    is_gated, reason = check_issue_claim_gate(target_issue)
+    if is_gated and not args.force:
+        print(f"ERROR: Issue #{issue_num} is claim-gated ({reason}). Pass --force to bypass gate in targeted mode.", file=sys.stderr)
+        return 5
+
+    # #370: the TARGETED form consulted NEITHER eligibility guard, so an
+    # already-landed issue was re-proposed and an issue already wired to a lane
+    # was wired to a SECOND one — the double-dispatch #337 exists to stop. Both
+    # entry points now run the SAME arms (evaluate_landed_and_dedup_arms), so the
+    # two can never drift apart again.
+    if args.allow_landed:
+        landed = set()
+    else:
+        landed = fetch_landed_issues(args.repo) | ledger_landed_issues(ledger_data)
+    recent = {} if args.redispatch else recent_dispatches(ledger_data)
+    arm_events, arm_ok = evaluate_landed_and_dedup_arms(target_issue, landed, recent)
+    if not arm_ok:
+        for kind, _iss, detail in arm_events:
+            if kind == "landed":
+                print(f"ERROR: Issue #{issue_num} has LANDED — its fix is already on "
+                      f"origin/main (an Issue-Ref trailer references it) or the ledger "
+                      f"holds a landing row for it. Re-dispatching re-proposes shipped "
+                      f"work. Pass --allow-landed to override.", file=sys.stderr)
+                return RC_TARGETED_LANDED
+            if kind == "dedup":
+                lane, ts = detail
+                print(f"ERROR: Issue #{issue_num} was ALREADY dispatched to {lane} at "
+                      f"{ts} and is not yet acked. Dispatching again wires a SECOND lane "
+                      f"to the same issue. Pass --redispatch to override.", file=sys.stderr)
+                return RC_TARGETED_ALREADY_DISPATCHED
+
+    editor_lanes = get_worker_roster(ledger_data)
+    target_lane = None
+
+    if args.to:
+        for l in editor_lanes:
+            if l["uuid"].startswith(args.to):
+                target_lane = l
+                break
+        if not target_lane:
+            # Custom uuid not in ledger
+            target_lane = {
+                "uuid": args.to,
+                "topic": "custom",
+                "topic_id": None,
+                "feature": "",
+                "is_busy": False
+            }
+    else:
+        # Auto-select best idle lane (a busy lane that OWNS this issue's domain
+        # stays a candidate -- fork #342, same predicate as the --auto path)
+        available = [l for l in editor_lanes
+                     if not l["is_busy"]
+                     or owner_candidate_for(l, detect_issue_domains(target_issue))]
+        if not available:
+            print("CAPACITY_EXHAUSTED: No idle editor lanes available for dispatch.", file=sys.stderr)
+            return 4
+        target_lane = select_best_lane(target_issue, available, allow_fallback=args.force)
+
+    if not target_lane:
+        print("ERROR: Could not resolve target lane with matching domain affinity (pass --force to override).", file=sys.stderr)
+        return 4
+
+    envelope, branch = format_wire_envelope(target_issue)
+    print(f"Target Editor: {target_lane['uuid']} (topic {target_lane['topic']})")
+    print(f"Branch Target: {branch}")
+    print("Wire Envelope:")
+    print("---")
+    print(envelope)
+    print("---")
+
+    rc = dispatch_to_lane(target_lane["uuid"], envelope, issue_num, dry_run=args.dry_run, ledger_path=ledger_file)
+    if rc != 0:
+        print(f"ERROR: Delivery failed with code {rc}", file=sys.stderr)
+        return rc
+
+    if args.dry_run:
+        print(f"[DRY-RUN] Planned dispatch for issue #{issue_num} -> editor {target_lane['uuid']}.")
+    else:
+        print(f"SUCCESS: Issue #{issue_num} dispatched to editor {target_lane['uuid']}.")
+    return 0
+
+
+# --- Hermetic Offline Selftest ---
+def run_selftest():
+    # #483: the window-full warning is asserted by shrinking the module's window
+    # global rather than by fabricating 1000 issues, so the PRODUCTION comparison
+    # (len(issues) >= OPEN_ISSUES_LIMIT) is the thing under test.
+    # #390: TOOL_DIR and ROSTER_TIMEOUT_SECS are swapped the same way -- the
+    # production call site reads both as globals, so the test drives the real one.
+    global OPEN_ISSUES_LIMIT, TOOL_DIR, ROSTER_TIMEOUT_SECS
+    print("Running oc-issue-dispatch --selftest battery...")
+    tests_passed = 0
+    tests_failed = 0
+
+    def assert_eq(desc, actual, expected):
+        nonlocal tests_passed, tests_failed
+        if actual == expected:
+            print(f"  ok {tests_passed + tests_failed + 1} - {desc}")
+            tests_passed += 1
+        else:
+            print(f"  FAIL {tests_passed + tests_failed + 1} - {desc} (expected '{expected}', got '{actual}')")
+            tests_failed += 1
+
+    def assert_true(desc, condition):
+        nonlocal tests_passed, tests_failed
+        if condition:
+            print(f"  ok {tests_passed + tests_failed + 1} - {desc}")
+            tests_passed += 1
+        else:
+            print(f"  FAIL {tests_passed + tests_failed + 1} - {desc} (condition False)")
+            tests_failed += 1
+
+    # Test 1: Wire envelope formatting and contract compliance
+    issue_sample = {
+        "number": 181,
+        "title": "fix(telegram): draft_streaming config flag is dead",
+        "body": "The DM draft gate was dropped in a refactor"
+    }
+    envelope, branch = format_wire_envelope(issue_sample)
+    assert_eq("Branch target derivation", branch, "fix/181-draft-streaming-config-flag-is-dead")
+    assert_true("Wire envelope header present", "[ISSUE DISPATCH: #181]" in envelope)
+    assert_true("Target issue line present", "Target Issue: #181 (fix(telegram): draft_streaming config flag is dead)" in envelope)
+    assert_true("Issue URL line present", "Issue URL: https://github.com/leshchenko1979/opencrabs/issues/181" in envelope)
+    assert_true("Branch Target line present", "Branch Target: fix/181-draft-streaming-config-flag-is-dead" in envelope)
+    assert_true("Zero-Ack contract clause present", "Ack contract: NONE — claim on ledger (oc-ledger claim) and proceed." in envelope)
+    assert_true("Refusal affordance clause present", "reply with [REFUSE: <reason>]." in envelope)
+    assert_true("Gate-blocked refusal affordance present", "gate-blocked" in envelope)
+
+    # Test 2: Extraction of claimed issues from ledger events.
+    # #329: the predicate is now the canonical one (tools/lib/oc_claims.py), so
+    # this fixture pins the properties the local copy got WRONG, not just the
+    # happy path. `Issue-Ref: 103` was dropped from the fixture deliberately: it
+    # is not one of the canonical reference forms (`#N`, `issue N`, `issue=N`,
+    # `issue#N`), and oc-ledger's write-time guard refuses a claim the scanner
+    # cannot see — so a row in that shape cannot exist in the live ledger.
+    mock_ledger = {
+        "events": [
+            {"kind": "claim", "by": "editor 1111", "what": "CLAIM #101 — some feature"},
+            {"kind": "claim", "by": "editor 2222", "what": "issue #102 fix"},
+            {"kind": "claim", "by": "editor 3333", "what": "issue 103 claimed"},
+            {"kind": "note", "by": "triage", "what": "not a claim for #104"},
+            # THE #329 REGRESSION: a body citation is not a second claim. Live
+            # shape: n=8034 claimed #302 and mentioned #290 in a parenthetical,
+            # which made the OPEN issue #290 undispatchable.
+            {"kind": "claim", "by": "editor 44444444",
+             "what": "CLAIM #105 — filed while fixing #104"},
+            # The structured field wins over prose in both directions.
+            {"kind": "claim", "by": "editor 55555555",
+             "what": "CLAIM #106 — mentions #107 in the body", "issues": [106]},
+            {"kind": "claim", "by": "editor 55555555",
+             "what": "CLAIM #108, #109 — genuine dual claim", "issues": [108, 109]},
+            # The closure predicate applies: a CLOSED claim must not block
+            # dispatch forever (the old copy returned every claim ever written).
+            {"kind": "claim", "by": "editor 66666666", "what": "CLAIM #110 — shipped"},
+            {"kind": "done", "by": "editor 66666666", "what": "DONE #110 — merged"},
+            # ...and a FOREIGN lane's prose mention releases nothing (#305).
+            {"kind": "claim", "by": "editor 77777777", "what": "CLAIM #111 — held"},
+            {"kind": "unclaim", "by": "triage 88888888",
+             "what": "UNCLAIM #999 — stood down in favour of editor lane 77777777"},
+        ]
+    }
+    claimed = extract_claimed_issues(mock_ledger)
+    assert_true("#101 recognized as claimed", 101 in claimed)
+    assert_true("#102 recognized as claimed", 102 in claimed)
+    assert_true("#103 (issue-N form) recognized as claimed", 103 in claimed)
+    assert_true("#104 (negative control) not recognized as claimed", 104 not in claimed)
+    assert_true("#105 claimed", 105 in claimed)
+    assert_true("#329: prose mention #104 is NOT claimed", 104 not in claimed)
+    assert_true("#329: structured issues honored (#106)", 106 in claimed)
+    assert_true("#329: prose mention #107 is NOT claimed", 107 not in claimed)
+    assert_true("#329: genuine dual claim keeps both", 108 in claimed and 109 in claimed)
+    assert_true("#329: closed claim releases its issue (#110)", 110 not in claimed)
+    assert_true("#305: foreign prose mention does not release (#111)", 111 in claimed)
+
+    # Test 3: Topic affinity scoring
+    issue_tg = {"number": 169, "title": "telegram_send re-poisons topic memory", "body": "stale-topic eviction"}
+    issue_bash = {"number": 166, "title": "fix(bash): bash tool env carries no session identity", "body": "subshell env missing"}
+    
+    lane_tg = {"uuid": "lane-tg-1", "feature": "rich-formatting telegram-buttons", "is_busy": False, "class": "ACTIVE"}
+    lane_bash = {"uuid": "lane-bash-1", "feature": "loop-guard bash-session-env", "is_busy": False, "class": "ACTIVE"}
+    
+    score_tg_to_tg = score_affinity(issue_tg, lane_tg)
+    score_tg_to_bash = score_affinity(issue_tg, lane_bash)
+    assert_true("Telegram issue scores higher on telegram lane", score_tg_to_tg > score_tg_to_bash)
+
+    # Test 3b: Domain mismatch and specialized lane pollution protection
+    issue_db = {
+        "number": 278,
+        "title": "feat(db): no retention policy for the messages table — session DB grows unbounded",
+        "body": "sqlite vacuum and message retention ttl"
+    }
+    lane_mermaid = {"uuid": "lane-mermaid-1", "feature": "mermaid-rendering visual diagram", "is_busy": False, "class": "ACTIVE"}
+    lane_generic = {"uuid": "lane-generic-1", "feature": "general editor", "is_busy": False, "class": "ACTIVE"}
+    lane_db = {"uuid": "lane-db-1", "feature": "compaction-signal sqlite maintenance", "is_busy": False, "class": "ACTIVE"}
+
+    assert_true("DB issue scores negative on mermaid specialized lane", score_affinity(issue_db, lane_mermaid) < 0)
+    assert_true("DB issue scores positive on db maintenance lane", score_affinity(issue_db, lane_db) > 0)
+    
+    # select_best_lane must refuse to route DB issue to mermaid lane if only mermaid is available
+    assert_true("Mismatched specialized lane refused when no matching lane available", select_best_lane(issue_db, [lane_mermaid]) is None)
+    # But routes cleanly when db lane or generic lane is present
+    assert_eq("Routes to matching domain lane", select_best_lane(issue_db, [lane_mermaid, lane_db])["uuid"], "lane-db-1")
+    assert_eq("Routes to generic lane over conflicting specialized lane", select_best_lane(issue_db, [lane_mermaid, lane_generic])["uuid"], "lane-generic-1")
+
+    # Test 3c: role-owned domain beats prose (fork #342 sufficiency leg). A lane that
+    # OWNS tools/** must win a tools/ issue even when its feature prose never names the
+    # surface -- and must still win against an editor whose prose happens to share
+    # domains with the issue. The verbose lane is deliberately FIRST in the candidate
+    # list, so an equal score would hand it the issue on sort stability alone.
+    issue_tools = {
+        "number": 451,
+        "title": "fix(tools): oc-issue-dispatch hangs past 120s",
+        "body": "the culprit is tools/issue/oc-issue-dispatch, with tools/lib/oc-log.sh in the path",
+    }
+    lane_toolsmith = {
+        "uuid": "lane-toolsmith", "class": "ACTIVE", "is_busy": False,
+        "feature": "TOOLSMITH lane: owns tools/ CLI (oc-ledger, oc-deploy, oc-prchecks)",
+        "raw": {"role": "toolsmith"},
+    }
+    lane_editor_verbose = {
+        "uuid": "lane-editor-verbose", "class": "ACTIVE", "is_busy": False,
+        "feature": "harvest upstream port census sweep telegram notify queue delivery router bash cli exec dispatch",
+        "raw": {"role": "editor"},
+    }
+    lane_tools_prose = {
+        "uuid": "lane-tools-prose", "class": "ACTIVE", "is_busy": False,
+        "feature": "(tools): dispatch affinity", "raw": {"role": "editor"},
+    }
+    s_owner = score_affinity(issue_tools, lane_toolsmith)
+    s_verbose = score_affinity(issue_tools, lane_editor_verbose)
+    assert_true("Role-owned domain: surface owner scores positive on its own issue", s_owner > 0)
+    assert_true("Role-owned domain: surface owner outranks a verbose multi-domain editor", s_owner > s_verbose)
+    assert_eq("Role-owned domain: selection picks the surface owner",
+              select_best_lane(issue_tools, [lane_editor_verbose, lane_toolsmith])["uuid"], "lane-toolsmith")
+
+    # Mutation kill: strip the role binding at runtime and the surface owner must LOSE.
+    # Without this the assertions above would still pass on a tie, proving nothing.
+    try:
+        _saved_role_domain = ROLE_DOMAINS.pop("toolsmith")
+        s_unbound = score_affinity(issue_tools, lane_toolsmith)
+    finally:
+        ROLE_DOMAINS["toolsmith"] = _saved_role_domain
+    assert_true("Role-owned domain: unbound surface owner loses its own issue", s_unbound < s_owner)
+    # Retargeted by #546. The old form compared against lane_editor_verbose, which
+    # shared the issue's domain ONLY through the pre-#546 over-firing ("oc-log.sh"
+    # -> the 2-char "sh" token): the leg passed BECAUSE of the defect, and under the
+    # narrowed vocabulary that lane is correctly penalised (-50). The invariant is
+    # that prose alone cannot substitute for the role binding, so compare against a
+    # lane whose prose NAMES the surface -- s_unbound 3 vs s_prose 26.
+    assert_true("Role-owned domain: unbound surface owner does not outrank a prose domain match",
+                s_unbound <= score_affinity(issue_tools, lane_tools_prose))
+
+    # Test 3d: the ownership override must survive BUSY (fork #342, live-misroute
+    # leg). Measured 2026-09-20: the toolsmith lane scored 93 on #451 while every
+    # editor scored 0-3, yet select_best_lane dropped it as busy and handed the
+    # issue to a score-0 editor. Ownership must outrank the idle preference, or the
+    # fix is cosmetic on the live box, where the owner lane is busy whenever it has
+    # work -- i.e. always, precisely when its own issues need routing.
+    lane_owner_busy = dict(lane_toolsmith, is_busy=True, busy_known=True)
+    assert_eq("Busy surface owner is still selected for its own domain",
+              select_best_lane(issue_tools, [lane_editor_verbose, lane_owner_busy])["uuid"],
+              "lane-toolsmith")
+
+    # Mutation kill A: an UNKNOWN busy reading (classify failed -> every lane marked
+    # busy by conservative default) must NOT be read as "the owner is merely queued".
+    lane_owner_unknown = dict(lane_toolsmith, is_busy=True, busy_known=False)
+    picked = select_best_lane(issue_tools, [lane_editor_verbose, lane_owner_unknown])
+    assert_true("Unknown busy reading does not re-enable the owner override",
+                picked is None or picked["uuid"] != "lane-toolsmith")
+
+    # Mutation kill B: an idle editor outranks a busy NON-owner, so the override
+    # cannot widen into a general "busy lanes are candidates" change.
+    # Fixtures retargeted by #546 for the same reason as the leg above: the verbose
+    # lane is now penalised on a tools issue, which destroyed this kill's contrast.
+    # Generic lanes keep it: both score 0, so the busy-first order decides, and a
+    # widened override picks the busy lane and reddens this leg.
+    lane_editor_busy = {"uuid": "lane-editor-busy", "class": "ACTIVE", "is_busy": True,
+                        "busy_known": True, "feature": "generic editor", "raw": {"role": "editor"}}
+    lane_editor_idle = {"uuid": "lane-editor-idle", "class": "ACTIVE", "is_busy": False,
+                        "feature": "generic editor", "raw": {"role": "editor"}}
+    assert_eq("Busy non-owner does not displace an idle editor",
+              select_best_lane(issue_tools, [lane_editor_busy, lane_editor_idle])["uuid"],
+              "lane-editor-idle")
+
+    # Test 3e: the PLAN domain (fork #529, live mis-route). #506 was dispatched to
+    # an unrelated editor lane on 2026-09-23 while the plan-tool lane sat idle.
+    # Settled by simulation, not inference: the DEGRADED path (classify failed ->
+    # every lane busy) makes select_best_lane return None, i.e. NO dispatch is
+    # possible, so a dispatch having occurred EXCLUDES it. The mis-route was the
+    # 0-score TIE: with every >0 scorer busy, 18 lanes scored exactly 0 and the
+    # stable sort on score alone left roster order to decide -- and the plan-tool
+    # lane sat at roster index 4 against the receiver's 2. Replaying that shape
+    # now picks the plan lane.
+    issue_plan = {"number": 506, "labels": [],
+                  "title": "fix(plan): complete and start in one parallel block clobber each other",
+                  "body": "the tool returns a SUCCESS receipt for a mutation that never persists"}
+    lane_plan = {"uuid": "lane-plan", "feature": "plan-tool (#1231 re-stick relay)",
+                 "is_busy": False, "busy_known": True, "class": "IDLE"}
+    lane_generic = {"uuid": "lane-suggest", "feature": "suggest-options",
+                    "is_busy": False, "busy_known": True, "class": "IDLE"}
+    assert_true("plan domain: the scope prefix gives the issue the plan domain",
+                "plan" in detect_issue_domains(issue_plan))
+    s_plan = score_affinity(issue_plan, lane_plan)
+    s_generic = score_affinity(issue_plan, lane_generic)
+    assert_true("plan domain: the plan lane scores strictly above an unrelated lane",
+                s_plan > s_generic)
+    assert_eq("plan domain: selection picks the plan lane", 
+              select_best_lane(issue_plan, [lane_generic, lane_plan])["uuid"], "lane-plan")
+    # The lane-side match is PROSE (its feature says 'plan-tool'), not role-owned:
+    # unlike #342's toolsmith there is no ROLE_DOMAINS entry, so this leg proves
+    # the keyword path carries the lane half on its own.
+    assert_true("plan domain: the lane half comes from its feature prose, not a role binding",
+                "toolsmith" not in ROLE_DOMAINS or "plan" not in ROLE_DOMAINS.get("toolsmith", ()))
+    # And the domain must NOT be handed to a telegram-rendering issue that merely
+    # mentions a plan card -- measured: 'plan card' / 'plan tool' fire on #290,
+    # #334, #399, #402 and were REJECTED for exactly this.
+    issue_tg_card = {"number": 290, "labels": [],
+                     "title": "fix(telegram): fallback to in-place HTML edit on plan card update error",
+                     "body": "the plan card update endpoint returns a stale revision"}
+    assert_true("plan domain: a telegram plan-card issue does NOT gain the plan domain",
+                "plan" not in detect_issue_domains(issue_tg_card))
+
+    # #543: shared matcher preserves structured scope tokens while blocking
+    # incidental prose substrings on both issue and lane sides.
+    issue_bash_noise = {"title": "fix: should push finished", "body": ""}
+    assert_true("#543: prose sh does not match inside should/push/finished",
+                "bash" not in detect_issue_domains(issue_bash_noise))
+    issue_tools_scope = {"title": "fix(tools): dispatch affinity", "body": ""}
+    assert_true("#543: structured tools scope keeps substring matching",
+                "tools" in detect_issue_domains(issue_tools_scope))
+    lane_topic = {"feature": "generic lane", "topic": "spill"}
+    assert_true("#543: optional topic participates through shared matcher",
+                "bash" not in _domains_for_text(lane_topic["feature"]))
+    assert_true("#543: topic value is matched by shared matcher",
+                "bash" in _domains_for_text(lane_topic["topic"]))
+    assert_true("#543: shared matcher is the only keyword predicate",
+                _keyword_matches("should", "sh") is False and _keyword_matches("sh", "sh"))
+
+    # #546: the bash vocabulary names the SHELL-TOOL surface, not generic English.
+    # The pre-#546 list broke the -50 arm on BOTH sides: it fired on 156/163 open
+    # issues, and 7 of the 9 armed lanes held the domain purely from an incidental
+    # word in their own feature string. These legs pin the real feature strings.
+    for _generic in ("rich-resume-guard",
+                     "harvest retry-429 ladder",
+                     "streaming-guard #105 transfer: rebase+gate feat/streaming-empty-finish-guard",
+                     "#92 demoted-host guard",
+                     "#438 local half - skill curation (compaction signal / token bound / mechanical shed)",
+                     "TOOLSMITH lane: owns tools/ CLI (oc-ledger, oc-deploy, oc-prchecks)"):
+        assert_true("#546: prose feature %r does NOT arm the bash domain" % _generic[:38],
+                    "bash" not in _domains_for_text(_generic))
+    for _shell in ("bash tool env carries no session identity",
+                   "subshell env missing",
+                   "tool-output spill dir has no retention policy",
+                   "pipefail battery leg reports FAIL on a successful match"):
+        assert_true("#546: shell surface %r DOES arm the bash domain" % _shell[:38],
+                    "bash" in _domains_for_text(_shell))
+    assert_true("#546: a lane naming the bash tool layer keeps the domain",
+                "bash" in _domains_for_text(
+                    "shared variation_directive() in nudge.rs, bash Layer 3 + loop-guard nudge"))
+    assert_true("#546: generic prose issue does not gain the bash domain",
+                "bash" not in detect_issue_domains(
+                    {"title": "fix(telegram): normalise text-presentation glyphs in the flow chrome",
+                     "body": "the phantom guard re-opens a turn and the retry loop repeats it"}))
+
+    # Test 4: Selection when lane is busy
+    lane_busy = {"uuid": "lane-busy", "feature": "telegram-buttons", "is_busy": True, "class": "ACTIVE"}
+    lane_idle = {"uuid": "lane-idle", "feature": "generic editor", "is_busy": False, "class": "IDLE"}
+    selected = select_best_lane(issue_tg, [lane_busy, lane_idle])
+    assert_eq("Busy lane skipped even with higher affinity", selected["uuid"], "lane-idle")
+
+    # Test 5: Capacity exhausted when all lanes are busy
+    assert_true("None returned when all lanes busy", select_best_lane(issue_tg, [lane_busy]) is None)
+
+    # Test 6: Claim-gate detection and refusal affordance
+    issue_gated_1 = {
+        "number": 78,
+        "title": "feat(daemon): dedicated identity surface",
+        "body": "Owner ruling: filed for idea-box ranking, not scheduled work. Low priority — idea-box ranked, no claim without fresh approval.",
+        "labels": []
+    }
+    issue_gated_2 = {
+        "number": 99,
+        "title": "chore: parked feature",
+        "body": "Normal body",
+        "labels": [{"name": "parked"}]
+    }
+    issue_ungated = {
+        "number": 220,
+        "title": "fix(mermaid): unify nudges",
+        "body": "Normal bug fix ready for scheduling.",
+        "labels": [{"name": "bug"}]
+    }
+    gated_1, r_1 = check_issue_claim_gate(issue_gated_1)
+    gated_2, r_2 = check_issue_claim_gate(issue_gated_2)
+    ungated, r_3 = check_issue_claim_gate(issue_ungated)
+
+    assert_true("Issue with 'no claim without fresh approval' is gated", gated_1)
+    assert_true("Issue with label 'parked' is gated", gated_2)
+    assert_true("Normal issue is not gated (negative control)", not ungated)
+
+    # Test 6b: Lane busy detection with open claims
+    lane_with_claims = {
+        "uuid": "lane-claims",
+        "feature": "generic",
+        "class": "ACTIVE",
+        "is_busy": True,
+        "claims": "38,218",
+        "worktrees": "-"
+    }
+    assert_true("Lane with open claims is treated as busy", select_best_lane(issue_tg, [lane_with_claims]) is None)
+
+    # Test 6c: Phantom worker exclusion and classify-absent live worker retention
+    mock_ledger_roster = {
+        "workers": [
+            {"role": "editor", "uuid": "phantom-uuid-1", "topic": "dead lane"},
+            {"role": "editor", "uuid": "live-idle-classify-present", "topic": "active lane"},
+            {"role": "editor", "uuid": "e14ea3a3-d1a1-4dd5-9902-8e90d5576439", "topic": "stale but alive"}
+        ]
+    }
+    mock_classify_data = {
+        "rows": [
+            {"uuid": "live-idle-classify-present", "class": "IDLE", "dirty": 0, "worktrees": "-", "claims": "-"}
+            # Notice e14ea3a3 is ABSENT from classify rows (stale beyond 24h)
+        ]
+    }
+    mock_live_sessions = {"live-idle-classify-present", "e14ea3a3-d1a1-4dd5-9902-8e90d5576439"}
+
+    filtered_roster = get_worker_roster(
+        mock_ledger_roster,
+        mock_classify=mock_classify_data,
+        mock_sessions=mock_live_sessions
+    )
+    filtered_uuids = {l["uuid"] for l in filtered_roster}
+    assert_true("Phantom worker absent from sessions DB is pruned", "phantom-uuid-1" not in filtered_uuids)
+    assert_true("Classify-present live worker is retained", "live-idle-classify-present" in filtered_uuids)
+    assert_true("Classify-absent but DB-alive worker (e14ea3a3) is retained", "e14ea3a3-d1a1-4dd5-9902-8e90d5576439" in filtered_uuids)
+    e14_lane = next(l for l in filtered_roster if l["uuid"] == "e14ea3a3-d1a1-4dd5-9902-8e90d5576439")
+    assert_true("Classify-absent DB-alive worker defaults to idle", not e14_lane["is_busy"])
+
+    # Test 6d: Classify failure defaults workers to busy (conservative safety)
+    mock_ledger_classify_fail = {
+        "workers": [
+            {"role": "editor", "uuid": "lane-safety-1", "topic": "safety lane"}
+        ]
+    }
+    # When mock_classify is empty dict without 'rows', classify_ok is True but rows empty.
+    # In live mode when oc-roster fails or mock_classify is None and oc-roster missing/fails,
+    # let's verify classify_ok=False defaults is_busy=True.
+    roster_classify_fail = get_worker_roster(
+        mock_ledger_classify_fail,
+        mock_classify=None,
+        mock_sessions={"lane-safety-1"},
+        db_path="/tmp/nonexistent-db.sqlite"
+    )
+    # Since oc-roster classify in test environment returns real rows or if absent fails,
+    # let's test check_journal_receipt helper directly
+    assert_true("check_journal_receipt returns False for nonexistent journal", not check_journal_receipt("nonexistent", 0, "/tmp/no-journal"))
+
+    # Test 6e (#390): the classify budget, and the degradation report.
+    #
+    # A stub `oc-roster` makes both arms deterministic. The stub `exec`s, so the
+    # process `run_cmd` kills IS the sleeper -- without exec the kill lands on the
+    # shell and the orphaned child keeps the stdout pipe open, which would make
+    # the elapsed assertion below measure the stub's sleep instead of the budget.
+    def _stub_roster(body):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "oc-roster")
+        with open(p, "w") as fh:
+            fh.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(p, 0o755)
+        return d
+
+    _saved_tool_dir, _saved_roster_budget = TOOL_DIR, ROSTER_TIMEOUT_SECS
+    try:
+        # (A) the BUDGET governs the call: a 3s stub under a 1s budget is KILLED
+        TOOL_DIR = _stub_roster("exec sleep 3")
+        ROSTER_TIMEOUT_SECS = 1
+        _out, _err = io.StringIO(), io.StringIO()
+        _t0 = time.time()
+        with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
+            _lanes = get_worker_roster(mock_ledger_classify_fail, mock_classify=None,
+                                       mock_sessions={"lane-safety-1"},
+                                       db_path="/tmp/nonexistent-db.sqlite")
+        _elapsed = time.time() - _t0
+        assert_true("#390 the classify budget governs the call (3s stub, 1s budget -> killed)",
+                    _elapsed < 2.5)
+        assert_true("#390 a killed classify is reported on STDOUT (countable by a cron)",
+                    any(l.startswith(DEGRADED_MARKER) for l in _out.getvalue().splitlines()))
+        assert_true("#390 ...and on STDERR (the stream it used to be alone on)",
+                    any(l.startswith(DEGRADED_MARKER) for l in _err.getvalue().splitlines()))
+        assert_true("#390 the report names the budget it exceeded",
+                    "budget 1s" in _out.getvalue())
+        assert_true("#390 every lane reads busy AND not-known when the table is unavailable",
+                    bool(_lanes) and all(l["is_busy"] and not l["busy_known"] for l in _lanes))
+
+        # (B) a FAST failure takes the same report path (rc 3, not a timeout)
+        TOOL_DIR = _stub_roster("exit 3")
+        _out2 = io.StringIO()
+        with contextlib.redirect_stdout(_out2), contextlib.redirect_stderr(io.StringIO()):
+            get_worker_roster(mock_ledger_classify_fail, mock_classify=None,
+                              mock_sessions={"lane-safety-1"},
+                              db_path="/tmp/nonexistent-db.sqlite")
+        assert_true("#390 a non-timeout classify failure is reported too",
+                    any(l.startswith(DEGRADED_MARKER) for l in _out2.getvalue().splitlines()))
+
+        # (C) a MISSING oc-roster was the silent case: classify_ok stayed False
+        # with no output at all before this fix.
+        TOOL_DIR = tempfile.mkdtemp()
+        _out3 = io.StringIO()
+        with contextlib.redirect_stdout(_out3), contextlib.redirect_stderr(io.StringIO()):
+            get_worker_roster(mock_ledger_classify_fail, mock_classify=None,
+                              mock_sessions={"lane-safety-1"},
+                              db_path="/tmp/nonexistent-db.sqlite")
+        assert_true("#390 a MISSING oc-roster is reported, not silent",
+                    any(l.startswith(DEGRADED_MARKER) for l in _out3.getvalue().splitlines()))
+    finally:
+        TOOL_DIR, ROSTER_TIMEOUT_SECS = _saved_tool_dir, _saved_roster_budget
+
+    # (D) the shipped default must not sit BELOW oc-roster's own allowance, or the
+    # inner budget is unreachable by construction (#390).
+    assert_true("#390 default classify budget >= oc-roster's own 120s allowance",
+                ROSTER_TIMEOUT_SECS >= 120)
+
+    # Test 7: Negative control for CLI argument parsing
+    p = argparse.ArgumentParser()
+    p.add_argument("--auto", action="store_true")
+    p.add_argument("issue", nargs="?", type=int)
+    p.add_argument("--force", action="store_true")
+    parsed = p.parse_args(["--auto"])
+    assert_true("CLI parser accepts --auto", parsed.auto)
+    parsed_issue = p.parse_args(["169"])
+    assert_eq("CLI parser accepts integer issue", parsed_issue.issue, 169)
+    parsed_force = p.parse_args(["78", "--force"])
+    assert_true("CLI parser accepts --force", parsed_force.force)
+
+    # Test 8: Unified log emission and suppression
+    tmp_log_dir = tempfile.mkdtemp()
+    tmp_log_file = os.path.join(tmp_log_dir, "test-tools.log")
+    try:
+        old_log = os.environ.get("OC_TOOLS_LOG")
+        old_nolog = os.environ.get("OC_TOOLS_NOLOG")
+        os.environ["OC_TOOLS_LOG"] = tmp_log_file
+        os.environ["OC_TOOLS_NOLOG"] = "0"
+        # Test simulated run logging
+        global _LOG_ENABLED, _LOG_TOOL, _LOG_ARGS, _LOG_EXTRA, _LOG_START, _LOG_FINISHED
+        _LOG_ENABLED = True
+        _LOG_TOOL = "oc-issue-dispatch"
+        _LOG_ARGS = "--auto --dry-run"
+        _LOG_EXTRA = {"test_key": "test_val"}
+        _LOG_START = time.time() - 1.2
+        _LOG_FINISHED = False
+        oc_log_finish(0)
+        assert_true("tools.log created by oc_log_finish", os.path.isfile(tmp_log_file))
+        with open(tmp_log_file, "r") as lf:
+            logged_lines = lf.readlines()
+        assert_eq("Exactly 1 line logged to tools.log", len(logged_lines), 1)
+        logged_json = json.loads(logged_lines[0])
+        assert_eq("Logged tool is oc-issue-dispatch", logged_json.get("tool"), "oc-issue-dispatch")
+        assert_eq("Logged exit code is 0", logged_json.get("exit"), 0)
+        assert_eq("Logged extra key matches", logged_json.get("extra", {}).get("test_key"), "test_val")
+
+        # Negative control: OC_TOOLS_NOLOG=1 suppresses logging
+        os.environ["OC_TOOLS_NOLOG"] = "1"
+        _LOG_ENABLED = False
+        _LOG_FINISHED = False
+        oc_log_finish(0)
+        with open(tmp_log_file, "r") as lf:
+            logged_lines_after = lf.readlines()
+        assert_eq("Suppressed invocation appends 0 lines (negative control)", len(logged_lines_after), 1)
+    finally:
+        shutil.rmtree(tmp_log_dir, ignore_errors=True)
+        if old_log is not None:
+            os.environ["OC_TOOLS_LOG"] = old_log
+        else:
+            os.environ.pop("OC_TOOLS_LOG", None)
+        if old_nolog is not None:
+            os.environ["OC_TOOLS_NOLOG"] = old_nolog
+        else:
+            os.environ.pop("OC_TOOLS_NOLOG", None)
+
+    # Test 9: the dispatch stamp must NOT force a bare-label actor (#328).
+    # The defect was a literal in this file. derive_by() resolves UUIDs only --
+    # any non-hex/non-dash value is classified as a LABEL and lands in the
+    # 'unrostered-actor' sentinel -- so forcing the label made every dispatch row
+    # unattributable while OPENCRABS_SESSION_ID held the resolvable session.
+    # The guard below is paired with a positive control: without it, the guard
+    # would pass for free on a file where the stamp call had been deleted.
+    _src = ""
+    try:
+        with open(os.path.abspath(__file__), "r") as _sf:
+            _src = _sf.read()
+    except Exception as _e:
+        assert_true(f"self-source readable for the #328 actor guard ({_e})", False)
+    assert_true("stamp call site present (positive control for the #328 guard)",
+                '"stamp", "note"' in _src)
+    # The needles are ASSEMBLED, never written verbatim: this test's own source
+    # lives in _src, so a literal needle would match itself and the guard could
+    # never pass. Same self-matching trap as grepping a log for your own command.
+    _needle_label = 'OC_ACTOR=' + '"' + 'triage' + '"'
+    _needle_env = 'env=dict(os.environ, ' + 'OC_ACTOR='
+    assert_true("dispatch stamp does not force a bare-label actor (#328)",
+                _needle_label not in _src)
+    assert_true("dispatch stamp passes no actor env= override to oc-ledger (#328)",
+                _needle_env not in _src)
+
+    # Test 10: #337 landed-work predicate -- LANDED_KINDS, NOT CLOSING_KINDS.
+    # The regression this pins: the first implementation reused
+    # oc_claims.CLOSING_KINDS, which includes confirm/unclaim/reject -- kinds
+    # that close a CLAIM without any work shipping. `unclaim` is the sharp case:
+    # it RELEASES a claim, returning the issue to the pool unbuilt, yet a
+    # CLOSING_KINDS-based landed filter read the release as "landed". Measured
+    # 2026-09-18: 48 issues are reachable by `unclaim` alone and none of them is
+    # git-landed -- latent starvation of dispatchable work. (All 48 happen to be
+    # closed on GitHub today, so this is a latent-correctness fix rather than a
+    # present outage; see the LANDED_KINDS docstring for the measurement.)
+    _landed_fixture = {
+        "events": [
+            # LANDING evidence. Positive control: if the predicate returned an
+            # empty set these two assertions fail, so the "does NOT land" half
+            # below cannot pass for free.
+            {"kind": "done", "by": "editor aaaa", "what": "DONE #201 -- merged"},
+            {"kind": "close", "by": "triage bbbb", "what": "closed issue #202"},
+            # BOOKKEEPING only -- none of these means the work landed.
+            {"kind": "confirm", "by": "editor cccc",
+             "what": "CONFIRM #203 -- claim verified live (workers[].confirmed=true)"},
+            {"kind": "unclaim", "by": "triage dddd",
+             "what": "#204 -- closed-issue stale claim sweep"},
+            {"kind": "reject", "by": "editor eeee", "what": "REJECT #205 -- out of scope"},
+            # The #329 phantom class: a done row lands only its ADDRESSED
+            # target, never an issue merely mentioned in its body.
+            {"kind": "done", "by": "editor ffff",
+             "what": "DONE #206 -- shipped while fixing #207"},
+        ]
+    }
+    _landed_pred = ledger_landed_issues(_landed_fixture)
+    assert_true("#337 POSITIVE CONTROL: a done row lands its target (#201)",
+                201 in _landed_pred)
+    assert_true("#337 a close row lands its target (#202)", 202 in _landed_pred)
+    assert_true("#337 confirm does NOT land (#203; the confirm/unclaim/reject regression)",
+                203 not in _landed_pred)
+    assert_true("#337 unclaim does NOT land (#204; claim released, work unbuilt)",
+                204 not in _landed_pred)
+    assert_true("#337 reject does NOT land (#205; claim refused, no work done)",
+                205 not in _landed_pred)
+    assert_true("#337 a done row lands its ADDRESSED target (#206)", 206 in _landed_pred)
+    assert_true("#337 a body mention is not a landing (#207; the #329 phantom)",
+                207 not in _landed_pred)
+
+    # Test 11: #337 dispatch memory -- an issue wired to a lane inside the window
+    # must not be wired to a SECOND lane on the next run. Every --auto run
+    # previously started from scratch, so an unacked dispatch was duplicated.
+    _now_utc = datetime.datetime.now(datetime.timezone.utc)
+    _fresh_ts = (_now_utc - datetime.timedelta(days=1)).isoformat()
+    _stale_ts = (_now_utc - datetime.timedelta(days=DISPATCH_WINDOW_DAYS + 2)).isoformat()
+    _dedup_fixture = {
+        "events": [
+            {"kind": "note", "by": "toolsmith 1234", "t": _fresh_ts,
+             "what": "Triage dispatch issue #301 to editor 11111111 -- wire zero-ack claim-first"},
+            {"kind": "note", "by": "toolsmith 1234", "t": _stale_ts,
+             "what": "Triage dispatch issue #302 to editor 22222222 -- wire zero-ack claim-first"},
+            {"kind": "note", "by": "toolsmith 1234", "t": _fresh_ts,
+             "what": "unrelated note about #303"},
+            {"kind": "note", "by": "toolsmith 1234",
+             "what": "Triage dispatch issue #304 to editor 33333333 -- wire zero-ack claim-first"},
+        ]
+    }
+    _recent_fx = recent_dispatches(_dedup_fixture)
+    assert_true("#337 a dispatch inside the window is remembered (#301)", 301 in _recent_fx)
+    assert_true("#337 a dispatch past the window expires (#302)", 302 not in _recent_fx)
+    assert_true("#337 a non-dispatch row is not memory (#303)", 303 not in _recent_fx)
+    assert_true("#337 a dispatch with no timestamp is not memory (#304)", 304 not in _recent_fx)
+    assert_eq("#337 the remembered lane is the 8-char prefix the writer records",
+              _recent_fx[301][0], "11111111")
+
+    # Test 12: #337 arm A -- fork-space scoping, probed against a REAL git repo.
+    # origin/main is a fork branch that ALSO carries upstream's history, and
+    # upstream PR numbers live in a DIFFERENT namespace that overlaps the low
+    # fork range: a plain `#N` scan of all 2118 commits found upstream commits
+    # citing #29 and #268 as PR numbers -- both REAL fork issue numbers. Without
+    # the scope an upstream citation marks a fork issue landed and starves it of
+    # dispatch. Session-Id is the discriminator: 452/455 fork commits carry it,
+    # 0/73 upstream commits do.
+    _armA_repo = tempfile.mkdtemp()
+    try:
+        def _g(*a):
+            return subprocess.run(["git", "-C", _armA_repo, *a],
+                                  capture_output=True, text=True, check=True)
+
+        _g("init", "-q")
+        _g("config", "user.email", "selftest@example.com")
+        _g("config", "user.name", "selftest")
+        _g("config", "commit.gpgsign", "false")
+
+        def _mk(msg, trailers=()):
+            with open(os.path.join(_armA_repo, "f.txt"), "a") as _fh:
+                _fh.write(msg + "\n")
+            _g("add", "f.txt")
+            _args = ["commit", "-q", "--no-gpg-sign", "-m", msg]
+            for _t in trailers:
+                _args += ["--trailer", _t]
+            _g(*_args)
+
+        # (1) FORK commit landing #29 -- subject arm, fork space.
+        _mk("fix: fork landing (#29)",
+            ["Session-Id: 11111111-1111-1111-1111-111111111111"])
+        # (2) UPSTREAM commit citing its OWN PR #268 -- no Session-Id.
+        _mk("fix(telegram): upstream thing (#268)")
+        # (3) FORK commit citing upstream's namespace EXPLICITLY.
+        _mk("chore: absorb upstream",
+            ["Session-Id: 22222222-2222-2222-2222-222222222222",
+             "Issue-Ref: adolfousier/opencrabs#1419"])
+        # (4) FORK commit with the canonical QUALIFIED fork ref.
+        _mk("fix(tools): qualified ref",
+            ["Session-Id: 33333333-3333-3333-3333-333333333333",
+             "Issue-Ref: leshchenko1979/opencrabs#343"])
+        # (5) FORK commit with no issue reference at all.
+        _mk("chore: no ref",
+            ["Session-Id: 44444444-4444-4444-4444-444444444444"])
+
+        _g("update-ref", "refs/remotes/origin/main", "HEAD")
+        _armA = fetch_landed_issues(_armA_repo)
+        assert_true("#337 arm A POSITIVE CONTROL: a fork commit lands (#29)", 29 in _armA)
+        assert_true("#337 arm A: an upstream citation is NOT fork space (#268)",
+                    268 not in _armA)
+        assert_true("#337 arm A: an explicit upstream ref is not ours (#1419)",
+                    1419 not in _armA)
+        assert_true("#337 arm A: a qualified fork ref lands (#343)", 343 in _armA)
+    finally:
+        shutil.rmtree(_armA_repo, ignore_errors=True)
+
+    # Test 12c: #370 -- the TARGETED path runs the SAME eligibility arms.
+    #   Pre-fix, cmd_targeted consulted NEITHER the landed arm nor the dedup arm
+    #   (`grep -n 'LANDED_KINDS\|recent_dispatches(' ` found call sites inside
+    #   cmd_auto ONLY), so an already-landed issue was re-proposed and an issue
+    #   already wired to a lane was wired to a SECOND one -- the double-dispatch
+    #   #337 exists to stop. The fix routes BOTH entry points through
+    #   evaluate_landed_and_dedup_arms, so the two can no longer drift.
+    #   MUTATION KILL: delete the `evaluate_landed_and_dedup_arms` call from
+    #   cmd_targeted and the three cmd_targeted legs below fail (rc 4, not 6/7).
+    _arm_iss = {"number": 370, "title": "t", "body": "b", "labels": []}
+    _ev_l, _ok_l = evaluate_landed_and_dedup_arms(_arm_iss, {370}, {})
+    assert_eq("#370 a landed issue is not dispatchable on the shared arm", _ok_l, False)
+    assert_eq("#370 ...and the arm event says LANDED", _ev_l[0][0], "landed")
+    _ev_d, _ok_d = evaluate_landed_and_dedup_arms(
+        _arm_iss, set(), {370: ("11111111", "2026-09-22T00:00:00Z")})
+    assert_eq("#370 an already-dispatched issue is not dispatchable", _ok_d, False)
+    assert_eq("#370 ...and the arm event says DEDUP", _ev_d[0][0], "dedup")
+    _ev_c, _ok_c = evaluate_landed_and_dedup_arms(_arm_iss, set(), {})
+    assert_eq("#370 a clean issue IS dispatchable", _ok_c, True)
+
+    # ...and the behavioural half: drive cmd_targeted ITSELF, because the defect
+    # was that this ENTRY POINT never called the arms -- a helper-level leg alone
+    # would have passed on the pre-fix tree.
+    _f370 = tempfile.mkdtemp()
+    _repo370 = tempfile.mkdtemp()
+    try:
+        def _g370(*a):
+            return subprocess.run(["git", "-C", _repo370, *a],
+                                  capture_output=True, text=True, check=True)
+
+        _g370("init", "-q")
+        _g370("config", "user.email", "selftest@example.com")
+        _g370("config", "user.name", "selftest")
+        with open(os.path.join(_repo370, "f.txt"), "w") as _fh:
+            _fh.write("x\n")
+        _g370("add", "f.txt")
+        _g370("commit", "-q", "--no-gpg-sign", "-m", "chore: base")
+        _g370("update-ref", "refs/remotes/origin/main", "HEAD")
+
+        _iss370 = os.path.join(_f370, "issues.json")
+        with open(_iss370, "w") as _fh:
+            json.dump([{"number": 370, "title": "fix(tools): targeted path",
+                        "body": "no gate markers here", "labels": []}], _fh)
+        os.environ["OC_DISPATCH_MOCK_ISSUES"] = _iss370
+
+        def _ns370(ledger_events, **kw):
+            _lp = os.path.join(_f370, "ledger-%d.json" % len(ledger_events) + str(kw))
+            with open(_lp, "w") as _fh:
+                json.dump({"workers": [], "events": ledger_events}, _fh)
+            _a = dict(repo=_repo370, ledger=_lp, issue=370, to=None, dry_run=True,
+                      force=False, allow_landed=False, redispatch=False, budget_secs=0)
+            _a.update(kw)
+            return argparse.Namespace(**_a)
+
+        _done_row = [{"n": 1, "t": "2026-09-22T00:00:00Z", "by": "toolsmith 1234",
+                      "kind": "done", "what": "DONE #370 -- landed"}]
+        _e370 = io.StringIO()
+        with contextlib.redirect_stderr(_e370):
+            _rc_landed = cmd_targeted(_ns370(_done_row))
+        assert_eq("#370 cmd_targeted REFUSES a landed issue (rc 8, was rc 4/pass-through)",
+                  _rc_landed, RC_TARGETED_LANDED)
+        assert_true("#370 ...naming the arm and the override flag",
+                    "LANDED" in _e370.getvalue() and "--allow-landed" in _e370.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()):
+            _rc_landed_ov = cmd_targeted(_ns370(_done_row, allow_landed=True))
+        assert_eq("#370 ...and --allow-landed bypasses that refusal (falls through to capacity)",
+                  _rc_landed_ov, 4)
+
+        _disp_row = [{"n": 1, "t": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                      "by": "toolsmith 1234", "kind": "note",
+                      "what": "Triage dispatch issue #370 to editor 11111111 -- wire zero-ack claim-first"}]
+        _e370b = io.StringIO()
+        with contextlib.redirect_stderr(_e370b):
+            _rc_disp = cmd_targeted(_ns370(_disp_row))
+        assert_eq("#370 cmd_targeted REFUSES an already-dispatched issue (rc 9)",
+                  _rc_disp, RC_TARGETED_ALREADY_DISPATCHED)
+        assert_true("#370 ...naming the lane it was already wired to",
+                    "11111111" in _e370b.getvalue() and "--redispatch" in _e370b.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()):
+            _rc_disp_ov = cmd_targeted(_ns370(_disp_row, redispatch=True))
+        assert_eq("#370 ...and --redispatch bypasses that refusal (falls through to capacity)",
+                  _rc_disp_ov, 4)
+    finally:
+        os.environ.pop("OC_DISPATCH_MOCK_ISSUES", None)
+        shutil.rmtree(_f370, ignore_errors=True)
+        shutil.rmtree(_repo370, ignore_errors=True)
+
+    # Test 13: #414 -- a REOPENED issue OVERRIDES the landed arm AND the dedup arm.
+    #
+    # Both arms are INFERENCES about state: `landed` is derived from artifacts (an
+    # Issue-Ref trailer on origin/main, or a ledger landing row) and `recent`
+    # records only OUR OWN past dispatch. A reopen is a DELIBERATE act that
+    # contradicts both, so it wins. Without the landed override the misreferenced
+    # close is PERMANENT -- the poison that produced the wrong close still sits on
+    # origin/main, so the arm re-marks the issue landed on every scan and the sweep
+    # never re-wires it. Without the dedup override the fix merely moves the
+    # stranding one arm over.
+    #
+    # Live scope measured 2026-09-19 (the three stranded issues this leg pins):
+    # #199 (closed on b10ca242f, which touches 0 files under src/a2a/, and still
+    # carrying Issue-Ref: #199), #253, and #324 (ALSO held by the 7-day dedup
+    # memory -- "wired to aff7ff41 at 2026-09-18T11:24:13Z").
+    _reopen_ts = (_now_utc - datetime.timedelta(days=1))
+
+    def _iss(num, state_reason=None, title=None):
+        d = {"number": num, "title": title or f"issue {num}", "labels": [],
+             "body": ""}
+        if state_reason is not None:
+            d["stateReason"] = state_reason
+        return d
+
+    _r_open = [
+        # 199: REOPENED and reads landed -> must be RELEASED.
+        _iss(199, "REOPENED", "fix(a2a): gateway listener"),
+        # 250: reads landed, NOT reopened -> must stay SKIPPED (negative control).
+        _iss(250, None, "fix: landed and not reopened"),
+        # 253: REOPENED, reads landed -> released.
+        _iss(253, "REOPENED", "fix(test): stale assertions"),
+        # 324: REOPENED, reads landed AND in dedup -> released by BOTH overrides.
+        _iss(324, "REOPENED", "test(utils): image_util non_image_schemes"),
+        # 400: reads landed, COMPLETED (not reopened) -> skipped (negative control
+        # for the value, not just for the absence, of stateReason).
+        _iss(400, "COMPLETED", "fix: closed normally"),
+        # 401: REOPENED but neither landed nor recently dispatched -> ordinary
+        # dispatchable, and it must NOT emit an override event (no false count).
+        _iss(401, "REOPENED", "open work never wired"),
+        # 402: no stateReason, in dedup only -> stays SKIPPED (dedup negative
+        # control: the dedup arm still works for non-reopened issues).
+        _iss(402, None, "wired recently, not reopened"),
+        # 403: no stateReason, neither landed nor dedup -> ordinary dispatchable.
+        _iss(403, None, "plain open work"),
+    ]
+    _r_landed = {199, 250, 253, 324, 400}
+    _r_recent = {324: ("aff7ff41", _reopen_ts), 402: ("63d775f9", _reopen_ts)}
+    _r_events, _r_dispatchable = classify_dispatch_arms(_r_open, _r_landed, _r_recent)
+    _r_nums = [i["number"] for i in _r_dispatchable]
+    _r_landed_skips = {i["number"] for k, i, _ in _r_events if k == "landed"}
+    _r_dedup_skips = {i["number"] for k, i, _ in _r_events if k == "dedup"}
+    _r_overrides = [(i["number"], arm) for k, i, arm in _r_events if k == "reopened"]
+
+    assert_true("#414 POSITIVE: a REOPENED issue reading landed is RELEASED (#199)",
+                199 in _r_nums)
+    assert_true("#414 NEGATIVE CONTROL: a landed issue with NO stateReason is "
+                "still SKIPPED (#250)",
+                250 not in _r_nums and 250 in _r_landed_skips)
+    assert_true("#414 a second REOPENED landed issue is RELEASED (#253)", 253 in _r_nums)
+    assert_true("#414 a non-REOPENED stateReason does NOT override landed (#400 "
+                "stateReason=COMPLETED)",
+                400 not in _r_nums and 400 in _r_landed_skips)
+    assert_true("#414 POSITIVE: a REOPENED issue in dedup is RELEASED by the dedup "
+                "override (#324)",
+                324 in _r_nums)
+    assert_true("#414 NEGATIVE CONTROL: a dedup issue with no stateReason is still "
+                "SKIPPED (#402)",
+                402 not in _r_nums and 402 in _r_dedup_skips)
+    assert_true("#414 a REOPENED issue that is neither landed nor in dedup is "
+                "released WITHOUT emitting an override event (#401)",
+                401 in _r_nums
+                and 401 not in [n for n, _ in _r_overrides])
+    assert_true("#414 an ordinary open issue is unaffected (#403)", 403 in _r_nums)
+    assert_eq("#414 the dispatchable set is exactly the 4 released/plain issues",
+              sorted(_r_nums), [199, 253, 324, 401, 403])
+    assert_eq("#414 #324 fires BOTH overrides (landed then dedup, per-issue order "
+              "follows the input scan order)",
+              _r_overrides,
+              [(199, "landed"), (253, "landed"), (324, "landed"), (324, "dedup")])
+    assert_eq("#414 the override counts are SPLIT by arm (3 landed, 1 dedup) -- a "
+              "merged total carrying one predicate is the defect this fixes",
+              (sum(1 for _, a in _r_overrides if a == "landed"),
+               sum(1 for _, a in _r_overrides if a == "dedup")), (3, 1))
+    assert_eq("#414 the four arms PARTITION the unclaimed set",
+              (sum(1 for k, _, _ in _r_events if k == "gated")
+               + len(_r_landed_skips) + len(_r_dedup_skips) + len(_r_dispatchable)),
+              len(_r_open))
+    assert_true("#414 stateReason is matched case-insensitively (a lower-case "
+                "'reopened' still overrides)",
+                is_reopened({"number": 9, "stateReason": "reopened"})
+                and not is_reopened({"number": 9, "stateReason": "COMPLETED"})
+                and not is_reopened({"number": 9}))
+
+    # The REPORTED numbers, not just the events they come from: a merged override
+    # total printed as "defeated the landed arm" was the defect this fixes, so the
+    # split is asserted directly against the summary the operator reads.
+    _r_counts = summarize_arms(_r_events, _r_dispatchable)
+    assert_eq("#414 reported counts: landed/dedup skips + split overrides "
+              "(of the 5 landed issues, 3 are REOPENED and released; of the 2 "
+              "dedup issues, 1 is REOPENED and released)",
+              (_r_counts["gated"], _r_counts["landed"], _r_counts["dedup"],
+               _r_counts["landed_override"], _r_counts["dedup_override"]),
+              (0, 2, 1, 3, 1))
+    assert_eq("#414 the reported override counts sum to the override EVENTS, "
+              "and each is stated against its OWN arm",
+              _r_counts["landed_override"] + _r_counts["dedup_override"],
+              len(_r_overrides))
+
+    # Test 13: #S -- a dispatch recorded as UNVERIFIED still defeats the dedup arm.
+    # This is the regression test for the reported defect: a false "Delivery FAILED"
+    # skipped the ledger stamp, so recent_dispatches() could not see the dispatch and
+    # the NEXT --auto run re-wired the issue to a SECOND lane.
+    _unv_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _unv_row = "Triage dispatch issue #459 to editor 40427d4f \u2014 sent, receipt unverified (rc=124)"
+    _unv_m = DISPATCH_ROW_RE.search(_unv_row)
+    assert_true("#S the UNVERIFIED stamp text is readable by DISPATCH_ROW_RE", _unv_m is not None)
+    assert_eq("#S the UNVERIFIED stamp keeps the issue number in group 1", _unv_m.group(1), "459")
+    assert_eq("#S the UNVERIFIED stamp keeps the lane prefix in group 2", _unv_m.group(2), "40427d4f")
+    _unv_recent = recent_dispatches(
+        {"events": [{"kind": "note", "by": "toolsmith 1234", "t": _unv_ts, "what": _unv_row}]})
+    assert_true("#S an unverified dispatch IS remembered by the dedup window (#459)", 459 in _unv_recent)
+    assert_eq("#S ... and to the lane that was actually wired", _unv_recent[459][0], "40427d4f")
+
+    # Test 14: #S -- the two verdict codes are distinct, so cmd_auto can tell
+    # "may have landed" from "nothing sent" (they need OPPOSITE operator action).
+    assert_true("#S RC_UNVERIFIED is distinct from 0 (success) and 3 (nothing sent)",
+                RC_UNVERIFIED not in (0, 3))
+    assert_eq("#S RC_UNVERIFIED is 6", RC_UNVERIFIED, 6)
+
+    # Test 15: #S -- check_journal_receipt: send-anchored budget + streamed tail.
+    # Hermetic: a temp journal, relative offsets only (no clock bomb), no ambient state.
+    with tempfile.TemporaryDirectory() as _jd:
+        _jp = os.path.join(_jd, "session-notify.journal")
+        _now = time.time()
+        _old_ts = datetime.datetime.fromtimestamp(_now - 600, datetime.timezone.utc).isoformat()
+        _new_ts = datetime.datetime.fromtimestamp(_now - 1, datetime.timezone.utc).isoformat()
+        with open(_jp, "w", encoding="utf-8") as _jf:
+            _jf.write(f"{_old_ts}\tcaller=x\ttarget=aaaabbbb\toutcome=delivered\texit=0\n")
+            _jf.write(f"{_new_ts}\tcaller=x\ttarget=ccccdddd\toutcome=delivered\texit=0\n")
+        assert_true("#S a receipt inside the send window is FOUND",
+                    check_journal_receipt("ccccdddd", _now - 5, _jp, send_budget_secs=30))
+        assert_true("#S a receipt for a DIFFERENT target is not a match",
+                    not check_journal_receipt("eeeeffff", _now - 5, _jp))
+        assert_true("#S a receipt OLDER than the send window is not a match",
+                    not check_journal_receipt("aaaabbbb", _now - 5, _jp))
+        _t_spent = time.time()
+        _spent = check_journal_receipt("gggghhhh", _now - 9999, _jp, send_budget_secs=1)
+        _spent_elapsed = time.time() - _t_spent
+        assert_true("#S a spent send budget returns False", not _spent)
+        assert_true("#S a spent send budget does NOT sleep-poll (one pass, <1s)", _spent_elapsed < 1.0)
+        assert_true("#S a missing journal is still False",
+                    not check_journal_receipt("ccccdddd", _now - 9999, os.path.join(_jd, "nope"),
+                                              send_budget_secs=1))
+
+
+    # Test 16: #S -- the notify-rc classifier is a PURE predicate, so its
+    # allowlist is asserted directly instead of through a scratch transport.
+    # This is the hermetic half of the /tmp negative control's ARM 4 / ARM 5.
+    assert_eq("#S classify_notify_rc: a receipt settles it as delivered",
+              classify_notify_rc(True, 124), 0)
+    assert_eq("#S classify_notify_rc: rc 2 is the ONE proven non-delivery",
+              classify_notify_rc(False, 2), 3)
+    assert_eq("#S classify_notify_rc: rc 124 (timeout) is UNVERIFIED",
+              classify_notify_rc(False, 124), RC_UNVERIFIED)
+    assert_eq("#S classify_notify_rc: rc 4 (transport catch-all) is UNVERIFIED (#433)",
+              classify_notify_rc(False, 4), RC_UNVERIFIED)
+    assert_eq("#S classify_notify_rc: a signal-death (negative rc) is UNVERIFIED",
+              classify_notify_rc(False, -9), RC_UNVERIFIED)
+    assert_eq("#S classify_notify_rc: rc 1 is ambiguous, so UNVERIFIED",
+              classify_notify_rc(False, 1), RC_UNVERIFIED)
+    # Set equality, not a count: rc 2 is the ONLY code in the tested population
+    # that may leave the dispatch UNRECORDED (so a retry is correct).
+    assert_eq("#S classify_notify_rc: rc 2 is the ONLY non-delivery verdict",
+              sorted(c for c in (2, 4, 124, 1, -9, 137)
+                     if classify_notify_rc(False, c) == 3), [2])
+
+    # Test 17 (#483): the open-issue fetch is a WINDOW with an explicit ceiling,
+    # never a hardcoded page size, and a FAILED fetch is None -- not [].
+    assert_eq("#483 the open-issue window is a ceiling above gh's own page size",
+              OPEN_ISSUES_LIMIT >= 1000, True)
+    # 17a. a FAILED read must not be readable as "no open issues": the two lead
+    #      to opposite decisions (rc 3 vs a clean empty run). Pre-fix the function
+    #      answered [] for both, which is what let the targeted path hand an
+    #      unfetched number to a stub. The mock file is the seam -- an unreadable
+    #      one models gh failing without touching the network.
+    _f483 = tempfile.mkdtemp(prefix="oc483-")
+    _bad = os.path.join(_f483, "bad.json")
+    with open(_bad, "w") as f:
+        f.write("{not json")
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _bad
+    assert_eq("#483 an unreadable issue source reads as a FAILED fetch (None), not []",
+              fetch_open_issues(""), None)
+    assert_eq("#483 unreadable source: the single-issue lookup is also None, never a stub",
+              fetch_issue("", 306), None)
+    # 17b. the window-full WARNING fires exactly when the returned list reaches
+    #      the ceiling, so a truncated window is never read as a complete one.
+    #      MUTATION KILL: delete the _warn_if_window_full call and the
+    #      "WARNING ... TRUNCATED" assertion below fails (the list assertions
+    #      still pass -- the warning is the only thing separating the two).
+    _saved_limit = OPEN_ISSUES_LIMIT
+    OPEN_ISSUES_LIMIT = 3
+    _full = os.path.join(_f483, "full.json")
+    with open(_full, "w") as f:
+        json.dump([{"number": n, "title": f"t{n}", "body": "", "labels": []} for n in (1, 2, 3)], f)
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _full
+    _buf = io.StringIO()
+    _real_stderr = sys.stderr
+    sys.stderr = _buf
+    try:
+        _got = fetch_open_issues("")
+    finally:
+        sys.stderr = _real_stderr
+    assert_eq("#483 a full window still returns every issue it fetched", len(_got), 3)
+    assert_true("#483 a full window WARNS that it may be TRUNCATED",
+                "TRUNCATED" in _buf.getvalue())
+    # 17c. ...and stays SILENT one issue below the ceiling. Without this control,
+    #      an unconditional warning would satisfy 17b.
+    OPEN_ISSUES_LIMIT = 4
+    _buf2 = io.StringIO()
+    sys.stderr = _buf2
+    try:
+        fetch_open_issues("")
+    finally:
+        sys.stderr = _real_stderr
+    assert_eq("#483 a window one below the ceiling does NOT warn", _buf2.getvalue(), "")
+    OPEN_ISSUES_LIMIT = _saved_limit
+
+    # 17d. an out-of-window target is resolved by the DIRECT lookup -- the
+    #      #483 regression. The mock's list holds ONE issue (#306 absent), so
+    #      the window cannot see it; the single-issue path must still answer
+    #      with the REAL title and body. MUTATION KILL: restore the stub
+    #      (title `Issue #306`, body "") and the title assertion fails.
+    _win = os.path.join(_f483, "win.json")
+    with open(_win, "w") as f:
+        json.dump([{"number": 1, "title": "in-window", "body": "b", "labels": []}], f)
+    _direct = os.path.join(_f483, "direct.json")
+    with open(_direct, "w") as f:
+        json.dump([{"number": 306, "title": "real #306 title", "body": "real body",
+                    "labels": [{"name": "tools"}]}], f)
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _win
+    assert_eq("#483 a target outside the window is absent from the list fetch",
+              [i["number"] for i in fetch_open_issues("")], [1])
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _direct
+    _resolved = fetch_issue("", 306)
+    assert_eq("#483 ...and resolves by DIRECT lookup to the real title, not `Issue #306`",
+              (_resolved or {}).get("title"), "real #306 title")
+    assert_eq("#483 ...with the real BODY too (the stub's was empty)",
+              (_resolved or {}).get("body"), "real body")
+
+    # 17g. the RESOLUTION RULE, which is where the regression actually lived --
+    #      the stub was constructed in cmd_targeted, not in the fetch. Three
+    #      arms: in-window answers from the window and says nothing; out-of-window
+    #      resolves by direct lookup and NAMES the window it fell outside; a
+    #      number that resolves nowhere is None and the caller REFUSES.
+    #      MUTATION KILL: restore the stub fallback (return {"number": n,
+    #      "title": f"Issue #{n}", "body": ""}, "") and the real-title assertion
+    #      fails; drop the refusal and the None arm returns a dict instead.
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _win
+    _window = [{"number": 1, "title": "in-window", "body": "b", "labels": []}]
+    _inwin, _inwin_note = resolve_target_issue("", 1, _window)
+    assert_eq("#483 an in-window target answers from the window itself",
+              (_inwin or {}).get("title"), "in-window")
+    assert_eq("#483 ...and carries NO out-of-window note", _inwin_note, "")
+    os.environ["OC_DISPATCH_MOCK_ISSUES"] = _direct
+    _out_of_win, _note = resolve_target_issue("", 306, _window)
+    assert_eq("#483 an OUT-OF-WINDOW target resolves to the real title, never a stub",
+              (_out_of_win or {}).get("title"), "real #306 title")
+    assert_true("#483 ...and the note names the window it fell outside",
+                "outside the fetched open-issue window (1 listed)" in _note)
+    _none, _none_note = resolve_target_issue("", 424242, [])
+    assert_eq("#483 a target that resolves NOWHERE is None -- the caller then refuses",
+              _none, None)
+    assert_eq("#483 ...with no note to print (there is nothing to explain)",
+              _none_note, "")
+    # 17h. a FAILED list read is not a licence to fabricate either: the target
+    #      still resolves by direct lookup, and the note says the list read
+    #      failed rather than reporting a window size it never had.
+    _withfail, _failnote = resolve_target_issue("", 306, None)
+    assert_eq("#483 a FAILED list read still resolves the target directly",
+              (_withfail or {}).get("title"), "real #306 title")
+    assert_true("#483 ...and says the list read FAILED instead of citing a window",
+                "the list read FAILED" in _failnote)
+    # 17e. an unresolvable target resolves to None -- never a fabricated dict.
+    assert_eq("#483 an unresolvable target returns None, never a stub",
+              fetch_issue("", 999999), None)
+    # 17f. the SAME mock feeds both reads, so they can never disagree about field
+    #      shape (#483): number/title/labels/body are the fields the claim gate
+    #      and the affinity scoring consume.
+    assert_eq("#483 both reads request ONE shared JSON field list",
+              ISSUE_JSON_FIELDS, "number,title,labels,body,stateReason,state")
+    del os.environ["OC_DISPATCH_MOCK_ISSUES"]
+    shutil.rmtree(_f483, ignore_errors=True)
+
+    total = tests_passed + tests_failed
+    print(f"selftest: {tests_passed}/{total} OK")
+    return 0 if tests_failed == 0 else 1
+
+
+def main():
+    if not _is_selftest():
+        oc_log_init("oc-issue-dispatch")
+        # Line-buffer stdout (#451). This tool can block for minutes inside a
+        # notify, and an outer `timeout` kills it, which DISCARDS a block-buffered
+        # stdout: the run then reads as a silent hang with no output and no side
+        # effect, when in fact it had reached the send. Line buffering leaves the
+        # evidence of where it died. Guarded -- reconfigure() needs a real stdout
+        # (not a replaced stream) and Python >= 3.7.
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
+    parser = argparse.ArgumentParser(
+        prog="oc-issue-dispatch",
+        description="Mechanized fork issue vetting, lane selection, and dispatch tool.",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--auto", action="store_true", help="Auto-scan open issues and dispatch to idle lanes")
+    parser.add_argument("issue", nargs="?", type=int, help="Target issue number to dispatch")
+    parser.add_argument("--to", help="Target session UUID for targeted dispatch")
+    parser.add_argument("--repo", default=DEFAULT_REPO, help="Path to opencrabs repo checkout")
+    parser.add_argument("--ledger", default=None, help="Path to workers-ledger.json")
+    parser.add_argument("--dry-run", action="store_true", help="Preview dispatch actions without notifying or stamping ledger")
+    parser.add_argument("--force", action="store_true", help="Force targeted dispatch even if issue has claim-gate markers")
+    parser.add_argument("--allow-landed", action="store_true",
+                        help="Propose issues whose fix already landed on origin/main or was closed in the ledger (disables the #337 landed filter)")
+    parser.add_argument("--redispatch", action="store_true",
+                        help=f"Re-propose an issue already dispatched within the last {DISPATCH_WINDOW_DAYS} days (disables #337 dedup memory)")
+    parser.add_argument("--budget-secs", type=int, default=0,
+                        help="Wall-clock budget for an --auto run; each notify's timeout is capped by what "
+                             "remains (0 = one notify budget per issue, unbounded run). A single issue's real "
+                             "ceiling is the notify budget PLUS the receipt grace, and --dry-run is the way to "
+                             "plan a dispatch without sending")
+
+    parser.add_argument("--selftest", action="store_true", help="Run hermetic offline test suite")
+
+    args = parser.parse_args()
+
+    if args.selftest:
+        sys.exit(run_selftest())
+
+    if not args.auto and args.issue is None:
+        parser.print_help()
+        oc_log_finish(2)
+        sys.exit(2)
+
+    try:
+        if args.auto:
+            rc = cmd_auto(args)
+        else:
+            rc = cmd_targeted(args)
+    except SystemExit as se:
+        rc = se.code if isinstance(se.code, int) else 1
+    except Exception as e:
+        sys.stderr.write(f"UNHANDLED ERROR: {e}\n")
+        rc = 1
+    finally:
+        oc_log_finish(rc if 'rc' in locals() else 0)
+    sys.exit(rc)
+
+
+if __name__ == "__main__":
+    main()

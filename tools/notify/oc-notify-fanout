@@ -1,0 +1,1234 @@
+#!/usr/bin/env bash
+# oc-notify-fanout — per-lane skill-change brief generator + dispatcher (v0.4.123)
+#
+# HQ CONCUR+ASSIGN 2026-09-09 (owner order same day): the v0.4.120 notify wave
+# hand-picked lanes from a stale roster and missed the RELOAD instruction.
+# This tool is the single sanctioned path for skill-change notifies.
+#
+# Laws baked in (Triage supplement after acc3fa9b/c6b1a539/d5863180):
+#   1. SELF-UUID SUBSTITUTION: each lane's brief carries THAT lane's uuid in
+#      the drift-check command — no "{{UUID}}" placeholder ever survives into
+#      a sent brief. A brief containing a literal placeholder token is a
+#      defect generator; the tool refuses to send one (defect class killed
+#      at the root: lanes parsed "<your-uuid>" as the sender's uuid).
+#   2. RELOAD line per fleet-directives.md §Post-compaction skill reload &
+#      context manifest curation + explicit ack contract in EVERY brief.
+#   3. TARGET VALIDATION: every target is checked (a) uuid shape, (b) no
+#      all-zero segment (n=2167 placeholder-uuid class), (c) LIVE session
+#      existence via `opencrabs session get <uuid>` rc==0, BEFORE any send.
+#      Dead targets are skipped with a reason, never attempted.
+#   4. RECEIPTS: one line per lane (uuid role rc detail); summary; ledger
+#      stamp kind=notify-fanout carrying all ids (opt-out --no-stamp).
+#   5. QUIET-60S contract text is embedded in briefs. SENDS DEFAULT TO QUIET:
+#      `--mode turn-end|quiet` (default **quiet**) is passed straight
+#      through to `session notify`. hq.md §Duty 3 (owner law 2026-09-07) mandates
+#      delivery=quiet for ANY version bump, so quiet is the default. In the
+#      non-quiet modes a mid-turn rc 3 is re-issued with --interrupt (a
+#      deprecated alias for --mode turn-end); in QUIET mode there is NO
+#      interrupt-retry — the CLI returns a DEFERRED verdict carrying a
+#      notification id, which IS the expected result, and re-issuing it would
+#      convert a deferred send into the immediate wake this flag exists to
+#      prevent.
+#      CORRECTION 2026-09-11 (Toolsmith, dispatched by the hourly health sweep):
+#      an earlier note here claimed the binary's `session notify` CLI had NO
+#      quiet/mode flag (verified 2026-09-09) and flagged it to HQ as a binary
+#      gap. That is FALSE now and was never re-checked: `opencrabs session
+#      notify --help` lists `--mode now|turn-end|quiet`, `--quiet-for-secs`,
+#      `--max-delay-secs`, and `--confirm`. The gap was closed upstream-side.
+#      The tool still sends immediately ON PURPOSE — deferred delivery for a
+#      work-dispatch wave is a fleet delivery-semantics decision, not a header
+#      detail. If HQ wants quiet-by-default fanout, the switch is one flag
+#      (`--mode quiet`), and it belongs in a separate, owner-visible change.
+#      FIXED 2026-09-12 (HQ report d72bd52d, Toolsmith): the law above named a
+#      flag this tool did not parse — `--mode quiet` died "unknown flag" — while
+#      the help described immediate sends as a choice. A tool whose help names a
+#      flag it cannot parse is the law-names-a-nonexistent-invocation family.
+#      The parser now carries --mode and the default is the law's quiet.
+#   6. FORUM-SCOPE GUARD (owner order 2026-09-10 03:16Z): ALL opencrabs-dev
+#      work — including skill-change fanout — happens ONLY in the opencrabs-dev
+#      forum chat. A target session is sendable only when the profile session
+#      DB binds it (session_bindings.chat_id) to the forum chat. Targets bound
+#      elsewhere or unbound are skipped with a `SKIP <uuid> <role> SCOPE(...)`
+#      receipt BEFORE any send. Override for drills: --forum-chat <chat_id>
+#      (or OC_FANOUT_FORUM_CHAT). Default: -1003936827469.
+#   7. WAVE-ID LOCK (v0.4.131, WAVE-GROUP-B B1): wave-id = sha256(title+brief)
+#      first 12 hex. A lockfile run/wave-<id>.lock (flock + pid + ts) guards
+#      against CONCURRENT re-runs of the same wave: a live lock (pid alive,
+#      <15 min old) refuses with rc=7 naming the holder pid/ts; a stale lock
+#      (pid dead OR >15 min) is auto-cleared with a receipt line. Locks live
+#      in <skill-repo>/run/ (created on demand, gitignored).
+#   8. PER-LANE IDEMPOTENCY (v0.4.131, WAVE-GROUP-B B2): run/wave-<id>.sent
+#      appends one uuid per successful send. A target already in .sent is
+#      skipped with `SKIP <uuid> <role> DUPLICATE` — a re-run of the same wave
+#      completes only the remaining lanes (resume semantics), never double-
+#      notifies.
+#   9. ACTIVE-ROWS-ONLY TARGET SET (2026-09-12, defect #6): a roster row whose
+#      `state` is anything other than ACTIVE is NEVER a dispatch target. The
+#      ledger carries 12 RETIRED rows whose sessions are still live and still
+#      bound to the forum chat, so they passed every guard above (uuid shape,
+#      live session, forum scope) and were notified on EVERY wave — e756b84b
+#      (retired_compiler) was FIRST in HQ's v0.4.156 wave, burning the slowest
+#      slot (75.6s) on a lane that can never act on a skill brief. Absent
+#      `state` == active (oc-ledger enroll writes no state key at all), so the
+#      test is `""|ACTIVE -> sendable`, anything else -> `SKIP <uuid> <role>
+#      INACTIVE(state=...)`. Fail-safe by construction: a state this tool does
+#      not know yet is skipped, never notified.
+#  10. PARTIAL-DELIVERY VERDICT (defect #5, 2026-09-12): a wave killed
+#      mid-loop (SIGTERM / cgroup teardown at swap restart) never runs its
+#      own end-of-wave accounting, and a partial .sent file is otherwise
+#      indistinguishable from a complete wave unless someone counts .sent
+#      lines by hand. Every send ATTEMPT is recorded to run/wave-<id>.targets
+#      BEFORE the send (dedup'd), and `--verify <wave-id>` diffs manifest vs
+#      receipts: rc 0 COMPLETE / rc 8 PARTIAL naming each unreached lane /
+#      rc 3 no manifest. In-wave send failures keep exit 4 but now print a
+#      PARTIAL DELIVERY stderr line with the resume/audit path.
+#
+#  17. DORMANCY / ACTIVITY FILTER (owner order 2026-09-13): prune targets
+#      to eliminate waking idle workers. Core roles (toolsmith, triage, hq)
+#      ALWAYS receive fanout broadcasts. Worker lanes idle >= 12h (measured
+#      from session DB updated_at) with no active worktree or claim are
+#      skipped cleanly: `SKIP <uuid> <role> DORMANT(idle_hours=XX.X)`.
+#
+#  16. SELF IDENTITY IS DERIVED, NEVER HARDCODED (defect D-1, HQ 2026-09-12):
+#      `self_uuid` — the lane a wave EXCLUDES as its own invoker — resolves
+#      from --self, else OC_FANOUT_SELF, else the invoking session's OC_ACTOR;
+#      an unresolved self is a HARD ERROR (rc 2). The production default used
+#      to be a hardcoded lane uuid (2fae1230-…, a selftest fixture value
+#      promoted by 7c7844cd at v0.4.123): it excluded the Toolsmith lane from
+#      EVERY wave while leaving --include-self dead for every other invoker —
+#      so HQ self-notified its own brief. The battery could not catch it
+#      because every fixture run passes OC_FANOUT_SELF explicitly, so the
+#      DEFAULT path was never exercised (assertions added with this fix).
+#      A wrong self is INVISIBLE — it silently drops a real target from the
+#      wave — which is why the tool refuses to guess one.
+#
+# Usage:
+#   oc-notify-fanout --title "SKILL CHANGE — v0.4.123" \
+#     [--text "what changed ..."] [--text-file /path/brief.md] \
+#     [--roles editor,hq] [--exclude "40695,uuid8char"] \
+#     [--mode turn-end|quiet] (default quiet) \
+#     [--forum-chat <chat_id>] [--self <uuid>] [--dry-run] [--no-stamp] [--include-self] \
+#     [--verify <wave-id>]
+#
+#   Default brief (when --text/--text-file omitted) is the canonical
+#   skill-change template with what="" — pass --text for the body.
+#
+#   --text-file loads the FILE'S CONTENT as the brief — it is not a pointer to
+#   be resolved elsewhere: the file is read here and its text IS the brief.
+#   --text-file WINS over --text when both are given. A --text-file path that
+#   does not exist is a hard error (rc 2), never a silent fall-through to the
+#   default brief. Fixed 2026-09-11 (HQ report d72bd52d): the file was
+#   validated and hashed into the wave-id but NEVER loaded into the brief, so
+#   every --text-file wave shipped the "(see title)" placeholder and nothing
+#   else — while the receipt still read brief-ok(N chars).
+#   Template tokens (case-sensitive, replaced per lane BEFORE sending):
+#     {{UUID}} -> lane's own session uuid   {{VERSION}} -> SKILL.md version
+#   Any surviving {{...}} token after substitution -> abort that send (law 1).
+#
+#   LAW 15 (defect #15, 2026-09-12): a wave inherits the cgroup of whoever
+#   launched it. When that launcher is a session hosted by the unit a swap is
+#   about to bounce (opencrabs-ops.service), the swap's `systemctl --user
+#   restart` tears the cgroup down and SIGKILLs the wave MID-FLIGHT — the
+#   survivors got their briefs, the rest never heard, and nothing reported the
+#   truncation. The wave re-execs under a transient scope OUTSIDE the unit
+#   before taking its lock, exactly as oc-deploy does for the swap itself.
+#
+# Exit codes: 0 all sent/skipped-clean · 2 usage/roster error · 3 ledger ·
+#             4 partial send failures (receipts say which) · 5 abort (placeholder leak guard)
+#             7 concurrent wave in progress (live lock held by another pid)
+set -euo pipefail
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+SKILL_DIR="$(cd "$OC_TOOLS_DIR/.." && pwd)"
+# LAW 15: the detach re-exec replays this exact invocation, so capture both the
+# script path and the original argv BEFORE the arg parse consumes "$@".
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ORIG_ARGS=("$@")
+# shellcheck source=lib/oc-notify.sh
+source "$SKILL_DIR/tools/lib/oc-notify.sh"
+_OC_LIB="$SKILL_DIR/tools/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then
+  source "$_OC_LIB"
+  oc_log_init "oc-notify-fanout" "$@"
+else
+  oc_log_finish() { :; }
+fi
+trap 'oc_log_finish $?' EXIT
+LEDGER="${OC_FANOUT_LEDGER:-$(oc_ledger_path)}"   # ONE literal: tools/lib/oc-log.sh
+PROFILE="${OC_NOTIFY_PROFILE:-ops}"
+SENDER="oc-notify-fanout"
+
+die() { echo "oc-notify-fanout: $*" >&2; exit "${2:-2}"; }
+
+# ---- cgroup safety (LAW 15, defect #15, 2026-09-12) ------------------------
+# Same class as oc-deploy's v0.4.153 silent-ledger defect, one layer out: a wave
+# inherits the cgroup of whoever launched it. When that launcher is a session
+# hosted by the very unit a swap is about to bounce (opencrabs-ops.service), the
+# swap's step-8 `systemctl --user restart` tears that cgroup down and SIGKILLs
+# the wave AT the restart line. Evidence 2026-09-12 (HQ report d72bd52d): wave
+# wave-2b2a99d25bd2 (lock ts 1789205498 = 09:31:38Z) last wrote .sent at
+# 09:38:18Z after exactly 5 lanes and had no live process by 09:45 — the
+# 09:39:02Z swap restarted the daemon and killed it mid-wave. Prior waves died
+# the same way (SIGTERM at 211s and 530s). A truncated wave is the WORST shape
+# of failure here: the lanes that were already reached got their briefs, the
+# rest never heard, and the tool never said so — the caller sees a wave that
+# simply stopped.
+# Fix: re-exec under a transient scope outside the bounce cgroup BEFORE the wave
+# lock is taken, so a re-entry can never self-deadlock on a held lock (the same
+# pre-lock ordering oc-deploy uses for its own detach).
+# Overrides: OC_FANOUT_UNIT (default opencrabs-ops.service) ·
+# OC_FANOUT_IN_UNIT_CGROUP (auto|1|0 — test hook; auto inspects /proc/self/cgroup)
+# OC_FANOUT_DETACH_CMD (default `systemd-run --user --scope --collect`; MUST BLOCK
+# and pass the child's rc through — use `setsid -w`, never bare `setsid`, or the
+# wave's exit code is lost and a refusal reads as success) · OC_FANOUT_DETACHED
+# (loop guard).
+fanout_in_bounce_cgroup() { # rc 0 = this process IS inside the unit's cgroup
+  local unit="${OC_FANOUT_UNIT:-opencrabs-ops.service}" cg
+  case "${OC_FANOUT_IN_UNIT_CGROUP:-auto}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [ -r /proc/self/cgroup ] || return 1
+  cg="$(cat /proc/self/cgroup 2>/dev/null || true)"
+  case "$cg" in *"/$unit"|*"/$unit/"*) return 0 ;; esac
+  return 1
+}
+
+fanout_ensure_detached() { # re-exec outside the bounce cgroup (argv from ORIG_ARGS)
+  [ "${OC_FANOUT_DETACHED:-0}" = "1" ] && return 0   # already detached (loop guard)
+  fanout_in_bounce_cgroup || return 0
+  local cmd="${OC_FANOUT_DETACH_CMD:-systemd-run --user --scope --collect}"
+  echo "oc-notify-fanout: wave is INSIDE ${OC_FANOUT_UNIT:-opencrabs-ops.service}'s cgroup — a swap's restart would SIGKILL it mid-wave, truncating delivery with NO failure report (LAW 15, defect #15). Re-executing outside the unit via: $cmd" >&2
+  OC_FANOUT_DETACHED=1 exec $cmd "$SELF" "${ORIG_ARGS[@]}"
+}
+if [ "${1:-}" = "--selftest" ]; then
+  # SELFTEST — forum-scope guard + law-1 placeholder guard, fully fixture-based
+  # (OC_NOTIFY_DB points at a throwaway sqlite DB; OC_NOTIFY_BIN at a fake
+  # notify binary that records sends; OC_FANOUT_LEDGER at a temp ledger).
+  # No real DB, no real sends, no real ledger touched.
+  T="$(mktemp -d /tmp/fanout-selftest.XXXXXX)"
+  trap 'rm -rf "$T"; oc_log_finish $?' EXIT
+  L1="11111111-1111-4111-8111-111111111111"  # live + bound to forum chat
+  L2="22222222-2222-4222-8222-222222222222"  # live + bound ELSEWHERE (leak path)
+  L3="33333333-3333-4333-8333-333333333333"  # live + UNBOUND (leak path)
+  L4="44444444-4444-4444-8444-444444444444"  # malformed shape
+  L5="00000000-0000-0000-0000-000000000000"  # all-zero (n=2167 class)
+  L6="66666666-6666-4666-8666-666666666666"  # live + forum-bound + RETIRED (defect #6)
+  L7="77777777-7777-4777-8777-777777777777"  # live + forum-bound + ACTIVE (law-10 slow lane)
+  L8="88888888-8888-4888-8888-888888888888"  # live + forum-bound + dormant editor (law-17)
+  L9="99999999-9999-4999-8999-999999999999"  # live + forum-bound + dormant core role (toolsmith) (law-17)
+  L10="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" # live + forum-bound + dormant editor with claim (law-17)
+  FORUM="-1999999999"
+  # Fixture DB built through the shared reader, not the `sqlite3` CLI (#371):
+  # before 2026-09-19 that binary was not on this box at all, so this heredoc
+  # failed outright and every DB-dependent fanout leg read an empty roster. The
+  # CLI exists now; the routing rule (tools/ code never gates on it) does not
+  # change.
+  "$SKILL_DIR/tools/lib/oc_sqlite" "$T/db.sqlite" <<SQL
+CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, archived_at INTEGER, updated_at INTEGER DEFAULT 0);
+CREATE TABLE session_bindings (session_id TEXT PRIMARY KEY, channel TEXT, chat_id TEXT, thread_id INTEGER, updated_at INTEGER DEFAULT 0);
+INSERT INTO sessions VALUES ('$L1','lane1',NULL,strftime('%s','now')),('$L2','outside',NULL,strftime('%s','now')),('$L3','unbound',NULL,strftime('%s','now')),('$L4','bad',NULL,strftime('%s','now')),('$L5','zero',NULL,strftime('%s','now')),('$L6','retired',NULL,strftime('%s','now')),('$L7','slow',NULL,strftime('%s','now')),('$L8','dormant-ed',NULL,100000),('$L9','dormant-ts',NULL,100000),('$L10','dormant-claim',NULL,100000);
+INSERT INTO session_bindings VALUES ('$L1','telegram','$FORUM',123,0);
+INSERT INTO session_bindings VALUES ('$L6','telegram','$FORUM',126,0);
+INSERT INTO session_bindings VALUES ('$L7','telegram','$FORUM',127,0);
+INSERT INTO session_bindings VALUES ('$L8','telegram','$FORUM',128,0);
+INSERT INTO session_bindings VALUES ('$L9','telegram','$FORUM',129,0);
+INSERT INTO session_bindings VALUES ('$L10','telegram','$FORUM',130,0);
+INSERT INTO session_bindings VALUES ('$L2','telegram','-1000000000',1,0);
+SQL
+  cat > "$T/fake-notify" <<'EOF'
+#!/usr/bin/env bash
+echo "sent: $*" >> "$FAKE_NOTIFY_LOG"
+echo "notification id 99999999-9999-4999-8999-999999999999"
+exit 0
+EOF
+  chmod +x "$T/fake-notify"
+  touch "$T/fake-notify-log"
+  LEDG="$T/ledger.json"
+  # Fixture roster: 5 workers, one per defect class (L2/L3 are the leak paths
+  # the guard exists to close). Roles/topics are irrelevant to the guard.
+  cat > "$LEDG" <<JSON
+{"workers": [
+  {"uuid": "$L1", "role": "editor", "topic_id": 1},
+  {"uuid": "$L2", "role": "editor", "topic_id": 2},
+  {"uuid": "$L3", "role": "editor", "topic_id": 3},
+  {"uuid": "$L4", "role": "editor", "topic_id": 4},
+  {"uuid": "$L5", "role": "editor", "topic_id": 5},
+  {"uuid": "$L6", "role": "editor", "topic_id": 6, "state": "RETIRED"},
+  {"uuid": "$L8", "role": "editor", "topic_id": 8},
+  {"uuid": "$L9", "role": "toolsmith", "topic_id": 9},
+  {"uuid": "$L10", "role": "editor", "topic_id": 10}
+], "events": [
+  {"kind": "claim", "by": "editor aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "what": "#9999 task"}
+]}
+JSON
+
+  run_fanout() { # args passed through; asserts rc 0 and returns receipts
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 \
+    OC_FANOUT_RUN_DIR="${OC_FANOUT_RUN_DIR:-$T/run-default}" FAKE_NOTIFY_LOG="$T/fake-notify-log" \
+      bash "$0" --title "T" --text "brief {{UUID}}" --no-stamp "$@" 2>&1
+  }
+  F=0; P=0
+  chk() { if [ "$1" = 0 ]; then P=$((P+1)); else F=$((F+1)); echo "FAIL: $2"; fi }
+  mkdir -p "$T/run-default"
+
+  # 1. Default roster (all 5 non-self workers): ONLY L1 sendable — L6 is live
+  #    and forum-bound but RETIRED, so law 9 is the only guard that stops it.
+  out="$(run_fanout)"
+  oc_has "$out" "SENT $L1" && chk 0 sent-in-scope || chk 1 sent-in-scope
+  grep -q "SKIP $L2 .*SCOPE" <<< "$out" && chk 0 skip-bound-elsewhere || chk 1 skip-bound-elsewhere
+  grep -q "SKIP $L3 .*SCOPE" <<< "$out" && chk 0 skip-unbound || chk 1 skip-unbound
+  oc_has "$out" "SKIP $L4" && chk 0 skip-malformed || chk 1 skip-malformed
+  oc_has "$out" "SKIP $L5" && chk 0 skip-zero-seg || chk 1 skip-zero-seg
+  # LAW 9 (defect #6, 2026-09-12): L6 passes EVERY guard above it (uuid shape,
+  # live session, forum binding) — the state filter is the only thing that can
+  # stop it, which is what makes these two assertions non-vacuous. Remove the
+  # guard on a throwaway copy and L6 is SENT (negative control, 2026-09-12).
+  grep -q "SKIP $L6 .*INACTIVE(state=RETIRED)" <<< "$out" && chk 0 skip-retired-row || chk 1 skip-retired-row
+  grep -qF "$L6" "$T/fake-notify-log" && chk 1 retired-never-sent || chk 0 retired-never-sent
+  grep -qF "$L2" "$T/fake-notify-log" && chk 1 leak-bound-elsewhere || chk 0 leak-bound-elsewhere
+  grep -qF "$L3" "$T/fake-notify-log" && chk 1 leak-unbound || chk 0 leak-unbound
+
+  # LAW 17 (owner order 2026-09-13): dormancy/activity filter
+  # L8 is a dormant editor without claim/worktree -> SKIP DORMANT
+  grep -q "SKIP $L8 .*DORMANT(idle_hours=" <<< "$out" && chk 0 skip-dormant-worker || chk 1 skip-dormant-worker
+  grep -qF "$L8" "$T/fake-notify-log" && chk 1 dormant-never-sent || chk 0 dormant-never-sent
+  # L9 is a dormant core role (toolsmith) -> core role bypasses dormancy and is SENT
+  oc_has "$out" "SENT $L9" && chk 0 dormant-core-role-sent || chk 1 dormant-core-role-sent
+  grep -qF "$L9" "$T/fake-notify-log" && chk 0 dormant-core-role-notified || chk 1 dormant-core-role-notified
+  # L10 is a dormant editor WITH active claim -> claim holder is preserved and SENT
+  oc_has "$out" "SENT $L10" && chk 0 dormant-with-claim-sent || chk 1 dormant-with-claim-sent
+  grep -qF "$L10" "$T/fake-notify-log" && chk 0 dormant-with-claim-notified || chk 1 dormant-with-claim-notified
+  # 1a2. DISCRIMINATING leg for the LAW-17 holder scan. The L10 assertions above
+  #      CANNOT catch the defect they look like they cover: run_fanout exports
+  #      OC_FANOUT_LEDGER, and the pre-fix scan read os.environ['LEDGER'] OR
+  #      os.environ['OC_FANOUT_LEDGER'] — so the TEST environment supplied the
+  #      path the PRODUCTION environment never did. On a real run LEDGER (line
+  #      155) is assigned WITHOUT export, so the scan saw '' and LAW 17 marked
+  #      every live claim-holder DORMANT. This leg UNSETS OC_FANOUT_LEDGER and
+  #      points HOME at a tree holding the ledger at the DEFAULT path, so the
+  #      holder set can only come from the argv-passed $LEDGER: pre-fix it
+  #      prints SKIP L10 DORMANT, post-fix SENT L10.
+  H="$T/home"
+  mkdir -p "$H/.opencrabs/profiles/ops/opencrabs-dev"
+  cp "$LEDG" "$H/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json"
+  : > "$T/fake-notify-log-1a2"
+  out="$(env -u OC_FANOUT_LEDGER OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$T/run-home" \
+    HOME="$H" FAKE_NOTIFY_LOG="$T/fake-notify-log-1a2" \
+      bash "$0" --title T --text "brief {{UUID}}" --no-stamp 2>&1)"
+  oc_has "$out" "SENT $L10" && chk 0 law17-holder-from-argv-ledger || chk 1 law17-holder-from-argv-ledger
+  grep -qF "$L10" "$T/fake-notify-log-1a2" && chk 0 law17-holder-notified-argv-ledger || chk 1 law17-holder-notified-argv-ledger
+  # 1b. The OTHER arm of law 9: an explicitly ACTIVE row must still be
+  #     sendable. L1 above carries NO state key at all (the enroll default), so
+  #     it proves only the ABSENT arm — a rewrite that special-cases RETIRED and
+  #     drops explicit ACTIVE would sail straight past it. Isolated fixture and
+  #     its OWN log, so this extra target cannot perturb the send counts the
+  #     shared-fixture assertions below rely on.
+  STL="$T/ledger-state.json"
+  cat > "$STL" <<JSON
+{"workers": [
+  {"uuid": "$L1", "role": "editor", "topic_id": 1, "state": "ACTIVE"}
+], "events": []}
+JSON
+  : > "$T/fake-notify-log-1b"
+  out="$(OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$STL" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$T/run-state" \
+    FAKE_NOTIFY_LOG="$T/fake-notify-log-1b" \
+      bash "$0" --title T --text "brief {{UUID}}" --no-stamp 2>&1)"
+  oc_has "$out" "SENT $L1" && chk 0 state-active-sendable || chk 1 state-active-sendable
+
+  # 2. Law-1 guard still fires: a brief with an unresolvable token aborts.
+  out="$(OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$LEDG" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 \
+    bash "$0" --title T --text "broken {{NOPE}} token" --no-stamp 2>&1)" || true
+  grep -q "ABORT.*placeholder" <<< "$out" && chk 0 law1-placeholder-abort || chk 1 law1-placeholder-abort
+
+  # LAW 5 (defect: HQ report d72bd52d, 2026-09-12): the tool could not express
+  # the law's quiet contract — hq.md §Duty 3 mandates delivery=quiet for ANY version
+  # bump, but the parser had no --mode at all, so `--mode quiet` died "unknown
+  # flag" and every wave sent IMMEDIATELY. These assertions pin the flag at the
+  # BINARY BOUNDARY (the fake notify's logged argv), not merely the rc: a parser
+  # that accepts the flag and drops it before the send would sail past an
+  # rc-only check. Distinct run dirs — the wave-id hashes title+brief, so two
+  # runs sharing a dir would SKIP as DUPLICATE and never reach a send.
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  OC_FANOUT_RUN_DIR="$T/run-mode-quiet" run_fanout --mode quiet >/dev/null 2>&1
+  grep -qF -- '--mode quiet' "$T/fake-notify-log" && chk 0 mode-quiet-reaches-binary || chk 1 mode-quiet-reaches-binary
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  OC_FANOUT_RUN_DIR="$T/run-mode-default" run_fanout >/dev/null 2>&1
+  grep -qF -- '--mode quiet' "$T/fake-notify-log" && chk 0 mode-absent-defaults-quiet || chk 1 mode-absent-defaults-quiet
+  # RETIRED MODE (2026-09-19): `now` is a HARD ERROR in the runtime
+  # (`notify_policy.rs` returns Err for it — fork #373), so a wave launched with
+  # it would fail EVERY send. The old leg (`mode-now-passthrough`) asserted the
+  # tool FORWARDED `now`, which pinned the stale contract: the forwarding was
+  # correct, the ACCEPTANCE was not. Assert BOTH the refusal AND that nothing
+  # reached the binary — an rc-only check would pass on a validator that dies
+  # after the first send.
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  out="$(OC_FANOUT_RUN_DIR="$T/run-mode-now" run_fanout --mode now 2>&1)" || true
+  oc_has "$out" "invalid --mode 'now'" && chk 0 mode-now-refused || chk 1 mode-now-refused
+  grep -qF -- '--mode' "$T/fake-notify-log" && chk 1 mode-now-never-sends || chk 0 mode-now-never-sends
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  OC_FANOUT_RUN_DIR="$T/run-mode-bogus" run_fanout --mode bogus >/dev/null 2>&1 || true
+  grep -qF -- '--mode' "$T/fake-notify-log" && chk 1 mode-invalid-never-sends || chk 0 mode-invalid-never-sends
+  out="$(OC_FANOUT_RUN_DIR="$T/run-mode-bogus2" run_fanout --mode bogus 2>&1)" || true
+  oc_has "$out" "invalid --mode" && chk 0 mode-invalid-rejected || chk 1 mode-invalid-rejected
+
+  # LAW 16 (defect D-1, HQ 2026-09-12): self identity is DERIVED from the
+  # invoking session, never the hardcoded lane uuid that shipped as the default
+  # from v0.4.123. The battery could never catch it because every fixture run
+  # passes OC_FANOUT_SELF explicitly — these assertions exercise the DEFAULT
+  # path (no OC_FANOUT_SELF) with OC_ACTOR as the only identity source.
+  selfrun() { # $1=run dir, $2=actor uuid; remaining args appended
+    local rd="$1" actor="$2"; shift 2
+    env -u OC_FANOUT_SELF OC_ACTOR="$actor" OC_NOTIFY_DB="$T/db.sqlite" \
+      OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" \
+      OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$rd" FAKE_NOTIFY_LOG="$T/fake-notify-log" \
+      bash "$0" --title T --text "brief {{UUID}}" --no-stamp --dry-run "$@" 2>&1
+  }
+  out="$(selfrun "$T/run-self-actor" "$L1")"
+  printf '%s' "$out" | grep -q "$L1" && chk 1 self-default-from-actor || chk 0 self-default-from-actor
+  printf '%s' "$out" | grep -q "SKIP $L3 .*SCOPE" && chk 0 self-others-still-processed || chk 1 self-others-still-processed
+  out="$(selfrun "$T/run-self-incl" "$L1" --include-self)"
+  printf '%s' "$out" | grep -q "DRY $L1" && chk 0 self-include-self-flag || chk 1 self-include-self-flag
+  out="$(selfrun "$T/run-self-flag" "$L2" --self "$L1")"
+  printf '%s' "$out" | grep -q "$L1" && chk 1 self-flag-overrides-actor || chk 0 self-flag-overrides-actor
+  printf '%s' "$out" | grep -q "SKIP $L2 .*SCOPE" && chk 0 self-flag-actor-not-self || chk 1 self-flag-actor-not-self
+  rc="$(env -u OC_ACTOR -u OPENCRABS_SESSION_ID -u OC_FANOUT_SELF OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_RUN_DIR="$T/run-self-none" \
+    bash "$0" --title T --text "brief {{UUID}}" --no-stamp --dry-run >"$T/self-none.out" 2>&1; echo $?)"
+  [ "$rc" = 2 ] && chk 0 self-unresolved-rc2 || chk 1 "self-unresolved-rc2 (got $rc)"
+  grep -q "self identity unresolved" "$T/self-none.out" && chk 0 self-unresolved-msg || chk 1 self-unresolved-msg
+
+  # 2b. OPENCRABS_SESSION_ID fallback works -> resolved without error
+  out="$(env -u OC_ACTOR -u OC_FANOUT_SELF OPENCRABS_SESSION_ID="$L1" OC_NOTIFY_DB="$T/db.sqlite" \
+    OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" \
+    OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$T/run-self-sessid" FAKE_NOTIFY_LOG="$T/fake-notify-log" \
+    bash "$0" --title T --text "brief {{UUID}}" --no-stamp --dry-run 2>&1)"
+  printf '%s' "$out" | grep -q "$L1" && chk 1 self-default-from-session-id || chk 0 self-default-from-session-id
+
+  # 3. Dry-run behaves identically for scope (no send attempted).
+  rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+  out="$(run_fanout --dry-run)"
+  oc_has "$out" "DRY $L1" && chk 0 dry-in-scope || chk 1 dry-in-scope
+  grep -q "SKIP $L3 .*SCOPE" <<< "$out" && chk 0 dry-scope-skip || chk 1 dry-scope-skip
+  [ -s "$T/fake-notify-log" ] && chk 1 dry-no-send || chk 0 dry-no-send
+
+  # 4. WAVE-GROUP-B: wave lock + idempotency (isolated run dir).
+  RD="$T/run"; mkdir -p "$RD"
+  # 4a. resume: run 1 sends L1 and records it in .sent; run 2 must SKIP DUPLICATE.
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
+  oc_has "$out" "SENT $L1" && chk 0 wave1-sent || chk 1 wave1-sent
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
+  grep -q "SKIP $L1 .*DUPLICATE" <<< "$out" && chk 0 resume-duplicate-skip || chk 1 resume-duplicate-skip
+  n_sends=$(grep -cF "$L1" "$T/fake-notify-log" || true)
+  [ "$n_sends" = "1" ] && chk 0 exactly-one-send || chk 1 "exactly-one-send (got $n_sends)"
+  # 4b. concurrent-refuse: a live lock (our own pid, fresh ts) refuses rc=7.
+  WID="$(printf '%s' "T|brief {{UUID}}" | sha256sum | cut -c1-12)"
+  printf '%s %s %s\n' "$$" "$(date +%s)" "$WID" > "$RD/wave-${WID}.lock"
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)" && rc7=0 || rc7=$?
+  [ "$rc7" = "7" ] && chk 0 concurrent-refuse-rc7 || chk 1 "concurrent-refuse-rc7 (got rc=$rc7)"
+  oc_has "$out" "already in progress" && chk 0 concurrent-refuse-names-holder || chk 1 concurrent-refuse-names-holder
+  # 4c. stale-clear: dead pid in the lockfile -> run proceeds, lock cleared.
+  printf '999999 1 %s\n' "$WID" > "$RD/wave-${WID}.lock"
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)" && rcst=0 || rcst=$?
+  [ "$rcst" = "0" ] && chk 0 stale-lock-cleared || chk 1 "stale-lock-cleared (got rc=$rcst)"
+  oc_has "$out" "DUPLICATE" && chk 0 stale-run-still-idempotent || chk 1 stale-run-still-idempotent
+  rm -f "$RD/wave-${WID}.sent"
+  # 4d. fresh .sent after clear: run sends again (lock was the only blocker).
+  out="$(OC_FANOUT_RUN_DIR="$RD" run_fanout)"
+  oc_has "$out" "SENT $L1" && chk 0 post-clear-send || chk 1 post-clear-send
+
+  # 5. Ontology fold alias (2026-09-11, c586e61f): the HQ role string was
+  #    `hq-supervisor`, now `hq`. A wave dispatched with the LEGACY selector must
+  #    still reach an `hq`-roled worker — otherwise it silently reaches nobody,
+  #    which is the worst failure mode a fanout can have. Both spellings must
+  #    select the same worker, and an unrelated selector must not.
+  HQL="$T/ledger-hq.json"
+  cat > "$HQL" <<JSON
+{"workers": [
+  {"uuid": "$L1", "role": "hq", "topic_id": 1}
+], "events": []}
+JSON
+  fanout_roles() { # $1 = --roles value, $2 = run dir
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$HQL" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$2" \
+    FAKE_NOTIFY_LOG="$T/fake-notify-log" \
+      bash "$0" --title T --text "brief {{UUID}}" --no-stamp --roles "$1" 2>&1
+  }
+  out="$(fanout_roles hq "$T/run-hq1")"
+  oc_has "$out" "SENT $L1" && chk 0 role-alias-new-selector || chk 1 role-alias-new-selector
+  out="$(fanout_roles hq-supervisor "$T/run-hq2")"
+  oc_has "$out" "SENT $L1" && chk 0 role-alias-legacy-selector || chk 1 role-alias-legacy-selector
+  out="$(fanout_roles editor "$T/run-hq3")"
+  oc_has "$out" "SENT $L1" && chk 1 role-alias-exact || chk 0 role-alias-exact
+
+  # 6. --text-file brief ASSEMBLY (defect fix 2026-09-11, HQ report d72bd52d).
+  #    `brief="${text}"` read ONLY --text: text_file was validated (244) and
+  #    hashed into the wave-id (245) and then NEVER loaded, so every
+  #    --text-file wave shipped "(see title)" + the RELOAD line and NOTHING
+  #    else — while the receipt still read brief-ok(N chars). ZERO of the
+  #    assertions above exercise this path, which is exactly why a 2078-char
+  #    brief shipped as 136 chars unnoticed. The tell was the character COUNT,
+  #    so the assertion must measure the EMITTED BRIEF, not merely the rc —
+  #    both paths return rc 0, and that is the whole defect.
+  BRIEF="$T/brief.md"
+  { printf 'PROBE-FILE-BODY '; head -c 300 /dev/zero | tr '\0' 'Z'; } > "$BRIEF"
+  BN="$(wc -c < "$BRIEF" | tr -d ' ')"
+  tf_run() { # $1=run dir; remaining args = brief-source flags
+    local rd="$1"; shift
+    rm -f "$T/fake-notify-log"; touch "$T/fake-notify-log"
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$LEDG" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=5 OC_FANOUT_RUN_DIR="$rd" \
+    FAKE_NOTIFY_LOG="$T/fake-notify-log" \
+      bash "$0" --title T --no-stamp "$@" 2>&1 || true
+  }
+  sent_brief() { # the logged argv is "... --text <brief> <target-uuid>"; drop the uuid
+    local b; b="$(sed -n 's/.*--text //p' "$T/fake-notify-log")"
+    printf '%s' "${b% $L1}"
+  }
+  # distinct run dirs: the wave-id hashes title+brief, so A and B would collide
+  # on one lock/.sent file and the second run would SKIP as DUPLICATE.
+  tf_run "$T/run-tf1" --text-file "$BRIEF" >/dev/null
+  A_B="$(sent_brief)"; A_L=${#A_B}
+  tf_run "$T/run-tf2" --text "$(cat "$BRIEF")" >/dev/null
+  B_B="$(sent_brief)"; B_L=${#B_B}
+  [ "$A_B" = "$B_B" ] && chk 0 text-file-matches-text-form || chk 1 "text-file-matches-text-form (A=$A_L B=$B_L)"
+  case "$A_B" in
+    "PROBE-FILE-BODY "*) chk 0 text-file-brief-carries-content ;;
+    *) chk 1 "text-file-brief-carries-content (got '$(printf '%s' "$A_B" | cut -c1-30)...')" ;;
+  esac
+  # A brief that is only the placeholder is FAR shorter than the file. This is
+  # the length tell that caught the defect in production; asserting the count
+  # (not just the content) is what makes the assertion non-vacuous, because the
+  # pre-fix code emitted a well-formed brief that simply was not the file.
+  [ "$A_L" -gt "$BN" ] && chk 0 text-file-brief-longer-than-placeholder || chk 1 "text-file-brief-longer-than-placeholder (brief=$A_L file=$BN)"
+  # A missing --text-file must still die rc 2 rather than silently fall through
+  # to the placeholder — the guard at 244 is the only thing standing between a
+  # typo'd path and another empty-brief wave.
+  OC_NOTIFY_BIN="$T/fake-notify" bash "$0" --title T --no-stamp \
+    --text-file "$T/does-not-exist.md" >/dev/null 2>&1 && rc_mf=0 || rc_mf=$?
+  [ "$rc_mf" = 2 ] && chk 0 text-file-missing-rc2 || chk 1 "text-file-missing-rc2 (got rc=$rc_mf)"
+  # D-5 (HQ d72bd52d, 2026-09-13): the RELOAD line must NOT carry the LIVE
+  # version. Passing ${version} made argv == live BY CONSTRUCTION, so the
+  # prescribed check always answered NO-DRIFT — the sensor could not fire on
+  # the one invocation every brief teaches. Assert the OMIT-ARG form is what
+  # ships, and that no version is handed to the checker as argv. Asserting
+  # only "the line mentions oc-drift-check" would pass on the broken form:
+  # the defect WAS a well-formed invocation, which is why it survived.
+  case "$A_B" in
+    *"oc-drift-check $L1 --ack"*) chk 0 reload-line-omit-arg ;;
+    *) chk 1 "reload-line-omit-arg (brief has no 'oc-drift-check <uuid> --ack')" ;;
+  esac
+  case "$A_B" in
+    *"oc-drift-check $L1 0."*) chk 1 "reload-line-carries-no-live-version (brief still passes the version as argv)" ;;
+    *) chk 0 reload-line-carries-no-live-version ;;
+  esac
+  # D-5 sibling (defect from lane a5b34466, 2026-09-19): the brief must NOT
+  # prescribe a SECOND ack. `oc-drift-check --ack` delegates to `oc-ledger
+  # ack`, so the retired "ACK after drift-check." taught every lane to mint a
+  # duplicate (uuid,version) row -- the class fleet-directives.md §Cross-lane message delivery discipline closed
+  # at v0.4.159. Assert the ABSENCE directly: both checks above pass on a
+  # brief carrying the retired phrase, which is exactly how it survived six
+  # versions of green selftests.
+  case "$A_B" in
+    *"ACK after drift-check"*) chk 1 "reload-line-carries-no-second-ack (brief still prescribes a second ack)" ;;
+    *) chk 0 reload-line-carries-no-second-ack ;;
+  esac
+
+  # LAW 10 (defect #5, 2026-09-12): partial delivery surfaced + per-send bound.
+  # 10a. --verify diffs the per-attempt manifest against .sent receipts:
+  #      partial wave -> rc 8 naming each unreached uuid; complete -> rc 0;
+      # unknown wave -> rc 3.
+  mkdir -p "$T/verify-run"
+  V1=aaaabbbb-1111-4111-8111-111111111111; V2=aaaabbbb-2222-4222-8222-222222222222; V3=aaaabbbb-3333-4333-8333-333333333333
+  printf '%s\n' "$V1" "$V2" "$V3" > "$T/verify-run/wave-deadbeef0001.targets"
+  printf '%s\n' "$V1" > "$T/verify-run/wave-deadbeef0001.sent"
+  OC_FANOUT_RUN_DIR="$T/verify-run" bash "$0" --verify deadbeef0001 >/dev/null 2>"$T/vp.err" && vrc=0 || vrc=$?
+  [ "$vrc" = 8 ] && chk 0 verify-partial-rc8 || chk 1 "verify-partial-rc8 (got $vrc)"
+  grep -q "$V2" "$T/vp.err" && chk 0 verify-names-unreached-2 || chk 1 verify-names-unreached-2
+  grep -q "$V3" "$T/vp.err" && chk 0 verify-names-unreached-3 || chk 1 verify-names-unreached-3
+  printf '%s\n' "$V2" "$V3" >> "$T/verify-run/wave-deadbeef0001.sent"
+  OC_FANOUT_RUN_DIR="$T/verify-run" bash "$0" --verify deadbeef0001 >/dev/null 2>&1 && vrc=0 || vrc=$?
+  [ "$vrc" = 0 ] && chk 0 verify-complete-rc0 || chk 1 "verify-complete-rc0 (got $vrc)"
+  OC_FANOUT_RUN_DIR="$T/verify-run" bash "$0" --verify nosuchwave00 >/dev/null 2>&1 && vrc=0 || vrc=$?
+  [ "$vrc" = 3 ] && chk 0 verify-nomanifest-rc3 || chk 1 "verify-nomanifest-rc3 (got $vrc)"
+  # 10b. per-send timeout bounds a hung lane; the wave CONTINUES past it and
+  # reports PARTIAL DELIVERY (exit 4) — one slow lane cannot starve a wave.
+  cat > "$T/fake-notify-slow" <<'SLOWEOF'
+#!/usr/bin/env bash
+for a in "$@"; do case "$a" in 77777777-*) sleep 30 ;; esac; done
+echo "notification id 88888888-8888-4888-8888-888888888888"
+exit 0
+SLOWEOF
+  chmod +x "$T/fake-notify-slow"
+  jq '.workers += [{"uuid":"'"$L7"'","role":"editor","topic_id":1,"state":"ACTIVE"}]' "$LEDG" > "$T/ledg2.json"
+  tout="$(OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify-slow" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_LEDGER="$T/ledg2.json" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_SEND_TIMEOUT=2 \
+    OC_FANOUT_RUN_DIR="$T/run-timeout" FAKE_NOTIFY_LOG="$T/fns.log" \
+    bash "$0" --title "TTO" --text "brief {{UUID}}" --no-stamp 2>&1; echo "RC=$?")"
+  grep -q "FAIL $L7 .*rc=124" <<< "$tout" && chk 0 timeout-bounds-hung-send || chk 1 timeout-bounds-hung-send
+  oc_has "$tout" "SENT $L1" && chk 0 wave-continues-past-hung-lane || chk 1 wave-continues-past-hung-lane
+  oc_has "$tout" "PARTIAL DELIVERY" && chk 0 partial-delivery-named || chk 1 partial-delivery-named
+  oc_has "$tout" "RC=4" && chk 0 partial-wave-exit-4 || chk 1 partial-wave-exit-4
+  # 10c. the manifest itself: one row per attempted lane, retired rows never.
+  ls "$T"/run-default/wave-*.targets >/dev/null 2>&1 && chk 0 manifest-written || chk 1 manifest-written
+  grep -qxF "$L1" "$T"/run-default/wave-*.targets && chk 0 manifest-has-attempted-lane || chk 1 manifest-has-attempted-lane
+  grep -qxF "$L6" "$T"/run-default/wave-*.targets && chk 1 manifest-never-retired || chk 0 manifest-never-retired
+  # LAW 15 (defect #15, 2026-09-12): a wave inherits the cgroup of its launcher.
+  # When the launcher is a session hosted by the unit a swap bounces, the swap's
+  # restart tears that cgroup down and SIGKILLs the wave mid-flight — the lanes
+  # already reached got their briefs, the rest never heard, and nothing said so.
+  # The wave must re-exec OUTSIDE the unit before it takes its lock.
+  cat > "$T/fake-detach" <<'DEOF'
+#!/usr/bin/env bash
+echo "DETACH-CALLED" >> "$DETACH_LOG"
+env OC_FANOUT_DETACHED=1 "$@"
+DEOF
+  chmod +x "$T/fake-detach"
+  # 15a. inside the unit cgroup -> the detach path fires ONCE and the re-exec
+  #      replays the original argv, so the wave still completes.
+  : > "$T/detach.log"
+  tout="$(DETACH_LOG="$T/detach.log" OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" OC_FANOUT_LEDGER="$LEDG" \
+    OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_IN_UNIT_CGROUP=1 OC_FANOUT_DETACH_CMD="$T/fake-detach" \
+    OC_FANOUT_RUN_DIR="$T/run-detach" FAKE_NOTIFY_LOG="$T/fn-detach.log" \
+    bash "$0" --title TD --text "brief {{UUID}}" --no-stamp 2>&1; echo "RC=$?")"
+  oc_has "$tout" "RC=0" && chk 0 detach-reexec-rc0 || chk 1 detach-reexec-rc0
+  chk "$([ "$(grep -c DETACH-CALLED "$T/detach.log" 2>/dev/null)" = 1 ] && echo 0 || echo 1)" detach-called-once
+  grep -q "INSIDE opencrabs-ops.service" <<< "$tout" && chk 0 detach-names-unit || chk 1 detach-names-unit
+  grep -q "$L1" "$T/fn-detach.log" 2>/dev/null && chk 0 detach-wave-delivered || chk 1 detach-wave-delivered
+  # 15b. loop guard: a re-entered wave (OC_FANOUT_DETACHED=1) must NOT re-exec
+  #      again — otherwise the detach recurses.
+  : > "$T/detach.log"
+  OC_FANOUT_IN_UNIT_CGROUP=1 OC_FANOUT_DETACHED=1 OC_FANOUT_DETACH_CMD="$T/fake-detach" \
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_RUN_DIR="$T/run-guard" \
+    FAKE_NOTIFY_LOG="$T/fn-guard.log" DETACH_LOG="$T/detach.log" \
+    bash "$0" --title TG --text "brief {{UUID}}" --no-stamp >/dev/null 2>&1
+  chk "$([ "$(grep -c DETACH-CALLED "$T/detach.log" 2>/dev/null)" = 0 ] && echo 0 || echo 1)" detach-loop-guard
+  # 15c. outside the cgroup -> no detach at all (the common case: no re-exec tax).
+  : > "$T/detach.log"
+  OC_FANOUT_IN_UNIT_CGROUP=0 OC_FANOUT_DETACH_CMD="$T/fake-detach" \
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="$T/fake-notify" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" OC_FANOUT_RUN_DIR="$T/run-outside" \
+    FAKE_NOTIFY_LOG="$T/fn-outside.log" DETACH_LOG="$T/detach.log" \
+    bash "$0" --title TO --text "brief {{UUID}}" --no-stamp >/dev/null 2>&1
+  chk "$([ "$(grep -c DETACH-CALLED "$T/detach.log" 2>/dev/null)" = 0 ] && echo 0 || echo 1)" detach-skipped-outside
+  # 15d. SURVIVAL (acceptance criterion): the launcher sits in its OWN process
+  #      group; SIGKILLing that whole group — exactly what a swap's cgroup
+  #      teardown does to every process still inside it — must NOT truncate a
+  #      DETACHED wave. The notify is gated so the kill provably lands
+  #      MID-WAVE, and the second send only happens if the wave survived.
+  cat > "$T/fake-notify-gated" <<'GEOF'
+#!/usr/bin/env bash
+echo "sent: $*" >> "$FAKE_NOTIFY_LOG"
+i=0
+while [ ! -f "$GATE" ] && [ "$i" -lt 150 ]; do sleep 0.1; i=$((i+1)); done
+echo "notification id 99999999-9999-4999-8999-999999999999"
+exit 0
+GEOF
+  chmod +x "$T/fake-notify-gated"
+  cat > "$T/surv-launch.sh" <<'LEOF'
+#!/usr/bin/env bash
+echo "$$" > "$SURV_PGID"
+exec env OC_NOTIFY_DB="$SURV_DB" OC_NOTIFY_BIN="$SURV_BIN" OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+  OC_FANOUT_LEDGER="$SURV_LEDG" OC_FANOUT_FORUM_CHAT="$SURV_FORUM" OC_FANOUT_IN_UNIT_CGROUP=1 \
+  OC_FANOUT_DETACH_CMD="$SURV_DETACH" OC_FANOUT_RUN_DIR="$SURV_RUN" FAKE_NOTIFY_LOG="$SURV_LOG" \
+  GATE="$SURV_GATE" bash "$SURV_SELF" --title TS --text "brief {{UUID}}" --no-stamp
+LEOF
+  chmod +x "$T/surv-launch.sh"
+  # The kill/launch choreography runs in a DRIVER so the shell's own "Killed"
+  # job notification lands in the driver's stderr (captured below) instead of
+  # the selftest's — the SIGKILL is INTENTIONAL, and an alarming line in a green
+  # selftest trains the reader to ignore it.
+  cat > "$T/surv-drive.sh" <<'DREOF'
+#!/usr/bin/env bash
+: > "$SURV_LOG"; rm -f "$SURV_GATE" "$SURV_PGID_FILE"
+SURV_PGID="$SURV_PGID_FILE" SURV_DB="$SURV_DB" SURV_BIN="$SURV_BIN" SURV_LEDG="$SURV_LEDG" \
+SURV_FORUM="$SURV_FORUM" SURV_DETACH="setsid -w" SURV_RUN="$SURV_RUN" SURV_LOG="$SURV_LOG" \
+SURV_GATE="$SURV_GATE" SURV_SELF="$SURV_SELF" \
+  setsid "$SURV_LAUNCH" >"$SURV_OUT" 2>&1 &
+i=0
+while [ ! -s "$SURV_LOG" ] && [ "$i" -lt 60 ]; do sleep 0.1; i=$((i+1)); done
+SPG="$(cat "$SURV_PGID_FILE" 2>/dev/null || echo 0)"
+[ -n "$SPG" ] && [ "$SPG" != 0 ] && kill -9 -"$SPG" 2>/dev/null
+sleep 0.3
+: > "$SURV_GATE"                      # release the gated notify
+i=0
+while [ "$(grep -c '^sent:' "$SURV_LOG" 2>/dev/null)" -lt 2 ] && [ "$i" -lt 60 ]; do sleep 0.1; i=$((i+1)); done
+echo "SENT=$(grep -c '^sent:' "$SURV_LOG" 2>/dev/null)"
+wait 2>/dev/null
+exit 0
+DREOF
+  chmod +x "$T/surv-drive.sh"
+  drv_out="$(SURV_PGID_FILE="$T/surv.pgid" SURV_DB="$T/db.sqlite" SURV_BIN="$T/fake-notify-gated" \
+    SURV_LEDG="$T/ledg2.json" SURV_FORUM="$FORUM" SURV_RUN="$T/run-surv" SURV_LOG="$T/fn-surv.log" \
+    SURV_GATE="$T/gate" SURV_SELF="$(readlink -f "$0")" SURV_LAUNCH="$T/surv-launch.sh" \
+    SURV_OUT="$T/surv.out" bash "$T/surv-drive.sh" 2>"$T/surv-drive.err")"
+  n_surv="$(printf '%s\n' "$drv_out" | sed -n 's/^SENT=//p' | head -1)"
+  [ -n "$n_surv" ] || n_surv=0
+  [ "$n_surv" -ge 2 ] && chk 0 detach-survives-pgkill || chk 1 "detach-survives-pgkill (sent=$n_surv)"
+  grep -q "INSIDE opencrabs-ops.service" "$T/surv.out" 2>/dev/null && chk 0 detach-surv-fired || chk 1 detach-surv-fired
+
+  # ---- D-3: the per-send cap is DERIVED from a probe, not hardcoded --------
+  # HQ d72bd52d (2026-09-13): the 90s constant sat BELOW the CLI's ~120s floor,
+  # so every send failed rc=124. The cap is now derived from a one-shot probe of
+  # the CLI, run before the target loop. These assertions pin the properties
+  # that make that safe — above all that the probe can never deliver a message.
+  #
+  # NOTE the `|| true` on every extraction: this selftest runs under
+  # `set -euo pipefail`, so a `grep` that legitimately finds nothing returns 1,
+  # the assignment fails, and the whole selftest dies rc=1 with ZERO output and
+  # no FAIL line. Guard the extraction, then assert on the value.
+  cat > "$T/fake-notify-slow" <<'SEOF'
+#!/usr/bin/env bash
+echo "sent: $*" >> "$FAKE_NOTIFY_LOG"
+sleep "${FAKE_SLEEP_S:-0.4}"
+echo "notification id 99999999-9999-4999-8999-999999999999"
+exit 0
+SEOF
+  chmod +x "$T/fake-notify-slow"
+  mkdir -p "$T/run-nocap" "$T/run-nocap2" "$T/run-nocap3"
+  cap_line_of() { printf '%s\n' "$1" | grep 'SEND-CAP probe' 2>/dev/null | head -1 || true; }
+  cap_field() { printf '%s' "$1" | awk -v f="$2" '{print $f}' | tr -d 'ms,)' || true; }
+  # Run with the cap UNSET so the derivation path is live. MULT/FLOOR are set so
+  # the arithmetic is checkable rather than box-dependent.
+  run_fanout_nocap() {
+    OC_NOTIFY_DB="$T/db.sqlite" OC_NOTIFY_BIN="${CAP_BIN:-$T/fake-notify-slow}" \
+    OC_FANOUT_SELF="00000000-0000-4000-8000-00000000dead" \
+    OC_FANOUT_LEDGER="$LEDG" OC_FANOUT_FORUM_CHAT="$FORUM" \
+    OC_FANOUT_RUN_DIR="${CAP_RUNDIR:-$T/run-nocap}" FAKE_NOTIFY_LOG="$T/fn-nocap.log" \
+    OC_FANOUT_PROBE_MULT="${CAP_MULT:-10}" OC_FANOUT_SEND_FLOOR="${CAP_FLOOR:-1}" \
+      bash "$0" --title "T" --text "brief {{UUID}}" --no-stamp "$@" 2>&1
+  }
+
+  # (1) the probe runs and REPORTS its measurement — an unrecorded cap is an
+  #     assertion, not a measurement ("shipping a measurement means making it
+  #     durable").
+  : > "$T/fn-nocap.log"
+  nocap_out="$(CAP_BIN="$T/fake-notify-slow" CAP_MULT=10 CAP_FLOOR=1 run_fanout_nocap || true)"
+  cap_line="$(cap_line_of "$nocap_out")"
+  [ -n "$cap_line" ] && chk 0 cap-probe-reports || chk 1 "cap-probe-reports (no SEND-CAP line)"
+
+  # (2) the reported cap is INTERNALLY CONSISTENT with the reported probe:
+  #     cap == max(floor, probe_ms * mult / 1000). Line shape:
+  #     SEND-CAP probe 465ms -> cap 4s (mult 10, floor 1)
+  if [ -n "$cap_line" ]; then
+    pms="$(cap_field "$cap_line" 3)"
+    cval="$(cap_field "$cap_line" 6)"
+    cmult="$(cap_field "$cap_line" 8)"
+    cfloor="$(cap_field "$cap_line" 10)"
+    if [ -n "$pms" ] && [ -n "$cmult" ] && [ -n "$cfloor" ]; then
+      want=$(( pms * cmult / 1000 ))
+      [ "$want" -lt "$cfloor" ] && want="$cfloor"
+      [ "$cval" = "$want" ] && chk 0 cap-arithmetic \
+        || chk 1 "cap-arithmetic (cap=$cval want=$want from probe=${pms}ms mult=$cmult floor=$cfloor)"
+    else
+      chk 1 "cap-arithmetic (unparsable line: $cap_line)"
+    fi
+  else
+    chk 1 "cap-arithmetic (no probe line)"
+  fi
+
+  # (3) a probe too fast to derive a sane cap is LIFTED TO THE FLOOR. This is
+  #     the guard against reproducing the original defect from the other side:
+  #     probe the wrong verb, derive a 3ms cap, kill every send again.
+  fast_out="$(CAP_BIN="$T/fake-notify" CAP_MULT=1 CAP_FLOOR=7 CAP_RUNDIR="$T/run-nocap2" run_fanout_nocap || true)"
+  fast_line="$(cap_line_of "$fast_out")"
+  fast_cap="$(cap_field "$fast_line" 6)"
+  [ -n "$fast_cap" ] && [ "$fast_cap" -ge 7 ] && chk 0 cap-floor-lifts \
+    || chk 1 "cap-floor-lifts (cap=${fast_cap:-none} floor=7)"
+
+  # (4) the probe carries the ALL-ZEROS uuid, never a real target uuid. This is
+  #     the entire safety argument for probing: the CLI rejects the zero uuid at
+  #     validation (rc 2) and sends NOTHING.
+  : > "$T/fn-nocap.log"
+  CAP_BIN="$T/fake-notify-slow" CAP_MULT=10 CAP_FLOOR=1 CAP_RUNDIR="$T/run-nocap3" \
+    run_fanout_nocap >/dev/null 2>&1 || true
+  probe_hit="$(grep -c 'cap probe' "$T/fn-nocap.log" 2>/dev/null || true)"
+  zero_hit="$(grep 'cap probe' "$T/fn-nocap.log" 2>/dev/null | grep -c '00000000-0000-0000-0000-000000000000' || true)"
+  [ -n "$probe_hit" ] || probe_hit=0
+  [ -n "$zero_hit" ] || zero_hit=0
+  [ "$probe_hit" -ge 1 ] && [ "$probe_hit" = "$zero_hit" ] && chk 0 cap-probe-uses-zero-uuid \
+    || chk 1 "cap-probe-uses-zero-uuid (probes=$probe_hit zero=$zero_hit)"
+
+  # (5) an EXPLICIT cap still WINS — the derivation must never override a caller
+  #     that has already decided. Every other test here depends on this.
+  env_out="$(run_fanout || true)"
+  if [ -n "$(cap_line_of "$env_out")" ]; then
+    chk 1 "cap-env-wins (derivation ran despite OC_FANOUT_SEND_TIMEOUT=5)"
+  else
+    chk 0 cap-env-wins
+  fi
+
+  # (6) Unknown flag ergonomically lists candidates and --body/--body-file alias works
+  unrec_out="$(OC_FANOUT_SELF="$L1" "$SELF" --bogus-flag 2>&1 || true)"
+  if oc_has "$unrec_out" "valid flags: --title, --text/--body"; then
+    chk 0 unknown-flag-ergonomics
+  else
+    chk 1 "unknown-flag-ergonomics (out=$unrec_out)"
+  fi
+
+  echo "oc-notify-fanout selftest: PASS=$P FAIL=$F"
+  [ "$F" -eq 0 ]
+  exit $?
+fi
+
+title="" text="" text_file="" roles="" excludes="" dry=0 stamp=1 include_self=0 verify_id="" self_uuid=""
+# LAW 5 (fixed 2026-09-12; rationale RE-BASED 2026-09-19): delivery mode, default
+# QUIET. A fan-out wave IS the `quiet` case named in fleet-directives.md
+# §Cross-lane message delivery discipline ("batch/fan-out notices ... a deliberate
+# choice now, never the fall-through") — so this default is a DELIBERATE choice for
+# this tool's traffic class, not the fleet default. The old rationale cited
+# hq.md §Duty 3 as mandating quiet for ANY version bump; the owner re-ruling of
+# 2026-09-19 03:34:30Z superseded that (turn-end is now the fleet default and
+# quiet the deliberate exception), so the citation was stale even though the
+# default itself remains correct. Passed through verbatim to `session notify`.
+mode="quiet"
+forum_chat="${OC_FANOUT_FORUM_CHAT:--1003936827469}"
+while [ $# -gt 0 ]; do case "$1" in
+  --title) title="${2:-}"; shift 2 ;;
+  --text|--body) text="${2:-}"; shift 2 ;;
+  --text-file|--body-file) text_file="${2:-}"; shift 2 ;;
+  --roles) roles="${2:-}"; shift 2 ;;
+  --exclude) excludes="${2:-}"; shift 2 ;;
+  --forum-chat) forum_chat="${2:-}"; shift 2 ;;
+  --dry-run) dry=1; shift ;;
+  --no-stamp) stamp=0; shift ;;
+  --include-self) include_self=1; shift ;;
+  --self) self_uuid="${2:-}"; shift 2 ;;
+  --verify) verify_id="${2:-}"; shift 2 ;;
+  --mode) mode="${2:-}"; shift 2 ;;
+  --help|-h) sed -n '2,40p' "$0"; exit 0 ;;
+  *) die "unknown flag '$1' (valid flags: --title, --text/--body, --text-file/--body-file, --roles, --exclude, --mode, --forum-chat, --self, --dry-run, --no-stamp, --include-self, --verify, --help; see --help for usage details)" 2 ;;
+esac; done
+
+# LAW 5: the mode must be one the CLI accepts. Validate BEFORE any send — an
+# unrecognised value silently falling back to `now` is the defect this fixes.
+case "$mode" in
+  turn-end|quiet) : ;;
+  *) die "invalid --mode '$mode' (want turn-end|quiet; 'now' is RETIRED — notify_policy.rs returns Err for it, so forwarding it would fail EVERY send — fork #373)" 2 ;;
+esac
+
+# LAW 10 — partial-delivery verdict (defect #5, 2026-09-12). Dispatched
+# BEFORE the version/title/ledger checks: --verify touches only the run dir.
+if [ -n "$verify_id" ]; then
+  [ -n "$verify_id" ] || die "verify: --verify needs a wave id" 2
+  VRUN="${OC_FANOUT_RUN_DIR:-$SKILL_DIR/run}"
+  VT="$VRUN/wave-${verify_id}.targets"; VS="$VRUN/wave-${verify_id}.sent"
+  if [ ! -f "$VT" ]; then
+    die "verify: no targets manifest for wave ${verify_id} in ${VRUN} — wave never attempted a send (or predates the manifest)" 3
+  fi
+  owed="$(sort -u "$VT" | grep -c . || true)"
+  sentn=0
+  if [ -f "$VS" ]; then sentn="$(sort -u "$VS" | grep -c . || true)"; fi
+  unreached="$(comm -23 <(sort -u "$VT") <(sort -u "${VS:-/dev/null}") || true)"
+  if [ -z "$unreached" ]; then
+    echo "wave ${verify_id}: COMPLETE — ${sentn}/${owed} targets all have receipts"
+    exit 0
+  fi
+  n_unreached="$(printf '%s\n' "$unreached" | grep -c . || true)"
+  {
+    echo "wave ${verify_id}: PARTIAL — ${sentn}/${owed} sent, ${n_unreached} unreached:"
+    printf '%s\n' "$unreached"
+    echo "resume: re-run the original fanout command (duplicates skip cleanly, law 8)"
+  } >&2
+  exit 8
+fi
+# LAW 15: detach BEFORE the version/title/ledger checks and the wave lock, so a
+# re-entry can never deadlock on a lock this same invocation already holds.
+# --verify returned above (read-only, no lock), so it never detaches.
+fanout_ensure_detached
+
+version="$(sed -n 's/^version:[[:space:]]*//p' "$SKILL_DIR/SKILL.md" | head -1)"
+[ -n "$version" ] || die "cannot read version from SKILL.md"
+[ -n "$title" ] || die "usage: --title required"
+[ -f "$LEDGER" ] || die "roster missing: $LEDGER" 3
+bin="$(oc_notify_resolve_bin)" || die "notify binary unresolvable (set OC_NOTIFY_BIN)"
+
+# LAW 7/8 — wave-id + lock + sent-ledger. wave-id derives from title+brief so
+# the same wave re-run (retry, resume) hashes identically while any content
+# change forks a new wave. Locks/receipts live in <skill-repo>/run/ (gitignored).
+RUN_DIR="${OC_FANOUT_RUN_DIR:-$SKILL_DIR/run}"
+mkdir -p "$RUN_DIR" 2>/dev/null || die "cannot create run dir: $RUN_DIR" 3
+if [ -n "$text_file" ]; then [ -f "$text_file" ] || die "--text-file missing: $text_file"; fi
+wave_text="${title}|$( [ -n "$text_file" ] && cat "$text_file" || echo "${text:-}" )"
+wave_id="$(printf '%s' "$wave_text" | sha256sum | cut -c1-12)"
+LOCK_FILE="$RUN_DIR/wave-${wave_id}.lock"
+SENT_FILE="$RUN_DIR/wave-${wave_id}.sent"
+TARGETS_FILE="$RUN_DIR/wave-${wave_id}.targets"   # law 10: one uuid per send ATTEMPT
+
+# Live = holder pid alive AND lock < 900s old. Stale = cleared with receipt.
+lock_live() { # $1=lockfile -> 0 if live
+  local pid ts age
+  read -r pid ts _ < "$1" 2>/dev/null || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  age=$(( $(date +%s) - ${ts:-0} ))
+  [ "$age" -lt 900 ]
+}
+if [ "$dry" = 0 ]; then
+  exec 9>>"$LOCK_FILE"
+  if ! flock -n 9; then
+    if lock_live "$LOCK_FILE"; then
+      read -r LPID LTS _ < "$LOCK_FILE"
+      die "wave ${wave_id} already in progress (holder pid ${LPID:-?} since ${LTS:-?} epoch); concurrent run refused (law 7)" 7
+    fi
+    printf 'LOCK clear stale wave-%s lock (pid dead or >15min)\n' "$wave_id" >&2
+    rm -f "$LOCK_FILE"
+    exec 9>>"$LOCK_FILE"
+    flock -n 9 || die "wave ${wave_id} lock contention unresolved" 7
+  fi
+  # flock acquired — but a live holder may have stamped the lockfile in the
+  # race window before its own flock (or be holding it via another fd). The
+  # lockfile CONTENT is the authority for the refuse verdict (law 7).
+  if [ -s "$LOCK_FILE" ]; then
+    read -r LPID LTS _ < "$LOCK_FILE" || true
+    if [ "${LPID:-}" != "$$" ] && lock_live "$LOCK_FILE"; then
+      die "wave ${wave_id} already in progress (holder pid ${LPID:-?} since ${LTS:-?} epoch); concurrent run refused (law 7)" 7
+    fi
+    printf 'LOCK clear stale wave-%s lock (pid dead or >15min)\n' "$wave_id" >&2
+  fi
+  printf '%s %s %s\n' "$$" "$(date +%s)" "$wave_id" > "$LOCK_FILE"
+fi
+
+LIVE_SESSIONS="$(mktemp /tmp/fanout-sessions.XXXXXX)"
+IN_SCOPE_SESSIONS="$(mktemp /tmp/fanout-scope.XXXXXX)"
+SESSION_RECENCY="$(mktemp /tmp/fanout-recency.XXXXXX)"
+ACTIVE_HOLDERS="$(mktemp /tmp/fanout-active.XXXXXX)"
+# FULL-ID roster from the profile session DB (READ-ONLY, ~0s) — v0.4.129:
+# session list prints only 8-char prefixes and session get costs ~37s/call;
+# the DB is the canonical full-id source (CLI list ≡ archived_at IS NULL AND
+# title NOT LIKE 'subagent:%', set-equality verified 2026-09-09). OC_NOTIFY_DB
+# overrides the path for selftests.
+# The reader is tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). Until
+# 2026-09-19 that binary was not on this box at all, so all three reads below
+# died at `sqlite3: command not found` and every fanout ran with an EMPTY
+# roster. The `|| die 3` guards stay exactly as they were: an unreadable DB must
+# remain a hard fail, never an empty roster that reads as "nothing to notify".
+"$SKILL_DIR/tools/lib/oc_sqlite" "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
+  "SELECT id FROM sessions WHERE archived_at IS NULL AND (title IS NULL OR title NOT LIKE 'subagent:%');" \
+  > "$LIVE_SESSIONS" 2>/dev/null || die "session DB unreadable — cannot validate targets" 3
+# FORUM-SCOPE roster (law 6): sessions bound to the opencrabs-dev forum chat.
+# One query, same read-only DB; empty roster = nothing is sendable (safe).
+"$SKILL_DIR/tools/lib/oc_sqlite" "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
+  "SELECT b.session_id FROM session_bindings b JOIN sessions s ON s.id = b.session_id
+   WHERE s.archived_at IS NULL AND b.chat_id = '$forum_chat';" \
+  > "$IN_SCOPE_SESSIONS" 2>/dev/null || die "session DB unreadable — cannot resolve forum scope" 3
+# RECENCY query (LAW 17, owner order 2026-09-13): resolve last update epoch seconds per session.
+"$SKILL_DIR/tools/lib/oc_sqlite" "file:${OC_NOTIFY_DB:-$HOME/.opencrabs/profiles/${PROFILE}/opencrabs.db}?mode=ro" \
+  "SELECT id, COALESCE(updated_at, 0) FROM sessions WHERE archived_at IS NULL;" \
+  | tr '|' ' ' > "$SESSION_RECENCY" 2>/dev/null || die "session DB unreadable — cannot resolve session recency" 3
+
+# ACTIVE CLAIM HOLDERS (LAW 17): claim authors, via the canonical claim module.
+# $LEDGER arrives as argv, NOT os.environ — line 155 assigns it unexported, so the
+# environ read this replaces always saw an empty path on a real run and LAW 17
+# skipped live claim-holders as DORMANT. Fail-loud: an empty holder set is a
+# FINDING, never a silent "nobody is active".
+python3 -c '
+import json, os, re, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import oc_claims as oc
+U = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+with open(sys.argv[2]) as f:
+    rows = oc.parse_events(json.load(f).get("events", []))
+seen = set()
+for row in rows:
+    if row["kind"] == "claim":
+        m = U.search(row["by"])
+        if m and m.group(0) not in seen:
+            seen.add(m.group(0))
+            print(m.group(0))
+' "$SKILL_DIR/tools" "$LEDGER" >> "$ACTIVE_HOLDERS" || die "ACTIVE_HOLDERS scan failed — refusing to run LAW 17 with an empty holder set" 3
+
+# --text-file is loaded HERE, not merely hashed. The first cut validated the
+# file (244), hashed its content into the wave-id (245) — and then never read
+# it into `text`, so EVERY --text-file wave shipped the "(see title)"
+# placeholder plus the auto-appended RELOAD line and NOTHING ELSE (silent-
+# failure defect, fixed 2026-09-11 on HQ report d72bd52d). The receipts looked
+# plausible — brief-ok(136 chars) — which is precisely why it survived a
+# 2078-char brief; only the character count gave it away, and the selftest had
+# no --text-file assertion to notice. Loaded into `text` (not just into the
+# brief assembly) so every downstream consumer sees the file content, with
+# --text remaining the fallback when no file is given. A file that exists but
+# is EMPTY still falls through to the placeholder below, exactly as an empty
+# --text does — the two paths stay symmetric.
+if [ -n "$text_file" ]; then text="$(cat "$text_file")"; fi
+
+[ -n "$text" ] || text="(see title)"
+
+is_core_role() { # LAW 17: core roles always receive fanouts
+  case "$(canon_role "$1")" in
+    toolsmith|triage|hq) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+canon_role() { # ontology fold 2026-09-11 (c586e61f): the HQ role string was
+  # `hq-supervisor`, now `hq`. Legacy selectors must keep resolving, or a wave
+  # dispatched with `--roles hq-supervisor` silently reaches nobody. Twin of the
+  # alias in oc-ledger cmd_roster; both carry a selftest assertion.
+  case "$1" in hq-supervisor|HQ-SUPERVISOR) printf 'hq' ;; *) printf '%s' "$1" ;; esac
+}
+want_role() { # $1=role -> 0 if selected by --roles filter
+  [ -z "$roles" ] && return 0
+  # Exact comma-delimited match, as before — but canonicalised on BOTH sides so
+  # the legacy `hq-supervisor` selector and the new `hq` selector each match the
+  # row whichever spelling the row happens to carry.
+  local r s IFS=','
+  r="$(canon_role "$1")"
+  for s in $roles; do
+    [ "$(canon_role "$s")" = "$r" ] && return 0
+  done
+  return 1
+}
+excluded() { # $1=uuid $2=topic -> 0 if excluded (8-char prefix or full uuid or topic)
+  local t
+  local IFS=','
+  for t in $excludes; do
+    case "$1" in "$t"*) return 0 ;; esac
+    [ -n "${2:-}" ] && [ "$2" = "$t" ] && return 0
+  done
+  return 1
+}
+# LAW 16 (defect D-1, HQ 2026-09-12): self is DERIVED from the invoking
+# session, never a hardcoded lane uuid. `2fae1230-…` — the Toolsmith lane's
+# uuid, a selftest fixture value promoted into the production default by
+# 7c7844cd (v0.4.123) — excluded that lane from EVERY wave while leaving
+# --include-self dead for every other invoker (HQ self-notified its own brief).
+# Precedence: --self, then OC_FANOUT_SELF, then the invoking session's OC_ACTOR (or OPENCRABS_SESSION_ID fallback)
+# (trailing token, so a composed "<role> <uuid>" resolves too). Unresolved is a
+# HARD ERROR: a wrong self is invisible — it silently drops a real target from
+# the wave — so the tool refuses to guess one.
+if [ -z "$self_uuid" ]; then
+  if [ -n "${OC_FANOUT_SELF:-}" ]; then
+    self_uuid="$OC_FANOUT_SELF"
+  elif [ -n "${OC_ACTOR:-${OPENCRABS_SESSION_ID:-}}" ]; then
+    local_actor="${OC_ACTOR:-${OPENCRABS_SESSION_ID:-}}"
+    self_uuid="${local_actor##* }"
+  else
+    die "self identity unresolved: pass --self <uuid> (or export OC_ACTOR=<your session uuid>); refusing to guess — a wrong self silently drops a real lane from the wave"
+  fi
+fi
+
+zero_segment() { case "$1" in *-0000-*|*-00000000*) return 0 ;; esac; return 1; }
+
+validate_target() { # $1=uuid -> 0 ok; else echo reason
+  local u="$1"
+  case "$u" in
+    [0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*) ;; # 8-4-4-4-12 shape
+    *) echo "malformed uuid"; return 1 ;;
+  esac
+  if zero_segment "$u"; then echo "placeholder/all-zero-segment uuid (n=2167 class)"; return 1; fi
+  # FULL-ID roster match (v0.4.129, same source as oc-waiter): the cached
+  # DB roster holds canonical full uuids; a frankenstein id (real prefix +
+  # foreign tail, n=2221 class) fails the exact match. All-zero segments
+  # die before this check (n=2167 placeholder class).
+  if ! grep -qxF "$u" "$LIVE_SESSIONS" 2>/dev/null; then
+    echo "not a live session (full-id absent from session DB roster)"; return 1
+  fi
+  return 0
+}
+
+sendable_state() { # $1=roster .state -> 0 if the row is a valid dispatch target
+  # LAW 9 (defect #6, 2026-09-12). The live ledger's state vocabulary is
+  # {absent, ACTIVE, RETIRED}: `oc-ledger enroll` writes NO state key (absent
+  # means active) and RETIRED is the only other value in the roster (12 of 48
+  # rows). The test is therefore "ACTIVE or absent", NOT "not RETIRED", so an
+  # unknown future state is skipped rather than notified.
+  case "$(printf '%s' "${1:-}" | tr 'a-z' 'A-Z')" in
+    ""|ACTIVE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# D-3 (HQ d72bd52d, 2026-09-13) — the 90s per-send cap above ROTTED, exactly as
+# a hardcoded latency constant does. Measured that day: a no-op `session notify`
+# (unknown uuid, sends NOTHING) costs ~120s on the ops DB (950MB + 75MB WAL,
+# 1,159 live sessions — the cost is the CLI's own session path, NOT the DB: a
+# direct sqlite count is 51ms). So the cap sat BELOW the floor and EVERY send
+# failed rc=124: the v0.4.163 wave landed 14/28, every failure at ~90,1xx ms.
+#
+# Fix: DERIVE the cap from a ONE-SHOT probe of the CLI, run HERE — once, before
+# the target loop — so the number cannot rot again. Placing it in the loop body
+# would make the derivation depend on run state (a wave where every target
+# dedupes to SKIP would derive nothing), which is the same argv-echo shape this
+# fix exists to remove.
+#
+# The probe uses an ALL-ZEROS uuid, which fails CLI validation (rc 2) and so
+# SENDS NOTHING while still paying the startup cost we need to measure. It runs
+# only when OC_FANOUT_SEND_TIMEOUT is unset (every selftest sets it explicitly,
+# so test timing is unchanged) and only when we are actually going to send.
+# Knobs: OC_FANOUT_PROBE_CAP (bound on the probe), OC_FANOUT_PROBE_MULT
+# (headroom), OC_FANOUT_SEND_FLOOR (minimum cap).
+if [ -z "${OC_FANOUT_SEND_TIMEOUT:-}" ] && [ "$dry" = 0 ]; then
+  _P0=$(date +%s%N)
+  timeout "${OC_FANOUT_PROBE_CAP:-300}" "$bin" session notify --profile "$PROFILE" \
+    --sender "$SENDER" --mode "$mode" \
+    --text "cap probe — validates and sends NOTHING" \
+    "00000000-0000-0000-0000-000000000000" >/dev/null 2>&1 || true
+  _P1=$(date +%s%N)
+  _PROBE_MS=$(( (_P1 - _P0) / 1000000 ))
+  OC_FANOUT_SEND_TIMEOUT=$(( _PROBE_MS * ${OC_FANOUT_PROBE_MULT:-3} / 1000 ))
+  if [ "$OC_FANOUT_SEND_TIMEOUT" -lt "${OC_FANOUT_SEND_FLOOR:-90}" ]; then
+    OC_FANOUT_SEND_TIMEOUT="${OC_FANOUT_SEND_FLOOR:-90}"
+  fi
+  printf 'SEND-CAP probe %sms -> cap %ss (mult %s, floor %s)\n' \
+    "$_PROBE_MS" "$OC_FANOUT_SEND_TIMEOUT" "${OC_FANOUT_PROBE_MULT:-3}" \
+    "${OC_FANOUT_SEND_FLOOR:-90}" >&2
+fi
+
+sent=0 skipped=0 failed=0 receipts="" ids=""
+while IFS=$'\t' read -r uuid role topic wstate; do
+  [ -n "$uuid" ] || continue
+  [ "$uuid" = "$self_uuid" ] && [ "$include_self" = 0 ] && continue
+  want_role "$role" || continue
+  # LAW 9 — target-set filter, applied BEFORE per-target validation: a retired
+  # row is not a target at all, so it is reported as such rather than dressed
+  # up as a scope/shape failure. Placed AFTER want_role so a wave that does not
+  # select the row's role emits no receipt for it.
+  if ! sendable_state "$wstate"; then
+    receipts+="SKIP ${uuid} ${role} INACTIVE(state=${wstate})"$'\n'; skipped=$((skipped+1)); continue
+  fi
+  if excluded "$uuid" "$topic"; then
+    receipts+="SKIP ${uuid} ${role} excluded(${topic:-no-topic})"$'\n'; skipped=$((skipped+1)); continue
+  fi
+  if reason="$(validate_target "$uuid")"; then :; else
+    receipts+="SKIP ${uuid} ${role} ${reason}"$'\n'; skipped=$((skipped+1)); continue
+  fi
+  # LAW 6 — forum-scope guard: the session must be bound to the opencrabs-dev
+  # forum chat. Unbound or bound-elsewhere targets are never woken (an unbound
+  # session's notify lands wherever its default route points — a DM, another
+  # group — which is exactly the leak this guard closes).
+  if ! grep -qxF "$uuid" "$IN_SCOPE_SESSIONS" 2>/dev/null; then
+    receipts+="SKIP ${uuid} ${role} SCOPE(not-bound-to-forum-${forum_chat})"$'
+'; skipped=$((skipped+1)); continue
+  fi
+  # LAW 17 — dormancy/activity filter (owner order 2026-09-13): prune targets
+  # to eliminate waking idle workers. Core roles (toolsmith, triage, hq) ALWAYS
+  # receive fanout broadcasts. Worker lanes idle >= 12h with no active worktree
+  # or claim are skipped cleanly.
+  if ! is_core_role "$role"; then
+    upd="$(awk -v u="$uuid" '$1==u {print $2; exit}' "$SESSION_RECENCY" 2>/dev/null || true)"
+    upd="${upd:-0}"
+    if [ "${#upd}" -gt 11 ]; then upd=$(( upd / 1000 )); fi
+    now_s="$(date +%s)"
+    idle_s=$(( now_s - upd ))
+    if [ "$idle_s" -ge 43200 ]; then
+      if ! grep -qxF "$uuid" "$ACTIVE_HOLDERS" 2>/dev/null; then
+        idle_h="$(python3 -c "import sys; print(f'{(int(sys.argv[1])) / 3600.0:.1f}')" "$idle_s" 2>/dev/null || awk -v s="$idle_s" 'BEGIN { printf "%.1f", s/3600.0 }')"
+        receipts+="SKIP ${uuid} ${role} DORMANT(idle_hours=${idle_h})"$'
+'
+        skipped=$((skipped+1))
+        continue
+      fi
+    fi
+  fi
+  # LAW 8 — per-lane idempotency: already-sent lanes never re-notify.
+  if [ "$dry" = 0 ] && grep -qxF "$uuid" "$SENT_FILE" 2>/dev/null; then
+    receipts+="SKIP ${uuid} ${role} DUPLICATE(already-sent-wave-${wave_id})"$'\n'; skipped=$((skipped+1)); continue
+  fi
+  brief="${text}"
+  brief="${brief//\{\{UUID\}\}/${uuid}}"
+  brief="${brief//\{\{VERSION\}\}/${version}}"
+  # D-5 (HQ d72bd52d, 2026-09-13): this line used to pass ${version} as argv.
+  # ${version} IS the live version THIS wave announces, so
+  # `oc-drift-check <uuid> <version> --ack` had argv == live BY CONSTRUCTION:
+  # the verdict was ALWAYS NO-DRIFT and the sensor could never fire on the
+  # exact invocation every brief prescribes. A lane with NO history got
+  # NO-DRIFT too, and cited it as compliance evidence. oc-drift-check now
+  # has an OMIT-ARG mode that reads the lane's RECORDED last_acked (roster)
+  # instead of argv — a pure function of state on disk (Reviewer J lens) —
+  # so the brief prescribes THAT and a lane cannot get it wrong.
+  # v0.4.159 (proposal n=4055): the trailing "ACK after drift-check." was
+  # RETIRED -- `oc-drift-check --ack` delegates to `oc-ledger ack`, so --ack
+  # IS the ack and prescribing a second one minted the duplicate
+  # (uuid,version) row class the law closed (68 groups / 27 lanes / 75 extra
+  # rows in the audit). This emitter taught the retired instruction to every
+  # lane from v0.4.123 until the defect was reported by lane a5b34466. The
+  # RELOAD line alone is canonical; never append a second ack verb.
+  brief="${brief} RELOAD: run oc-drift-check ${uuid} --ack, re-read changed files."
+  case "$brief" in *'{{'*'}}'*)
+    receipts+="ABORT ${uuid} ${role} placeholder-token-survived-substitution(law1)"$'\n'
+    failed=$((failed+1)); continue ;;
+  esac
+  if [ "$dry" = 1 ]; then
+    receipts+="DRY ${uuid} ${role} brief-ok(${#brief} chars)"$'\n'; sent=$((sent+1)); continue
+  fi
+  # n=2221 hang fix: `session notify` to a wedged target can block indefinitely;
+  # with ~33 targets one hang starves the whole fanout and NO receipts flush.
+  # Per-send timeout + receipts printed INCREMENTALLY (flush before each send),
+  # so a mid-run hang leaves every prior receipt on stdout.
+  # n=2269 fix (v0.4.126): measured live latency of `session notify` is ~30s
+  # UNIFORM (probe A plain=34s, probe B --title=31s — --title NOT the delta).
+  # The old 20s default killed EVERY send rc=124 while delivery actually
+  # worked. Default raised to 90s; each receipt carries send latency.
+  # LAW 10 manifest: recorded BEFORE the send, so even a mid-send kill leaves
+# the intended set on disk for --verify to diff against .sent receipts.
+  if [ "$dry" = 0 ]; then
+    grep -qxF "$uuid" "$TARGETS_FILE" 2>/dev/null || printf '%s\n' "$uuid" >> "$TARGETS_FILE"
+  fi
+  printf '%s' "$receipts"   # incremental flush: receipts survive a mid-send hang
+  receipts=""
+  T0=$(date +%s%N)
+  # LAW 5 (fixed 2026-09-12, HQ report d72bd52d): --mode is passed straight
+  # through to the CLI and DEFAULTS TO QUIET. --mode sits BEFORE --text on
+  # purpose: the argv tail stays "... --text <brief> <uuid>", the shape the
+  # selftest's sent_brief() parser keys on.
+  out="$(timeout "$OC_FANOUT_SEND_TIMEOUT" "$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
+        --title "$title" --mode "$mode" --text "$brief" "$uuid" 2>&1)" && rc=0 || rc=$?
+  # A mid-turn rc 3 gets the interrupt-retry ONLY in the non-quiet modes. In
+  # QUIET mode a deferred verdict (rc 0 + notification id) IS the expected
+  # result, and re-issuing it would convert a deferred send into the immediate
+  # wake the flag exists to prevent.
+  if [ "$rc" = 3 ] && [ "$mode" != "quiet" ]; then  # mid-turn: interrupt-retry per lib contract
+    out="$(timeout "$OC_FANOUT_SEND_TIMEOUT" "$bin" session notify --profile "$PROFILE" --sender "$SENDER" \
+          --title "$title" --text "$brief" --interrupt "$uuid" 2>&1)" && rc=0 || rc=$?
+  fi
+  T1=$(date +%s%N)
+  LAT_MS=$(( (T1 - T0) / 1000000 ))
+  # The CLI prints `notification id <id>` ONLY on a DEFERRED verdict (quiet
+  # mode). An IMMEDIATE delivery prints `delivered: delivered to session <uuid>`
+  # — no id phrase at all — so this regex can never match a normal send and the
+  # fallback below is the COMMON path, not an error. The label is deliberately
+  # self-describing: `rc0-no-id` read like a receipt failure and cost HQ a cycle
+  # proving it was fine (HQ addendum 2026-09-11). The bare `rc0` fallback that
+  # lands in the ledger stamp's `ids:` field is LEFT ALONE — it is a pre-existing
+  # token other lanes' greps may key on, and it never reaches a receipt line.
+  nid="$(printf '%s' "$out" | grep -oE 'notification id [0-9a-f-]+' | head -1 || true)"
+  if [ "$rc" = 0 ]; then
+    receipts+="SENT ${uuid} ${role} ${nid:-rc0-immediate-no-id} ${LAT_MS}ms"$'\n'
+    ids+="${nid:-rc0} " ; sent=$((sent+1))
+    printf '%s\n' "$uuid" >> "$SENT_FILE"   # law 8: append-one-per-send idempotency receipt
+  else
+    receipts+="FAIL ${uuid} ${role} rc=${rc} ${LAT_MS}ms"$'\n'; failed=$((failed+1))
+  fi
+done < <(jq -r '.workers[] | [(.uuid // ""), (.role // "editor"), ((.topic_id // 0) | tostring), (.state // "ACTIVE")] | @tsv' "$LEDGER")
+
+echo "--- receipts ---"; printf '%s' "$receipts"
+echo "--- summary ---"
+echo "sent=$sent skipped=$skipped failed=$failed version=$version dry=$dry"
+if [ "$stamp" = 1 ] && [ "$dry" = 0 ] && [ "$sent" -gt 0 ]; then
+  # --by fallback (#19, 2026-09-12): oc-ledger refuses an anonymous row, so a
+  # wave stamps under the caller's OC_ACTOR (or OPENCRABS_SESSION_ID) when set, else under the tool name.
+  bash "$SKILL_DIR/tools/state/oc-ledger" stamp notify-fanout \
+    --by "${OC_ACTOR:-${OPENCRABS_SESSION_ID:-oc-notify-fanout}}" \
+    "fanout '$title': sent=$sent skipped=$skipped failed=$failed ids: ${ids:-none}" || true
+fi
+if [ "$failed" -gt 0 ]; then
+  # LAW 10 (defect #5, 2026-09-12): a wave that finished its loop with send
+  # failures must SAY partial delivery on stderr, not just exit 4 silently.
+  echo "PARTIAL DELIVERY: $failed of $((sent+failed)) attempted send(s) failed — named in the FAIL receipts above; resume by re-running the same wave (duplicates skip), audit with: oc-notify-fanout --verify $wave_id" >&2
+  exit 4
+fi
+exit 0

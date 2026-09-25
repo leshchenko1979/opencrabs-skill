@@ -1,0 +1,632 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-smoke — unified 4-leg smoke verification & verdict row generator
+# =============================================================================
+# Cycle 20260915-c14 (editor fire-and-forget pass):
+# Wraps live identity verification (oc-smoke-evidence), optional behavioral
+# probe execution, and canonical smoke-verdicts.log append into a single command.
+#
+# Usage: oc-smoke <issue> [--verdict PASS|FAIL] [--probe <cmd>]
+#                         [--markers m1,m2] [--evidence <text>]
+#   --probe and --evidence are INDEPENDENT and BOTH land in the row (#409:
+#   an elif used to drop the whole --evidence argument whenever a probe was
+#   supplied — i.e. on exactly the rows the 4-leg rubric requires).
+#                         [--target <name>] [--unit <unit>]
+#                         [--no-ledger] [--selftest]
+#
+# Exit codes:
+#   0 Smoke PASS (identity match + probe pass + verdict row recorded)
+#   1 Smoke FAIL (identity mismatch or probe failure; verdict row recorded)
+#   2 Usage error (missing issue argument, invalid options)
+#   3 Precondition/infra failure (state-dir missing, daemon dead)
+# =============================================================================
+# --- oc-snap guard: run from an immutable mirror (fork #167; tools/lib/oc-snap.sh)
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_SNAP="$OC_TOOLS_DIR/lib/oc-snap.sh"
+if [ -f "$_OC_SNAP" ]; then . "$_OC_SNAP"; oc_snap_guard "$0" "$@"; fi
+
+set -u
+set -o pipefail
+set -e
+
+SCRIPT_DIR="$OC_TOOLS_DIR"
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"
+CANON_LOG="$STATE_DIR/smoke-verdicts.log"
+EVIDENCE_TOOL="$SCRIPT_DIR/smoke/oc-smoke-evidence"
+LEDGER_TOOL="$SCRIPT_DIR/state/oc-ledger"
+
+. "$SCRIPT_DIR/lib/oc-log.sh" 2>/dev/null || true
+oc_log_init "oc-smoke" "$@"
+
+PROG="oc-smoke"
+ISSUE=""
+VERDICT="PASS"
+PROBE_CMD=""
+MARKERS=""
+EVIDENCE_TEXT=""
+TARGET=""
+UNIT="opencrabs-ops"
+NO_LEDGER=0
+SELFTEST=0
+LINEAGE="unverified"
+
+usage() {
+  local code="${1:-2}"
+  local fd=2
+  [ "$code" -eq 0 ] && fd=1
+  cat <<EOF >&$fd
+usage: $PROG <issue> [--verdict PASS|FAIL] [--probe <cmd>]
+                 [--markers m1,m2] [--evidence <text>]
+                 [--lineage verified|failed|unverified]
+                 [--target <name>] [--unit <unit>] [--no-ledger] | --selftest
+
+Options:
+  <issue>             Issue number or slug (e.g. 235 or #235)
+  --verdict <V>       Verdict token: PASS (default) or FAIL
+  --probe <cmd>       Optional shell command to execute for behavioral proof
+  --markers <m1,m2>   Comma-separated presence markers to verify in binary
+  --evidence <text>   Prose summary of verification evidence (recorded IN
+                      ADDITION to --probe, never instead of it)
+  --lineage <tok>     Lineage leg status: verified|failed|unverified (default:
+                      unverified — oc-smoke computes no ancestry itself, so it
+                      never claims a lineage it did not check)
+  --target <name>     Deployment unit the verdict is about (default: live-ops)
+  --unit <unit>       Systemd user unit to check (default: opencrabs-ops)
+  --no-ledger         Skip automatic done stamp in workers-ledger.json on PASS
+  --selftest          Run internal test battery
+
+Exit codes:
+  0 Smoke PASS
+  1 Smoke FAIL
+  2 Usage error
+  3 Precondition/infra failure
+EOF
+  exit "$code"
+}
+
+die() {
+  local code="$1"; shift
+  echo "$PROG: ERROR: $*" >&2
+  oc_log_finish "$code"
+  exit "$code"
+}
+
+# Newline-safe append helper matching oc-smoke-evidence
+# clip <text> <cap> — bound a field for the line-oriented verdict log and MARK
+# any truncation. A silent cut is indistinguishable from a short value: the
+# #409 report's row ends mid-word ("post-#28") and a reader cannot tell a
+# 200-char probe from a truncated one. The cap is overridable so a lane that
+# needs more probe detail does not have to edit the tool.
+SMOKE_PROBE_CAP="${OC_SMOKE_PROBE_CAP:-400}"
+clip() {
+  local txt="$1" cap="$2" len
+  len="${#txt}"
+  if [ "$len" -le "$cap" ]; then
+    printf '%s' "$txt"
+  else
+    printf '%s…[truncated at %s of %s chars]' "$(printf '%s' "$txt" | cut -c1-"$cap")" "$cap" "$len"
+  fi
+}
+
+# flatten <text> — the verdict log is ONE ROW PER LINE, so an embedded newline
+# splits a row in two and every later reader sees a malformed record. The probe
+# path always flattened; the --evidence path did not, so multi-line prose (the
+# normal shape for a by-hand lineage derivation) silently corrupted the log.
+# Returns the flattened text; sets FLATTENED=1 when it actually had to.
+FLATTENED=0
+flatten() {
+  local txt="$1" flat
+  flat="$(printf '%s' "$txt" | tr '\n\r\t' '   ')"
+  [ "$flat" = "$txt" ] || FLATTENED=1
+  printf '%s' "$flat"
+}
+
+append_log_safe() {
+  local log_file="$1"
+  local line="$2"
+  mkdir -p "$(dirname "$log_file")"
+  if [ -s "$log_file" ]; then
+    local last_byte
+    last_byte="$(tail -c1 "$log_file" 2>/dev/null || true)"
+    if [ -n "$last_byte" ]; then
+      printf '\n' >> "$log_file"
+    fi
+  fi
+  printf '%s\n' "$line" >> "$log_file"
+}
+
+do_selftest() {
+  local d
+  d="$(mktemp -d)"
+  trap 'rm -rf "$d"' EXIT
+  local pass=0 fail=0
+
+  t_ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
+  t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
+
+  # Test 1: Usage without args -> 2
+  local rc=0 out=""
+  out="$("$0" 2>&1)" || rc=$?
+  [ "$rc" -eq 2 ] && t_ok "no args -> 2" || t_bad "no args (rc=$rc out=$out)"
+
+  # Create fake deployed state and fake evidence tool
+  mkdir -p "$d/state"
+  printf '0123456789abcdef0123456789abcdef01234567\n' > "$d/state/deployed.sha"
+  printf '{"run_id":34917665398,"source_sha":"0123456789abcdef0123456789abcdef01234567"}\n' > "$d/state/deployed.meta.json"
+
+  cat > "$d/fake-evidence" <<'EOF'
+#!/usr/bin/env bash
+if [ "${FAKE_EVIDENCE_RC:-0}" != "0" ]; then
+  echo "VERDICT: IDENTITY-MISMATCH"
+  exit 1
+fi
+echo "pid 1234"
+echo "VERDICT: IDENTITY-MATCH — binary identity + feature presence on live opencrabs-ops"
+exit 0
+EOF
+  chmod +x "$d/fake-evidence"
+
+  # Test 2: Happy path PASS with probe
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 235 --probe "echo probe-ok" --evidence "tested feature" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && grep -q "PASS" "$d/state/smoke-verdicts.log" && grep -q "probe-ok" "$d/state/smoke-verdicts.log" && grep -q "sha=" "$d/state/smoke-verdicts.log"; then
+    t_ok "happy path PASS with probe -> 0 and verdict row written"
+  else
+    t_bad "happy path (rc=$rc out=$out)"
+  fi
+
+  # Test 3: Probe failure -> exit 1 and FAIL verdict row
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 236 --probe "exit 4" --evidence "probe must fail" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && grep -q "236" "$d/state/smoke-verdicts.log" && grep -q "FAIL" "$d/state/smoke-verdicts.log"; then
+    t_ok "probe failure -> 1 and FAIL verdict row written"
+  else
+    t_bad "probe failure (rc=$rc out=$out)"
+  fi
+
+  # Test 4: Identity mismatch -> exit 1
+  rc=0
+  out="$(FAKE_EVIDENCE_RC=1 OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 237 --evidence "identity mismatch test" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && case "$out" in *"IDENTITY-MISMATCH"*|*"mismatch"*) true ;; *) false ;; esac; then
+    t_ok "identity mismatch from evidence tool -> exit 1"
+  else
+    t_bad "identity mismatch (rc=$rc out=$out)"
+  fi
+
+  # Test 5: Tab separation and fields in verdict row
+  local row
+  row="$(tail -n 1 "$d/state/smoke-verdicts.log")"
+  local fields
+  fields="$(printf '%s' "$row" | awk -F'\t' '{print NF}')"
+  [ "$fields" -ge 7 ] && t_ok "verdict row has >=7 tab-separated fields" || t_bad "verdict row fields ($fields != >=7)"
+
+  # Test 6: Auto-stamp ledger done on PASS
+  cat > "$d/fake-ledger" <<'EOF'
+#!/usr/bin/env bash
+echo "$@" >> "$OC_DEPLOY_STATE_DIR/fake-ledger.calls"
+exit 0
+EOF
+  chmod +x "$d/fake-ledger"
+  touch "$d/state/workers-ledger.json"
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OC_LEDGER_BIN="$d/fake-ledger" OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 238 --probe "echo probe-ok" --evidence "ledger auto-stamp test" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && grep -q "stamp done" "$d/state/fake-ledger.calls" && grep -q "#238" "$d/state/fake-ledger.calls"; then
+    t_ok "PASS automatically stamps ledger done -> 0"
+  else
+    t_bad "auto-stamp ledger (rc=$rc out=$out)"
+  fi
+
+  # Test 7: --no-ledger skips ledger stamping on PASS
+  rm -f "$d/state/fake-ledger.calls"
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OC_LEDGER_BIN="$d/fake-ledger" OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 239 --probe "echo probe-ok" --no-ledger 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -f "$d/state/fake-ledger.calls" ]; then
+    t_ok "--no-ledger suppresses ledger stamp -> 0"
+  else
+    t_bad "--no-ledger flag (rc=$rc out=$out)"
+  fi
+
+  # Test 8: FAIL verdict does not stamp ledger done
+  rm -f "$d/state/fake-ledger.calls"
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OC_LEDGER_BIN="$d/fake-ledger" OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 240 --probe "exit 1" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && [ ! -f "$d/state/fake-ledger.calls" ]; then
+    t_ok "FAIL verdict does not stamp ledger done -> 1"
+  else
+    t_bad "FAIL verdict ledger stamp (rc=$rc out=$out)"
+  fi
+
+  # ---- #409: --probe and --evidence are INDEPENDENT (both must land) -------
+  # Before this fix an `elif` made the probe branch win, so --evidence was
+  # discarded whole. --probe is the NORMAL case (leg 4 of the rubric IS a live
+  # probe), so the loss hit exactly the rows that matter. The assertions below
+  # are on the ROW, not on stdout, because the row is the artifact of record.
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 241 --probe "echo probe-ok" --evidence "EVIDENCE-MARKER-409" 2>&1)" || rc=$?
+  row241="$(grep 'issue=#241' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row241" | grep -q "live_behavior=" && printf '%s' "$row241" | grep -q "evidence=EVIDENCE-MARKER-409"; then
+    t_ok "probe AND evidence both land in the row (#409)"
+  else
+    t_bad "probe+evidence both land (rc=$rc row=$row241)"
+  fi
+
+  # A raw newline in --evidence used to split the verdict row across lines,
+  # because the probe path flattened and the evidence path did not.
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 242 --probe "echo p" --evidence "line one
+line two" 2>&1)" || rc=$?
+  n242="$(grep -c 'issue=#242' "$d/state/smoke-verdicts.log" || true)"
+  if [ "$n242" = "1" ] && grep 'issue=#242' "$d/state/smoke-verdicts.log" | grep -q "line one line two"; then
+    t_ok "multi-line --evidence flattened: row stays ONE line (#409)"
+  else
+    t_bad "multi-line evidence (rc=$rc rows_for_242=$n242)"
+  fi
+
+  # Truncation must be MARKED — a silent cut is indistinguishable from a short
+  # value, and the #409 row ends mid-word with no way for a reader to tell.
+  cat > "$d/longprobe" <<'EOF'
+#!/usr/bin/env bash
+head -c 500 /dev/zero | tr '\0' 'y'
+EOF
+  chmod +x "$d/longprobe"
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 243 --probe "$d/longprobe" 2>&1)" || rc=$?
+  if grep 'issue=#243' "$d/state/smoke-verdicts.log" | grep -q "truncated at 400 of 500 chars"; then
+    t_ok "probe truncation is marked with the cap and the true length (#409)"
+  else
+    t_bad "probe truncation unmarked (rc=$rc row=$(grep 'issue=#243' "$d/state/smoke-verdicts.log" | tail -n1))"
+  fi
+
+  # ---- #432: target= carries the DEPLOYMENT UNIT, not the subject ---------
+  # The law (upstream-merge-runbook.md §Ledger hygiene laws, v0.4.218) fixes ONE
+  # meaning for this key — the deployment unit — and ONE default, live-ops. The
+  # seed was `Issue #<n>` — the smoke's own SUBJECT — so every run that omitted
+  # --target wrote the value the ruling says the key must NOT carry, and the
+  # DEFAULT path is the common path: 65 of the 178 non-conforming rows measured
+  # in #432 are this tool's own default rather than lane prose. The override
+  # must still win. (No leg covered the default before this fixture — which is
+  # why the defect lived here unnoticed while oc-smoke-evidence conformed.)
+  local row244 row245
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 244 --probe "echo probe-ok" 2>&1)" || rc=$?
+  row244="$(grep 'issue=#244' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row244" | grep -q "target=live-ops"; then
+    t_ok "no --target writes the deployment unit target=live-ops (#432)"
+  else
+    t_bad "default target= (rc=$rc row=$row244)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 245 --probe "echo probe-ok" --target unit-x 2>&1)" || rc=$?
+  row245="$(grep 'issue=#245' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row245" | grep -q "target=unit-x"; then
+    t_ok "--target still overrides the deployment-unit default (#432)"
+  else
+    t_bad "--target override (rc=$rc row=$row245)"
+  fi
+
+  # ---- #436 + #306: the row must not contradict its own verdict -----------
+  # #436: the opening clause was the literal "4-leg smoke pass:" on EVERY row,
+  # so all 7 FAIL rows in the canonical log asserted a pass in their first five
+  # words — the precise rows a reader consults when something went wrong.
+  # #306: the same clause asserted lineage=true for a leg this tool cannot
+  # compute (it runs no ancestry command at all). Both literals lived on ONE
+  # line, so they are covered by ONE fixture. Assertions are on the ROW, never
+  # on stdout, because the row is the artifact of record. The PASS-side control
+  # is row244, written by the #432 fixture above.
+  local row246 row247 row248 row249 v249
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 246 --probe "echo probe-ok" 2>&1)" || rc=$?
+  row246="$(grep 'issue=#246' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row246" | grep -q 'evidence="4-leg smoke pass: lineage=unverified '; then
+    t_ok "PASS row keeps the pass clause; lineage reads unverified, never true (#306)"
+  else
+    t_bad "PASS default opening clause (rc=$rc row=$row246)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 247 --verdict FAIL --evidence "smoke of a FAIL" 2>&1)" || rc=$?
+  row247="$(grep 'issue=#247' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row247" | grep -q 'evidence="4-leg smoke FAIL: ' \
+     && ! printf '%s' "$row247" | grep -q '4-leg smoke pass'; then
+    t_ok "a FAIL row names its own verdict and never opens by claiming a pass (#436)"
+  else
+    t_bad "FAIL opening clause (rc=$rc row=$row247)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 248 --probe "echo probe-ok" --lineage verified 2>&1)" || rc=$?
+  row248="$(grep 'issue=#248' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row248" | grep -q 'lineage=verified '; then
+    t_ok "a caller-supplied --lineage verified is what the row records (#306)"
+  else
+    t_bad "--lineage verified (rc=$rc row=$row248)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 249 --probe "echo probe-ok" --lineage failed 2>&1)" || rc=$?
+  row249="$(grep 'issue=#249' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  v249="$(printf '%s' "$row249" | awk -F'\t' '{print $2}')"
+  if [ "$rc" -eq 1 ] && [ "$v249" = "FAIL" ] && printf '%s' "$row249" | grep -q 'lineage=failed'; then
+    t_ok "a caller-reported lineage FAIL forces the row to FAIL, not PASS (#306)"
+  else
+    t_bad "--lineage failed (rc=$rc verdict=$v249 row=$row249)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 250 --lineage bogus 2>&1)" || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    t_ok "--lineage rejects a token outside verified|failed|unverified -> 2"
+  else
+    t_bad "--lineage domain check (rc=$rc out=$out)"
+  fi
+
+  echo "selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ] && exit 0 || exit 1
+}
+
+# Handle selftest flag before argument verification
+for arg in "$@"; do
+  if [ "$arg" = "--selftest" ]; then
+    do_selftest
+  fi
+done
+
+# Argument parsing
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help|-h)
+      usage 0
+      ;;
+    --selftest)
+      do_selftest
+      ;;
+    --verdict)
+      [ $# -ge 2 ] || die 2 "--verdict requires a value (PASS|FAIL)"
+      VERDICT="$2"
+      shift 2
+      ;;
+    --probe)
+      [ $# -ge 2 ] || die 2 "--probe requires a shell command string"
+      PROBE_CMD="$2"
+      shift 2
+      ;;
+    --markers|--strings)
+      [ $# -ge 2 ] || die 2 "--markers requires a comma-separated list"
+      MARKERS="$2"
+      shift 2
+      ;;
+    --evidence)
+      [ $# -ge 2 ] || die 2 "--evidence requires description text"
+      EVIDENCE_TEXT="$2"
+      shift 2
+      ;;
+    --lineage)
+      [ $# -ge 2 ] || die 2 "--lineage requires a token (verified|failed|unverified)"
+      case "$2" in
+        verified|VERIFIED|failed|FAILED|unverified|UNVERIFIED)
+          LINEAGE="$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ;;
+        *)
+          die 2 "--lineage accepts exactly verified|failed|unverified (got: $2)" ;;
+      esac
+      shift 2
+      ;;
+    --target)
+      [ $# -ge 2 ] || die 2 "--target requires a target/feature name"
+      TARGET="$2"
+      shift 2
+      ;;
+    --unit)
+      [ $# -ge 2 ] || die 2 "--unit requires a systemd user unit name"
+      UNIT="$2"
+      shift 2
+      ;;
+    --no-ledger)
+      NO_LEDGER=1
+      shift
+      ;;
+    --issue)
+      [ $# -ge 2 ] || die 2 "--issue requires an issue number"
+      ISSUE="$2"
+      shift 2
+      ;;
+    -*)
+      die 2 "unknown option: $1 (see --help)"
+      ;;
+    *)
+      if [ -z "$ISSUE" ]; then
+        ISSUE="$1"
+        shift
+      else
+        die 2 "unexpected positional argument: $1"
+      fi
+      ;;
+  esac
+done
+
+[ -n "$ISSUE" ] || die 2 "issue number or identifier required (e.g. oc-smoke 235)"
+ISSUE="${ISSUE###}" # strip leading # if provided
+
+# Verify state directory
+[ -d "$STATE_DIR" ] || die 3 "state directory not found: $STATE_DIR"
+
+DEPLOYED_SHA="$(head -1 "$STATE_DIR/deployed.sha" 2>/dev/null || true)"
+[ -n "$DEPLOYED_SHA" ] || die 3 "deployed.sha not found in $STATE_DIR"
+
+RUN_ID=""
+if [ -f "$STATE_DIR/deployed.meta.json" ]; then
+  RUN_ID="$(jq -r '.run_id // empty' "$STATE_DIR/deployed.meta.json" 2>/dev/null || true)"
+fi
+RUN_ID="${RUN_ID:-unknown}"
+
+ACTOR="${OPENCRABS_SESSION_ID:-}"
+if [ -z "$ACTOR" ] && [ -f "$STATE_DIR/workers-ledger.json" ]; then
+  CLAIM_ACTOR="$(jq -r --arg iss "$ISSUE" '.events[]? | select(.kind == "claim" and ((.issue|tostring) == $iss)) | .actor // empty' "$STATE_DIR/workers-ledger.json" 2>/dev/null | tail -1 || true)"
+  if [ -n "$CLAIM_ACTOR" ]; then
+    ACTOR="$CLAIM_ACTOR"
+  else
+    ACTOR="$(jq -r '.workers[-1].uuid // empty' "$STATE_DIR/workers-ledger.json" 2>/dev/null || true)"
+  fi
+fi
+ACTOR="${ACTOR:-unknown-actor}"
+
+TARGET="${TARGET:-live-ops}"
+
+EVIDENCE_BIN="${OC_SMOKE_EVIDENCE_BIN:-$EVIDENCE_TOOL}"
+
+# 1. Run live identity verification
+IDENTITY_OUT=""
+IDENTITY_RC=0
+if [ -x "$EVIDENCE_BIN" ]; then
+  echo "$PROG: running identity verification on $UNIT..."
+  set +e
+  IDENTITY_OUT="$("$EVIDENCE_BIN" --unit "$UNIT" ${MARKERS:+--markers "$MARKERS"} 2>&1)"
+  IDENTITY_RC=$?
+  set -e
+  printf '%s\n' "$IDENTITY_OUT"
+  if [ "$IDENTITY_RC" -ne 0 ]; then
+    echo "$PROG: identity verification failed (rc=$IDENTITY_RC)" >&2
+    VERDICT="FAIL"
+  fi
+else
+  echo "$PROG: WARNING: evidence tool $EVIDENCE_BIN not found/executable; skipping live identity leg" >&2
+fi
+
+# 2. Run behavioral probe if specified
+PROBE_DETAILS=""
+if [ -n "$PROBE_CMD" ]; then
+  echo "$PROG: running behavioral probe: $PROBE_CMD"
+  set +e
+  PROBE_OUT="$(bash -c "$PROBE_CMD" 2>&1)"
+  PROBE_RC=$?
+  set -e
+  printf '%s\n' "$PROBE_OUT"
+  if [ "$PROBE_RC" -ne 0 ]; then
+    echo "$PROG: behavioral probe FAILED (rc=$PROBE_RC)" >&2
+    VERDICT="FAIL"
+    PROBE_DETAILS="probe failed (rc=$PROBE_RC): $(clip "$(flatten "$PROBE_OUT")" "$SMOKE_PROBE_CAP")"
+  else
+    echo "$PROG: behavioral probe PASSED"
+    PROBE_DETAILS="probe passed: $(clip "$(flatten "$PROBE_OUT")" "$SMOKE_PROBE_CAP")"
+  fi
+fi
+
+# 2b. The lineage leg (#306). This tool runs no ancestry command — `grep -c
+#     'is-ancestor|merge-base'` over it returns 0 — so it CANNOT compute leg 1 of
+#     the 4-leg rubric; it can only report what the caller checked. The caller
+#     says so with --lineage, and the default is `unverified`: a leg this tool
+#     did not check must not read as a checked one. A caller reporting the leg
+#     FAILED forces the row to FAIL, on the same reasoning that already forces
+#     FAIL on an identity mismatch or a failed probe — a row reading
+#     `PASS ... lineage=failed` is the self-contradiction #436 fixes below.
+if [ "$LINEAGE" = "failed" ]; then
+  echo "$PROG: caller reported the lineage leg FAILED — verdict forced to FAIL" >&2
+  VERDICT="FAIL"
+fi
+
+# 3. Assemble full evidence string
+# #436: the opening clause names the ROW's OWN verdict. It was the literal
+# `4-leg smoke pass:` on every row — including all 7 FAIL rows in the canonical
+# log, which are exactly the rows a reader consults when something went wrong,
+# so the durable record asserted a pass in its first five words while field 2
+# said FAIL. PASS keeps the phrase byte-for-byte (no migration, no lost marker);
+# a FAIL row now opens by naming its own verdict.
+CLAUSE="4-leg smoke ${VERDICT}"
+if [ "$VERDICT" = "PASS" ]; then
+  CLAUSE="4-leg smoke pass"
+fi
+FULL_EVIDENCE="${CLAUSE}: lineage=${LINEAGE} identity=$( [ "$IDENTITY_RC" -eq 0 ] && echo "MATCH" || echo "MISMATCH" )"
+if [ -n "$MARKERS" ]; then
+  FULL_EVIDENCE="${FULL_EVIDENCE} markers=${MARKERS}"
+fi
+# #409: two INDEPENDENT ifs. The elif dropped the entire --evidence argument
+# whenever --probe was also supplied — and --probe is the NORMAL case, since
+# leg 4 of the 4-leg rubric IS a live behavioral probe. What was lost is the
+# part a reviewer cannot reconstruct: the by-hand lineage computation — now
+# recorded in the lineage= leg by --lineage above, since #306 stopped this tool
+# asserting a leg it never computes — plus stated limits, non-duplicate
+# provenance, packaging identity.
+if [ -n "$PROBE_DETAILS" ]; then
+  FULL_EVIDENCE="${FULL_EVIDENCE} live_behavior=${PROBE_DETAILS}"
+fi
+if [ -n "$EVIDENCE_TEXT" ]; then
+  FLAT_EVIDENCE="$(flatten "$EVIDENCE_TEXT")"
+  if [ "$FLATTENED" = "1" ]; then
+    echo "$PROG: NOTE --evidence contained newlines/tabs; flattened to single spaces" >&2
+    echo "$PROG:       so the verdict row stays ONE line (a raw newline would split it)" >&2
+  fi
+  FULL_EVIDENCE="${FULL_EVIDENCE} evidence=${FLAT_EVIDENCE}"
+fi
+# Never silent (#409 ask 2): state the truncation on stderr as well as in the row.
+case "$PROBE_DETAILS" in
+  *'…[truncated at '*) echo "$PROG: NOTE probe output truncated to ${SMOKE_PROBE_CAP} chars — full output was above; raise OC_SMOKE_PROBE_CAP to keep more" >&2 ;;
+esac
+
+# 4. Append canonical 4-leg smoke verdict row
+TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+TAB=$'\t'
+ROW="${TS}${TAB}${VERDICT}${TAB}issue=#${ISSUE}${TAB}sha=${DEPLOYED_SHA}${TAB}run=${RUN_ID}${TAB}target=${TARGET}${TAB}actor=${ACTOR}${TAB}evidence=\"${FULL_EVIDENCE}\""
+
+append_log_safe "$CANON_LOG" "$ROW"
+echo "$PROG: recorded verdict row ($VERDICT) for #$ISSUE in $CANON_LOG"
+
+# 5. On PASS: optionally stamp workers-ledger.json done
+if [ "$VERDICT" = "PASS" ] && [ "$NO_LEDGER" -eq 0 ]; then
+  ACTUAL_LEDGER_BIN="${OC_LEDGER_BIN:-$LEDGER_TOOL}"
+  if [ -x "$ACTUAL_LEDGER_BIN" ] && [ -f "$STATE_DIR/workers-ledger.json" ]; then
+    echo "$PROG: stamping workers-ledger.json done for issue #$ISSUE..."
+    set +e
+    LEDGER_OUT="$(OC_DEPLOY_STATE_DIR="$STATE_DIR" "$ACTUAL_LEDGER_BIN" stamp done "smoke PASS verified for issue #${ISSUE}" 2>&1)"
+    LEDGER_RC=$?
+    set -e
+    if [ "$LEDGER_RC" -eq 0 ]; then
+      echo "$PROG: $LEDGER_OUT"
+    else
+      echo "$PROG: WARNING: oc-ledger stamp done exited $LEDGER_RC: $LEDGER_OUT" >&2
+    fi
+  fi
+fi
+
+if [ "$VERDICT" = "PASS" ]; then
+  oc_log_finish 0
+  exit 0
+else
+  oc_log_finish 1
+  exit 1
+fi

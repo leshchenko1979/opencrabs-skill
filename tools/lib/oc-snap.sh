@@ -16,7 +16,7 @@
 # USAGE — as the first executable lines of a long-running tool, directly under
 # the shebang and BEFORE `set -e`/`set -u` and before any lib is sourced:
 #
-#   _OC_SNAP="$(cd "$(dirname "$0")" && pwd)/lib/oc-snap.sh"
+#   _OC_SNAP="$OC_TOOLS_DIR/lib/oc-snap.sh"   # after the oc-root bootstrap
 #   if [ -f "$_OC_SNAP" ]; then . "$_OC_SNAP"; oc_snap_guard "$0" "$@"; fi
 #
 # oc_snap_guard either EXECs (it never returns in that case) or returns 0 with
@@ -71,7 +71,7 @@ oc_snap_guard() {
 
   # Universal verification hook: OC_SNAP_VERBOSE=1 proves, for ANY tool, that
   # this run came off an immutable copy — without adding selftest code to each.
-  #   OC_SNAP_VERBOSE=1 bash tools/oc-prchecks --selftest 2>&1 | grep 'oc-snap:'
+  #   OC_SNAP_VERBOSE=1 bash tools/harvest/oc-prchecks --selftest 2>&1 | grep 'oc-snap:'
   [ -n "${OC_SNAP_VERBOSE:-}" ] && \
     printf 'oc-snap: running from %s (pid %s, tool %s)\n' \
       "$_os_mir/$_os_sn" "$$" "$_os_sn" >&2

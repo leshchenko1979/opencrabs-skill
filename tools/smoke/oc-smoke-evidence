@@ -1,0 +1,640 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-smoke-evidence — mechanical identity + presence evidence for a smoke verdict
+# =============================================================================
+# Duty-6 lens C1 (2026-08-31, incident-backed: 15+ hand-assembled evidence
+# lines in state smoke-verdicts.log). Prints the boilerplate every Phase 6b
+# smoke verdict needs: running daemon identity (MainPID, exe path, sha256)
+# compared against the deployed markers (deployed.sha + deployed.meta.json
+# artifact sha), optional presence markers, optional negative control.
+#
+# BEHAVIORAL JUDGMENT STAYS HUMAN — this tool produces IDENTITY evidence only.
+#
+# Usage: oc-smoke-evidence [--unit opencrabs-ops] [--markers m1,m2]
+#                          [--negative-control <backup-binary>] [--selftest]
+#                          [--append-log [<path>]]
+#                          [--late-entry --sha <sha> [--run <id>] [--actor <uuid>]
+#                           [--issue <#N>] [--target <name>] [--evidence <text>]]
+#                          [--park-owner-eye <description> [--sha <sha>] [--issue <#N>]]
+#                          [--repair-row --match <text> --replace <text> [--log [<path>]]]
+#   --append-log [<path>] (defect #13, lane c10cd97b, 2026-09-12): appends the
+#   evidence block to <path> NEWLINE-SAFELY — if the log was last written
+#   without a trailing newline, that row is terminated first, so rows can
+#   never glue. Appends on rc 0/1 (verdict rows are evidence either way);
+#   usage/infra failures (rc 2/3) write nothing. This is the sanctioned
+#   append path — a plain shell >> is what glued c10cd97b's verdict rows.
+#   M2-2 (2026-09-12): <path> is OPTIONAL and defaults to the canonical ABSOLUTE
+#   log ($STATE_DIR/smoke-verdicts.log). A RELATIVE path resolves against
+#   STATE_DIR, never the caller's CWD — a bare `smoke-verdicts.log` used to be
+#   written to whatever directory the caller happened to be in, a decoy holding
+#   none of the evidence (2 rows lost). A divergent ABSOLUTE path is honoured but
+#   announced LOUDLY on stderr, naming the canonical one.
+#   --markers is canonical (matches oc-artifact-verify); --strings is a
+#   deprecated FLAG alias kept for back-compat (E2 finding 6, v0.4.72). The
+#   alias names the FLAG only: since #376 neither form invokes strings(1) --
+#   the scan is a byte-level grep -a -F against the file itself, so a box
+#   without binutils cannot degrade a present marker into a false MISSING.
+#   --late-entry (D-4, HQ d72bd52d, 2026-09-13): emits a HISTORICAL VERDICT ROW
+#   instead of the live identity block. The normal block reads the RUNNING
+#   daemon (MainPID -> /proc/PID/exe -> sha256) and therefore CANNOT describe a
+#   sha that is no longer deployed -- so the sanctioned writer had never once
+#   written a verdict row. Measured 2026-09-13: the canonical log held 0
+#   tool-appended identity blocks against ~14 strict verdict rows, all
+#   lane-authored by hand. LATE ENTRY is sanctioned (fleet-directives.md); this
+#   closes the writer gap. The row is built from ARGV and describes the smokes
+#   of a PAST sha -- it is a receipt, NOT live-identity evidence, and it can
+#   never be mistaken for one (different verdict token, different field set).
+#   --sha is required; --run/--actor/--issue/--target/--evidence are optional and
+#   omitted when empty (the row shape matches the fleet's own rows exactly:
+#   ts TAB <VERDICT>-LATE-ENTRY TAB run= TAB sha= TAB actor= TAB issue= TAB
+#   target= TAB evidence="..."). Writes on rc 0; rc 2 on misuse.
+#   --repair-row (#477, Toolsmith ruling): EQUAL-LENGTH in-place repair of a
+#   malformed row. upstream-merge-runbook.md §Ledger hygiene ORDERS in-place
+#   repair and FORBIDS rename/truncate, because the log is appended to
+#   concurrently: a rename replaces the inode and orphans the fd held by a
+#   peer's >> write, silently dropping that peer's rows. This verb is that
+#   order's implementation, and until it existed the order was a spec with no
+#   tool. It requires --match to be UNIQUE, re-reads the target bytes
+#   immediately before writing, overwrites IN PLACE on the SAME INODE (dd
+#   conv=notrunc), fsyncs, then PROVES the invariant: the inode is unchanged,
+#   the file did not shrink, and the region reads back as --replace. The file
+#   SIZE never changes, and that is the whole safety argument -- a peer's
+#   O_APPEND fd stays valid and its next append lands at the true EOF. A
+#   LENGTH-CHANGING repair is REFUSED by construction (rc 1): there is no lock
+#   we can take against a plain >> writer, so any tail shift has an irreducible
+#   window that can cut a concurrent append. The sanctioned remedy for a length
+#   change is an APPENDED CORRECTION row (same section).
+# Exit:  0 IDENTITY-MATCH / 1 MISMATCH / 2 usage / 3 unit-or-proc-fail
+#        (--repair-row: 0 repaired / 1 REFUSED -- no unique match, or the
+#         target bytes moved under a concurrent writer / 2 usage / 3 IO or a
+#         failed post-write invariant)
+# =============================================================================
+set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-smoke-evidence" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() {
+  # Kept in sync with the header synopsis (#316 debt: a usage text that omits a
+  # verb is how --late-entry, --park-owner-eye and --repair-row stayed invisible;
+  # every verb below is real and, before this, only three of them were named).
+  echo "usage: $0 [--unit <systemd-user-unit>] [--markers m1,m2] [--negative-control <binary>]" >&2
+  echo "          [--append-log [<path>]] | --selftest" >&2
+  echo "          [--late-entry --sha <sha> [--run <id>] [--actor <uuid>] [--issue <#N>] [--target <name>] [--evidence <text>]]" >&2
+  echo "          [--park-owner-eye <description> [--sha <sha>] [--issue <#N>]]" >&2
+  echo "          [--repair-row --match <text> --replace <text> [--log [<path>]]]" >&2
+  echo "          [--log-stats [<path>]]" >&2
+  exit 2
+}
+die() { echo "oc-smoke-evidence: $2" >&2; exit "$1"; }
+
+marker_scan() { # byte-level feature-presence scan (#376). rc 0 = found, 1 =
+                # absent, >=2 = SCAN ERROR. The distinction is the whole point:
+                # a missing or unreadable file must surface as an ERROR, never
+                # as "marker absent", or a broken host binary reads as a
+                # missing feature.
+  grep -q -a -F -- "$2" "$1"
+}
+
+append_log() { # newline-safe append (defect #13): a log left unterminated by a
+               # previous writer must not glue the next row onto its last line
+  local f="$1" c="$2"
+  [ -n "$f" ] || return 2
+  if [ -s "$f" ] && [ -n "$(tail -c 1 "$f" 2>/dev/null)" ]; then
+    printf '\n' >> "$f"   # terminate the previous writer's unterminated row
+  fi
+  printf '%s\n' "$c" >> "$f"
+}
+
+STATE_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"
+CANON_LOG="$STATE_DIR/smoke-verdicts.log"   # M2-2: the ONLY sanctioned target
+UNIT="opencrabs-ops"; MARKERS=""; NEGCTRL=""; APPEND_LOG=""
+LATE_MODE=""; LATE_SHA=""; LATE_RUN=""; LATE_ACTOR=""; LATE_ISSUE=""
+LATE_TARGET=""; LATE_EVIDENCE=""
+PARK_MODE=""; PARK_DESC=""; PARK_ISSUE=""
+REPAIR_MODE=""; REPAIR_MATCH=""; REPAIR_REPLACE=""; REPAIR_LOG=""
+
+# D-4 (HQ d72bd52d, 2026-09-13): the HISTORICAL row builder. It mirrors the
+# shape the fleet already writes by hand, so the sanctioned writer and the
+# lanes agree on one format. Optional fields are OMITTED rather than emitted
+# empty -- an empty `run=` reads as a value, not as absence. Defined BEFORE
+# the arg loop because --selftest runs inside it and must be able to call this.
+build_park_block() {
+  [ -n "$PARK_DESC" ] || die 2 "--park-owner-eye requires a description text"
+  local ts row sha TAB
+  TAB=$'\t'
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sha="${LATE_SHA:-$(head -1 "$STATE_DIR/deployed.sha" 2>/dev/null || echo "unknown")}"
+  row="${ts}${TAB}PARKED-OWNER-EYE${TAB}sha=${sha}"
+  local iss="${PARK_ISSUE:-$LATE_ISSUE}"
+  [ -n "$iss" ] && row="${row}${TAB}issue=${iss}"
+  row="${row}${TAB}evidence=\"${PARK_DESC}\""
+  printf '%s' "$row"
+}
+
+build_late_block() {
+  [ -n "$LATE_SHA" ] || die 2 "--late-entry requires --sha <sha>"
+  local ts row TAB
+  TAB=$'\t'
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  row="${ts}${TAB}PASS-LATE-ENTRY"
+  [ -n "$LATE_RUN" ]      && row="${row}${TAB}run=${LATE_RUN}"
+  row="${row}${TAB}sha=${LATE_SHA}"
+  [ -n "$LATE_ACTOR" ]    && row="${row}${TAB}actor=${LATE_ACTOR}"
+  [ -n "$LATE_ISSUE" ]    && row="${row}${TAB}issue=${LATE_ISSUE}"
+  row="${row}${TAB}target=${LATE_TARGET:-live-ops}"
+  [ -n "$LATE_EVIDENCE" ] && row="${row}${TAB}evidence=\"${LATE_EVIDENCE}\""
+  printf '%s' "$row"
+}
+
+repair_row() { # #477 -- EQUAL-LENGTH in-place repair of a malformed row.
+               # $1 = file, $2 = --match text, $3 = --replace text.
+               # rc 0 repaired / 1 REFUSED (nothing written) / 2 misuse
+               #    / 3 IO error or a failed post-write invariant.
+               # Contract (incl. WHY a length change is refused) = header block.
+  local f="${1:-}" match="${2:-}" repl="${3:-}"
+  # Argument-SHAPE first, filesystem second. The #477 selftest leg found this
+  # INVERTED: `--match <multi-line>` against a file that does not exist answered
+  # rc 3 ("no such file") when the invocation was malformed on its face. A
+  # malformed invocation is a MISUSE (2) whatever the state of the target, so the
+  # pure-argument checks must settle the rc before any filesystem probe can
+  # misdirect the operator at the wrong problem.
+  [ -n "$match" ] || { echo "oc-smoke-evidence: --repair-row requires --match" >&2; return 2; }
+  [ -n "$repl" ]  || { echo "oc-smoke-evidence: --repair-row requires --replace" >&2; return 2; }
+
+  # The match must be a single-LINE fragment: everything below is byte-addressed,
+  # and a multi-line match has no single byte offset to splice at.
+  local nl='
+'
+  case "$match" in *"$nl"*) echo "oc-smoke-evidence: --match must not contain a newline" >&2; return 2 ;; esac
+  case "$repl"  in *"$nl"*) echo "oc-smoke-evidence: --replace must not contain a newline" >&2; return 2 ;; esac
+
+  [ -f "$f" ]     || { echo "oc-smoke-evidence: no such file: $f" >&2; return 3; }
+  if [ ! -r "$f" ] || [ ! -w "$f" ]; then
+    echo "oc-smoke-evidence: not readable+writable: $f" >&2; return 3
+  fi
+
+  # BYTE lengths, never ${#match}. ${#} counts CHARACTERS under a UTF-8 locale,
+  # so it would accept replacing a 2-byte `ab` with a 4-byte `éé` (both report
+  # length 2) -- the file would then GROW, voiding the size-preservation argument,
+  # and only the post-write size check would notice, after the damage. Verified on
+  # this box: LC_ALL=en_US.utf8 -> ${#}=2 (chars), LC_ALL=C -> ${#}=4 (bytes).
+  # The invariant here is a byte invariant, and wc -c is the locale-independent
+  # byte count.
+  local mbytes rbytes offs count off ino_before size_before
+  mbytes="$(printf '%s' "$match" | wc -c | tr -d ' ')"
+  rbytes="$(printf '%s' "$repl"  | wc -c | tr -d ' ')"
+  if [ "$mbytes" != "$rbytes" ]; then
+    echo "oc-smoke-evidence: REFUSED -- a length-changing repair cannot be done in place (match ${mbytes}B vs replace ${rbytes}B); append a CORRECTION row instead; nothing written" >&2
+    return 1
+  fi
+
+  # Uniqueness: with two or more occurrences we cannot know WHICH bytes to splice.
+  offs="$(grep -abo -F -- "$match" "$f" 2>/dev/null | cut -d: -f1)"
+  count="$(printf '%s\n' "$offs" | grep -c . || true)"
+  if [ "$count" != 1 ]; then
+    echo "oc-smoke-evidence: REFUSED -- --match occurs ${count} times in $f (need exactly 1); nothing written" >&2
+    return 1
+  fi
+  off="$offs"
+  ino_before="$(stat -c %i "$f")"
+  size_before="$(stat -c %s "$f")"
+
+  # Re-read the target bytes IMMEDIATELY before writing (runbook: a concurrent
+  # append may have moved your row off the tail). The read-back is of the REGION,
+  # not the tail -- so a peer's append at EOF does not false-refuse the repair,
+  # while a rewrite of the region does.
+  if [ "$(dd if="$f" bs=1 skip="$off" count="$mbytes" status=none)" != "$match" ]; then
+    echo "oc-smoke-evidence: REFUSED -- the target bytes moved under a concurrent writer; nothing written" >&2
+    return 1
+  fi
+
+  # In-place splice on the SAME INODE: bs=1 + seek=<offset> + conv=notrunc writes
+  # exactly $mbytes bytes and never truncates. No temp file, no mv, no cp, no
+  # truncate -- any of those replaces the inode and orphans a peer's O_APPEND fd.
+  if ! printf '%s' "$repl" | dd of="$f" bs=1 seek="$off" conv=notrunc status=none; then
+    echo "oc-smoke-evidence: write failed: $f" >&2
+    return 3
+  fi
+  sync "$f" 2>/dev/null || sync
+
+  # PROVE the invariant the header promises -- reported, never assumed.
+  if [ "$(stat -c %i "$f")" != "$ino_before" ]; then
+    echo "oc-smoke-evidence: INVARIANT VIOLATED -- inode changed" >&2; return 3
+  fi
+  if [ "$(stat -c %s "$f")" -lt "$size_before" ]; then
+    echo "oc-smoke-evidence: INVARIANT VIOLATED -- file shrank" >&2; return 3
+  fi
+  if [ "$(dd if="$f" bs=1 skip="$off" count="$mbytes" status=none)" != "$repl" ]; then
+    echo "oc-smoke-evidence: INVARIANT VIOLATED -- region does not read back as --replace" >&2; return 3
+  fi
+  return 0
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --unit) UNIT="${2:-}"; shift 2 ;;
+    --markers|--strings) MARKERS="${2:-}"; shift 2 ;;   # --strings = deprecated alias
+    --negative-control) NEGCTRL="${2:-}"; shift 2 ;;
+    --append-log)
+      # M2-2 (2026-09-12): a WRONG path must be unrepresentable. The canonical
+      # log is absolute; a bare `smoke-verdicts.log` used to land in the CALLER'S
+      # CWD -- a decoy that looks right and holds none of the evidence (2 rows
+      # lost). Relative now resolves against STATE_DIR, and a bare flag means
+      # "the canonical log".
+      shift
+      case "${1:-}" in
+        ''|--*|-h) APPEND_LOG="$CANON_LOG" ;;            # bare -> canonical
+        /*) APPEND_LOG="$1"; shift ;;                    # absolute -> honoured
+        *)  APPEND_LOG="$STATE_DIR/$1"; shift ;;         # relative -> STATE_DIR, never CWD
+      esac ;;
+    --park-owner-eye) PARK_MODE=1; PARK_DESC="${2:-}"; shift 2 ;;
+    --repair-row) REPAIR_MODE=1; shift ;;
+    --match)   REPAIR_MATCH="${2:-}";   shift 2 ;;
+    --replace) REPAIR_REPLACE="${2:-}"; shift 2 ;;
+    --log)
+      # #477: the repair target. Same M2-2 discipline as --append-log -- a bare
+      # flag means the canonical log, a relative path resolves against STATE_DIR
+      # (never the caller's CWD), and only an absolute path is honoured verbatim.
+      shift
+      case "${1:-}" in
+        ''|--*|-h) REPAIR_LOG="$CANON_LOG" ;;            # bare -> canonical
+        /*) REPAIR_LOG="$1"; shift ;;                    # absolute -> honoured
+        *)  REPAIR_LOG="$STATE_DIR/$1"; shift ;;         # relative -> STATE_DIR, never CWD
+      esac ;;
+    --late-entry) LATE_MODE=1; shift ;;
+    --sha)     LATE_SHA="${2:-}";      shift 2 ;;
+    --run)     LATE_RUN="${2:-}";      shift 2 ;;
+    --actor)   LATE_ACTOR="${2:-}";    shift 2 ;;
+    --issue)   LATE_ISSUE="${2:-}";    shift 2 ;;
+    --target)  LATE_TARGET="${2:-}";   shift 2 ;;
+    --evidence) LATE_EVIDENCE="${2:-}"; shift 2 ;;
+    --log-stats)
+      # Dynamic smoke log statistics
+      shift
+      target="${1:-$CANON_LOG}"
+      case "$target" in
+        --*|-h) target="$CANON_LOG" ;;
+        /*) ;;
+        *) target="$STATE_DIR/$target" ;;
+      esac
+      [ -f "$target" ] || die 3 "smoke log missing: $target"
+      total="$(wc -l < "$target")"
+      echo "total_rows=$total log=$target"
+      exit 0 ;;
+    --selftest)
+      d="$(mktemp -d)"
+      printf 'x%.0s' {1..100} > "$d/a"; cp "$d/a" "$d/b"; printf 'x%.0s' {1..100} > "$d/c"; printf 'y' >> "$d/c"
+      h1="$(sha256sum "$d/a" | cut -d' ' -f1)"; h2="$(sha256sum "$d/b" | cut -d' ' -f1)"; h3="$(sha256sum "$d/c" | cut -d' ' -f1)"
+      [ "$h1" = "$h2" ] && [ "$h1" != "$h3" ] || { echo "selftest: hash discrimination broken" >&2; exit 1; }
+      # marker leg (v0.4.85, revised #376): early marker inside a >1MB binary.
+      # Scans raw bytes (grep -a -F) rather than draining a strings(1) buffer,
+      # so this leg runs on a box without binutils. The >1MB prefix is kept: it
+      # is the shape that used to false-MISSING, and it still exercises
+      # "marker found early, then a long non-matching tail".
+      { printf 'OC_MARKER_PAST_PIPEBUF\n'; head -c 1048576 /dev/zero | tr '\0' 'x'; } > "$d/m"
+      marker_scan "$d/m" 'OC_MARKER_PAST_PIPEBUF' || { echo "selftest: raw marker check failed (marker leg regression?)" >&2; exit 1; }
+      # anti-vacuity (#376): the rc CONTRACT is what the fix rests on, so pin
+      # all three arms. An ABSENT marker must read 1 (not 0), and an UNREADABLE
+      # file must read >=2 -- otherwise a broken scan is indistinguishable from
+      # an absent marker, which is precisely the defect this leg guards.
+      marker_scan "$d/m" 'OC_MARKER_DEFINITELY_ABSENT_zzz'; arc=$?
+      [ "$arc" = 1 ] || { echo "selftest: absent marker returned rc=$arc, want 1" >&2; exit 1; }
+      marker_scan "$d/does-not-exist" 'OC_MARKER_PAST_PIPEBUF' 2>/dev/null; brc=$?
+      [ "$brc" -ge 2 ] || { echo "selftest: unreadable file returned rc=$brc, want >=2" >&2; exit 1; }
+      # defect #13 (lane c10cd97b): newline-safe append. A log left WITHOUT a
+      # trailing newline must not glue the next row onto its last line, and a
+      # second probe keeps the same intact-line shape.
+      printf 'row1-unterminated' > "$d/v.log"
+      append_log "$d/v.log" "E1" && append_log "$d/v.log" "E2"
+      [ "$(wc -l < "$d/v.log")" = 3 ] || { echo "selftest: append-log line count broken" >&2; exit 1; }
+      grep -qF 'row1-unterminatedE1' "$d/v.log" && { echo "selftest: append glued rows" >&2; exit 1; }
+      grep -qx 'row1-unterminated' "$d/v.log" || { echo "selftest: append glued row1" >&2; exit 1; }
+      grep -qx 'E1' "$d/v.log" || { echo "selftest: append lost E1" >&2; exit 1; }
+      grep -qx 'E2' "$d/v.log" || { echo "selftest: append lost E2" >&2; exit 1; }
+      append_log "$d/v.log" "E3"
+      [ "$(wc -l < "$d/v.log")" = 4 ] || { echo "selftest: second probe broke shape" >&2; exit 1; }
+      grep -qF 'E2E3' "$d/v.log" && { echo "selftest: second probe glued" >&2; exit 1; }
+      # D-4 (HQ d72bd52d, 2026-09-13): the historical-row override. The live
+      # block cannot describe a sha that is no longer deployed, so the sanctioned
+      # writer could never produce a verdict row. --late-entry switches the
+      # writer to the row shape the fleet already writes by hand.
+      LATE_SHA="x"; LATE_RUN=""; LATE_ACTOR=""; LATE_ISSUE=""; LATE_TARGET=""; LATE_EVIDENCE=""
+      lb="$(build_late_block 2>/dev/null)"
+      printf '%s' "$lb" | grep -qF 'PASS-LATE-ENTRY' || { echo "selftest: late-entry verdict token wrong" >&2; exit 1; }
+      printf '%s' "$lb" | grep -qF "$(printf '\t')" || { echo "selftest: late-entry row is not tab-separated" >&2; exit 1; }
+      [ "$(printf '%s' "$lb" | wc -l)" = 0 ] || { echo "selftest: late-entry block is not a single line" >&2; exit 1; }
+      LATE_SHA=abc; LATE_RUN=1; LATE_ACTOR=u; LATE_ISSUE='#1'; LATE_TARGET=t; LATE_EVIDENCE=e
+      lb2="$(build_late_block 2>/dev/null)"
+      printf '%s' "$lb2" | grep -qF 'sha=abc' || { echo "selftest: late-entry sha not carried" >&2; exit 1; }
+      printf '%s' "$lb2" | grep -qF 'run=1' || { echo "selftest: late-entry run not carried" >&2; exit 1; }
+      printf '%s' "$lb2" | grep -qF 'issue=#1' || { echo "selftest: late-entry issue not carried" >&2; exit 1; }
+      printf '%s' "$lb2" | grep -qF 'evidence="e"' || { echo "selftest: late-entry evidence not quoted" >&2; exit 1; }
+      LATE_RUN=""; LATE_ACTOR=""
+      lb3="$(build_late_block 2>/dev/null)"
+      printf '%s' "$lb3" | grep -qF 'run=' && { echo "selftest: empty --run emitted as a value" >&2; exit 1; }
+      printf '%s' "$lb3" | grep -qF 'actor=' && { echo "selftest: empty --actor emitted as a value" >&2; exit 1; }
+      LATE_SHA=""
+      ( build_late_block >/dev/null 2>&1 ); [ $? -eq 2 ] || { echo "selftest: late-entry without --sha did not die 2" >&2; exit 1; }
+      # misuse legs end-to-end: a rejected invocation exits 2 and writes NOTHING.
+      # OC_DEPLOY_STATE_DIR is pinned to the temp dir so a NEUTERED run (an NC arm
+      # that lets these legs fall through to the live path) can never touch the
+      # real state dir or read the live daemon -- the selftest stays hermetic.
+      OC_DEPLOY_STATE_DIR="$d" "$0" --late-entry --append-log "$d/late-miss.log" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: --late-entry without --sha did not exit 2" >&2; exit 1; }
+      [ -s "$d/late-miss.log" ] && { echo "selftest: rejected late-entry wrote a row" >&2; exit 1; }
+      OC_DEPLOY_STATE_DIR="$d" "$0" --late-entry --sha a --markers m --append-log "$d/late-miss2.log" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: --late-entry + --markers did not exit 2" >&2; exit 1; }
+      [ -s "$d/late-miss2.log" ] && { echo "selftest: rejected late-entry (markers) wrote a row" >&2; exit 1; }
+      # end-to-end accept: ONE tab-separated row, newline-terminated, fleet shape
+      OC_DEPLOY_STATE_DIR="$d" "$0" --late-entry --sha deadbeef --run 42 --actor u1 --issue '#9' --evidence 'e2e' --append-log "$d/late-ok.log" >/dev/null 2>&1 || { echo "selftest: late-entry accept leg failed" >&2; exit 1; }
+      [ "$(wc -l < "$d/late-ok.log")" = 1 ] || { echo "selftest: late-entry wrote != 1 line" >&2; exit 1; }
+      grep -qF 'PASS-LATE-ENTRY' "$d/late-ok.log" || { echo "selftest: late-entry row lacks the verdict token" >&2; exit 1; }
+      grep -qF 'sha=deadbeef' "$d/late-ok.log" || { echo "selftest: late-entry row lacks the sha" >&2; exit 1; }
+      [ "$(grep -oF "$(printf '\t')" "$d/late-ok.log" | wc -l)" = 7 ] || { echo "selftest: late-entry row field count wrong" >&2; exit 1; }
+      # J-02: --park-owner-eye selftest
+      PARK_DESC=""; ( build_park_block >/dev/null 2>&1 ); [ $? -eq 2 ] || { echo "selftest: park-owner-eye without desc did not die 2" >&2; exit 1; }
+      PARK_DESC="check visual layout"; LATE_SHA="cafe1234"; PARK_ISSUE="#42"
+      pb="$(build_park_block 2>/dev/null)"
+      printf '%s' "$pb" | grep -qF "PARKED-OWNER-EYE" || { echo "selftest: park row lacks verdict token" >&2; exit 1; }
+      printf '%s' "$pb" | grep -qF "sha=cafe1234" || { echo "selftest: park row lacks sha" >&2; exit 1; }
+      printf '%s' "$pb" | grep -qF "issue=#42" || { echo "selftest: park row lacks issue" >&2; exit 1; }
+      printf '%s' "$pb" | grep -qF 'evidence="check visual layout"' || { echo "selftest: park row lacks quoted evidence" >&2; exit 1; }
+      OC_DEPLOY_STATE_DIR="$d" "$0" --park-owner-eye "e2e visual" --sha bbeef --issue 10 --append-log "$d/park-ok.log" >/dev/null 2>&1 || { echo "selftest: park-owner-eye e2e failed" >&2; exit 1; }
+      [ "$(wc -l < "$d/park-ok.log")" = 1 ] || { echo "selftest: park-owner-eye wrote != 1 line" >&2; exit 1; }
+      grep -qF "PARKED-OWNER-EYE" "$d/park-ok.log" || { echo "selftest: park file lacks verdict token" >&2; exit 1; }
+      grep -qF "sha=bbeef" "$d/park-ok.log" || { echo "selftest: park file lacks sha" >&2; exit 1; }
+      # #477: --repair-row EQUAL-LENGTH in-place repair. The entire safety
+      # argument is that the file SIZE and INODE never change, so a peer holding
+      # an O_APPEND fd is never orphaned. Pin that invariant, and pin EVERY
+      # refusal arm -- a refusal that silently writes is the defect class this
+      # verb exists to prevent, so a leg that cannot fail is worthless (#376).
+      R_M1='BBROKEN ROW sha=deadbeefBB'   # 26B
+      R_R1='PASS    ROW sha=deadbeefCC'   # 26B (4 spaces)
+      R_M2='PASS    ROW sha=deadbeefCC'   # 26B
+      R_R2='FIXED   ROW sha=deadbeefCC'   # 26B (3 spaces)
+      # SELF-CHECKING fixtures. A fixture that is not byte-equal makes the verb
+      # REFUSE the happy path, so the selftest would blame the tool for a fixture
+      # bug -- this exact near-miss happened (26B vs 27B) and python caught it,
+      # not the eye. Assert the fixtures before using them.
+      for rfx in "$R_M1" "$R_R1" "$R_M2" "$R_R2"; do
+        [ "$(printf '%s' "$rfx" | wc -c)" = 26 ] || { echo "selftest: repair fixture is not 26B: $rfx" >&2; exit 1; }
+      done
+
+      # accept: unique + equal-length -> spliced IN PLACE.
+      rf="$d/repair.log"
+      printf 'good-row-1\n%s\ngood-row-2\n' "$R_M1" > "$rf"
+      rsz="$(stat -c %s "$rf")"; rino="$(stat -c %i "$rf")"
+      repair_row "$rf" "$R_M1" "$R_R1" || { echo "selftest: repair_row refused a valid equal-length repair" >&2; exit 1; }
+      [ "$(cat "$rf")" = "$(printf 'good-row-1\n%s\ngood-row-2\n' "$R_R1")" ] || { echo "selftest: repaired region does not read back as --replace (or a neighbour row moved)" >&2; exit 1; }
+      [ "$(stat -c %s "$rf")" = "$rsz" ] || { echo "selftest: repair changed the file SIZE -- the size-preservation argument is void" >&2; exit 1; }
+      [ "$(stat -c %i "$rf")" = "$rino" ] || { echo "selftest: repair changed the INODE (a rename slipped in)" >&2; exit 1; }
+      # a second splice keeps the same inode (the verb is re-runnable in place)
+      repair_row "$rf" "$R_M2" "$R_R2" || { echo "selftest: second splice was refused" >&2; exit 1; }
+      grep -qF 'FIXED   ROW sha=deadbeefCC' "$rf" || { echo "selftest: second splice did not land" >&2; exit 1; }
+      [ "$(stat -c %i "$rf")" = "$rino" ] || { echo "selftest: second splice changed the INODE" >&2; exit 1; }
+
+      # refusal: --match not unique. rc 1 AND the file must be byte-identical --
+      # a refusal that writes is worse than no tool at all.
+      rfd="$d/repair-dup.log"; printf '%s\n%s\n' "$R_M1" "$R_M1" > "$rfd"
+      rsha="$(sha256sum "$rfd" | cut -d' ' -f1)"
+      repair_row "$rfd" "$R_M1" "$R_R1" 2>/dev/null; rrc=$?
+      [ "$rrc" = 1 ] || { echo "selftest: non-unique --match returned rc=$rrc, want 1" >&2; exit 1; }
+      [ "$(sha256sum "$rfd" | cut -d' ' -f1)" = "$rsha" ] || { echo "selftest: a REFUSED non-unique repair still wrote to the file" >&2; exit 1; }
+
+      # refusal: length-changing pair. There is no lock to take against a plain
+      # >> writer, so a tail shift has an irreducible window -- refused by
+      # construction, and the remedy is an appended CORRECTION row.
+      rfl="$d/repair-len.log"; printf '%s\n' "$R_M1" > "$rfl"
+      rsha="$(sha256sum "$rfl" | cut -d' ' -f1)"
+      repair_row "$rfl" "$R_M1" "${R_M1}Z" 2>/dev/null; rrc=$?
+      [ "$rrc" = 1 ] || { echo "selftest: length-changing repair returned rc=$rrc, want 1" >&2; exit 1; }
+      [ "$(sha256sum "$rfl" | cut -d' ' -f1)" = "$rsha" ] || { echo "selftest: a REFUSED length-changing repair still wrote to the file" >&2; exit 1; }
+
+      # the BYTE-vs-CHARACTER trap, pinned in BOTH directions. The guard must be
+      # a byte guard: ${#} counts CHARACTERS under a UTF-8 locale.
+      # Dir 1: char-equal, byte-different. ${#} computes 2 vs 2 and would ACCEPT,
+      # growing the file and voiding the size argument; wc -c must REFUSE.
+      R_U2="$(printf '\303\251\303\251')"   # ee-acute pair = 4 bytes
+      [ "$(printf '%s' "$R_U2" | wc -c)" = 4 ] || { echo "selftest: unicode fixture is not 4B" >&2; exit 1; }
+      rfu="$d/repair-uni.log"; printf 'xaby\n' > "$rfu"
+      rsha="$(sha256sum "$rfu" | cut -d' ' -f1)"
+      repair_row "$rfu" 'ab' "$R_U2" 2>/dev/null; rrc=$?
+      [ "$rrc" = 1 ] || { echo "selftest: 2B->4B repair returned rc=$rrc, want 1 (a char guard would ACCEPT it and grow the file)" >&2; exit 1; }
+      [ "$(sha256sum "$rfu" | cut -d' ' -f1)" = "$rsha" ] || { echo "selftest: a REFUSED 2B->4B repair still wrote to the file" >&2; exit 1; }
+      # Dir 2: char-different, byte-equal -- the complement. ${#} would REFUSE
+      # this perfectly valid splice; the byte guard must ACCEPT and preserve size.
+      rfu2="$d/repair-uni2.log"; printf 'x%sy\n' "$(printf '\303\251')" > "$rfu2"
+      rsz2="$(stat -c %s "$rfu2")"
+      repair_row "$rfu2" "$(printf '\303\251')" 'ab' || { echo "selftest: byte-equal char-different repair was refused (guard is not byte-based)" >&2; exit 1; }
+      grep -qF 'xaby' "$rfu2" || { echo "selftest: byte-equal repair did not land" >&2; exit 1; }
+      [ "$(stat -c %s "$rfu2")" = "$rsz2" ] || { echo "selftest: byte-equal repair changed the size" >&2; exit 1; }
+
+      # the rc CONTRACT end to end: misuse is 2, IO is 3, refusal is 1 -- a
+      # misuse must never be mistakable for a repair.
+      OC_DEPLOY_STATE_DIR="$d" "$0" --repair-row --match "$R_M1" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: --repair-row without --replace did not exit 2" >&2; exit 1; }
+      OC_DEPLOY_STATE_DIR="$d" "$0" --repair-row --match "$(printf 'a\nb')" --replace "$(printf 'c\nd')" --log "$d/repair-ml.log" >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: multi-line --match did not exit 2" >&2; exit 1; }
+      [ -e "$d/repair-ml.log" ] && { echo "selftest: a rejected multi-line repair created the log" >&2; exit 1; }
+      OC_DEPLOY_STATE_DIR="$d" "$0" --repair-row --match aa --replace bb --log "$d/repair-absent.log" >/dev/null 2>&1; [ $? -eq 3 ] || { echo "selftest: repair of a missing file did not exit 3" >&2; exit 1; }
+
+      # e2e accept + the M2-2 divergent-target NOTE (a wrong path must be
+      # unrepresentable AND the divergence must be announced).
+      rfe="$d/repair-e2e.log"; printf 'good-row-1\n%s\ngood-row-2\n' "$R_M1" > "$rfe"
+      rino_e="$(stat -c %i "$rfe")"
+      OC_DEPLOY_STATE_DIR="$d" "$0" --repair-row --match "$R_M1" --replace "$R_R1" --log "$rfe" >/dev/null 2>"$d/repair-note.err"
+      [ $? -eq 0 ] || { echo "selftest: --repair-row e2e accept leg failed" >&2; exit 1; }
+      grep -qF "$R_R1" "$rfe" || { echo "selftest: e2e repair did not land" >&2; exit 1; }
+      [ "$(stat -c %i "$rfe")" = "$rino_e" ] || { echo "selftest: e2e repair changed the inode" >&2; exit 1; }
+      grep -qF 'NOTE -- repairing' "$d/repair-note.err" || { echo "selftest: a divergent --log did not emit the M2-2 NOTE" >&2; exit 1; }
+
+      # THE invariant that actually matters: a peer's O_APPEND fd. A rename or
+      # truncate replaces the inode and orphans a concurrent appender's fd,
+      # silently dropping its rows -- the incident that created this verb. Hold a
+      # real fd across the splice and append AFTER it; a surviving peer-AFTER row
+      # is the proof, and an orphaned fd is exactly what would lose it.
+      rfp="$d/repair-peer.log"
+      printf 'good-row-1\n%s\ngood-row-2\n' "$R_M1" > "$rfp"
+      # The peer WAITS for a go-file instead of sleeping a fixed window, and the
+      # parent reads the log's inode ITSELF. Both halves close a TOCTOU that made
+      # this leg flake under battery load and then report the WRONG cause (#566):
+      # with a fixed 0.4s sleep, a parent descheduled past it finds the peer gone,
+      # stat on /proc/<pid>/fd/9 reads EMPTY, and the leg exits claiming "the
+      # peer's fd is not on the log inode" -- a confident false diagnosis of an
+      # inode bug. The handshake makes both the reading and the splice window
+      # deterministic: the peer cannot exit before the go-file, so the splice
+      # provably happens while the fd is open.
+      rdy="$d/peer-ready"; rgo="$d/peer-go"; rgu="$d/peer-gaveup"; rm -f "$rdy" "$rgo" "$rgu"
+      ( exec 9>>"$rfp"
+        printf 'peer-BEFORE\n' >&9
+        : > "$rdy"
+        rg=0; while [ ! -e "$rgo" ] && [ "$rg" -lt 900 ]; do sleep 0.01; rg=$((rg+1)); done
+        [ -e "$rgo" ] || : > "$rgu"     # wait expired -> the fd was NOT held across the splice
+        printf 'peer-AFTER\n' >&9 ) &
+      rpp=$!
+      rw=0
+      while [ ! -e "$rdy" ] && [ "$rw" -lt 900 ]; do sleep 0.01; rw=$((rw+1)); done
+      [ -e "$rdy" ] || { echo "selftest: the peer never opened its fd" >&2; kill "$rpp" 2>/dev/null; exit 1; }
+      rpeero="$(stat -c %i "$rfp")"
+      grep -qF 'peer-BEFORE' "$rfp" || { echo "selftest: the peer's fd was not writing the log" >&2; kill "$rpp" 2>/dev/null; exit 1; }
+      repair_row "$rfp" "$R_M1" "$R_R1" || { echo "selftest: splice was refused while a peer held the log open" >&2; kill "$rpp" 2>/dev/null; exit 1; }
+      [ "$(stat -c %i "$rfp")" = "$rpeero" ] || { echo "selftest: the log inode changed across a peer-held splice" >&2; kill "$rpp" 2>/dev/null; exit 1; }
+      : > "$rgo"     # release the peer: it appends AFTER the splice
+      wait "$rpp" 2>/dev/null || true
+      # A weakened precondition must not pass as a clean result: if the peer's
+      # bounded wait expired before the release, the fd was never held ACROSS
+      # the splice, so the AFTER row proves nothing. Fail as INCONCLUSIVE.
+      [ ! -e "$rgu" ] || { echo "selftest: the peer's wait expired before the splice -- fd not held across it (inconclusive)" >&2; exit 1; }
+      grep -qF 'peer-AFTER' "$rfp" || { echo "selftest: the peer's post-repair append was LOST -- its fd was orphaned (rename?)" >&2; exit 1; }
+      grep -qF "$R_R1" "$rfp" || { echo "selftest: the peer-leg splice did not land" >&2; exit 1; }
+      echo "selftest OK"; exit 0 ;;
+    -h|--help) (usage); exit 0 ;;   # F-L1 (v0.4.77): --help = 0 (subshell absorbs usage's exit 2)
+    *) usage ;;
+  esac
+done
+
+# M2-2: never let a divergent target pass silently -- name the canonical one.
+if [ -n "$APPEND_LOG" ] && [ "$APPEND_LOG" != "$CANON_LOG" ]; then
+  echo "oc-smoke-evidence: NOTE -- appending to $APPEND_LOG, NOT the canonical $CANON_LOG" >&2
+fi
+
+emit_evidence() {
+[ -f "$STATE_DIR/deployed.meta.json" ] || die 3 "deployed.meta.json missing in $STATE_DIR"
+PID="$(systemctl --user show "$UNIT" -p MainPID --value 2>/dev/null)" || die 3 "systemctl --user show $UNIT failed"
+case "$PID" in ''|0) die 3 "unit $UNIT not running (MainPID=$PID)" ;; esac
+EXE="$(readlink -f "/proc/$PID/exe" 2>/dev/null)" || die 3 "cannot resolve /proc/$PID/exe"
+[ -x "$EXE" ] || die 3 "exe not accessible: $EXE"
+
+EXE_SHA="$(sha256sum "$EXE" | cut -d' ' -f1)"
+SRC_SHA="$(jq -r '.sha // ""' "$STATE_DIR/deployed.meta.json")"
+ART_SHA="$(jq -r '.artifact_sha256 // ""' "$STATE_DIR/deployed.meta.json")"
+RUN_ID="$(jq -r '.run_id // ""' "$STATE_DIR/deployed.meta.json")"
+SWAP_AT="$(jq -r '.swapped_at // ""' "$STATE_DIR/deployed.meta.json")"
+DEPLOYED_SHA="$(head -1 "$STATE_DIR/deployed.sha" 2>/dev/null || echo '')"
+
+# TSV evidence block
+echo -e "pid\t$PID"
+echo -e "exe_path\t$EXE"
+echo -e "exe_sha256\t$EXE_SHA"
+echo -e "artifact_sha256\t$ART_SHA"
+echo -e "source_sha\t$SRC_SHA"
+echo -e "deployed.sha\t$DEPLOYED_SHA"
+echo -e "run_id\t$RUN_ID"
+echo -e "swapped_at\t$SWAP_AT"
+
+rc=0
+if [ -n "$ART_SHA" ]; then
+  if [ "$EXE_SHA" = "$ART_SHA" ]; then
+    echo -e "identity\tMATCH (running exe == run $RUN_ID artifact)"
+  else
+    echo -e "identity\tMISMATCH (running exe != deployed artifact sha)"; rc=1
+  fi
+else
+  echo -e "identity\tNO-ARTIFACT-SHA (deployed.meta.json lacks artifact_sha256)"; rc=1
+fi
+[ "$SRC_SHA" = "$DEPLOYED_SHA" ] || { echo -e "deployed.sha\tMISMATCH (meta vs marker)"; rc=1; }
+
+# feature-presence markers (byte-level scan of the live binary)
+if [ -n "$MARKERS" ]; then
+  IFS=',' read -ra MS <<< "$MARKERS"
+  # #376 (lane 4b0990b7): strings(1) is NOT guaranteed on this box (binutils
+  # absent), and the old `strings "$EXE" 2>/dev/null` shape turned that into an
+  # EMPTY buffer -- every marker read MISSING and the tool exited rc=1,
+  # reporting a missing BINARY as a missing FEATURE. grep -a scans the raw file
+  # and finds the same literals. It also needs no pipeline, so the SIGPIPE
+  # shape the old buffer guarded against (grep exits on match, strings eats 141
+  # under pipefail -- found live 2026-09-04, markers at line ~1635/837007)
+  # cannot occur: there is no longer a pipe to poison. Measured on the 90MB
+  # live binary: 0.01-0.04s per scan.
+  for m in "${MS[@]}"; do
+    marker_scan "$EXE" "$m"; mrc=$?
+    case "$mrc" in
+      0) echo -e "marker:$m\tFOUND" ;;
+      1) echo -e "marker:$m\tMISSING"; rc=1 ;;
+      *) die 3 "marker scan failed (rc=$mrc) reading $EXE -- an ABSENT marker is NOT distinguishable from a BROKEN scan (#376)" ;;
+    esac
+  done
+fi
+
+# negative control: a DIFFERENT binary must hash different — proves the hash discriminates
+if [ -n "$NEGCTRL" ]; then
+  [ -f "$NEGCTRL" ] || die 3 "negative-control file missing: $NEGCTRL"
+  NC_SHA="$(sha256sum "$NEGCTRL" | cut -d' ' -f1)"
+  if [ "$NC_SHA" != "$EXE_SHA" ]; then
+    echo -e "negative-control\tOK (differs from live exe)"
+  else
+    echo -e "negative-control\tSUSPECT (identical to live exe — control is not a control)"; rc=1
+  fi
+fi
+
+if [ "$rc" -eq 0 ]; then echo "VERDICT: IDENTITY-MATCH — binary identity + feature presence on live $UNIT"; else echo "VERDICT: MISMATCH — see rows above"; fi
+exit "$rc"
+}
+
+# J-02 (2026-09-14): PARKED-OWNER-EYE mechanical formatting & atomic append
+if [ -n "$PARK_MODE" ]; then
+  [ -n "$PARK_DESC" ] || die 2 "--park-owner-eye requires a description text"
+  if [ -n "$MARKERS" ] || [ -n "$NEGCTRL" ]; then
+    die 2 "--park-owner-eye cannot be combined with --markers/--negative-control"
+  fi
+  TARGET_LOG="${APPEND_LOG:-$CANON_LOG}"
+  OUT="$(build_park_block)"
+  printf '%s\n' "$OUT"
+  append_log "$TARGET_LOG" "$OUT" || die 3 "append-log failed: $TARGET_LOG"
+  echo "oc-smoke-evidence: NOTE -- PARKED-OWNER-EYE row appended to $TARGET_LOG" >&2
+  exit 0
+fi
+
+# D-4: validation BEFORE any work -- a misuse must never be mistakable for a row.
+if [ -n "$LATE_MODE" ]; then
+  [ -n "$LATE_SHA" ] || die 2 "--late-entry requires --sha <sha>"
+  if [ -n "$MARKERS" ] || [ -n "$NEGCTRL" ]; then
+    die 2 "--late-entry describes a historical sha; --markers/--negative-control probe the RUNNING exe and cannot be combined with it"
+  fi
+fi
+
+if [ -n "$LATE_MODE" ]; then
+  OUT="$(build_late_block)"
+  printf '%s\n' "$OUT"
+  if [ -n "$APPEND_LOG" ]; then
+    append_log "$APPEND_LOG" "$OUT" || die 3 "append-log failed: $APPEND_LOG"
+  fi
+  echo "oc-smoke-evidence: NOTE -- LATE ENTRY row (historical sha, from ARGV) -- NOT live-identity evidence" >&2
+  exit 0
+fi
+
+# #477: EQUAL-LENGTH in-place repair of a malformed row. Validation BEFORE any
+# work, mirroring D-4 -- a misuse must never be mistakable for a repair.
+if [ -n "$REPAIR_MODE" ]; then
+  [ -n "$REPAIR_MATCH" ]   || die 2 "--repair-row requires --match <text>"
+  [ -n "$REPAIR_REPLACE" ] || die 2 "--repair-row requires --replace <text>"
+  if [ -n "$MARKERS" ] || [ -n "$NEGCTRL" ] || [ -n "$PARK_MODE" ] || [ -n "$LATE_MODE" ]; then
+    die 2 "--repair-row cannot be combined with --markers/--negative-control/--park-owner-eye/--late-entry"
+  fi
+  TARGET_LOG="${REPAIR_LOG:-$CANON_LOG}"
+  if [ "$TARGET_LOG" != "$CANON_LOG" ]; then
+    echo "oc-smoke-evidence: NOTE -- repairing $TARGET_LOG, NOT the canonical $CANON_LOG" >&2
+  fi
+  RRC=0
+  repair_row "$TARGET_LOG" "$REPAIR_MATCH" "$REPAIR_REPLACE" || RRC=$?
+  if [ "$RRC" = 0 ]; then
+    echo "oc-smoke-evidence: REPAIRED in place, same inode, size unchanged: $TARGET_LOG"
+    echo "oc-smoke-evidence: NOTE -- no concurrent appender was orphaned (the file SIZE never changed)" >&2
+  else
+    echo "oc-smoke-evidence: repair verdict: REFUSED/FAILED (rc=$RRC) -- nothing written to $TARGET_LOG" >&2
+  fi
+  exit "$RRC"
+fi
+
+if [ -n "$APPEND_LOG" ]; then
+  RC=0
+  OUT="$( { trap - EXIT; emit_evidence; } )" || RC=$?
+  printf '%s\n' "$OUT"
+  if [ "$RC" = 0 ] || [ "$RC" = 1 ]; then
+    append_log "$APPEND_LOG" "$OUT" || die 3 "append-log failed: $APPEND_LOG"
+  fi
+  exit "$RC"
+fi
+emit_evidence

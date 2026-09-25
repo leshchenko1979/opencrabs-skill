@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-ship-audit — C6 (lens C, Duty-6 2026-08-31): dispatch-WITHOUT-swap alarm.
+# Scans the unified tools.log for SUCCESSFUL ship dispatches (oc-deploy
+# "ship --sha <sha> ... --execute", exit 0) and pairs each against swap
+# evidence: a swap journal (swap-<sha>*.jsonl with a step:"auto-swap" line)
+# in the oc-deploy journal dir, or the deployed.sha marker matching the sha.
+# Closes the orphaned-GREEN-ship class (3 live instances 2026-08-31): a
+# dispatch-only rc=0 exit can never again read as a shipped build — absence
+# of a swap row for the sha is alarmable from the log alone.
+# Dispatches younger than --grace minutes (default 120) read IN-FLIGHT, not
+# ORPHANED (no false alarm on a chain still executing).  A dispatch older
+# than that with no swap evidence is further classified by its CARRIER BUILD
+# (task 15, fork #420): the dispatched sha lives in the JOB NAME of the
+# quick-build-linux.yml run (the run object's head_sha is the carrier branch
+# tip, never the built sha), and a RED build produced no artifact at all --
+# so it DISCHARGES the dispatch: SUPERSEDED-BUILD-FAILED, no alarm.
+# ORPHANED is reserved for a dispatch with no build at all, and for a GREEN
+# build that was never swapped.
+#
+# Usage:
+#   oc-ship-audit [--hours N] [--log <tools.log>] [--journal-dir <dir>]
+#                 [--grace <min>] [--meta <deployed.meta.json>]
+#                 [--supersede-hours N] | --selftest
+#
+# Output: TSV: VERDICT <tab> sha7 <tab> ts <tab> lag_h <tab> evidence
+#   VERDICT in SWAPPED | IN-FLIGHT | SUPERSEDED | SUPERSEDED-BUILD-FAILED | ORPHANED
+# Exit codes: 0 all-SWAPPED / SUPERSEDED / SUPERSEDED-BUILD-FAILED (or no
+#             dispatches) · 1 ORPHANED found · 2 usage · 3 log/dir missing
+# Env: OC_TOOLS_LOG · OC_DEV_STATE · OC_SHIP_AUDIT_REPO
+# =============================================================================
+set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-ship-audit" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+usage() { echo "usage: $0 [--hours N] [--log <tools.log>] [--journal-dir <dir>] [--grace <min>] | --selftest" >&2; exit 2; }
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  echo "usage: $0 [--hours N] [--log <tools.log>] [--journal-dir <dir>] [--grace <min>] | --selftest"
+  exit 0
+fi
+if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
+  d="$(mktemp -d)" || exit 3
+  trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"   # selftest re-invocations need an absolute path (v0.4.77)
+  mkdir -p "$d/journal"
+  # gh stand-in for the carrier build-outcome leg (task 15): the fixture has
+  # NO network, so only the HTTP call is stubbed -- the tool's own list call,
+  # oldest-first walk, job-name match and classification are the real code
+  # path.  Modes: red (one matching run, RED build) | none (no runs at all) |
+  # err (gh itself broken).  Default is none, which also leaves the pre-
+  # existing legs untouched: their rows are younger than --supersede-hours,
+  # so they never reach a gh call at all.
+  mkdir -p "$d/bin"
+  cat > "$d/bin/gh" <<'OC_FAKEGH'
+#!/bin/sh
+[ "${FAKE_GH_MODE:-none}" = "err" ] && exit 1
+case "$1 $2" in
+  "run list")
+    if [ "${FAKE_GH_MODE:-none}" = "red" ]; then
+      printf '[{"databaseId":9001,"createdAt":"%s"}]\n' "${FAKE_GH_TS:-2026-01-01T00:00:00Z}"
+    else
+      printf '[]\n'
+    fi ;;
+  "run view")
+    printf '{"jobs":[{"name":"ORDER gates (%s)","conclusion":"success"},{"name":"Linux amd64 (%s, telegram,code-graph,browser)","conclusion":"%s"}]}\n' \
+      "${FAKE_GH_SHA:-}" "${FAKE_GH_SHA:-}" "${FAKE_GH_CONC:-failure}" ;;
+  "api")
+    printf 'diverged\n' ;;
+  *) printf '{}\n' ;;
+esac
+OC_FAKEGH
+  chmod +x "$d/bin/gh"
+  PATH="$d/bin:$PATH"; export PATH
+  OLD="$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+  NEW="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+  # paired dispatch (has swap journal) + orphaned old dispatch + in-flight new dispatch + failed attempt
+  cat > "$d/tools.log" <<EOF
+{"ts":"$OLD","tool":"oc-deploy","actor":"a1","args":"ship --sha aaaaaaa111111111111111111111111111111111 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}
+{"ts":"$OLD","tool":"oc-deploy","actor":"a1","args":"ship --sha bbbbbbb222222222222222222222222222222222 --features telegram --execute","exit":2,"secs":5.0,"extra":{}}
+{"ts":"$OLD","tool":"oc-deploy","actor":"a2","args":"ship --sha ccccccc333333333333333333333333333333333 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}
+{"ts":"$NEW","tool":"oc-deploy","actor":"a3","args":"ship --sha ddddddd444444444444444444444444444444444 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}
+EOF
+  printf '{"ts":"%s","seq":1,"step":"auto-swap","exit":0,"sha":"aaaaaaa111111111111111111111111111111111","run_id":"123"}\n' "$OLD" > "$d/journal/swap-aaaaaaa-1788000000.jsonl"
+  OUT="$("$SELF" --log "$d/tools.log" --journal-dir "$d/journal")"; RC=$?
+  [ $RC -eq 1 ] || { echo "selftest: orphan present but rc=$RC" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q $'^ORPHANED\tccccccc' || { echo "selftest: ccccccc not ORPHANED" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q $'^SWAPPED\taaaaaaa' || { echo "selftest: aaaaaaa not SWAPPED" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q $'^IN-FLIGHT\tddddddd' || { echo "selftest: ddddddd not IN-FLIGHT" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q 'bbbbbbb' && { echo "selftest: failed dispatch bbbbbbb must be skipped" >&2; exit 1; }
+  # all swapped -> 0
+  printf '{"ts":"%s","seq":1,"step":"auto-swap","exit":0,"sha":"ccccccc333333333333333333333333333333333"}\n' "$OLD" > "$d/journal/swap-ccccccc-1788000100.jsonl"
+  "$SELF" --log "$d/tools.log" --journal-dir "$d/journal" >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: audit not clean after ccccccc swap journal (IN-FLIGHT ddddddd must not alarm)" >&2; exit 1; }
+  # usage
+  "$SELF" --nonsense >/dev/null 2>&1; [ $? -eq 2 ] || { echo "selftest: bad flag != 2" >&2; exit 1; }
+  # missing log -> 3
+  "$SELF" --log "$d/nope.log" >/dev/null 2>&1; [ $? -eq 3 ] || { echo "selftest: missing log != 3" >&2; exit 1; }
+  # rogue non-JSON lines must NOT truncate the scan into a false clean:
+  # append a fresh orphan dispatch + insert garbage BEFORE it; orphan must still be found (rc 1)
+  OLD2="$(date -u -d '5 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"ts":"%s","tool":"oc-deploy","actor":"a9","args":"ship --sha eeeee55555555555555555555555555555555555 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}\n' "$OLD2" >> "$d/tools.log"
+  sed -i "1i 2026-08-29T16:44:18Z stamp rogue-writer action=ledger-append outcome=ok n=1325" "$d/tools.log"
+  "$SELF" --log "$d/tools.log" --journal-dir "$d/journal" >/dev/null 2>/dev/null
+  [ $? -eq 1 ] || { echo "selftest: rogue line truncated scan into false clean" >&2; exit 1; }
+  # ---- carrier build-outcome leg (task 15, fork #420) --------------------
+  # A RED carrier build DISCHARGES the dispatch (no artifact was ever
+  # produced, so nothing was left unshipped): SUPERSEDED-BUILD-FAILED at
+  # rc 0, never the orphan alarm.  Every other build outcome -- GREEN but
+  # never swapped, no build at all, gh unreachable -- must STILL alarm, or
+  # the leg would silence the very class this tool exists to catch.
+  OLD3="$(date -u -d '20 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"ts":"%s","tool":"oc-deploy","actor":"a5","args":"ship --sha fffffff999999999999999999999999999999999 --features telegram --execute","exit":0,"secs":5.0,"extra":{}}\n' "$OLD3" > "$d/tools3.log"
+  FAKE_GH_SHA="fffffff999999999999999999999999999999999"
+  FAKE_GH_TS="$OLD3"
+  export FAKE_GH_SHA FAKE_GH_TS
+  # (a) RED build -> SUPERSEDED-BUILD-FAILED, rc 0 (discharged, no alarm)
+  OUT3="$(FAKE_GH_MODE=red "$SELF" --log "$d/tools3.log" --journal-dir "$d/journal" 2>/dev/null)"; RC3=$?
+  printf '%s\n' "$OUT3" | grep -q $'^SUPERSEDED-BUILD-FAILED\tfffffff' \
+    || { echo "selftest: RED carrier build not classified SUPERSEDED-BUILD-FAILED (got: $OUT3)" >&2; exit 1; }
+  [ "$RC3" -eq 0 ] || { echo "selftest: RED carrier build raised the orphan alarm (rc=$RC3)" >&2; exit 1; }
+  # (b) GREEN build, never swapped -> STILL ORPHANED rc 1
+  FAKE_GH_MODE=red FAKE_GH_CONC=success "$SELF" --log "$d/tools3.log" --journal-dir "$d/journal" >/dev/null 2>&1
+  [ $? -eq 1 ] || { echo "selftest: GREEN-but-unswapped dispatch must stay ORPHANED rc=1" >&2; exit 1; }
+  # (c) no build at all -> ORPHANED rc 1 (the alarm this tool exists for)
+  FAKE_GH_MODE=none "$SELF" --log "$d/tools3.log" --journal-dir "$d/journal" >/dev/null 2>&1
+  [ $? -eq 1 ] || { echo "selftest: a dispatch with no build must stay ORPHANED rc=1" >&2; exit 1; }
+  # (d) gh broken -> graceful degradation, never a false SUPERSEDED
+  FAKE_GH_MODE=err "$SELF" --log "$d/tools3.log" --journal-dir "$d/journal" >/dev/null 2>&1
+  [ $? -eq 1 ] || { echo "selftest: broken gh must not mask an orphan" >&2; exit 1; }
+  echo "selftest OK"; exit 0
+fi
+
+HOURS=24; GRACE=120; SUPERSEDE_HOURS=12
+LOG="${OC_TOOLS_LOG:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/tools.log}"
+JDIR="${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}/oc-deploy/journal"
+OCDEV_DIR="${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}"
+DEPLOYED_META="$OCDEV_DIR/deployed.meta.json"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --hours) HOURS="${2:-}"; shift 2 ;;
+    --log) LOG="${2:-}"; shift 2 ;;
+    --journal-dir) JDIR="${2:-}"; shift 2 ;;
+    --grace) GRACE="${2:-}"; shift 2 ;;
+    --meta) DEPLOYED_META="${2:-}"; shift 2 ;;
+    --supersede-hours) SUPERSEDE_HOURS="${2:-}"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+[ -f "$LOG" ] || { echo "log missing: $LOG" >&2; exit 3; }
+[ -d "$JDIR" ] || { echo "journal dir missing: $JDIR" >&2; exit 3; }
+
+# Robustness (2026-08-31 live incident): the canonical log carries rogue
+# non-JSON TSV lines (a stamp script wrote raw text on 08-29, lines 112-113).
+# jq ABORTS at the first bad line — a naive consumer scans only the head and
+# can emit a false CLEAN. Pre-pass: isolate JSON lines, count and NAME the
+# skipped ones loudly.
+JSON_LOG="$(mktemp)" || exit 3
+trap '_rc=$?; rm -f "$JSON_LOG" /tmp/.oc-ship-audit.$$; oc_log_finish "$_rc"' EXIT
+BAD=0
+while IFS= read -r line; do
+  case "$line" in
+    "{"*) printf '%s\n' "$line" >> "$JSON_LOG" ;;
+    *) [ -n "$line" ] && { BAD=$((BAD + 1)); echo "audit: SKIPPED non-JSON line: ${line:0:80}" >&2; } ;;
+  esac
+done < "$LOG"
+[ "$BAD" -gt 0 ] && echo "audit: $BAD non-JSON legacy lines skipped — log format contract violated, scan covers JSON rows only" >&2
+
+SINCE="$(date -u -d "-$HOURS hours" +%s)"
+SINCE_ISO="$(date -u -d "-$HOURS hours" +%Y-%m-%dT%H:%M:%SZ)"
+NOW="$(date -u +%s)"
+ORPHANS=0
+
+# successful dispatch rows within the window (single-pass extraction)
+jq -r --arg since "$SINCE_ISO" 'select(.tool=="oc-deploy" and .exit==0 and .ts >= $since)
+  | select(.args | startswith("ship --sha ")) | select(.args | contains("--execute"))
+  | [(.args | capture("^ship --sha (?<sha>[0-9a-f]{7,40})").sha), .ts] | @tsv' \
+  "$JSON_LOG" 2>/dev/null | while IFS=$'\t' read -r sha ts; do
+  [ -n "$sha" ] && [ -n "$ts" ] || continue
+  short="${sha:0:7}"
+  TE="$(date -u -d "$ts" +%s 2>/dev/null)" || continue
+  [ "$TE" -ge "$SINCE" ] || continue
+  ANY=1
+  LAG="$(( (NOW - TE) / 3600 )).$(( ((NOW - TE) % 3600) * 10 / 3600 ))"
+  EV=""
+  # evidence 1: swap journal for this sha (file name or auto-swap line)
+  if ls "$JDIR"/swap-"$short"-*.jsonl >/dev/null 2>&1 \
+     && grep -l '"step":"auto-swap"' "$JDIR"/swap-"$short"-*.jsonl >/dev/null 2>&1; then
+    EV="swap-journal swap-$short*"
+  fi
+  # evidence 2: journal content match (full sha inside any swap journal)
+  if [ -z "$EV" ] && grep -l "\"sha\":\"$sha\"" "$JDIR"/swap-*.jsonl >/dev/null 2>&1; then
+    EV="swap-journal content"
+  fi
+  if [ -z "$EV" ]; then
+    if [ $((NOW - TE)) -lt $((GRACE * 60)) ]; then
+      printf 'IN-FLIGHT\t%s\t%s\t%s\t-\n' "$short" "$ts" "$LAG"
+    else
+      # Superseded-orphan aging (2026-09-08 study): a dispatch older than
+      # SUPERSEDE_HOURS (default 12h) whose sha is an ANCESTOR of the sha
+      # currently recorded in deployed.meta.json was never swapped because a
+      # LATER build replaced it — a superseded orphan, not a live incident.
+      # Reported as SUPERSEDED (no rc-1 alarm); only a non-ancestor orphan
+      # (dispatch-only rc=0 with nothing shipped after) stays ORPHANED rc 1.
+      # Ancestor authority is gh compare (GitHub), NOT local git: old fork
+      # shas can be unreachable locally (fetch by sha refused, GC'd on the
+      # fork side) while still resolving server-side (2e161df3 case).
+      # ---- carrier build-outcome leg (task 15, fork #420) ----------------
+      # A dispatch whose carrier build went RED never produced an artifact,
+      # so no swap could ever exist: the dispatch is DISCHARGED, not
+      # orphaned -- and the build's own conclusion IS outcome evidence.
+      # The dispatched sha is carried ONLY by the JOB NAME: the run object's
+      # head_sha is the carrier branch tip (ci/quick-build-linux), never the
+      # built sha, and the workflow declares no run-name.  So: one bounded
+      # list call, then one view call per candidate, OLDEST first -- the
+      # build is created seconds after the ship row, so the first candidate
+      # normally answers it.  The loop counter caps the calls; `head` is
+      # deliberately NOT used, since closing that pipe early SIGPIPEs sort
+      # and `set -o pipefail` would then silently empty the candidate list.
+      # Absent / unfinished / GREEN-but-unswapped builds all fall through to
+      # the ancestry test below: only a RED build discharges a dispatch.
+      BUILD_CONC=""; BUILD_RUN=""
+      if command -v gh >/dev/null 2>&1; then
+        BUILD_REPO="${OC_SHIP_AUDIT_REPO:-leshchenko1979/opencrabs}"
+        BUILD_CAND="$(gh run list --repo "$BUILD_REPO" --workflow quick-build-linux.yml \
+                        --created ">=$ts" --limit 100 --json databaseId,createdAt </dev/null 2>/dev/null \
+                      | jq -r '.[] | "\(.databaseId)\t\(.createdAt)"' 2>/dev/null | sort -k2)" || BUILD_CAND=""
+        BUILD_N=0
+        while IFS=$'\t' read -r _rid _rts; do
+          [ -n "$_rid" ] || continue
+          BUILD_N=$((BUILD_N + 1))
+          [ "$BUILD_N" -le 10 ] || break
+          # the ORDER gates job embeds the same sha but is a different job:
+          # it must not be mistaken for the build's conclusion.
+          _c="$(gh run view "$_rid" --repo "$BUILD_REPO" --json jobs </dev/null 2>/dev/null \
+                | jq -r --arg s "$sha" '[.jobs[] | select((.name | contains($s)) and ((.name | contains("ORDER gates")) | not)) | .conclusion] | @tsv' 2>/dev/null)" || _c=""
+          if [ -n "$_c" ]; then BUILD_CONC="$_c"; BUILD_RUN="$_rid"; break; fi
+        done <<OC_BUILD_CAND
+$BUILD_CAND
+OC_BUILD_CAND
+      fi
+      if [ "$BUILD_CONC" = "failure" ]; then
+        # no artifact was ever produced -- nothing was left unshipped
+        printf 'SUPERSEDED-BUILD-FAILED\t%s\t%s\t%s\tcarrier build failure (run %s)\n' \
+          "$short" "$ts" "$LAG" "$BUILD_RUN"
+        continue
+      fi
+      DEPLOYED_SHA=""
+      [ -f "$DEPLOYED_META" ] && DEPLOYED_SHA="$(jq -r '.sha // .commit // empty' "$DEPLOYED_META" 2>/dev/null)"
+      # NOTE: compare status "ahead" means MAIN is ahead of the sha, i.e. the
+      # sha is an ANCESTOR of main -- the only status that discharges a
+      # dispatch.  "diverged" is NOT an ancestor (measured 2026-09-20:
+      # ee4f679 read diverged / ahead_by 355 / behind_by 234) and must NOT be
+      # accepted here: that sha's carrier build went RED, which the build leg
+      # above discharges on its own evidence.  Broadening this test to accept
+      # "diverged" would silence genuinely-unmerged dispatches -- the exact
+      # class this tool exists to catch.
+      SUPERSEDED=0
+      if [ $((NOW - TE)) -gt $((SUPERSEDE_HOURS * 3600)) ] && [ -n "$DEPLOYED_SHA" ] && [ "$sha" != "$DEPLOYED_SHA" ]; then
+        if command -v gh >/dev/null 2>&1 && [ -n "${OC_SHIP_AUDIT_REPO:-leshchenko1979/opencrabs}" ]; then
+          CMP="$(gh api "repos/${OC_SHIP_AUDIT_REPO:-leshchenko1979/opencrabs}/compare/${sha}...main" --jq '.status' 2>/dev/null)" || CMP=""
+          [ "$CMP" = "ahead" ] && SUPERSEDED=1   # sha is behind main: main moved on
+        fi
+      fi
+      if [ "$SUPERSEDED" -eq 1 ]; then
+        printf 'SUPERSEDED\t%s\t%s\t%s\tbehind fork main (gh compare)\n' "$short" "$ts" "$LAG"
+      else
+        printf 'ORPHANED\t%s\t%s\t%s\tno swap journal for sha\n' "$short" "$ts" "$LAG"
+      fi
+    fi
+  else
+    printf 'SWAPPED\t%s\t%s\t%s\t%s\n' "$short" "$ts" "$LAG" "$EV"
+  fi
+done > /tmp/.oc-ship-audit.$$ 2>/dev/null
+
+if [ -s /tmp/.oc-ship-audit.$$ ]; then
+  cat /tmp/.oc-ship-audit.$$
+  grep -q '^ORPHANED' /tmp/.oc-ship-audit.$$ && ORPHANS=1
+fi
+rm -f /tmp/.oc-ship-audit.$$
+if [ "$ORPHANS" -eq 1 ]; then
+  echo "audit: ORPHANED dispatch found — dispatch-only rc=0 is NOT a shipped build" >&2
+  exit 1
+fi
+echo "audit: clean (no orphaned dispatches in the last ${HOURS}h)" >&2
+exit 0

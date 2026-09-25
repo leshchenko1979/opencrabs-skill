@@ -1,7 +1,7 @@
 # HEALTH-CHECKS.md — hourly fleet health & cleanliness
 
 **Owner order 2026-09-11.** Toolsmith owns the cleanup/health process. This file
-is the operational runbook and remediation catalog mechanized by `tools/oc-health`
+is the operational runbook and remediation catalog mechanized by `tools/state/oc-health`
 (see `tools/docs/HEALTH-CLASSES.md` for the 8-class architecture and CLI contract).
 
 **Primary rule (owner):** *workers clean after themselves.* A lane that leaves
@@ -35,7 +35,7 @@ after sloppy lanes and hide the pattern.
 - **Invariant:** Count registered worktrees vs directories on disk. Flag directories
   with no registration (crashed `oc-wt remove`) and registered worktrees whose
   branch is already merged into main.
-- **Remediation:** Report only. Removal is `tools/oc-wt remove <task>` — enforces dirty-tree
+- **Remediation:** Report only. Removal is `tools/git/oc-wt remove <task>` — enforces dirty-tree
   gate and journals deletion; never use raw `rm -rf`.
 
 ## 3. Ledger backups — `SAFE` (prune old, keep newest N)
@@ -76,7 +76,7 @@ after sloppy lanes and hide the pattern.
 ## 7. Version / ledger consistency — `QUIRK`
 
 - **Where:** `SKILL.md` version vs `workers-ledger.json` metadata.
-- **Invariant:** `tools/oc-ledger check-version` must report MATCH. Lane `last_acked` must
+- **Invariant:** `tools/state/oc-ledger check-version` must report MATCH. Lane `last_acked` must
   not be stale (>7 days).
 - **Remediation:** Report; resolution requires `oc-ledger sync` (HQ release flow).
 
@@ -206,7 +206,7 @@ after sloppy lanes and hide the pattern.
 
 - **Where:** every registered worktree of `$OC_HEALTH_FORK` and `$SKILL_CHECK`, via `git worktree list --porcelain`.
 - **Invariant:** porcelain ` D` (tracked file deleted in the worktree, NOT staged) is never a legitimate mid-work state — a deliberate removal is staged by `git rm` and then reads `D ` in the INDEX column, so a lane mid-work cannot trip this. The staged form is a DIFFERENT condition and is deliberately NOT flagged.
-- **Remediation:** Report only (`git checkout -- <path>` in the affected tree, or stage the removal). Removing the tree itself stays `tools/oc-wt remove`.
+- **Remediation:** Report only (`git checkout -- <path>` in the affected tree, or stage the removal). Removing the tree itself stays `tools/git/oc-wt remove`.
 - **Quirk:** n/a — the finding IS the signal.
 
 ---

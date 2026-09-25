@@ -1,0 +1,398 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-attrib — attribute commits in a range to worker LANES via Session-Id
+# trailers joined against workers-ledger.json.
+#
+# War-story provenance (2026-08-26/27): HQ cracked THREE rogue CI
+# dispatches by hand, pulling trailers off remote forks and cross-referencing
+# session UUIDs against the roster. This turns that ritual into one call.
+# Unsigned or ledger-unmapped sessions are NEVER silently dropped — they carry
+# literal markers "(unsigned)" / "(unmapped)" and stay visible in every row.
+#
+# Usage:
+#   ./tools/state/oc-attrib --repo <path> --range <A..B> [--ledger workers-ledger.json] [--json]
+#   ./tools/state/oc-attrib --repo <path> --trailers-only --range <A..B>
+#       --trailers-only: raw extraction backend — `sha<TAB>session|(unsigned)`
+#       per commit, NO ledger join. Consumers (oc-harvest-sweep Leg T) delegate
+#       here so the Session-Id extraction lives in ONE place (E2 finding 5).
+#   ./tools/state/oc-attrib --repo <path> --deployed [--ledger workers-ledger.json] [--json]
+#       --deployed composes <prev_sha>..<deployed_sha> from deployed markers
+#       (deployed.sha + deployed.meta.json) in $OC_DEPLOY_STATE_DIR (default ${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev} — post-v0.4.60 state split)
+#   ./tools/state/oc-attrib --selftest
+#
+# NOVELTY FILTER (issue #407, v0.4.212) — --novel / --no-novel
+#   After a lineage-rewriting sync rebase, `prev_sha..sha` stops being a ship
+#   delta: the rebase orphans prev_sha, so the range degenerates into "every
+#   commit on main the old base does not reach" (run 35441550360: 310 commits
+#   over 9 days, of which 276 were merely REPLAYED under new shas). Fan-out over
+#   that range credits lanes for content that has been live for days — the harm
+#   s2-swap-journal-spec.md §Duty-4 P-01 exists to prevent, reached through the
+#   rewrite door instead of the merge door.
+#
+#   --novel keeps only commits whose change is NOT already present in the
+#   baseline. Novelty is patch-id equivalence via `git cherry <baseline> <tip>`
+#   (`+` = novel, `-` = a patch-id-equivalent commit exists in the baseline).
+#   --deployed implies --novel (it is the fan-out range composer); an explicit
+#   --no-novel always wins, and --range stays RAW by default so the historical
+#   raw behaviour is unchanged for every existing caller.
+#
+#   TWO measured properties of `git cherry` drive the implementation:
+#     (a) it OMITS MERGE COMMITS — a merge has no patch-id, so it can never be
+#         matched and never appears in the output at all. Filtering by
+#         membership in its output would therefore SILENTLY DROP merges (and
+#         can empty the result entirely on a merge-heavy range). Merges are
+#         consequently passed through UNFILTERED — see the loop.
+#     (b) an EMPTY commit (no changed paths) produces NO patch-id — `git
+#         patch-id` prints NOTHING for it — yet `git cherry` STILL matches
+#         empty against empty: measured 2026-09-19 on a controlled fixture, an
+#         empty whose baseline holds an empty twin (even a different message) is
+#         reported `-`, while an empty with NO empty twin is reported `+`. So an
+#         empty is NOT uniformly `+`, and it must NOT be assumed harmless: an
+#         empty with no twin would sail through as a CONTRIBUTOR. It is
+#         therefore excluded EXPLICITLY (a non-merge commit with no changed
+#         paths), which is also why this is a correctness guard rather than a
+#         tidy-up. Harm case B in #407: a lane's only in-range commit was an
+#         empty `chore(attribution): sign tip` commit. (In run 35441550360 all
+#         11 in-range empties were `-` — each had a twin in prev's history — so
+#         the explicit branch counted 0 there; it still has to exist for the
+#         untwinned case.)
+#
+#   ERROR DIRECTION: the filter errs toward KEEPING. It drops a commit only when
+#   `git cherry` positively reports a patch-id-equivalent twin in the baseline.
+#   `git cherry` is known to report `+` for work that has ALREADY landed under a
+#   rewritten sha (its false-negative direction, flagged by the Triage lane
+#   2026-09-19), which leaves a residual replayed credit — it can never
+#   manufacture a drop of genuinely novel work. A missed contribution (a lane
+#   never told its work shipped) is the worse failure, so the asymmetry is
+#   deliberate: this filter removes the bulk of replay noise, and guarantees it
+#   adds none.
+#
+#   Fail OPEN: if the baseline object is absent or `git cherry` cannot run, the
+#   filter is DISABLED with a loud stderr warning and the raw range is
+#   attributed — never an empty result (this tool never silently drops).
+#   --trailers-only is ALWAYS raw: oc-harvest-sweep Leg T must still SEE empty
+#   commits in order to report them MISSING a Session-Id.
+#
+# Exit codes: 0 ok · 2 usage / bad range syntax · 3 git failure · 4 empty range
+#            · 5 --deployed markers missing (deployed.sha or prev_sha absent)
+# Output (TSV, sorted by session):
+#   session <TAB> topic_id <TAB> feature <TAB> issue_refs(CSV) <TAB> sha7s(CSV)
+# =============================================================================
+set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-attrib" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT   # early exits (usage/git-fail) — cleanup traps below supersede but also log
+
+usage() { [ -n "${1:-}" ] && echo "oc-attrib: $1" >&2; echo "usage: $0 --repo <path> --range <A..B> [--novel|--no-novel] | --deployed [--ledger <file>] [--first-parent] [--novel|--no-novel] [--json] | --trailers-only --range <A..B> | --contributors | --selftest" >&2; exit 2; }   # lens C MED-2/MED-4 (v0.4.79)
+help()   { echo "usage: $0 --repo <path> --range <A..B> [--novel|--no-novel] | --deployed [--ledger <file>] [--first-parent] [--novel|--no-novel] [--json] | --trailers-only --range <A..B> | --contributors | --selftest"; echo "Exit: 0 ok / 2 usage / 3 git failure / 4 empty range / 5 deployed-markers-missing"; echo "  --novel     keep only commits NOT already present in the baseline (patch-id equivalence, #407); implied by --deployed"; echo "  --no-novel  force the raw range (overrides the --deployed implication)"; }  # C-#3: help=0
+
+SELFTEST=0; JSON=0; REPO="."; RANGE=""; LEDGER=""; DEPLOYED=0; TRAILERS_ONLY=0; CONTRIB=0; FIRST_PARENT=0
+NOVEL=0; NOVEL_SET=""   # #407: tri-state — unset means "derive from --deployed"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo) [ -n "${2:-}" ] || usage "--repo needs a path"; REPO="${2:-}"; shift ;;
+    --range) RANGE="${2:-}"; shift ;;
+    --deployed) DEPLOYED=1 ;;
+    --trailers-only) TRAILERS_ONLY=1 ;;
+    --first-parent) FIRST_PARENT=1 ;;
+    --contributors) CONTRIB=1 ;;
+    --novel) NOVEL=1; NOVEL_SET=1 ;;   # #407
+    --no-novel) NOVEL=0; NOVEL_SET=1 ;;   # #407: explicit always beats the --deployed implication
+    --ledger) LEDGER="${2:-}"; shift ;;
+    --json) JSON=1 ;;
+    --selftest) SELFTEST=1 ;;
+    -h|--help) help; exit 0 ;;  # C-#3
+    *) usage "unknown flag: $1" ;;
+  esac
+  shift
+done
+# #407: --deployed implies --novel (it is the fan-out range composer). An explicit
+# --novel/--no-novel always wins; --range alone stays RAW, so no existing caller's
+# behaviour changes.
+[ -n "$NOVEL_SET" ] || { [ "$DEPLOYED" -eq 1 ] && NOVEL=1; }
+if [ "$CONTRIB" -eq 1 ] && [ "$JSON" -eq 1 ]; then usage; fi   # E6: --contributors is TSV-only
+
+if [ "$SELFTEST" -eq 1 ]; then
+  d="$(mktemp -d)" || exit 3
+  trap '_rc=$?; rm -rf "$d"; oc_log_finish "$_rc"' EXIT
+  git -C "$d" init -q -b main || exit 3
+  git -C "$d" config user.email t@t; git -C "$d" config user.name t
+  mk() { printf '%s' "$1" > "$d/f.txt"; git -C "$d" add f.txt
+         printf '%s' "$2" > "$d/.msg"; git -C "$d" commit -q -F "$d/.msg"; }
+  M1='#1239 archive scoping fix
+
+Session-Id: cccccccc-4444-5555-6666-777777777777
+Issue-Ref: #1239'
+  M2='hotfix, no trailer'
+  mk a1 "$M1"; mk a2 "$M2"
+  printf '{"workers":[{"uuid":"cccccccc-4444-5555-6666-777777777777","role":"editor","topic_id":31789,"feature":"plan-tool"}]}\n' > "$d/wl.json"
+  OUT="$("$0" --repo "$d" --range main --ledger "$d/wl.json")"
+  [ $? -eq 0 ] || { echo "selftest: nonzero exit" >&2; exit 1; }
+  printf '%s\n' "$OUT" | awk -F'\t' '$1=="cccccccc-4444-5555-6666-777777777777"&&$2=="31789"&&$3=="plan-tool"&&$4=="#1239"{f=1} END{exit f?0:1}' \
+    || { echo "selftest: mapped row wrong" >&2; exit 1; }
+  printf '%s\n' "$OUT" | grep -q '(unsigned)' || { echo "selftest: unsigned silently dropped" >&2; exit 1; }
+  printf '%s\n' "$OUT" | wc -l | grep -qx 2 || { echo "selftest: unexpected row count" >&2; exit 1; }
+  # C2: --deployed composes prev_sha..deployed from markers; must equal explicit range
+  R_FROM="$(git -C "$d" rev-parse HEAD~1)"; R_TO="$(git -C "$d" rev-parse HEAD)"
+  printf '%s\n' "$R_TO" > "$d/deployed.sha"
+  printf '{"sha":"%s","prev_sha":"%s"}\n' "$R_TO" "$R_FROM" > "$d/deployed.meta.json"
+  OUT_D="$(OC_DEPLOY_STATE_DIR="$d" "$0" --repo "$d" --deployed --ledger "$d/wl.json")" || { echo "selftest: --deployed nonzero exit" >&2; exit 1; }
+  OUT_R="$("$0" --repo "$d" --range "$R_FROM..$R_TO" --ledger "$d/wl.json")"
+  [ "$OUT_D" = "$OUT_R" ] || { echo "selftest: --deployed range != explicit range" >&2; exit 1; }
+
+  # Duty-4 P-01: --first-parent selftest
+  git -C "$d" checkout -q -b side
+  M3='foreign branch commit
+
+Session-Id: ffffffff-4444-5555-6666-777777777777'
+  mk a3 "$M3"
+  git -C "$d" checkout -q main
+  git -C "$d" merge -q side -m "merge side" --no-ff
+  R_MERGE="$(git -C "$d" rev-parse HEAD~1)..$(git -C "$d" rev-parse HEAD)"
+  OUT_FP="$("$0" --repo "$d" --range "$R_MERGE" --first-parent --ledger "$d/wl.json")"
+  oc_has "$OUT_FP" "ffffffff-4444-5555-6666-777777777777" && { echo "selftest: --first-parent leaked foreign trailer" >&2; exit 1; }
+  mkdir -p "$d/nostate"
+  OC_DEPLOY_STATE_DIR="$d/nostate" OC_TOOLS_NOLOG=1 "$0" --repo "$d" --deployed >/dev/null 2>&1; rc=$?
+  [ $rc -eq 5 ] || { echo "selftest: --deployed missing markers rc=$rc want=5" >&2; exit 1; }
+  "$0" --repo "$d" --range main --deployed >/dev/null 2>&1; rc=$?
+  [ $rc -eq 2 ] || { echo "selftest: --range + --deployed rc=$rc want=2" >&2; exit 1; }
+  # E2 finding 5: --trailers-only raw backend (sha<TAB>session, unsigned kept)
+  OUT_T="$("$0" --repo "$d" --trailers-only --range "4b825dc642cb6eb9a060e54bf8d69288fbee4904..main")" \
+    || { echo "selftest: --trailers-only nonzero exit" >&2; exit 1; }
+  printf '%s\n' "$OUT_T" | awk -F'\t' '$2=="cccccccc-4444-5555-6666-777777777777"{m=1} $2=="(unsigned)"{u=1} END{exit (m&&u)?0:1}' \
+    || { echo "selftest: --trailers-only output wrong: $OUT_T" >&2; exit 1; }
+  OUT_C="$("$0" --repo "$d" --range "4b825dc642cb6eb9a060e54bf8d69288fbee4904..main" --contributors)" \
+    || { echo "selftest: --contributors nonzero exit" >&2; exit 1; }
+  printf '%s\n' "$OUT_C" | awk -F'\t' 'NF!=3{bad=1} END{exit bad?1:(NR>0?0:1)}' \
+    || { echo "selftest: --contributors output not 3-col TSV: $OUT_C" >&2; exit 1; }
+  # ---- #407: novelty filter — replayed twin, empty commit, merge passthrough ----
+  # Fixture: the twin lands on the BASELINE lineage first (so `git cherry`'s
+  # upstream contains it), and the tip branches from BEFORE it, then replays it
+  # (same patch-id, NEW sha, trailer preserved) — the exact shape of #407
+  # instance A. The tip also adds an EMPTY commit carrying a Session-Id and a
+  # genuinely novel commit.
+  # NOTE the trap this fixture was first written into: a twin that is a CHILD of
+  # the baseline is NOT reachable from it, so `git cherry` cannot match it and
+  # reports `+` — the assertion then passes vacuously against a fixture with no
+  # twin in the baseline at all. The twin must be an ANCESTOR of the baseline.
+  NR="$d/nr407"
+  git init -q -b main "$NR"; git -C "$NR" config user.email t@t; git -C "$NR" config user.name t
+  S_PRE='d0000000-0000-0000-0000-0000000000e4'
+  S_TWIN='d0000000-0000-0000-0000-0000000000b2'
+  S_EMPTY='d0000000-0000-0000-0000-0000000000c3'
+  S_NOVEL='d0000000-0000-0000-0000-0000000000a1'
+  S_SIDE='e0000000-0000-0000-0000-0000000000f9'
+  nmk() { printf '%s\n' "$2" > "$NR/$1"; git -C "$NR" add "$1"; printf '%s' "$3" > "$NR/.msg"; git -C "$NR" commit -q -F "$NR/.msg"; }
+  nmk base.txt base 'baseline'
+  NR_ROOT="$(git -C "$NR" rev-parse HEAD)"
+  nmk twin.txt twinned "twin source
+
+Session-Id: $S_TWIN"
+  NR_TWIN="$(git -C "$NR" rev-parse HEAD)"
+  NR_BASE="$NR_TWIN"   # the baseline CONTAINS the twin — cherry's upstream must reach it
+  git -C "$NR" checkout -q -b tip "$NR_ROOT"
+  nmk pre.txt pre "pre-tip commit
+
+Session-Id: $S_PRE"
+  git -C "$NR" cherry-pick "$NR_TWIN" >/dev/null 2>&1 || { echo "selftest: cherry-pick failed" >&2; exit 1; }
+  NR_REPLAY="$(git -C "$NR" rev-parse HEAD)"
+  [ "$NR_REPLAY" != "$NR_TWIN" ] || { echo "selftest: fixture broken — replay reproduced the original sha, so there is NO twin" >&2; exit 1; }
+  [ "$(git -C "$NR" show "$NR_REPLAY" | git patch-id --stable | cut -d' ' -f1)" = "$(git -C "$NR" show "$NR_TWIN" | git patch-id --stable | cut -d' ' -f1)" ] \
+    || { echo "selftest: fixture broken — replay is not patch-id-equivalent to the twin" >&2; exit 1; }
+  git -C "$NR" commit -q --allow-empty -m "chore: sign tip
+
+Session-Id: $S_EMPTY"
+  nmk novel.txt novel "genuinely new
+
+Session-Id: $S_NOVEL"
+  NR_TIP="$(git -C "$NR" rev-parse HEAD)"
+  OUT_RW="$("$0" --repo "$NR" --range "$NR_BASE..$NR_TIP")"
+  OUT_NV="$("$0" --repo "$NR" --range "$NR_BASE..$NR_TIP" --novel 2>/dev/null)"
+  nraw="$(printf '%s\n' "$OUT_RW" | wc -l)"; nnov="$(printf '%s\n' "$OUT_NV" | wc -l)"
+  [ "$nraw" -eq 4 ] || { echo "selftest: #407 raw rows=$nraw want 4" >&2; exit 1; }
+  [ "$nnov" -eq 2 ] || { echo "selftest: #407 --novel rows=$nnov want 2 (raw=$nraw)" >&2; exit 1; }
+  printf '%s\n' "$OUT_NV" | grep -q "$S_NOVEL" || { echo "selftest: #407 --novel dropped the NOVEL commit" >&2; exit 1; }
+  printf '%s\n' "$OUT_NV" | grep -q "$S_PRE"   || { echo "selftest: #407 --novel dropped a novel commit" >&2; exit 1; }
+  printf '%s\n' "$OUT_NV" | grep -q "$S_TWIN"  && { echo "selftest: #407 --novel KEPT the replayed twin (patch-id equivalence missed)" >&2; exit 1; }
+  printf '%s\n' "$OUT_NV" | grep -q "$S_EMPTY" && { echo "selftest: #407 --novel KEPT the empty commit" >&2; exit 1; }
+  # explicit --no-novel must restore the raw range exactly (parity, not a lookalike)
+  OUT_NN="$("$0" --repo "$NR" --range "$NR_BASE..$NR_TIP" --no-novel)"
+  [ "$OUT_NN" = "$OUT_RW" ] || { echo "selftest: #407 --no-novel != raw range" >&2; exit 1; }
+  # --deployed implies --novel (it is the fan-out range composer)
+  printf '%s\n' "$NR_TIP" > "$NR/deployed.sha"
+  printf '{"sha":"%s","prev_sha":"%s"}\n' "$NR_TIP" "$NR_BASE" > "$NR/deployed.meta.json"
+  OUT_DEP="$(OC_DEPLOY_STATE_DIR="$NR" "$0" --repo "$NR" --deployed 2>/dev/null)"
+  [ "$OUT_DEP" = "$OUT_NV" ] || { echo "selftest: #407 --deployed does not imply --novel" >&2; exit 1; }
+  # MERGE PASSTHROUGH: `git cherry` omits merges (no patch-id), so a membership
+  # test would silently DROP the merge row. It must survive --novel as (unsigned).
+  git -C "$NR" checkout -q -b mside "$NR_TIP"
+  nmk side.txt side "foreign side commit
+
+Session-Id: $S_SIDE"
+  git -C "$NR" checkout -q tip
+  git -C "$NR" merge -q --no-ff mside -m "merge side" >/dev/null 2>&1
+  NR_MTIP="$(git -C "$NR" rev-parse HEAD)"
+  OUT_M="$("$0" --repo "$NR" --range "$NR_BASE..$NR_MTIP" --novel 2>/dev/null)"
+  nm="$(printf '%s\n' "$OUT_M" | wc -l)"
+  [ "$nm" -eq 4 ] || { echo "selftest: #407 merge-passthrough rows=$nm want 4 (pre+novel+side+merge)" >&2; exit 1; }
+  printf '%s\n' "$OUT_M" | grep -q '(unsigned)' || { echo "selftest: #407 merge commit SILENTLY DROPPED by --novel" >&2; exit 1; }
+  printf '%s\n' "$OUT_M" | grep -q "$S_TWIN" && { echo "selftest: #407 twin survived in merge range" >&2; exit 1; }
+  # --trailers-only is ALWAYS raw: oc-harvest-sweep Leg T must SEE empty commits
+  # in order to report them MISSING a Session-Id.
+  OUT_TN="$("$0" --repo "$NR" --range "$NR_BASE..$NR_TIP" --novel --trailers-only 2>"$d/tn407.err")"
+  grep -q "no effect with --trailers-only" "$d/tn407.err" || { echo "selftest: #407 --novel+--trailers-only did not warn" >&2; exit 1; }
+  printf '%s\n' "$OUT_TN" | grep -q "$S_EMPTY" || { echo "selftest: #407 --trailers-only dropped the empty commit (must stay RAW)" >&2; exit 1; }
+  # FAIL-OPEN: a single-ref range carries no baseline -> filter DISABLED, loud
+  # warning, raw output. Never a silent empty result.
+  OUT_SR="$("$0" --repo "$NR" --range main --novel 2>"$d/sr407.err")"
+  grep -q "single-ref range" "$d/sr407.err" || { echo "selftest: #407 single-ref --novel did not warn" >&2; exit 1; }
+  [ "$OUT_SR" = "$("$0" --repo "$NR" --range main)" ] || { echo "selftest: #407 single-ref --novel was not fail-open" >&2; exit 1; }
+  echo "selftest OK"; exit 0
+fi
+
+# C2 (KERNEL 2026-08-28): --deployed composes prev_sha..deployed from markers.
+if [ "$DEPLOYED" -eq 1 ]; then
+  [ -z "$RANGE" ] || usage   # --range and --deployed are alternatives
+  SD="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"   # v0.4.60: state dir (owner 06:03Z migration)
+  TO_REPO="$(head -1 "$SD/deployed.sha" 2>/dev/null)"
+  FROM_REPO="$(jq -r '.prev_sha // empty' "$SD/deployed.meta.json" 2>/dev/null)"
+  [ -n "$TO_REPO" ] && [ -n "$FROM_REPO" ] || { echo "deployed markers missing in: $SD" >&2; exit 5; }
+  RANGE="$FROM_REPO..$TO_REPO"
+fi
+[ -n "$RANGE" ] || usage
+git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repo: $REPO" >&2; exit 3; }
+
+FP_FLAG=""
+[ "$FIRST_PARENT" -eq 1 ] && FP_FLAG="--first-parent"
+
+# ---- #407 novelty filter: baseline + `git cherry` patch-id set --------------
+# `--novel` keeps only commits whose change is NOT already present in the baseline
+# (see the header block for the full rationale and the two measured `git cherry`
+# properties). `--deployed` implies it; RAW is the default and is byte-identical
+# to pre-#407 behaviour for every --range caller.
+NOVEL_SHAS=""; NOVEL_BASE=""; NOVEL_TIP=""
+REPLAYED=0; EMPTY=0; KEPT=0
+if [ "$NOVEL" -eq 1 ] && [ "$TRAILERS_ONLY" -eq 1 ]; then
+  echo "oc-attrib: --novel has no effect with --trailers-only (the raw backend must keep empty commits visible to oc-harvest-sweep Leg T)" >&2
+elif [ "$NOVEL" -eq 1 ]; then
+  case "$RANGE" in
+    *..*) NOVEL_BASE="${RANGE%%..*}"; NOVEL_TIP="${RANGE#*..}" ;;
+    *)    NOVEL_BASE="";              NOVEL_TIP="$RANGE" ;;   # single-ref range carries no baseline
+  esac
+  if [ -z "$NOVEL_BASE" ]; then
+    echo "oc-attrib: WARNING novelty unavailable for single-ref range '$RANGE' — fan-out NOT filtered" >&2
+  else
+    NOVEL_SHAS="$(mktemp)" || exit 3
+    # `git cherry` prints '<+|-| > <sha>': '+' = no patch-id-equivalent commit in
+    # the baseline, '-' = already there. The pipeline rc is checked FIRST so a git
+    # FAILURE can never be mistaken for a legitimate all-replayed empty set.
+    if git -C "$REPO" rev-parse --verify --quiet "${NOVEL_BASE}^{commit}" >/dev/null 2>&1 \
+       && git -C "$REPO" cherry "$NOVEL_BASE" "$NOVEL_TIP" 2>/dev/null \
+          | awk '$1=="+"{print $2}' > "$NOVEL_SHAS"; then
+      :   # filter active — the set may legitimately be EMPTY (every commit replayed)
+    else
+      echo "oc-attrib: WARNING novelty unavailable (baseline '$NOVEL_BASE' unreadable or git cherry failed) — fan-out NOT filtered" >&2
+      rm -f "$NOVEL_SHAS"; NOVEL_SHAS=""
+    fi
+  fi
+fi
+
+# #407: an EMPTY commit (non-merge, no changed paths) yields NO patch-id, so
+# `git cherry` can never match it — it must be excluded explicitly.
+oc_empty_commit() {   # 0 iff $1 is a NON-MERGE commit with no changed paths
+  [ -z "$(git -C "$REPO" diff-tree --no-commit-id --name-only -r "$1" 2>/dev/null)" ] || return 1
+  [ "$(git -C "$REPO" rev-list --parents -n1 "$1" 2>/dev/null | wc -w)" -le 2 ]
+}
+
+# --trailers-only (E2 finding 5, v0.4.72): raw sha<TAB>session backend — no ledger join.
+if [ "$TRAILERS_ONLY" -eq 1 ]; then
+  for sha in $(git -C "$REPO" rev-list --reverse $FP_FLAG "$RANGE"); do
+    body="$(git -C "$REPO" show -s --format=%B "$sha")" || exit 3
+    sess="$(oc_session_trailer "$body" | tr -d '[:space:]')"   # one-convention helper (Duty-6 lens F task 2)
+    [ -n "$sess" ] || sess="(unsigned)"
+    printf '%s\t%s\n' "$sha" "$sess"
+  done
+  exit 0
+fi
+
+N=$(git -C "$REPO" rev-list --count $FP_FLAG "$RANGE" 2>/dev/null)
+rc=$?
+[ $rc -eq 0 ] || { echo "bad range: $RANGE" >&2; exit 2; }   # lens C MED-4 (v0.4.79): header promises rc 2 for bad range syntax — code now honors it
+[ "$N" -gt 0 ] || { echo "empty range: $RANGE" >&2; exit 4; }
+
+TMP="$(mktemp)" || exit 3
+trap '_rc=$?; rm -f "$TMP"; [ -n "$NOVEL_SHAS" ] && rm -f "$NOVEL_SHAS"; oc_log_finish "$_rc"' EXIT
+for sha in $(git -C "$REPO" rev-list --reverse $FP_FLAG "$RANGE"); do
+  # ---- #407 filters (active only when NOVEL_SHAS is set; RAW is untouched) ----
+  if [ -n "$NOVEL_SHAS" ]; then
+    # MERGES PASS THROUGH UNFILTERED: `git cherry` omits them (a merge has no
+    # patch-id), so a membership test would silently drop every merge commit —
+    # and can empty the result entirely on a merge-heavy range. Header note (a).
+    if [ "$(git -C "$REPO" rev-list --parents -n1 "$sha" | wc -w)" -le 2 ]; then
+      grep -qxF "$sha" "$NOVEL_SHAS" || { REPLAYED=$((REPLAYED+1)); continue; }
+      oc_empty_commit "$sha" && { EMPTY=$((EMPTY+1)); continue; }
+    fi
+  fi
+  body="$(git -C "$REPO" show -s --format=%B "$sha")" || exit 3
+  sess="$(oc_session_trailer "$body" | tr -d '[:space:]')"   # one-convention helper (Duty-6 lens F task 2)
+  [ -n "$sess" ] || sess="(unsigned)"
+  iss="$(printf '%s\n' "$body" | sed -n 's/^Issue-Ref:[[:space:]]*//p' | tail -1 | tr -d ' ')"
+  short="$(printf '%s' "$sha" | cut -c1-7)"
+  printf '%s\t%s\t%s\n' "$sess" "$iss" "$short" >> "$TMP"
+  KEPT=$((KEPT+1))
+done
+# #407 accounting on stderr, so TSV/JSON consumers on stdout are unaffected.
+# Carries the predicate with the numbers: RAW = the rev-list count for this
+# range+FP_FLAG, and RAW == KEPT + REPLAYED + EMPTY + merges-passed.
+if [ -n "$NOVEL_SHAS" ]; then
+  echo "oc-attrib: novelty filter $(printf '%s' "$NOVEL_BASE" | cut -c1-7)..$(printf '%s' "$NOVEL_TIP" | cut -c1-7): $N raw, $REPLAYED replayed, $EMPTY empty, $KEPT contributing" >&2
+fi
+
+# uuid -> "topic_id \x01 feature" lookup (built fresh per call; never cached)
+MF=""
+if [ -n "$LEDGER" ] && [ -f "$LEDGER" ]; then
+  MF="$(mktemp)" || exit 3
+  jq -r '(.workers // [])[] | [(.uuid//""),(.topic_id|tostring),(.feature//"-")] | @tsv' "$LEDGER" > "$MF" 2>/dev/null \
+    || { echo "unreadable ledger: $LEDGER" >&2; rm -f "$MF"; exit 3; }
+fi
+
+DEDUP="$(awk -F'\t' -v mf="$MF" '
+  BEGIN { if (mf != "") { while ((getline line < mf) > 0) { split(line, a, "\t"); map[a[1]] = a[2] "\x01" a[3] } close(mf) } }
+  {
+    s = $1
+    if (!(s in seen)) { seen[s] = 1; order[++k] = s }
+    cnt[s]++
+    if ($2 != "" && !index(is[s], $2)) is[s] = is[s] (is[s] == "" ? "" : ",") $2
+    if (!index(hs[s], $3)) hs[s] = hs[s] (hs[s] == "" ? "" : ",") $3
+  }
+  END {
+    for (i = 1; i <= k; i++) {
+      s = order[i]; tp = "-"; ft = (s == "(unsigned)" ? "(unsigned)" : "(unmapped)")
+      if (s in map) { split(map[s], m, "\x01"); tp = m[1]; ft = m[2] }
+      printf "%s\t%s\t%s\t%s\t%s\n", s, tp, ft, is[s], hs[s]
+    }
+  }
+' "$TMP" | LC_ALL=C sort)"
+[ -n "$MF" ] && rm -f "$MF"
+
+if [ "$CONTRIB" -eq 1 ]; then   # E6 (v0.4.78): contributors row = session, issues, shas (was oc-deploy's private awk)
+  DEDUP="$(printf '%s\n' "$DEDUP" | awk -F'\t' -v OFS='\t' '{print $1, $4, $5}')"
+fi
+
+if [ "$JSON" -eq 1 ]; then
+  printf '%s\n' "$DEDUP" | jq -Rn '
+    [ inputs | select(length>0) | split("\t")
+    | { session: .[0]
+      , lane: { topic_id: (.[1] | if test("^[0-9]+$") then tonumber else . end)
+              , feature:  .[2] }
+      , issues: (.[3] | split(",") | map(select(length>0)))
+      , shas:   (.[4] | split(",")) } ]'
+else
+  printf '%s\n' "$DEDUP"
+fi
+exit 0

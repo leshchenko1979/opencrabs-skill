@@ -9,8 +9,8 @@
 #
 # #307 — anchored Issue-Ref fencing. Reverts the matcher to the pre-#307
 # unanchored `git log --grep=#N`. Covers all three control sites:
-#   (1) tools/oc-harvest-census --selftest
-#   (2) tools/oc-harvest-dispatch --selftest   (legs 11e/11f)
+#   (1) tools/harvest/oc-harvest-census --selftest
+#   (2) tools/harvest/oc-harvest-dispatch --selftest   (legs 11e/11f)
 #   (3) tools/tests/run.sh §00c lib/oc_claims unit cases
 #
 # #365 — the gate-4 SUBJECT predicate (symbol derivation + the declared-subject

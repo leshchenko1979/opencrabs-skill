@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-start — one-command editor entry: claim + branch + worktree.
+#
+# Kills the 4-step hand ritual of editor.md Phase 1-2:
+#   oc-issue-sweep (uniqueness, lane runs it) -> oc-ledger claim ->
+#   git branch <branch> <base> -> oc-wt add <task> <branch>
+#
+# This tool does steps 2-4 in ONE invocation (uniqueness sweep stays a lane
+# judgment call — a tool cannot decide "no issue covers this"). The lane names
+# the branch; the tool only executes creation (same posture as oc-wt --create).
+#
+# Usage:
+#   oc-start <issue> --branch <branch> [--task <task>] [--base REF]
+#            [--repo P] [--no-log]
+#   oc-start --selftest          offline fixture repo (no network)
+#
+# Defaults: --task = branch slug part (<type>/<slug> -> <slug>, truncated to
+# oc-wt slug shape); --base = origin/main; --repo = $HOME/opencrabs.
+# Env: OC_START_LEDGER_BIN / OC_START_WT_BIN (sibling overrides, selftest seam),
+#      OC_GIT, OC_LEDGER / OC_DEPLOY_STATE_DIR (passed through to oc-ledger).
+#
+# Exit: 0 STARTED (claim + branch + worktree all landed)
+#       2 usage (bad issue/branch shape, missing flags)
+#       3 claim refused (oc-ledger non-zero — row printed on stderr)
+#       4 branch create failed (already exists or bad base ref)
+#       5 worktree add failed (oc-wt non-zero — BEHIND_BASE gate etc.)
+# On every failure the tool prints the EXACT resume command (self-explaining
+# exits: the lane never memorizes recovery — it runs what the tool printed).
+# =============================================================================
+set -u
+set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_SELF_DIR="$OC_TOOLS_DIR"
+_OC_LIB="$_SELF_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-start" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+# #429: the shared task -> path predicate, sourced by BOTH carriers (oc-wt and
+# here). oc-start REPORTS the resolved path, and printing $WT_BASE/<task> blind
+# sends the lane to a directory that does not hold its tree for the COMMON shape
+# (`list` strips the oc-wt- prefix; 143 of 193 live rows are oc-wt-<task> dirs).
+# Load-bearing, so a missing lib is a HARD stop: oc-log may degrade (telemetry),
+# this one decides where the editor is told to work.
+_OC_WT_LIB="$_SELF_DIR/lib/oc-wt-resolve.sh"
+if [ -f "$_OC_WT_LIB" ]; then source "$_OC_WT_LIB"; else
+  echo "oc-start: $_OC_WT_LIB not found — the tool ships beside its lib/ (broken install)" >&2; exit 5
+fi
+
+PROG="$(basename "$0")"
+GIT_BIN="${OC_GIT:-git}"
+REPO="${HOME}/opencrabs"
+BASE="origin/main"
+LEDGER_BIN="${OC_START_LEDGER_BIN:-$_SELF_DIR/state/oc-ledger}"
+WT_BIN="${OC_START_WT_BIN:-$_SELF_DIR/git/oc-wt}"
+
+usage() { [ -n "${1:-}" ] && echo "oc-start: $1" >&2; cat >&2 <<EOS
+usage: $0 <issue-N> --branch <type>/<slug> [--task <task>] [--base REF] [--repo P]
+       $0 --selftest
+Exit: 0 STARTED / 2 usage / 3 claim-refused / 4 branch-fail / 5 worktree-fail
+STARTED names the tree resolved by lib/oc-wt-resolve.sh — the same predicate
+oc-wt uses, so the path printed is the path oc-wt add/remove/list agree on.
+EOS
+  exit "${2:-2}"; }
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  usage "" 0
+fi
+
+# ---------- selftest (offline, fixture repo + stub ledger) -------------------
+if [ "${1:-}" = "--selftest" ] || [ "${1:-}" = "selftest" ]; then
+  SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+  pass=0; fail=0
+  t_ok()  { pass=$((pass+1)); echo "selftest: $1  OK"; }
+  t_bad() { fail=$((fail+1)); echo "selftest: $1 FAIL"; }
+  D="$(mktemp -d)"; trap '_rc=$?; rm -rf "$D"; oc_log_finish "$_rc"' EXIT
+  export HOME="$D/home"; mkdir -p "$HOME"
+  unset OC_WT_BASE   # the #429 legs depend on the BASE being the fixture HOME
+  git init -q --bare -b main "$D/origin.git" || { echo "fixture fail"; exit 1; }
+  git clone -q "$D/origin.git" "$D/repo" 2>/dev/null
+  git -C "$D/repo" config user.email t@t; git -C "$D/repo" config user.name t
+  echo one > "$D/repo/f.txt"; git -C "$D/repo" add f.txt; git -C "$D/repo" commit -qm one
+  git -C "$D/repo" push -q origin main
+  # stub ledger: logs argv, exits $STUB_RC
+  printf '#!/usr/bin/env bash\necho "$@" >> "$STUB_LOG"\nexit "${STUB_RC:-0}"\n' > "$D/ledger-stub"
+  chmod +x "$D/ledger-stub"
+  export OC_START_LEDGER_BIN="$D/ledger-stub" STUB_LOG="$D/calls.log" OC_TOOLS_NOLOG=1
+  R() { env OC_TOOLS_NOLOG=1 "$SELF" --repo "$D/repo" "$@"; }
+
+  # 1. happy path -> 0, branch created, worktree landed, claim stamped
+  : > "$D/calls.log"
+  R 123 --branch feat/thing-one >/dev/null 2>&1; RC=$?
+  if [ "$RC" -eq 0 ] && [ -d "$HOME/opencrabs-wt/thing-one" ] \
+     && git -C "$D/repo" rev-parse --verify --quiet "refs/heads/feat/thing-one" >/dev/null \
+     && grep -q "123" "$D/calls.log" 2>/dev/null; then
+    t_ok "happy: claim+branch+worktree"
+  else t_bad "happy (rc=$RC)"; fi
+
+  # 2. no args -> 2
+  R >/dev/null 2>&1; [ $? -eq 2 ] && t_ok "no args -> 2" || t_bad "no args"
+  # 3. non-numeric issue -> 2
+  R abc --branch feat/x >/dev/null 2>&1; [ $? -eq 2 ] && t_ok "bad issue -> 2" || t_bad "bad issue"
+  # 4. branch without type/ prefix -> 2
+  R 124 --branch noslash >/dev/null 2>&1; [ $? -eq 2 ] && t_ok "bad branch -> 2" || t_bad "bad branch"
+  # 5. claim refused -> 3 + resume line names oc-ledger claim
+  OUT="$(STUB_RC=3 R 125 --branch feat/refused-two 2>&1)"; RC=$?
+  if [ "$RC" -eq 3 ] && printf '%s' "$OUT" | grep -q "CLAIM REFUSED"; then
+    t_ok "claim-refused -> 3 + resume"
+  else t_bad "claim-refused (rc=$RC)"; fi
+  # 6. branch already exists -> 4, never clobbered
+  git -C "$D/repo" branch feat/taken HEAD
+  BEFORE="$(git -C "$D/repo" rev-parse feat/taken)"
+  R 126 --branch feat/taken >/dev/null 2>&1; RC=$?
+  AFTER="$(git -C "$D/repo" rev-parse feat/taken)"
+  if [ "$RC" -eq 4 ] && [ "$BEFORE" = "$AFTER" ]; then
+    t_ok "existing branch -> 4, untouched"
+  else t_bad "existing branch (rc=$RC)"; fi
+  # 7. explicit --task names the worktree dir
+  R 127 --branch feat/other --task custom-t >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && [ -d "$HOME/opencrabs-wt/custom-t" ] \
+    && t_ok "explicit task dir" || t_bad "explicit task (rc=$RC)"
+
+  # 8. #429: oc-start resolves through the SAME predicate oc-wt uses. A task whose
+  #    tree lives at $WT_BASE/oc-wt-<task> — what `list` PRINTS, 143 of the 193
+  #    live rows — must be REPORTED at that path, not at $WT_BASE/<task>, or the
+  #    lane is sent to a directory that is not its worktree (oc-wt's own leg 15
+  #    covers the remove half of the same predicate). `oc-wt add` is stubbed so
+  #    only the REPORT is under test: here the resolver names an existing tree.
+  mkdir -p "$HOME/opencrabs-wt/oc-wt-mirror-t"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$D/wt-stub"; chmod +x "$D/wt-stub"
+  OUT="$(OC_START_WT_BIN="$D/wt-stub" R 128 --branch feat/mirror-t 2>&1)"; RC=$?
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "worktree=$HOME/opencrabs-wt/oc-wt-mirror-t"; then
+    t_ok "#429 mirror: STARTED names the oc-wt-prefixed tree"
+  else t_bad "#429 mirror (rc=$RC; want worktree=$HOME/opencrabs-wt/oc-wt-mirror-t)"; fi
+  # 9. #429 control: a task with NO tree anywhere still reports the path `add`
+  #    creates — widening the resolver must not displace the ordinary case.
+  OUT="$(OC_START_WT_BIN="$D/wt-stub" R 129 --branch feat/fresh-two 2>&1)"; RC=$?
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "worktree=$HOME/opencrabs-wt/fresh-two"; then
+    t_ok "#429 control: untracked task reports the create path"
+  else t_bad "#429 control (rc=$RC; want worktree=$HOME/opencrabs-wt/fresh-two)"; fi
+
+  echo "selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ]; _rc=$?
+  rm -rf "$D"
+  trap - EXIT
+  oc_log_finish "$_rc" 2>/dev/null || true
+  exit "$_rc"
+fi
+
+ISSUE=""; BRANCH=""; TASK=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --branch) BRANCH="${2:-}"; [ -n "$BRANCH" ] || usage "empty --branch"; shift 2 ;;
+    --task) TASK="${2:-}"; [ -n "$TASK" ] || usage "empty --task"; shift 2 ;;
+    --base) BASE="${2:-}"; [ -n "$BASE" ] || usage "empty --base"; shift 2 ;;
+    --repo) REPO="${2:-}"; [ -n "$REPO" ] || usage "empty --repo"; shift 2 ;;
+    --no-log) shift ;;
+    -h|--help) usage "" 0 ;;
+    -*) usage "unknown flag '$1'" ;;
+    *) if [ -z "$ISSUE" ]; then ISSUE="$1"; else usage "unexpected arg '$1'"; fi; shift ;;
+  esac
+done
+[ -n "$ISSUE" ] || usage "missing <issue-N>"
+[ -n "$BRANCH" ] || usage "missing --branch <type>/<slug>"
+printf '%s' "$ISSUE" | grep -Eq '^[0-9]+$' || usage "issue must be numeric (got '$ISSUE')"
+printf '%s' "$BRANCH" | grep -Eq '^(feat|fix|ci|chore|docs|refactor)/[a-z0-9][a-z0-9-]{0,60}$' \
+  || usage "branch must be <type>/<slug> with type in feat|fix|ci|chore|docs|refactor (got '$BRANCH')"
+[ -z "$TASK" ] && TASK="${BRANCH#*/}"
+printf '%s' "$TASK" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' \
+  || usage "task slug '$TASK' fails oc-wt shape — pass --task explicitly"
+
+# ---- step 0: git pre-flight (verify repo & base ref, ensure branch does not exist) ---
+[ -d "$REPO" ] || usage "repo directory not found: $REPO"
+"$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null && {
+  echo "$PROG: branch '$BRANCH' already exists — refusing to clobber." >&2
+  echo "  resume: oc-wt add $TASK $BRANCH --repo $REPO   (branch is yours, just attach the tree)" >&2
+  exit 4; }
+"$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null || {
+  echo "$PROG: base ref '$BASE' not found in $REPO." >&2
+  echo "  resume: git -C $REPO fetch origin && oc-start $ISSUE --branch $BRANCH --task $TASK --repo $REPO" >&2
+  exit 4; }
+
+# ---- step 1: claim ----------------------------------------------------------
+CLAIM_ARGS=(claim --issue "$ISSUE" --what "CLAIM #$ISSUE — editor start branch=$BRANCH")
+if [ -n "${OPENCRABS_SESSION_ID:-}" ]; then
+  CLAIM_ARGS+=(--by "$OPENCRABS_SESSION_ID")
+fi
+
+if ! "$LEDGER_BIN" "${CLAIM_ARGS[@]}" 2>&1; then
+  echo "$PROG: CLAIM REFUSED (see above) — resume: fix the claim, then re-run:" >&2
+  echo "  oc-start $ISSUE --branch $BRANCH --task $TASK --repo $REPO" >&2
+  exit 3
+fi
+
+# ---- step 2: create branch (lane named it, tool executes — oc-wt posture) ---
+"$GIT_BIN" -C "$REPO" branch "$BRANCH" "$BASE" 2>&1 || {
+  echo "$PROG: branch create failed: $BRANCH from $BASE." >&2
+  echo "  resume: oc-start $ISSUE --branch $BRANCH --task $TASK --repo $REPO" >&2
+  exit 4; }
+
+# ---- step 3: worktree -------------------------------------------------------
+if ! "$WT_BIN" add "$TASK" "$BRANCH" --repo "$REPO" 2>&1; then
+  echo "$PROG: WORKTREE FAILED (see oc-wt line above — behind-base gate etc.)." >&2
+  echo "  Rolling back branch $BRANCH..." >&2
+  "$GIT_BIN" -C "$REPO" branch -D "$BRANCH" >/dev/null 2>&1 || true
+  echo "  resume: oc-start $ISSUE --branch $BRANCH --task $TASK --repo $REPO" >&2
+  exit 5
+fi
+
+# #429: ONE resolver (lib/oc-wt-resolve.sh) shared with oc-wt. `oc-wt list`
+# prints the task with the oc-wt- DIRECTORY PREFIX STRIPPED, so the tree for a
+# task can live at $WT_BASE/oc-wt-<task> (the 143-of-193 common shape), at the
+# legacy $HOME/oc-wt-<task>, or under a base a later `add` never learned — the
+# same three-plus-one shapes oc-wt accepts. Reporting "$WT_BASE/$TASK" blind
+# sends the editor to a directory that is not its worktree.
+WT_BASE="$(oc_wt_base)"
+WT="$(oc_wt_resolve "$TASK")"
+echo "STARTED issue=#$ISSUE branch=$BRANCH worktree=$WT"
+echo "  next: edit in $WT, commit via oc-commit, then ship:"
+echo "  oc-ship-chain --sha <head-sha> --branch $BRANCH --issue $ISSUE"
+exit 0

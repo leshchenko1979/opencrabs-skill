@@ -1,0 +1,1295 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-health — 8-class rotating fleet health & cleanliness sweep (owner order 2026-09-11).
+#
+# Spec + per-check remediation: tools/docs/HEALTH-CLASSES.md & tools/docs/HEALTH-CHECKS.md.
+# This tool is the MECHANICAL half: it measures, decides SAFE vs QUIRK vs WARN,
+# and (with --reap) performs only the provably-dead class. It never touches evidence.
+#
+# Usage: oc-health [--class <name>|--all] [--rotate] [--status] [--json] [--reap] [--quiet] [--selftest]
+#   --class <name>  audit specific class: filesystem, runtime_procs, persistence,
+#                   git_vcs, schedulers, fleet_lanes, logs, issue_portfolio, or all
+#   --all           execute all 8 classes in a single full sweep
+#   --rotate        advance round-robin pointer in health-rotation.json (default)
+#   --status        show rotation history and next class up without executing sweep
+#   --json          machine-readable findings (the cron's contract)
+#   --reap          apply the SAFE remediations (stale locks, old backups, old tmp,
+#                   generated *.bak sidecars beyond the keep-window).
+#                   Without it the tool is a pure read — safe to run any time.
+#   --quiet         print only findings, not the checked-and-clean lines
+#   --selftest      run the hermetic offline fixture suite, exit 0/1
+#
+# Exit: 0 clean · 1 findings (warn) · 2 usage · 3 measurement failure
+# =============================================================================
+set -u
+set -o pipefail
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-health" "$@"; else oc_log_finish() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+TOOLS_DIR="$OC_TOOLS_DIR"
+PROFILE="${OC_PROFILE:-ops}"
+STATE="${OC_HEALTH_STATE:-$HOME/.opencrabs/profiles/$PROFILE/opencrabs-dev}"
+FORK="${OC_HEALTH_FORK:-$HOME/opencrabs}"
+DB="${OC_HEALTH_DB:-$HOME/.opencrabs/profiles/$PROFILE/opencrabs.db}"
+TMP_GLOB="${OC_HEALTH_TMP_GLOB:-/tmp/oc-*}"
+SKILL_CHECK="${OC_HEALTH_SKILL_DIR:-$(cd "$TOOLS_DIR/.." && pwd)}"
+WT_PATTERNS="${OC_HEALTH_WT_PATTERNS:-${HOME:-/root}/oc-work/* ${HOME:-/root}/oc-wt-* ${HOME:-/root}/opencrabs-wt/*}"
+LOCK_MAX_AGE_H="${OC_HEALTH_LOCK_MAX_AGE_H:-24}"
+BAK_KEEP="${OC_HEALTH_BAK_KEEP:-3}"
+TMP_MAX_AGE_H="${OC_HEALTH_TMP_MAX_AGE_H:-48}"
+# D3 (#509): the GENERATED-IGNORED sidecar class (*.bak / *.bak-*). Keep the
+# newest SIDECAR_KEEP per source, and prune beyond that only once older than
+# SIDECAR_MAX_AGE_H. 48h + 3/source prunes 17 of the live 75 while keeping the
+# three most recent pre-images of every file.
+SIDECAR_KEEP="${OC_HEALTH_SIDECAR_KEEP:-3}"
+SIDECAR_MAX_AGE_H="${OC_HEALTH_SIDECAR_MAX_AGE_H:-48}"
+# M2-22 (2026-09-12): the second temp class — `mktemp -d` WORKDIRs left behind by
+# oc-deploy's swap path and by the battery's run_selftest. They reached 3.3G and
+# took the root fs to 85%. Distinct glob + distinct age + a SIGNATURE gate: a
+# generic `mktemp -d` from any other tool lives in the same namespace and must
+# never be touched, so a dir is only ever a candidate when it carries the
+# oc-deploy WORKDIR signature. 24h is deliberately conservative: a LIVE swap
+# rewrites its WORKDIR continuously, so a signature dir whose mtime is a day
+# old cannot belong to a running swap (the manual reap used a 90-min gate).
+TMP2_GLOB="${OC_HEALTH_TMP2_GLOB:-/tmp/tmp.*}"
+TMP2_MAX_AGE_H="${OC_HEALTH_TMP2_MAX_AGE_H:-24}"
+# M2-25 detector (2026-09-12): the THIRD temp class — `mktemp` FILEs, i.e. the
+# non-directory `/tmp/tmp.*` namespace. `oc-issue-sweep` wrote three siblings of
+# its `mktemp` file (`.raw`/`.sorted`/`.final`) but its EXIT trap removed only the
+# base path, so every invocation dripped 3 files — 1070 of them, oldest 2 days
+# (fixed at source in 83008e1d). This check is the backstop. Same signature-gate
+# discipline as tmp2: only the KNOWN sibling pattern is ever a reap candidate;
+# any other `/tmp/tmp.*` file is REPORTED, never touched — another tool's
+# `mktemp` file shares this namespace.
+TMP3_GLOB="${OC_HEALTH_TMP3_GLOB:-/tmp/tmp.*}"
+TMP3_MAX_AGE_H="${OC_HEALTH_TMP3_MAX_AGE_H:-24}"
+WATCHER_WINDOW_H="${OC_HEALTH_WATCHER_WINDOW_H:-24}"   # runtime_procs: audit window (hours); 0 = all history
+SKILL_DIR="$(cd "$TOOLS_DIR/.." && pwd)"
+LOGF="${OC_HEALTH_LOG:-$STATE/tools.log}"
+DAEMON_LOG_DIR="${OC_HEALTH_DAEMON_LOG_DIR:-$HOME/.opencrabs/profiles/$PROFILE/logs}"
+DETACHED_DIR="${OC_HEALTH_DETACHED_DIR:-$HOME/.opencrabs/profiles/$PROFILE/tmp/detached}"
+ROTATION_FILE="${OC_HEALTH_ROTATION_FILE:-$STATE/health-rotation.json}"
+
+ALL_CLASSES=("filesystem" "runtime_procs" "persistence" "git_vcs" "schedulers" "fleet_lanes" "logs" "issue_portfolio")
+
+JSON=0; REAP=0; QUIET=0; SHOW_STATUS=0; TARGET_CLASS=""; DO_ALL=0; DO_ROTATE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) JSON=1; shift ;;
+    --reap) REAP=1; shift ;;
+    --quiet) QUIET=1; shift ;;
+    --status) SHOW_STATUS=1; shift ;;
+    --rotate) DO_ROTATE=1; shift ;;
+    --all) DO_ALL=1; shift ;;
+    --class)
+      [ $# -ge 2 ] || { echo "oc-health: --class requires a class name" >&2; exit 2; }
+      TARGET_CLASS="$2"; shift 2 ;;
+    --class=*)
+      TARGET_CLASS="${1#*=}"; shift ;;
+    --selftest) SELFTEST=1; shift ;;
+    -h|--help) sed -n '2,22p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "oc-health: unknown arg '$1' (see --help)" >&2; exit 2 ;;
+  esac
+done
+
+# ---- Status display --------------------------------------------------------
+if [ "$SHOW_STATUS" = "1" ]; then
+  if [ -f "$ROTATION_FILE" ]; then
+    if [ "$JSON" = "1" ]; then
+      cat "$ROTATION_FILE"
+    else
+      echo "=== Health Rotation State ==="
+      python3 -c "
+import json, sys
+try:
+    with open('$ROTATION_FILE') as f:
+        d = json.load(f)
+    print('Current Class  :', d.get('current_class', 'unknown'))
+    print('Next Class     :', d.get('next_class', 'unknown'))
+    print('Last Rotated   :', d.get('last_rotated_at', 'never'))
+    print('Cycle Count    :', d.get('cycle_count', 0))
+    print('History        :')
+    for k, v in d.get('history', {}).items():
+        print(f'  - {k:<16}: last_run={v.get(\"last_run\",\"never\")} findings={v.get(\"findings\",0)} reaped={v.get(\"reaped\",0)}')
+except Exception as e:
+    print('Error parsing rotation file:', e)
+"
+    fi
+    exit 0
+  else
+    if [ "$JSON" = "1" ]; then
+      echo '{"status":"uninitialized","next_class":"filesystem"}'
+    else
+      echo "Health rotation uninitialized (next up: filesystem)"
+    fi
+    exit 0
+  fi
+fi
+
+# ---- selftest --------------------------------------------------------------
+selftest_impl() {
+  set -u
+  T="$(mktemp -d)"
+  trap 'rm -rf "$T"' EXIT
+  P=0; F=0
+  ok()  { P=$((P+1)); }
+  bad() { F=$((F+1)); echo "  FAIL $*" >&2; }
+  chk() { [ "$2" = "$3" ] && ok || bad "$1 (want $2 got $3)"; }
+
+  mkdir -p "$T/state" "$T/tmp" "$T/skill" "$T/wt" "$T/fork" "$T/logs" "$T/detached" "$T/tmp2" "$T/tmp3"
+  git -C "$T/skill" init -q 2>/dev/null
+  git -C "$T/skill" config user.email t@t; git -C "$T/skill" config user.name t
+  echo x > "$T/skill/f"; git -C "$T/skill" add -A >/dev/null 2>&1
+  git -C "$T/skill" commit -qm init >/dev/null 2>&1
+  git -C "$T/skill" branch -M main >/dev/null 2>&1
+  git -C "$T/skill" update-ref refs/remotes/origin/main HEAD
+  git -C "$T/fork" init -q 2>/dev/null
+  git -C "$T/fork" config user.email t@t; git -C "$T/fork" config user.name t
+  echo y > "$T/fork/f"; git -C "$T/fork" add -A >/dev/null 2>&1
+  git -C "$T/fork" commit -qm init >/dev/null 2>&1
+
+  # Fixture DB is built through the shared reader, not the `sqlite3` CLI (#371).
+  # Until 2026-09-19 that binary was not on this box at all, so every one of
+  # these four lines failed with `sqlite3: command not found` — the fixture DB
+  # never existed, the schedulers class read an empty database, and the selftest
+  # still passed.
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "CREATE TABLE cron_jobs (name TEXT, enabled INTEGER, deliver_to TEXT, prompt TEXT);"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-roster-detached-sweep',1,'','silent; uses session_notify');"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-harvest-dispatch-4h',1,'','ok');"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-health-hourly',1,'','ok');"
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "INSERT INTO cron_jobs VALUES ('oc-upstream-delta-watch',1,'','ok');"
+
+  printf '{"ts":"2026-09-11T00:00:00Z","tool":"oc-demo","args":"","exit":0,"secs":0.1,"extra":{}}\n' > "$T/tools.log"
+  echo '{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[]}' > "$T/state/workers-ledger.json"
+
+  run() {
+    OC_HEALTH_STATE="$T/state" OC_HEALTH_TMP_GLOB="$T/tmp/oc-*" OC_HEALTH_TMP2_GLOB="$T/tmp2/tmp.*" OC_HEALTH_TMP3_GLOB="$T/tmp3/tmp.*" OC_HEALTH_DB="$T/db.sqlite" \
+    OC_HEALTH_SKILL_DIR="$T/skill" OC_HEALTH_FORK="$T/fork" OC_HEALTH_WT_PATTERNS="$T/wt/*" \
+    OC_HEALTH_LOG="$T/tools.log" OC_HEALTH_DAEMON_LOG_DIR="$T/logs" OC_HEALTH_DETACHED_DIR="$T/detached" \
+    OC_HEALTH_DISK_PCT="${DISK_PCT_OVERRIDE:-10}" \
+    OC_HEALTH_ROTATION_FILE="$T/state/health-rotation.json" OC_HEALTH_SKIP_VERSION=1 \
+      bash "$SELF" "$@"
+  }
+
+  # 1. Clean fixture full sweep (--all) → rc 0, zero findings
+  RC=0; OUT="$(run --all 2>&1)" || RC=$?
+  chk "all-clean-rc0" 0 "$RC"
+  case "$OUT" in *"0 finding(s)"*) ok ;; *) bad "all-clean-zero-findings: $OUT" ;; esac
+
+  # 1b. DISK THRESHOLDS, both directions, hermetic via the OC_HEALTH_DISK_PCT
+  #     test hook (see the note at the disk check). The host's own usage must
+  #     never decide these: run() defaults the hook to 10, and these three pin
+  #     it explicitly so the >=89 / >=85 / clean branches are all exercised.
+  DISK_PCT_OVERRIDE=10; RC=0; OUT="$(run --all 2>&1)" || RC=$?
+  chk "disk-low-clean-rc0" 0 "$RC"
+  case "$OUT" in *"disk-high"*|*"disk-critical"*) bad "disk-low-no-finding: $OUT" ;; *) ok ;; esac
+  DISK_PCT_OVERRIDE=85; RC=0; OUT="$(run --all 2>&1)" || RC=$?
+  chk "disk-85-warn-rc1" 1 "$RC"
+  case "$OUT" in *"disk-high"*) ok ;; *) bad "disk-85-finding: $OUT" ;; esac
+  DISK_PCT_OVERRIDE=90; RC=0; OUT="$(run --all 2>&1)" || RC=$?
+  chk "disk-90-critical-rc1" 1 "$RC"
+  case "$OUT" in *"disk-critical"*) ok ;; *) bad "disk-90-finding: $OUT" ;; esac
+  DISK_PCT_OVERRIDE=
+
+  # 2. Rotation state creation and advance
+  run >/dev/null 2>&1
+  chk "rotation-file-created" 1 "$( [ -f "$T/state/health-rotation.json" ] && echo 1 || echo 0 )"
+  first_class="$(python3 -c 'import json; print(json.load(open("'"$T/state/health-rotation.json"'"))["current_class"])')"
+  chk "first-class-filesystem" "filesystem" "$first_class"
+
+  # 3. Second rotation run advances to runtime_procs
+  run >/dev/null 2>&1
+  second_class="$(python3 -c 'import json; print(json.load(open("'"$T/state/health-rotation.json"'"))["current_class"])')"
+  chk "second-class-runtime_procs" "runtime_procs" "$second_class"
+
+  # 4. Status flag inspects rotation state
+  RC=0; OUT="$(run --status 2>&1)" || RC=$?
+  chk "status-rc0" 0 "$RC"
+  case "$OUT" in *"Current Class"*|"current_class"*) ok ;; *) bad "status-output: $OUT" ;; esac
+
+  # 5. Class: filesystem — stale lock detection and reap
+  printf 'pid=999999 ts=2020-01-01T00:00:00Z run=1\n' > "$T/state/fanout.1.lock"
+  touch -d '3 days ago' "$T/state/fanout.1.lock"
+  RC=0; OUT="$(run --class filesystem 2>&1)" || RC=$?
+  chk "fs-stale-lock-rc1" 1 "$RC"
+  case "$OUT" in *"stale-locks"*) ok ;; *) bad "fs-stale-lock: $OUT" ;; esac
+  run --class filesystem --reap >/dev/null 2>&1
+  [ -e "$T/state/fanout.1.lock" ] && bad "fs-stale-lock-reaped" || ok
+
+  # 6. Class: filesystem — live pid lock not reaped
+  printf 'pid=%s ts=2020-01-01T00:00:00Z run=2\n' "$$" > "$T/state/fanout.2.lock"
+  touch -d '3 days ago' "$T/state/fanout.2.lock"
+  run --class filesystem --reap >/dev/null 2>&1
+  [ -e "$T/state/fanout.2.lock" ] && ok || bad "fs-live-lock-kept"
+  rm -f "$T/state/fanout.2.lock"
+
+  # 6b. Class: filesystem — leaked mktemp WORKDIR class (M2-22).
+  #     Three fixtures pin the THREE gates at once: the signature, the age, and
+  #     the reap action. A generic mktemp dir MUST survive — that is the whole
+  #     point of a separate signature-gated class rather than a blanket
+  #     /tmp/tmp.* sweep.
+  mkdir -p "$T/tmp2/tmp.FAKELEAK/state-backup"
+  printf 'x' > "$T/tmp2/tmp.FAKELEAK/build-flags.txt"
+  touch -d '3 days ago' "$T/tmp2/tmp.FAKELEAK"
+  mkdir -p "$T/tmp2/tmp.FAKEGENERIC"
+  printf 'not-an-oc-deploy-workdir\n' > "$T/tmp2/tmp.FAKEGENERIC/somefile"
+  touch -d '3 days ago' "$T/tmp2/tmp.FAKEGENERIC"
+  mkdir -p "$T/tmp2/tmp.FAKEFRESH/state-backup"
+  RC=0; OUT="$(run --class filesystem 2>&1)" || RC=$?
+  chk "fs-tmp2-rc1" 1 "$RC"
+  case "$OUT" in *"stale-tmp2"*) ok ;; *) bad "fs-tmp2-detected: $OUT" ;; esac
+  run --class filesystem --reap >/dev/null 2>&1
+  [ -e "$T/tmp2/tmp.FAKELEAK" ] && bad "fs-tmp2-signature-reaped" || ok
+  [ -e "$T/tmp2/tmp.FAKEGENERIC" ] && ok || bad "fs-tmp2-generic-kept"
+  [ -e "$T/tmp2/tmp.FAKEFRESH" ] && ok || bad "fs-tmp2-fresh-kept"
+
+  # 6c. Class: filesystem — leaked mktemp FILE class (M2-25 detector).
+  #     The signature (.raw/.sorted/.final) is reaped; an UNKNOWN /tmp/tmp.*
+  #     file is reported but NEVER removed; a fresh signature file is kept.
+  printf 'x' > "$T/tmp3/tmp.FAKELEAKA.raw";    touch -d '3 days ago' "$T/tmp3/tmp.FAKELEAKA.raw"
+  printf 'x' > "$T/tmp3/tmp.FAKELEAKB.sorted"; touch -d '3 days ago' "$T/tmp3/tmp.FAKELEAKB.sorted"
+  printf 'x' > "$T/tmp3/tmp.FAKEUNKNOWN.xyz";  touch -d '3 days ago' "$T/tmp3/tmp.FAKEUNKNOWN.xyz"
+  printf 'x' > "$T/tmp3/tmp.FAKEFRESH.raw"
+  RC=0; OUT="$(run --class filesystem 2>&1)" || RC=$?
+  chk "fs-tmp3-rc1" 1 "$RC"
+  case "$OUT" in *"oc-issue-sweep sibling signature"*) ok ;; *) bad "fs-tmp3-detected: $OUT" ;; esac
+  case "$OUT" in *"stale-tmp3-unknown"*) ok ;; *) bad "fs-tmp3-unknown-reported: $OUT" ;; esac
+  run --class filesystem --reap >/dev/null 2>&1
+  [ -e "$T/tmp3/tmp.FAKELEAKA.raw" ] && bad "fs-tmp3-signature-reaped" || ok
+  [ -e "$T/tmp3/tmp.FAKELEAKB.sorted" ] && bad "fs-tmp3-signature-reaped2" || ok
+  [ -e "$T/tmp3/tmp.FAKEUNKNOWN.xyz" ] && ok || bad "fs-tmp3-unknown-kept"
+  [ -e "$T/tmp3/tmp.FAKEFRESH.raw" ] && ok || bad "fs-tmp3-fresh-kept"
+
+  # 7. Class: persistence — ledger backup pruning
+  for i in 1 2 3 4 5; do
+    printf 'x' > "$T/state/workers-ledger.json.bak.$i"
+    touch -d "$((i + 1)) days ago" "$T/state/workers-ledger.json.bak.$i"
+  done
+  run --class persistence --reap >/dev/null 2>&1
+  left="$(ls -1 "$T/state"/workers-ledger.json.*bak* 2>/dev/null | wc -l)"
+  chk "persistence-backups-pruned" 3 "$left"
+  rm -f "$T/state"/workers-ledger.json.*bak*
+
+  # 7b. Class: persistence — GENERATED sidecar retention (D3, #509) ----------
+  # The class is the .gitignore'd *.bak / *.bak-* sidecars. The prune path needs
+  # the fixture state dir to BE a git repo, because the guard is "never reap a
+  # sidecar whose source is not tracked" -- so this leg inits one. That is also
+  # the fail-safe direction: with no repo to read, nothing is reaped at all.
+  git -C "$T/state" init -q 2>/dev/null
+  git -C "$T/state" config user.email t@t; git -C "$T/state" config user.name t
+  printf 'live\n' > "$T/state/tracked-state.md"
+  git -C "$T/state" add tracked-state.md >/dev/null 2>&1
+  git -C "$T/state" commit -qm base >/dev/null 2>&1
+  # 4 sidecars of a TRACKED source, oldest 4 days back: keep 3, prune the 4th
+  for i in 1 2 3 4; do
+    ts="$(date -u -d "-${i} day" +%Y-%m-%dT%H%M%S)"
+    printf 'x' > "$T/state/tracked-state.md.${ts}Z.bak"
+    touch -d "$i days ago" "$T/state/tracked-state.md.${ts}Z.bak"
+  done
+  # 2 sidecars of an UNTRACKED source: the only-copy guard must refuse them
+  for i in 1 2; do
+    ts="$(date -u -d "-${i} day" +%Y-%m-%dT%H%M%S)"
+    printf 'y' > "$T/state/untracked-state.md.${ts}Z.bak"
+    touch -d "$i days ago" "$T/state/untracked-state.md.${ts}Z.bak"
+  done
+  # the REQUIRED marker the owner's pacemaker order needs: --reap must not flip it
+  : > "$T/state/pacemakers-off"
+  RC=0; OUT="$(run --class persistence --reap 2>&1)" || RC=$?
+  chk "sidecar-tracked-pruned-to-keep" 3 "$(ls -1 "$T/state"/tracked-state.md.*.bak 2>/dev/null | wc -l)"
+  chk "sidecar-untracked-source-kept" 2 "$(ls -1 "$T/state"/untracked-state.md.*.bak 2>/dev/null | wc -l)"
+  [ -e "$T/state/pacemakers-off" ] && ok || bad "sidecar-reap-marker-survived"
+  case "$OUT" in *"sidecar-untracked-source"*) ok ;; *) bad "sidecar-untracked-reported: $OUT" ;; esac
+  rm -f "$T/state"/tracked-state.md.*.bak "$T/state"/untracked-state.md.*.bak "$T/state/pacemakers-off"
+
+  # 8. Class: runtime_procs — unthrottled watcher detection (inside the window)
+  NOW_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"command":"gh run watch 12345","detached_at":"%s","pid":999999}\n' "$NOW_TS" > "$T/detached/test-watch.json"
+  RC=0; OUT="$(run --class runtime_procs 2>&1)" || RC=$?
+  chk "runtime_procs-unthrottled-rc1" 1 "$RC"
+  case "$OUT" in *"unthrottled-watch"*) ok ;; *) bad "unthrottled-watch-detected: $OUT" ;; esac
+
+  # 8b. The reported count is the real array length, never a fabricated 1.
+  #     Regression: the old `.get("violation_count")` raised on a JSON ARRAY and
+  #     the `|| echo 1` fallback made every sweep report exactly 1 violation.
+  printf '{"command":"gh run watch 12346 --exit-status","detached_at":"%s","state":"Completed"}\n' "$NOW_TS" > "$T/detached/test-watch2.json"
+  RC=0; OUT="$(run --class runtime_procs --json 2>/dev/null)" || RC=$?
+  n_reported="$(printf '%s' "$OUT" | python3 -c '
+import json, sys, re
+d = json.load(sys.stdin)
+f = [x for x in d.get("findings", []) if x.get("slug") == "unthrottled-watch"]
+m = re.match(r"^(\d+) ", f[0]["message"]) if f else None
+print(m.group(1) if m else "none")
+' 2>/dev/null)"
+  chk "runtime_procs-real-count-2" "2" "$n_reported"
+  rm -f "$T/detached/test-watch.json" "$T/detached/test-watch2.json"
+
+  # 8c. Rolling window: a violation older than the window is not re-reported
+  printf '{"command":"gh run watch 12347 --exit-status","detached_at":"2020-01-01T00:00:00Z","state":"Completed"}\n' > "$T/detached/test-watch-old.json"
+  RC=0; OUT="$(run --class runtime_procs 2>&1)" || RC=$?
+  chk "runtime_procs-old-violation-windowed-out" 0 "$RC"
+  rm -f "$T/detached/test-watch-old.json"
+
+  # 9. Class: git_vcs — orphan worktree detection
+  mkdir -p "$T/wt/orphan/.git"
+  RC=0; OUT="$(run --class git_vcs 2>&1)" || RC=$?
+  chk "git_vcs-orphan-rc1" 1 "$RC"
+  case "$OUT" in *"orphan-worktrees"*) ok ;; *) bad "git_vcs-orphan: $OUT" ;; esac
+  rm -rf "$T/wt/orphan"
+
+  # 9b. Class: git_vcs — registered-worktree tracked-file DELETION (#380).
+  #     Pre-fix, NO check ran `git status` inside a registered worktree, so the
+  #     live fleet lost a tracked file from 195 of 206 trees with no signal.
+  git -C "$T/fork" worktree add -q "$T/wt/lanedel" -b lanedel >/dev/null 2>&1
+  chk "git_vcs-wt-deletion-fixture" "true" "$([ -d "$T/wt/lanedel" ] && echo true || echo false)"
+  # a lane MID-WORK must not trip it: a MODIFIED tracked file is legitimate
+  echo y2 >> "$T/wt/lanedel/f"
+  RC=0; OUT="$(run --class git_vcs 2>&1)" || RC=$?
+  case "$OUT" in *"worktree-tracked-deleted"*) bad "git_vcs-wt-deletion-fires-on-modification: $OUT" ;; *) ok ;; esac
+  # the signal: an UNSTAGED tracked deletion
+  rm "$T/wt/lanedel/f"
+  RC=0; OUT="$(run --class git_vcs 2>&1)" || RC=$?
+  chk "git_vcs-wt-deletion-rc1" 1 "$RC"
+  case "$OUT" in *"worktree-tracked-deleted"*) ok ;; *) bad "git_vcs-wt-deletion: $OUT" ;; esac
+  case "$OUT" in *"1 of "*"registered worktree"*) ok ;; *) bad "git_vcs-wt-deletion-count: $OUT" ;; esac
+  # the NEGATIVE half the issue names explicitly: a STAGED deletion ('git rm')
+  # is a DIFFERENT condition and must NOT be flagged
+  git -C "$T/wt/lanedel" checkout -- f >/dev/null 2>&1
+  git -C "$T/wt/lanedel" rm -q f >/dev/null 2>&1
+  RC=0; OUT="$(run --class git_vcs 2>&1)" || RC=$?
+  chk "git_vcs-wt-deletion-staged-rc0" 0 "$RC"
+  case "$OUT" in *"worktree-tracked-deleted"*) bad "git_vcs-wt-deletion-staged-flagged: $OUT" ;; *) ok ;; esac
+  git -C "$T/fork" worktree remove --force "$T/wt/lanedel" >/dev/null 2>&1
+  chk "git_vcs-wt-deletion-fixture-removed" "true" "$([ -d "$T/wt/lanedel" ] && echo false || echo true)"
+
+  # 10. Class: schedulers — DM leak detection
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='telegram:133526395' WHERE name='oc-roster-detached-sweep';"
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  chk "schedulers-leak-rc1" 1 "$RC"
+  case "$OUT" in *"cron-leak"*) ok ;; *) bad "schedulers-leak: $OUT" ;; esac
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET deliver_to='' WHERE name='oc-roster-detached-sweep';"
+
+  # 10b. Class: schedulers — law-carrying cron liveness (issue #339) AND the
+  #      unset-direction channel (issue #426). The pre-fix query matched name IN
+  #      ('harvest-watch-4h',...) — a spelling that has NEVER existed in
+  #      cron_jobs — so the harvest patrol could go dead in silence and the class
+  #      still printed "law-carrying enabled". This leg disables the LIVE job and
+  #      demands it be NAMED. With the pacemakers-off marker absent the direction
+  #      is UNSET — the marker EXISTS in the ops profile (524 B, 2026-09-19 18:25Z)
+  #      and in no other profile, so this is the production state everywhere else
+  #      and it returns here too the moment the owner lifts the order — so the
+  #      observation is a NOTE naming the job — not the old cron-disabled finding,
+  #      which asserted a direction the check cannot read from an absent file.
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=0 WHERE name='oc-harvest-dispatch-4h';"
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  chk "schedulers-lawcron-rc0" 0 "$RC"
+  case "$OUT" in *"scheduler-direction-unset"*"oc-harvest-dispatch-4h"*) ok ;; *) bad "schedulers-lawcron-note-names-live-job: $OUT" ;; esac
+  case "$OUT" in *"cron-disabled"*) bad "schedulers-lawcron-asserts-unread-direction: $OUT" ;; *) ok ;; esac
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name='oc-harvest-dispatch-4h';"
+
+  # 10c. Rename-proof. The 2026-09-18 namespacing law RENAMES these jobs, so a
+  #      check pinned to a literal name cannot watch its own subject. A renamed
+  #      law-carrying job must still be found (stem matching).
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET name='oc-harvest-dispatch-6h', enabled=0 WHERE name='oc-harvest-dispatch-4h';"
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  case "$OUT" in *"oc-harvest-dispatch-6h"*) ok ;; *) bad "schedulers-rename-proof: $OUT" ;; esac
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET name='oc-harvest-dispatch-4h', enabled=1 WHERE name='oc-harvest-dispatch-6h';"
+
+  # 10d. Owner-order mode (2026-09-18 20:53Z "turn off all of your pacemakers",
+  #      still standing per tools/docs/HEALTH-CLASSES.md class 5). With the marker present a
+  #      DISABLED law-carrying cron is the owner's own order and must NOT be
+  #      reported back to him; what fails is one ENABLED against the order.
+  mkdir -p "$T/state"; : > "$T/state/pacemakers-off"
+  # Order honoured = all four OFF (the live production reading).
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=0 WHERE name IN ('oc-roster-detached-sweep','oc-harvest-dispatch-4h','oc-health-hourly','oc-upstream-delta-watch');"
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  chk "schedulers-offorder-rc0" 0 "$RC"
+  case "$OUT" in *"cron-disabled"*) bad "schedulers-offorder-still-flags: $OUT" ;; *) ok ;; esac
+  case "$OUT" in *"order honoured"*) ok ;; *) bad "schedulers-offorder-cleanline: $OUT" ;; esac
+  # One enabled AGAINST the order = the finding this mode exists to raise.
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name='oc-roster-detached-sweep';"
+  RC=0; OUT="$(run --class schedulers 2>&1)" || RC=$?
+  chk "schedulers-against-order-rc1" 1 "$RC"
+  case "$OUT" in *"cron-enabled-against-order"*"oc-roster-detached-sweep"*) ok ;; *) bad "schedulers-against-order: $OUT" ;; esac
+  # Restore: all four enabled, marker removed (direction unset again).
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name IN ('oc-roster-detached-sweep','oc-harvest-dispatch-4h','oc-health-hourly','oc-upstream-delta-watch');"
+  rm -f "$T/state/pacemakers-off"
+
+  # 10e. Unset direction with ALL FOUR patrols off (issue #426 acceptance).
+  #      This is the production state in every profile BUT ops, which carries the
+  #      marker (524 B, 2026-09-19 18:25Z); it is reachable in ops too, the moment
+  #      the owner lifts the order. The check must OBSERVE: exactly one
+  #      note naming the marker's path and the unset direction, ZERO findings
+  #      (so rc 0, no hourly page), and no cron-disabled finding — the old bug
+  #      was re-reporting the owner's own 2026-09-18 order back to him as an
+  #      8 QUIRK defect on every run.
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=0 WHERE name IN ('oc-roster-detached-sweep','oc-harvest-dispatch-4h','oc-health-hourly','oc-upstream-delta-watch');"
+  RC=0; OUT="$(run --class schedulers --json 2>/dev/null)" || RC=$?
+  chk "schedulers-unset-direction-rc0" 0 "$RC"
+  case "$OUT" in *'"findings":[]'*) ok ;; *) bad "schedulers-unset-direction-findings-empty: $OUT" ;; esac
+  case "$OUT" in *'"notes":1'*'"slug":"scheduler-direction-unset"'*) ok ;; *) bad "schedulers-unset-direction-note: $OUT" ;; esac
+  case "$OUT" in *'"cron-disabled"'*) bad "schedulers-unset-direction-legacy-finding: $OUT" ;; *) ok ;; esac
+  case "$OUT" in *'pacemakers-off'*) ok ;; *) bad "schedulers-unset-direction-marker-path: $OUT" ;; esac
+  case "$OUT" in *'"oc-roster-detached-sweep"'*|*'oc-roster-detached-sweep'*) ok ;; *) bad "schedulers-unset-direction-lists-job: $OUT" ;; esac
+  "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET enabled=1 WHERE name IN ('oc-roster-detached-sweep','oc-harvest-dispatch-4h','oc-health-hourly','oc-upstream-delta-watch');"
+
+  # 11. Class: logs — malformed lines detection
+  printf '2026-08-31T04:11:21Z prose evidence line\n' >> "$T/tools.log"
+  RC=0; OUT="$(run --class logs 2>&1)" || RC=$?
+  chk "logs-malformed-rc1" 1 "$RC"
+  case "$OUT" in *"toolslog-malformed"*) ok ;; *) bad "logs-malformed: $OUT" ;; esac
+
+  # 12. Class: fleet_lanes — invalid ledger JSON detection
+  echo "INVALID JSON" > "$T/state/workers-ledger.json"
+  RC=0; OUT="$(run --class fleet_lanes 2>&1)" || RC=$?
+  chk "fleet_lanes-corrupt-rc1" 1 "$RC"
+  case "$OUT" in *"ledger-corrupt"*) ok ;; *) bad "fleet_lanes-corrupt: $OUT" ;; esac
+  echo '{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[]}' > "$T/state/workers-ledger.json"
+
+  # 13. Class: issue_portfolio — clean run
+  RC=0; OUT="$(run --class issue_portfolio 2>&1)" || RC=$?
+  chk "issue_portfolio-clean-rc0" 0 "$RC"
+
+  # 13b. DISCRIMINATING leg: plant a duplicate uuid AND an authorless claim.
+  # Pre-fix both legs read keys that never existed and stayed silent on the same input.
+  printf '%s\n' '{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"},{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[{"n":1,"kind":"claim","t":"2026-09-21T10:00:00Z","what":"#9999 planted claim with no author"}]}' > "$T/state/workers-ledger.json"
+  RC=0; OUT="$(run --class fleet_lanes 2>&1)" || RC=$?
+  case "$OUT" in *"roster-inconsistency"*) ok ;; *) bad "fleet_lanes-duplicate-uuid: $OUT" ;; esac
+  RC=0; OUT="$(run --class issue_portfolio 2>&1)" || RC=$?
+  case "$OUT" in *"issue-claims"*) ok ;; *) bad "issue_portfolio-unassigned-claim: $OUT" ;; esac
+  echo '{"workers":[{"uuid":"f1c7c0de-0000-4000-8000-000000000149","role":"editor"}],"events":[]}' > "$T/state/workers-ledger.json"
+
+  # 14. Unknown class argument handling
+  RC=0; OUT="$(run --class nonexistent 2>&1)" || RC=$?
+  chk "unknown-class-rc2" 2 "$RC"
+
+  # 15. JSON output contract
+  RC=0; OUT="$(run --json 2>/dev/null)" || RC=$?
+  if printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "rotation" in d; assert "findings" in d' 2>/dev/null; then ok; else bad "json-schema-contract: $OUT"; fi
+
+  echo "oc-health selftest: PASS=$P FAIL=$F"
+  [ "$F" -eq 0 ]
+}
+
+if [ "${SELFTEST:-0}" = "1" ]; then selftest_impl; exit $?; fi
+
+# ---- Class Selection & Rotation Engine --------------------------------------
+ACTIVE_CLASSES=()
+CURRENT_ROTATION_CLASS=""
+NEXT_ROTATION_CLASS=""
+CYCLE_COUNT=0
+
+get_next_class_in_ring() {
+  local cur="$1"
+  local idx=0
+  for i in "${!ALL_CLASSES[@]}"; do
+    if [ "${ALL_CLASSES[$i]}" = "$cur" ]; then
+      idx=$(( (i + 1) % ${#ALL_CLASSES[@]} ))
+      echo "${ALL_CLASSES[$idx]}"
+      return 0
+    fi
+  done
+  echo "${ALL_CLASSES[0]}"
+}
+
+if [ "$DO_ALL" = "1" ] || [ "$TARGET_CLASS" = "all" ]; then
+  ACTIVE_CLASSES=("${ALL_CLASSES[@]}")
+  CURRENT_ROTATION_CLASS="all"
+  NEXT_ROTATION_CLASS="all"
+elif [ -n "$TARGET_CLASS" ]; then
+  # Validate class name
+  found=0
+  for c in "${ALL_CLASSES[@]}"; do
+    if [ "$c" = "$TARGET_CLASS" ]; then found=1; break; fi
+  done
+  if [ "$found" = "0" ]; then
+    echo "oc-health: unknown class '$TARGET_CLASS' (valid: ${ALL_CLASSES[*]} or all)" >&2
+    exit 2
+  fi
+  ACTIVE_CLASSES=("$TARGET_CLASS")
+  CURRENT_ROTATION_CLASS="$TARGET_CLASS"
+  NEXT_ROTATION_CLASS="$(get_next_class_in_ring "$TARGET_CLASS")"
+else
+  # Default mode: Rotate round-robin
+  mkdir -p "$(dirname "$ROTATION_FILE")"
+  if [ -f "$ROTATION_FILE" ]; then
+    state_cur="$(python3 -c 'import json; print(json.load(open("'"$ROTATION_FILE"'")).get("next_class","filesystem"))' 2>/dev/null || echo "filesystem")"
+    CYCLE_COUNT="$(python3 -c 'import json; print(json.load(open("'"$ROTATION_FILE"'")).get("cycle_count",0))' 2>/dev/null || echo 0)"
+  else
+    state_cur="filesystem"
+    CYCLE_COUNT=0
+  fi
+  CURRENT_ROTATION_CLASS="$state_cur"
+  NEXT_ROTATION_CLASS="$(get_next_class_in_ring "$CURRENT_ROTATION_CLASS")"
+  if [ "$NEXT_ROTATION_CLASS" = "${ALL_CLASSES[0]}" ]; then
+    CYCLE_COUNT=$((CYCLE_COUNT + 1))
+  fi
+  ACTIVE_CLASSES=("$CURRENT_ROTATION_CLASS")
+fi
+
+FINDINGS=0        # count of warn-class findings
+REAPED=0          # count of remediations applied
+FAILED=0          # measurement failures
+F_JSON=""         # accumulated JSON finding objects
+F_TEXT=""         # accumulated human finding lines
+N_JSON=""         # accumulated JSON note objects (observations, never findings)
+N_TEXT=""         # accumulated human note lines
+NOTES=0           # count of low-severity notes — NEVER affects rc (#426)
+
+add_finding() { # <check-no> <severity> <slug> <message>
+  FINDINGS=$((FINDINGS + 1))
+  F_TEXT="${F_TEXT}$1 $2 $3 — $4"$'\n'
+  [ -n "$F_JSON" ] && F_JSON="$F_JSON,"
+  F_JSON="$F_JSON{\"check\":$1,\"severity\":\"$2\",\"slug\":\"$3\",\"message\":\"$(printf '%s' "$4" | sed 's/"/\\"/g')\"}"
+}
+clean_line() { # never writes to stdout in --json mode
+  if [ "$QUIET" = "1" ] || [ "$JSON" = "1" ]; then return 0; fi
+  printf '  ok   %s\n' "$1"
+}
+
+add_note() { # <slug> <message> — a LOW-SEVERITY observation: visible, never a finding
+  # A third output channel beside findings and measurement failures (#426): an
+  # observation the check cannot turn into a verdict. It reaches BOTH consumers —
+  # the human line in text mode, and a JSON object in --json mode (the machine
+  # contract) — while leaving FINDINGS and rc untouched, so an unset direction is
+  # never reported back to the owner as his own defect. Same shape as the
+  # pre-existing measure_failures channel: observed, counted, not a finding.
+  NOTES=$((NOTES + 1))
+  N_TEXT="${N_TEXT}  note $1 — $2"$'\n'
+  [ -n "$N_JSON" ] && N_JSON="$N_JSON,"
+  N_JSON="$N_JSON{\"slug\":\"$1\",\"message\":\"$(printf '%s' "$2" | sed 's/"/\\"/g')\"}"
+}
+
+is_class_active() {
+  local target="$1"
+  for c in "${ACTIVE_CLASSES[@]}"; do
+    if [ "$c" = "$target" ] || [ "$c" = "all" ]; then return 0; fi
+  done
+  return 1
+}
+
+# =============================================================================
+# BASE CRITICAL INVARIANTS (Always executed on every sweep)
+# =============================================================================
+# OC_HEALTH_DISK_PCT is a TEST HOOK, and it exists because this check reads the
+# LIVE host filesystem: without it every "clean fixture => rc 0" assertion in the
+# selftest is non-hermetic. On 2026-09-12 the root fs hit exactly 85% and the
+# battery went 167/1 with four red assertions in THIS file (all-clean-rc0,
+# all-clean-zero-findings, runtime_procs-old-violation-windowed-out,
+# issue_portfolio-clean-rc0) — not one of them related to the change under test.
+# A selftest asserts the TOOL's behaviour, never the host's disk usage.
+# Setting the hook overrides the measurement; the branch logic below is
+# unchanged, and the selftest now exercises BOTH directions explicitly.
+if [ -n "${OC_HEALTH_DISK_PCT:-}" ]; then
+  disk_pct="$OC_HEALTH_DISK_PCT"
+else
+  disk_pct="$(df -P "${OC_HEALTH_DISK_PATH:-/}" 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}')"
+fi
+if [ "${disk_pct:-0}" -ge 89 ]; then
+  add_finding 5 URGENT disk-critical "root filesystem ${disk_pct}% — run vds-servers/scripts/cleanup-unified.sh, then re-check"
+elif [ "${disk_pct:-0}" -ge 85 ]; then
+  add_finding 5 WARN disk-high "root filesystem ${disk_pct}% (warn at 85)"
+else
+  clean_line "disk: ${disk_pct}% (headroom OK)"
+fi
+
+# =============================================================================
+# CLASS 1: filesystem
+# =============================================================================
+if is_class_active "filesystem"; then
+  # 1. Stale fanout & wave locks
+  n_locks=0; n_stale=0; reaped_locks=0
+  if [ -d "$STATE" ]; then
+    # BOTH names: legacy `fanout.lock.<run>` (pre-rename) and the current
+    # `fanout.<run>.lock`. Triage owns untracking the legacy ones; until then
+    # they still need reaping.
+    for f in "$STATE"/fanout.lock.* "$STATE"/fanout.*.lock "$SKILL_CHECK"/run/wave-*.lock "$SKILL_CHECK"/run/wave-*.sent; do
+      [ -e "$f" ] || continue
+      n_locks=$((n_locks + 1))
+      age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
+      [ "$age_h" -ge "$LOCK_MAX_AGE_H" ] || continue
+      pid="$(sed -n 's/^pid=\([0-9]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        add_finding 1 QUIRK stale-lock-live-pid "lock $(basename "$f") is ${age_h}h old but pid $pid is ALIVE — not reaping"
+        continue
+      fi
+      n_stale=$((n_stale + 1))
+      if [ "$REAP" = "1" ]; then
+        # A reaped lock may be a TRACKED file: a CORRECT reap then leaves a
+        # dirty tree that the next sweep commits as a deletion. Say so rather
+        # than doing that silently. Check the repo that OWNS the path - the
+        # sweep covers $STATE locks AND $SKILL_CHECK/run/ wave locks.
+        lock_repo=""; lock_rel=""
+        case "$f" in
+          "$STATE"/*) lock_repo="$STATE"; lock_rel="$(basename "$f")" ;;
+          "$SKILL_CHECK"/*) lock_repo="$SKILL_CHECK"; lock_rel="${f#"$SKILL_CHECK"/}" ;;
+        esac
+        if [ -n "$lock_repo" ] \
+           && git -C "$lock_repo" ls-files --error-unmatch "$lock_rel" >/dev/null 2>&1; then
+          add_finding 1 QUIRK stale-lock-tracked "reaped $lock_rel but it is TRACKED - the reap leaves a deletion for the next sweep"
+        fi
+        rm -f "$f"; reaped_locks=$((reaped_locks + 1))
+      fi
+    done
+  fi
+  if [ "$n_stale" -gt 0 ]; then
+    if [ "$REAP" = "1" ]; then
+      REAPED=$((REAPED + reaped_locks))
+      add_finding 1 SAFE stale-locks "reaped $reaped_locks stale lock(s)/sent-marker(s) of $n_locks"
+    else
+      add_finding 1 SAFE stale-locks "$n_stale of $n_locks fanout lock(s) are stale (>=${LOCK_MAX_AGE_H}h, owner pid dead) — rerun with --reap"
+    fi
+  else
+    clean_line "locks: $n_locks present, none stale"
+  fi
+
+  # 4. State-dir bloat
+  if [ -d "$STATE" ]; then
+    mb="$(du -sm "$STATE" 2>/dev/null | awk '{print $1}')"
+    if [ "${mb:-0}" -gt 200 ]; then
+      top="$(du -sm "$STATE"/* 2>/dev/null | sort -rn | head -3 | awk '{printf "%s(%sM) ", $2, $1}')"
+      add_finding 4 REPORT state-bloat "state dir ${mb}MB > 200MB — top: $top"
+    else
+      clean_line "state dir: ${mb}MB"
+    fi
+  fi
+
+  # 9. Temp accumulation & Dead mirrors
+  n_tmp=0; reap_tmp=0
+  for f in $TMP_GLOB; do
+    [ -e "$f" ] || continue
+    case "${f##*/}" in oc-snap-*-*[0-9]) continue ;; esac
+    age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
+    [ "$age_h" -ge "$TMP_MAX_AGE_H" ] || continue
+    n_tmp=$((n_tmp + 1))
+    if [ "$REAP" = "1" ]; then rm -rf "$f"; reap_tmp=$((reap_tmp + 1)); fi
+  done
+
+  # 9b. Leaked mktemp WORKDIR class (M2-22). Signature-gated on purpose: the
+  #     check must name the oc-deploy/run.sh WORKDIR, never a generic mktemp dir.
+  n_tmp2=0; reap_tmp2=0
+  for d in $TMP2_GLOB; do
+    [ -d "$d" ] || continue
+    { [ -f "$d/build-flags.txt" ] || [ -d "$d/state-backup" ]; } || continue
+    age_h=$(( ( $(date +%s) - $(stat -c %Y "$d") ) / 3600 ))
+    [ "$age_h" -ge "$TMP2_MAX_AGE_H" ] || continue
+    n_tmp2=$((n_tmp2 + 1))
+    if [ "$REAP" = "1" ]; then rm -rf "$d"; reap_tmp2=$((reap_tmp2 + 1)); fi
+  done
+
+  n_mir=0; reap_mir=0
+  if [ -f "$TOOLS_DIR/lib/oc-snap.sh" ]; then
+    . "$TOOLS_DIR/lib/oc-snap.sh"
+    MR="${OC_HEALTH_MIRROR_ROOT:-$(dirname "$TMP_GLOB")}"
+    if [ "$REAP" = "1" ]; then
+      reap_mir="$(oc_snap_reap "$MR" 2>/dev/null || echo 0)"
+    else
+      n_mir="$(oc_snap_reap --dry-run "$MR" 2>/dev/null || echo 0)"
+    fi
+  fi
+
+  if [ "$reap_tmp" -gt 0 ] || [ "$reap_mir" -gt 0 ]; then
+    REAPED=$((REAPED + reap_tmp + reap_mir))
+    add_finding 9 SAFE stale-tmp "removed $reap_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h + $reap_mir dead mirror(s)"
+  elif [ "$n_tmp" -gt 0 ] || [ "$n_mir" -gt 0 ]; then
+    add_finding 9 SAFE stale-tmp "$n_tmp /tmp/oc-* path(s) older than ${TMP_MAX_AGE_H}h, $n_mir dead mirror(s) — rerun with --reap"
+  else
+    clean_line "tmp: no stale /tmp/oc-*"
+  fi
+
+  if [ "$reap_tmp2" -gt 0 ]; then
+    REAPED=$((REAPED + reap_tmp2))
+    add_finding 9 SAFE stale-tmp2 "removed $reap_tmp2 leaked mktemp WORKDIR(s) (>=${TMP2_MAX_AGE_H}h, oc-deploy signature)"
+  elif [ "$n_tmp2" -gt 0 ]; then
+    add_finding 9 SAFE stale-tmp2 "$n_tmp2 leaked mktemp WORKDIR(s) (>=${TMP2_MAX_AGE_H}h, oc-deploy signature) — rerun with --reap"
+  else
+    clean_line "tmp2: no leaked mktemp WORKDIRs"
+  fi
+
+  # 9c. Leaked mktemp FILE class (M2-25 detector). `oc-issue-sweep` wrote
+  #     `.raw`/`.sorted`/`.final` siblings of its `mktemp` file and trapped only
+  #     the base path, dripping 1070 files (fixed at source, 83008e1d). Same
+  #     discipline as 9b: only the KNOWN sibling signature is a reap candidate;
+  #     any other `/tmp/tmp.*` file is REPORTED, never removed — another tool's
+  #     `mktemp` file shares this namespace, and a detector that eats a live
+  #     temp file is worse than the leak it hunts.
+  n_tmp3=0; reap_tmp3=0; n_tmp3_unknown=0
+  for f in $TMP3_GLOB; do
+    [ -f "$f" ] || continue
+    age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
+    [ "$age_h" -ge "$TMP3_MAX_AGE_H" ] || continue
+    case "${f##*/}" in
+      tmp.*.raw|tmp.*.sorted|tmp.*.final)
+        n_tmp3=$((n_tmp3 + 1))
+        if [ "$REAP" = "1" ]; then rm -f "$f"; reap_tmp3=$((reap_tmp3 + 1)); fi ;;
+      *) n_tmp3_unknown=$((n_tmp3_unknown + 1)) ;;
+    esac
+  done
+
+  if [ "$reap_tmp3" -gt 0 ]; then
+    REAPED=$((REAPED + reap_tmp3))
+    add_finding 9 SAFE stale-tmp3 "removed $reap_tmp3 leaked mktemp FILE(s) (>=${TMP3_MAX_AGE_H}h, oc-issue-sweep sibling signature)"
+  elif [ "$n_tmp3" -gt 0 ]; then
+    add_finding 9 SAFE stale-tmp3 "$n_tmp3 leaked mktemp FILE(s) (>=${TMP3_MAX_AGE_H}h, oc-issue-sweep sibling signature) — rerun with --reap"
+  else
+    clean_line "tmp3: no leaked mktemp FILEs"
+  fi
+  if [ "$n_tmp3_unknown" -gt 0 ]; then
+    add_finding 9 REPORT stale-tmp3-unknown "$n_tmp3_unknown other /tmp/tmp.* FILE(s) >=${TMP3_MAX_AGE_H}h with no known leak signature — NOT reaped, inspect"
+  fi
+fi
+
+# =============================================================================
+# CLASS 2: runtime_procs
+# =============================================================================
+if is_class_active "runtime_procs"; then
+  # Check detached jobs & watcher discipline
+  if [ -f "$TOOLS_DIR/audit/oc-watcher-audit" ]; then
+    # Rolling window (defect fix 2026-09-12): only detached tasks spawned inside
+    # the last WATCHER_WINDOW_H hours are audited. Without a window a long-terminal
+    # task's violation re-alarms on every sweep forever. 0 = audit all history.
+    watcher_since=""
+    if [ "$WATCHER_WINDOW_H" -gt 0 ]; then
+      watcher_since="$(date -u -d "$WATCHER_WINDOW_H hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")"
+    fi
+    if [ "$WATCHER_WINDOW_H" -eq 0 ]; then WATCHER_SCOPE="all history"; else WATCHER_SCOPE="window ${WATCHER_WINDOW_H}h"; fi
+    if [ -n "$watcher_since" ]; then
+      w_out="$(cd "$TOOLS_DIR" && ./audit/oc-watcher-audit --dir "$DETACHED_DIR" --since "$watcher_since" --json 2>/dev/null)"; w_rc=$?
+    else
+      w_out="$(cd "$TOOLS_DIR" && ./audit/oc-watcher-audit --dir "$DETACHED_DIR" --json 2>/dev/null)"; w_rc=$?
+    fi
+    if [ "$w_rc" = "1" ]; then
+      # oc-watcher-audit --json emits a JSON ARRAY of violation objects, never a
+      # dict — count the array. The old `.get("violation_count",0)` raised on a
+      # list and the `|| echo 1` fallback fabricated a count of 1 on every sweep.
+      # An unparseable payload is a MEASUREMENT FAILURE, never a fabricated count.
+      w_summary="$(printf '%s' "$w_out" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if isinstance(d, list):
+    kinds = {}
+    live = 0
+    for r in d:
+        if isinstance(r, dict):
+            k = r.get("violation", "UNKNOWN")
+            if r.get("live") is True:
+                live += 1
+        else:
+            k = "UNKNOWN"
+        kinds[k] = kinds.get(k, 0) + 1
+    print(len(d))
+    print(" ".join(f"{k}x{v}" for k, v in sorted(kinds.items())))
+    print(live)
+elif isinstance(d, dict):
+    print(d.get("violation_count", 0))
+    print("")
+    print(0)
+else:
+    sys.exit(1)
+' 2>/dev/null)"; w_prc=$?
+      v_count="$(printf '%s\n' "$w_summary" | sed -n '1p')"
+      v_kinds="$(printf '%s\n' "$w_summary" | sed -n '2p')"
+      v_live="$(printf '%s\n' "$w_summary" | sed -n '3p')"
+      if [ "$w_prc" != "0" ] || [ -z "$v_count" ]; then
+        FAILED=$((FAILED + 1))
+        add_finding 12 QUIRK unthrottled-watch-unparsed "oc-watcher-audit --json output not parseable — measurement failure, not a violation"
+      elif [ "$v_count" -gt 0 ]; then
+        [ -n "$v_kinds" ] && v_kinds=" [$v_kinds]"
+        v_live_note=""
+        case "$v_live" in ''|0) ;; *) v_live_note=", $v_live still running" ;; esac
+        w_scope="$WATCHER_SCOPE"
+        add_finding 12 WARN unthrottled-watch "$v_count non-compliant watcher(s)$v_kinds in $DETACHED_DIR ($w_scope$v_live_note)"
+      else
+        clean_line "watchers: compliant ($WATCHER_SCOPE)"
+      fi
+    elif [ "$w_rc" = "0" ]; then
+      clean_line "watchers: compliant ($WATCHER_SCOPE)"
+    elif [ "$w_rc" = "3" ]; then
+      clean_line "watchers: no detached dir at $DETACHED_DIR"
+    else
+      FAILED=$((FAILED + 1))
+      add_finding 12 QUIRK unthrottled-watch-failed "oc-watcher-audit exited $w_rc — measurement failure"
+    fi
+  else
+    clean_line "runtime_procs: oc-watcher-audit not installed"
+  fi
+fi
+
+# =============================================================================
+# CLASS 3: persistence
+# =============================================================================
+if is_class_active "persistence"; then
+  # 3. Ledger backups retention
+  n_bak=0; reap_bak=0
+  if [ -d "$STATE" ]; then
+    mapfile -t baks < <(ls -1t "$STATE"/workers-ledger.json.*bak* 2>/dev/null)
+    n_bak="${#baks[@]}"
+    for ((i=BAK_KEEP; i<n_bak; i++)); do
+      f="${baks[$i]}"
+      age_h=$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 3600 ))
+      [ "$age_h" -ge 24 ] || continue
+      if [ "$REAP" = "1" ]; then rm -f "$f"; reap_bak=$((reap_bak + 1)); fi
+    done
+    if [ "$reap_bak" -gt 0 ]; then
+      REAPED=$((REAPED + reap_bak))
+      add_finding 3 SAFE ledger-backups "pruned $reap_bak old ledger backup(s), kept newest $BAK_KEEP"
+    elif [ "$n_bak" -gt "$BAK_KEEP" ]; then
+      add_finding 3 SAFE ledger-backups "$n_bak ledger backups (keep $BAK_KEEP) — rerun with --reap"
+    else
+      clean_line "ledger backups: $n_bak (keep $BAK_KEEP)"
+    fi
+  fi
+
+  # 3b. GENERATED sidecar class retention (D3, #509) ---------------------------
+  # The .gitignore'd generated class: *.bak / *.bak-* sidecars left beside the
+  # file they are a PRE-IMAGE of. Nothing reaped it -- the class reached 75
+  # files / 4.1 MB in the live state dir. tools/docs/HEALTH-CLASSES.md's *.corrupt-*.bak
+  # row is a DIFFERENT pattern and never covered this one.
+  # Three safety properties, each the reason a simpler rule was rejected:
+  #  - allowlist generated PATTERNS only. A REQUIRED marker such as
+  #    `pacemakers-off` (tools/docs/HEALTH-CLASSES.md:93) is not a *.bak, so it can never be
+  #    a candidate and the reaper cannot flip that check's direction.
+  #  - a sidecar whose SOURCE is not tracked in the state repo is NEVER reaped.
+  #    Taken while its source was still untracked it may be the ONLY copy of that
+  #    reading (lane facd50af lost exactly that on 2026-09-22, #341), so the class
+  #    is REPORTED and left alone -- visible, not risked.
+  #  - the newest SIDECAR_KEEP per source are always kept, and the rest go only
+  #    once older than SIDECAR_MAX_AGE_H.
+  # NOT unified with the ledger-backup check above: that one keeps the newest N
+  # GLOBALLY, this one keeps the newest N PER SOURCE -- different rules. The
+  # ledger's own backups are excluded by prefix so the two never double-count.
+  if [ -d "$STATE" ] && git -C "$STATE" rev-parse --git-dir >/dev/null 2>&1; then
+    n_sc=0; sc_bytes=0; reap_sc=0; n_sc_prunable=0; n_sc_untracked=0; sc_untracked_names=""
+    sc_plan="$(python3 - "$STATE" "$SIDECAR_KEEP" "$SIDECAR_MAX_AGE_H" <<'PY' 2>/dev/null
+import os, re, subprocess, sys, time
+sd, keep, max_age_h = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+def source_of(f):
+    if ".bak-" in f:                       # <src>.bak-<suffix>
+        return f.split(".bak-")[0]
+    return re.sub(r"\.(?:19|20)\d{2}-\d{2}-\d{2}T\d{6}Z?$", "", f[:-4])
+try:
+    tracked = set(subprocess.check_output(["git", "-C", sd, "ls-files"],
+                                          text=True, stderr=subprocess.DEVNULL).split("\n"))
+except Exception:
+    tracked = set()
+names = sorted(f for f in os.listdir(sd)
+               if (f.endswith(".bak") or ".bak-" in f)
+               and not f.startswith("workers-ledger.json"))
+now = time.time(); total = 0; by = {}
+for f in names:
+    p = os.path.join(sd, f)
+    if not os.path.isfile(p):
+        continue
+    total += os.path.getsize(p)
+    by.setdefault(source_of(f), []).append(f)
+print("COUNT\t%d\t%d" % (len(names), total))
+def stamp(f):
+    # the writer's own stamp where it left one, mtime otherwise. mtime is sound
+    # here: 75 distinct mtimes over 75 live sidecars, so these are NOT cp -p
+    # copies of their source's timestamps.
+    m = re.search(r"\.(\d{4}-\d{2}-\d{2}T\d{6})Z?\.bak$", f)
+    if m:
+        try:
+            return time.mktime(time.strptime(m.group(1), "%Y-%m-%dT%H%M%S"))
+        except Exception:
+            pass
+    return os.path.getmtime(os.path.join(sd, f))
+for src, fs in sorted(by.items()):
+    fs.sort(key=stamp, reverse=True)
+    if src not in tracked:
+        for f in fs:
+            print("UNTRACKED\t%s" % f)
+        continue
+    for f in fs[keep:]:
+        if (now - stamp(f)) / 3600.0 >= max_age_h:
+            print("PRUNE\t%s" % f)
+PY
+)" || sc_plan=""
+    while IFS=$'\t' read -r tag a b; do
+      case "$tag" in
+        COUNT) n_sc="$a"; sc_bytes="$b" ;;
+        PRUNE) n_sc_prunable=$((n_sc_prunable + 1))
+               if [ "$REAP" = "1" ] && rm -f "$STATE/$a"; then reap_sc=$((reap_sc + 1)); fi ;;
+        UNTRACKED) n_sc_untracked=$((n_sc_untracked + 1)); sc_untracked_names="$sc_untracked_names $a" ;;
+      esac
+    done <<< "$sc_plan"
+    sc_mb="$(awk -v b="$sc_bytes" 'BEGIN{printf "%.1f", b/1048576}')"
+    if [ "$n_sc_untracked" -gt 0 ]; then
+      add_finding 3 QUIRK sidecar-untracked-source "$n_sc_untracked sidecar(s) whose source is NOT tracked in the state repo - NOT reaped (each may be the only copy of its reading):$sc_untracked_names"
+    fi
+    if [ "$reap_sc" -gt 0 ]; then
+      REAPED=$((REAPED + reap_sc))
+      add_finding 3 SAFE sidecar-retention "pruned $reap_sc generated sidecar(s), kept newest $SIDECAR_KEEP per source (>=${SIDECAR_MAX_AGE_H}h)"
+    elif [ "$n_sc_prunable" -gt 0 ]; then
+      add_finding 3 SAFE sidecar-retention "$n_sc generated sidecar(s) / ${sc_mb}MB, $n_sc_prunable prunable (keep $SIDECAR_KEEP per source, >=${SIDECAR_MAX_AGE_H}h) - rerun with --reap"
+    else
+      clean_line "generated sidecars: $n_sc / ${sc_mb}MB (keep $SIDECAR_KEEP per source)"
+    fi
+  fi
+
+  # 10. Session DB size
+  if [ -f "$DB" ]; then
+    db_mb=$(( $(stat -c %s "$DB") / 1048576 ))
+    if [ "$db_mb" -gt 1024 ]; then
+      add_finding 10 REPORT db-size "session DB ${db_mb}MB > 1GB"
+    else
+      clean_line "session db: ${db_mb}MB"
+    fi
+  fi
+
+  # Ledger JSON syntax check
+  if [ -f "$STATE/workers-ledger.json" ]; then
+    if ! python3 -c 'import json; json.load(open("'"$STATE/workers-ledger.json"'"))' 2>/dev/null; then
+      add_finding 13 URGENT ledger-corrupt "workers-ledger.json has invalid JSON syntax"
+    else
+      clean_line "ledger: valid JSON"
+    fi
+  fi
+fi
+
+# =============================================================================
+# CLASS 4: git_vcs
+# =============================================================================
+if is_class_active "git_vcs"; then
+  # 2. Orphaned / unregistered worktrees
+  if [ -d "$FORK/.git" ]; then
+    reg="$( { git -C "$FORK" worktree list 2>/dev/null | tail -n +2 | awk '{print $1}'; \
+              [ -d "$SKILL_CHECK/.git" ] && git -C "$SKILL_CHECK" worktree list 2>/dev/null | tail -n +2 | awk '{print $1}'; } | sort -u )"
+    n_reg="$(printf '%s\n' "$reg" | grep -c . || true)"
+    ondisk_list=()
+    for p in $WT_PATTERNS; do
+      [ -d "$p" ] || continue
+      [ -e "$p/.git" ] || continue
+      ondisk_list+=("$p")
+    done
+    ondisk="$(printf '%s\n' "${ondisk_list[@]}" | sort -u)"
+    n_disk="$(printf '%s\n' "$ondisk" | grep -c . || true)"
+    orphan="$(comm -13 <(printf '%s\n' "$reg") <(printf '%s\n' "$ondisk") | grep -c . || true)"
+    if [ "${orphan:-0}" -gt 0 ]; then
+      add_finding 2 QUIRK orphan-worktrees "$orphan dir(s) on disk are NOT registered worktrees ($n_disk on disk vs $n_reg registered) — remove via tools/git/oc-wt, never rm -rf"
+    else
+      clean_line "worktrees: $n_reg registered, $n_disk on disk, 0 orphans"
+    fi
+  else
+    FAILED=$((FAILED + 1))
+  fi
+
+  # 18. Worktree tracked-file DELETIONS (#380) — report only.
+  #
+  # 195 of 206 registered worktrees lost the tracked file `.cargo/config.toml`
+  # and NOTHING reported it, for weeks. Check 2 above compares registration
+  # against the directories on disk, and check 6 below inspects the SHARED
+  # checkout only — so no check ever ran `git status` INSIDE a registered
+  # worktree. Both concepts existed; they were never joined.
+  #
+  # The predicate is deliberately narrow: porcelain ` D` is a tracked file
+  # deleted in the worktree and NOT staged. That is never a legitimate mid-work
+  # state, because a deliberate removal is staged by `git rm` and then reads
+  # `D ` in the INDEX column — so a lane mid-work cannot trip this. Measured on
+  # the live fleet 2026-09-19 after remediation: ` D` 0, `D ` 1, ` M`/`M ` 163,
+  # `??` 7 — zero false positives across 163 legitimate modified paths. The
+  # staged form (`D `) is a DIFFERENT condition and is deliberately NOT flagged.
+  #
+  # `-uno` skips the untracked walk (the expensive half on a large tree) and
+  # cannot change this predicate, which only ever matches a tracked deletion:
+  # measured 23s -> 6s across the fleet's 211 trees.
+  _wrepos="$FORK"
+  [ "$SKILL_CHECK" = "$FORK" ] || _wrepos="$FORK $SKILL_CHECK"
+  wt_scanned=0; wt_del_trees=0; wt_del_files=0; wt_del_sample=""
+  for _wrepo in $_wrepos; do
+    [ -d "$_wrepo/.git" ] || continue
+    while IFS= read -r _wt; do
+      [ -n "$_wt" ] || continue
+      [ -d "$_wt" ] || continue
+      wt_scanned=$((wt_scanned + 1))
+      _wtdel="$(git -C "$_wt" status --porcelain -uno 2>/dev/null | grep '^ D' || true)"
+      [ -n "$_wtdel" ] || continue
+      wt_del_trees=$((wt_del_trees + 1))
+      wt_del_files=$((wt_del_files + $(printf '%s\n' "$_wtdel" | grep -c .)))
+      if [ -z "$wt_del_sample" ]; then
+        wt_del_sample="$(printf '%s\n' "$_wtdel" | awk '{print $2}' | head -3 | tr '\n' ' ')"
+      fi
+    done <<EOF_WT
+$(git -C "$_wrepo" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+EOF_WT
+  done
+  if [ "$wt_del_trees" -gt 0 ]; then
+    add_finding 18 QUIRK worktree-tracked-deleted "$wt_del_trees of $wt_scanned registered worktree(s) carry an UNSTAGED tracked-file deletion ($wt_del_files file(s), e.g. $wt_del_sample) — never a legitimate mid-work state (a deliberate removal is staged as 'D '); restore the file or stage the removal"
+  else
+    clean_line "worktree tracked files: $wt_scanned registered tree(s), 0 unstaged deletions"
+  fi
+
+  # 6. Shared checkout cleanliness & divergence
+  if [ -d "$SKILL_CHECK/.git" ]; then
+    dirty="$(git -C "$SKILL_CHECK" status --porcelain 2>/dev/null | wc -l)"
+    if [ "$dirty" -gt 0 ]; then
+      files="$(git -C "$SKILL_CHECK" status --porcelain 2>/dev/null | head -5 | awk '{print $2}' | tr '\n' ' ')"
+      add_finding 6 QUIRK checkout-dirty "$dirty uncommitted path(s) in SHARED skill checkout: $files"
+    else
+      clean_line "checkout: clean"
+    fi
+    head_sha="$(git -C "$SKILL_CHECK" rev-parse --short HEAD 2>/dev/null)"
+    for r in origin; do
+      rsha="$(git -C "$SKILL_CHECK" rev-parse --short "$r/main" 2>/dev/null || echo none)"
+      [ "$rsha" = "$head_sha" ] || add_finding 6 QUIRK checkout-diverged "HEAD=$head_sha but $r/main=$rsha"
+    done
+  else
+    FAILED=$((FAILED + 1))
+  fi
+
+  # 7. Version / ledger consistency
+  if [ "${OC_HEALTH_SKIP_VERSION:-0}" = "1" ]; then
+    clean_line "version: skipped (selftest)"
+  else
+    cv_out="$(cd "$TOOLS_DIR" && ./state/oc-ledger check-version 2>&1)"; cv_rc=$?
+    case "$cv_out" in
+      *MISMATCH*) add_finding 7 QUIRK version-mismatch "$(printf '%s' "$cv_out" | head -1) — fix is oc-ledger sync" ;;
+      *) [ "$cv_rc" = "0" ] && clean_line "version: consistent" || add_finding 7 QUIRK version-unreadable "check-version rc=$cv_rc: $(printf '%s' "$cv_out" | head -1)" ;;
+    esac
+  fi
+fi
+
+# =============================================================================
+# CLASS 5: schedulers
+# =============================================================================
+if is_class_active "schedulers"; then
+  # 8. Cron liveness & DM leak detection
+  if [ -f "$DB" ]; then
+    # The reader is tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). The old
+    # `command -v sqlite3` guard made an ABSENT BINARY and a CLEAN RESULT the
+    # same output: the whole check was skipped, the class reported no finding,
+    # and the only trace was a measurement failure nobody read. Read through the
+    # lib, and treat a DB that will not answer as the measurement failure it is
+    # -- never as "clean".
+    # Law-carrying dev crons. This check has TWO jobs and which one is live
+    # depends on the OWNER ORDER of 2026-09-18 20:53Z ("turn off all of your
+    # pacemakers"), which switched every ops pacemaker off and is STILL STANDING
+    # (tools/docs/HEALTH-CLASSES.md class 5). While it stands, a disabled law-carrying cron
+    # is the owner's own order and flagging it only reports his decision back to
+    # him; what is worth failing on is then one ENABLED AGAINST the order.
+    # Absent marker = the direction is UNSET — NOT "the order was lifted" (#426).
+    # Those two states are byte-identical to this check, and resolving toward the
+    # old direction reports the owner's own order back to him as a defect
+    # (measured 2026-09-19: an 8 QUIRK cron-disabled finding with the marker absent
+    # — reproduced against an empty state dir, the shape every profile but ops is
+    # in). So with the marker absent a disabled patrol is OBSERVED —
+    # a note naming the marker path and the unset direction — never asserted as a
+    # finding. The failing direction is live ONLY while the marker is present and
+    # one of these patrols is ENABLED against the standing order.
+    # The marker is state-dir scoped, so it is hermetic in the selftest.
+    #
+    # The name list is deliberately NOT a hardcoded `name IN (...)`: a liveness
+    # check pinned to a name cannot watch its own subject, because the
+    # 2026-09-18 namespacing law RENAMES these jobs. `harvest-watch-4h` ->
+    # `oc-harvest-dispatch-4h` was exactly that rename, and the stale spelling
+    # left the check blind to the harvest patrol for its whole life. Matching on
+    # the stable STEM survives the next rename; `oc-upstream-delta-watch` was
+    # missing from the list outright and is covered now.
+    _LAWCARRY="(name LIKE 'oc-harvest-dispatch%' OR name LIKE 'oc-roster-detached-sweep%' OR name LIKE 'oc-health-hourly%' OR name LIKE 'oc-upstream-delta-watch%')"
+    if [ -f "$STATE/pacemakers-off" ]; then
+      cron_bad="$("$TOOLS_DIR/lib/oc_sqlite" "$DB" "SELECT name FROM cron_jobs WHERE enabled=1 AND $_LAWCARRY;" 2>/dev/null)"; cron_rc=$?
+    else
+      cron_bad="$("$TOOLS_DIR/lib/oc_sqlite" "$DB" "SELECT name FROM cron_jobs WHERE enabled=0 AND $_LAWCARRY;" 2>/dev/null)"; cron_rc=$?
+    fi
+    leak_bad="$("$TOOLS_DIR/lib/oc_sqlite" "$DB" "SELECT name FROM cron_jobs WHERE enabled=1 AND name LIKE 'oc-%' AND ((deliver_to LIKE 'telegram:%' AND deliver_to NOT LIKE 'telegram:-%') OR prompt LIKE '%133526395%');" 2>/dev/null)"; leak_rc=$?
+    if [ "$cron_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ]; then
+      FAILED=$((FAILED + 1))
+    else
+      if [ -n "$cron_bad" ]; then
+        if [ -f "$STATE/pacemakers-off" ]; then
+          add_finding 8 QUIRK cron-enabled-against-order "law-carrying cron(s) ENABLED while the 2026-09-18 pacemakers-off order stands: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
+        else
+          add_note scheduler-direction-unset "direction UNSET — the marker $STATE/pacemakers-off is absent, so the 2026-09-18 pacemakers-off order reads as neither standing nor lifted, and a disabled law-carrying cron is observed here rather than reported as a defect. Write the marker to assert the order still stands, or leave it absent deliberately if the order was lifted. Disabled: $(printf '%s' "$cron_bad" | tr '\n' ' ')"
+        fi
+      fi
+      [ -n "$leak_bad" ] && add_finding 8 QUIRK cron-leak "dev cron(s) delivering outside forum (DM-routed): $(printf '%s' "$leak_bad" | tr '\n' ' ')"
+      if [ -z "$cron_bad$leak_bad" ]; then
+        if [ -f "$STATE/pacemakers-off" ]; then
+          clean_line "crons: pacemakers-off order honoured, zero DM leaks"
+        else
+          clean_line "crons: law-carrying enabled, zero DM leaks"
+        fi
+      fi
+    fi
+  else
+    FAILED=$((FAILED + 1))
+  fi
+fi
+
+# =============================================================================
+# CLASS 6: fleet_lanes
+# =============================================================================
+if is_class_active "fleet_lanes"; then
+  if [ -f "$STATE/workers-ledger.json" ]; then
+    # Check if ledger JSON is valid before parsing roster
+    if ! python3 -c 'import json; json.load(open("'"$STATE/workers-ledger.json"'"))' 2>/dev/null; then
+      add_finding 13 URGENT ledger-corrupt "workers-ledger.json has invalid JSON syntax"
+    else
+      # Roster is TOP-LEVEL `.workers` (a LIST) — NOT `.roster.workers`, which has
+      # never existed: `uuids` was always [] so the duplicate check could not fire.
+      roster_err="$(python3 -c '
+import json, sys
+try:
+    uuids = [w.get("uuid") for w in json.load(sys.stdin).get("workers", [])]
+    if len(uuids) != len(set(uuids)):
+        print("duplicate worker UUIDs in roster")
+except Exception as e:
+    print("roster error: %s" % e)
+' < "$STATE/workers-ledger.json" 2>/dev/null)"
+      if [ -n "$roster_err" ]; then
+        add_finding 14 QUIRK roster-inconsistency "$roster_err"
+      else
+        clean_line "fleet_lanes: roster format consistent"
+      fi
+    fi
+  fi
+fi
+
+# =============================================================================
+# CLASS 7: logs
+# =============================================================================
+if is_class_active "logs"; then
+  # 11. tools.log JSONL syntax integrity
+  if [ -f "$LOGF" ]; then
+    n_lines=$(wc -l < "$LOGF")
+    n_ok=$(jq -Rr 'fromjson? | .ts' "$LOGF" 2>/dev/null | wc -l)
+    n_bad=$((n_lines - n_ok))
+    if [ "$n_bad" -gt 0 ]; then
+      bad_lines="$(grep -n -v -E '^\{' "$LOGF" 2>/dev/null | head -3 | cut -d: -f1 | tr '\n' ' ')"
+      add_finding 11 QUIRK toolslog-malformed "$n_bad non-JSON line(s) in $(basename "$LOGF") (${n_ok} parseable of ${n_lines}; lines: ${bad_lines:-?}) — recipes must use -Rr 'fromjson?'"
+    else
+      clean_line "tools.log: ${n_lines} JSONL line(s), all parseable"
+    fi
+
+    # Failure rate audit (>15% non-zero exit with minimum 10 invocations)
+    high_fail_tools="$(jq -Rr 'fromjson? | select(.tool != null) | {tool: .tool, exit: .exit}' "$LOGF" 2>/dev/null | \
+      python3 -c '
+import json, sys
+from collections import defaultdict
+counts = defaultdict(int)
+fails = defaultdict(int)
+for line in sys.stdin:
+    try:
+        row = json.loads(line)
+        t = row["tool"]
+        counts[t] += 1
+        if row.get("exit", 0) != 0:
+            fails[t] += 1
+    except:
+        pass
+bad = []
+for t, total in counts.items():
+    if total >= 10:
+        rate = fails[t] / total
+        if rate > 0.15:
+            bad.append(f"{t}({fails[t]}/{total}={rate:.0%})")
+if bad:
+    print(", ".join(bad))
+' 2>/dev/null)"
+    if [ -n "$high_fail_tools" ]; then
+      add_finding 15 REPORT tool-failure-rate "high failure rate (>15%) in tools: $high_fail_tools"
+    else
+      clean_line "tools.log: tool failure rates normal"
+    fi
+  else
+    clean_line "tools.log: absent"
+  fi
+
+  # Daemon log error spikes
+  today_log="$DAEMON_LOG_DIR/opencrabs.$(date -u +%Y-%m-%d)"
+  if [ -f "$today_log" ]; then
+    err_count="$(grep -c ' ERROR ' "$today_log" 2>/dev/null || echo 0)"
+    if [ "$err_count" -gt 50 ]; then
+      add_finding 16 WARN daemon-error-spike "high error volume in daemon log ($err_count errors today)"
+    else
+      clean_line "daemon log: error volume normal ($err_count errors)"
+    fi
+  fi
+fi
+
+# =============================================================================
+# CLASS 8: issue_portfolio
+# =============================================================================
+if is_class_active "issue_portfolio"; then
+  # Audit issue claims. DELEGATED to tools/lib/oc_claims.py, the ONE claim-closure
+  # predicate. The copy this replaces keyed on keys absent from all 9025 live events.
+  if [ -f "$STATE/workers-ledger.json" ]; then
+    claims_check="$(python3 -c '
+import json, sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import oc_claims as oc
+open_c = oc.open_claims(json.load(sys.stdin).get("events", []))
+unassigned = [c for c in open_c if not c["by"]]
+if unassigned:
+    print("%d unassigned claim(s) of %d open" % (len(unassigned), len(open_c)))
+' "$TOOLS_DIR" < "$STATE/workers-ledger.json" 2>&1)"
+    claims_rc=$?
+    if [ "$claims_rc" -ne 0 ]; then
+      add_finding 17 REPORT issue-claims "claim scan FAILED (rc=$claims_rc): $(printf '%s' "$claims_check" | head -1)"
+    elif [ -n "$claims_check" ]; then
+      add_finding 17 REPORT issue-claims "$claims_check"
+    else
+      clean_line "issue portfolio: ledger claim structure valid"
+    fi
+  fi
+fi
+
+# =============================================================================
+# Record Rotation State
+# =============================================================================
+if [ "$DO_ALL" = "0" ] && [ "$TARGET_CLASS" != "all" ] && [ -n "$CURRENT_ROTATION_CLASS" ]; then
+  python3 -c "
+import json, os, datetime
+path = '$ROTATION_FILE'
+now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except:
+        data = {}
+
+data['version'] = 1
+data['current_class'] = '$CURRENT_ROTATION_CLASS'
+data['next_class'] = '$NEXT_ROTATION_CLASS'
+data['last_rotated_at'] = now
+data['cycle_count'] = $CYCLE_COUNT
+hist = data.setdefault('history', {})
+hist['$CURRENT_ROTATION_CLASS'] = {
+    'last_run': now,
+    'findings': $FINDINGS,
+    'reaped': $REAPED
+}
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+" 2>/dev/null || true
+fi
+
+# =============================================================================
+# Output
+# =============================================================================
+classes_str="$(IFS=,; echo "${ACTIVE_CLASSES[*]}")"
+if [ "$JSON" = "1" ]; then
+  printf '{"findings":[%s],"reaped":%d,"measure_failures":%d,"notes":%d,"notes_detail":[%s],"state_dir":"%s","rotation":{"current_class":"%s","next_class":"%s","classes_run":[%s],"cycle_count":%d}}\n' \
+    "$F_JSON" "$REAPED" "$FAILED" "$NOTES" "$N_JSON" "$STATE" \
+    "$CURRENT_ROTATION_CLASS" "$NEXT_ROTATION_CLASS" \
+    "$(printf '"%s",' "${ACTIVE_CLASSES[@]}" | sed 's/,$//')" "$CYCLE_COUNT"
+else
+  printf 'oc-health [%s]: %d finding(s), %d remediation(s), %d measurement failure(s), %d note(s)\n' \
+    "$classes_str" "$FINDINGS" "$REAPED" "$FAILED" "$NOTES"
+  [ -n "$N_TEXT" ] && printf '%s' "$N_TEXT"
+  [ -n "$F_TEXT" ] && printf '%s' "$F_TEXT"
+fi
+
+[ "$FAILED" -gt 0 ] && exit 3
+[ "$FINDINGS" -gt 0 ] && exit 1
+exit 0

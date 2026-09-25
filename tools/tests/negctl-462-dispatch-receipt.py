@@ -30,7 +30,7 @@ THE PRE-FIX BASELINE (why it comes from git, not from this tree)
   read that from a scratch file, so it materialises the blob at the immutable
   sha the fix was built on:
 
-      git -C <repo> show <BASE_SHA>:tools/oc-issue-dispatch
+      git -C <repo> show <BASE_SHA>:tools/issue/oc-issue-dispatch
 
   BASE_SHA is the last commit before the fix and is an ancestor of `main`, so
   the blob is present in any clone that carries this control. If git or the
@@ -106,13 +106,13 @@ def materialize_baseline():
     """Write the pre-fix revision to a temp file; return its path or None."""
     try:
         proc = subprocess.run(
-            ["git", "-C", REPO, "show", "%s:tools/oc-issue-dispatch" % BASE_SHA],
+            ["git", "-C", REPO, "show", "%s:tools/issue/oc-issue-dispatch" % BASE_SHA],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
     except Exception as exc:
         print("  baseline: git invocation failed (%s)" % exc)
         return None
     if proc.returncode != 0 or not proc.stdout:
-        print("  baseline: `git show %s:tools/oc-issue-dispatch` returned rc=%d, %d bytes"
+        print("  baseline: `git show %s:tools/issue/oc-issue-dispatch` returned rc=%d, %d bytes"
               % (BASE_SHA, proc.returncode, len(proc.stdout or b"")))
         return None
     fd, path = tempfile.mkstemp(prefix="oid-pre-", suffix=".py")

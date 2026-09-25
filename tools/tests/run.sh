@@ -28,7 +28,18 @@ export OC_ACTOR="test-runner"
 note()  { printf '%s\n' "$*"; }
 ok()    { PASS=$((PASS+1)); note "  ok   - $*"; }
 bad()   { FAIL=$((FAIL+1)); note "  FAIL - $*"; if [ -n "${FAIL_LOG:-}" ]; then printf '  FAIL - %s\n' "$*" >> "$FAIL_LOG"; fi; }
-tool()  { [ -x "$TOOLS_DIR/$1" ] || { bad "missing tool: $1"; return 1; } }
+# tools/ is grouped by KIND (owner order 2026-09-25): oc-* live in functional
+# subdirs. Resolve by NAME so a tool can be moved without touching every leg.
+tool_path() {
+  [ -x "$TOOLS_DIR/$1" ] && { printf '%s\n' "$TOOLS_DIR/$1"; return 0; }
+  for _d in "$TOOLS_DIR"/*/; do
+    [ -d "$_d" ] || continue
+    case "${_d%/}" in */lib|*/tests|*/archive|*/docs|*/instruments) continue ;; esac
+    [ -x "$_d$1" ] && { printf '%s\n' "$_d$1"; return 0; }
+  done
+  return 1
+}
+tool()  { [ -x "$(tool_path "$1" 2>/dev/null)" ] || { bad "missing tool: $1"; return 1; } }
 section() { note ""; note "== $1 =="; }
 # record — a continuation line's detail: printed AND appended to the fail
 # transcript. `tee -a` is byte-transparent on stdout, so a GREEN run stays
@@ -75,7 +86,8 @@ run_capture() { # $1 = label, $2.. = command
 }
 run_selftest() {
   local t="$1"
-  if [ ! -x "$TOOLS_DIR/$t" ]; then bad "$t missing or not executable"; return 1; fi
+  _tp="$(tool_path "$t" 2>/dev/null)"
+  if [ -z "$_tp" ] || [ ! -x "$_tp" ]; then bad "$t missing or not executable"; return 1; fi
   # M2-22 (2026-09-12): the state dir must be removed after the run — this was
   # the volume driver of the /tmp leak (one dir per tool per battery run).
   # A plain `rm -rf` right after the call, NOT a global trap: chunk mode
@@ -83,7 +95,7 @@ run_selftest() {
   # marker) once per section, so a prelude-level trap would be set N times.
   local sd
   sd="$(mktemp -d)"
-  run_capture "$t --selftest" env OC_DEPLOY_STATE_DIR="$sd" "$TOOLS_DIR/$t" --selftest
+  run_capture "$t --selftest" env OC_DEPLOY_STATE_DIR="$sd" "$_tp" --selftest
   rm -rf "$sd"
 }
 
@@ -293,7 +305,7 @@ section "unified-log wire (real tool -> tmp log)"
 if tool oc-attrib; then
   wd="$(mktemp -d)"
   WL="$wd/tools.log"
-  OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$WL" "$TOOLS_DIR/oc-attrib" --repo /root/opencrabs --deployed >/dev/null 2>&1
+  OC_TOOLS_NOLOG=0 OC_TOOLS_LOG="$WL" "$TOOLS_DIR/state/oc-attrib" --repo /root/opencrabs --deployed >/dev/null 2>&1
   wrc=$?
   # rc=0 normal; rc=4 = empty range (prev_sha==deployed or no commits in range) —
   # tool-correct on degenerate live marker state (seen 2026-08-31, double swap-execute)
@@ -309,7 +321,7 @@ fi
 section "oc-order-validate"
 run_selftest oc-order-validate
 if tool oc-order-validate; then
-  "$TOOLS_DIR/oc-order-validate" --no-such-arg >/dev/null 2>&1; [ $? -eq 1 ] && ok "unknown arg -> 1 (usage)" || bad "unknown arg -> expected 1"
+  "$TOOLS_DIR/ship/oc-order-validate" --no-such-arg >/dev/null 2>&1; [ $? -eq 1 ] && ok "unknown arg -> 1 (usage)" || bad "unknown arg -> expected 1"
 fi
 
 # ---- 02. oc-job-verify -----------------------------------------------------
@@ -331,7 +343,7 @@ if tool oc-seal-state; then
   printf '{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","run_id":1,"name":"keep-me"}' > "$d/b.json"
   printf '{"orders":[]}' > "$d/o.json"
   S="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  OUT="$("$TOOLS_DIR/oc-seal-state" --baseline "$d/b.json" --orders "$d/o.json" \
+  OUT="$("$TOOLS_DIR/ship/oc-seal-state" --baseline "$d/b.json" --orders "$d/o.json" \
     --sha "$S" --run-id 42 --marker width=1600 --found 1 --dry-run)"
   rc=$?
   [ "$rc" -eq 0 ] || { bad "seal merge exit=$rc (expected 0)"; rm -rf "$d"; }
@@ -655,7 +667,7 @@ fi
 section "oc-pr-atomicity"
 run_selftest oc-pr-atomicity
 if tool oc-pr-atomicity; then
-  "$TOOLS_DIR/oc-pr-atomicity" >/dev/null 2>&1; [ $? -eq 1 ] && ok "no args -> 1 (usage)" || bad "no args -> expected 1"
+  "$TOOLS_DIR/harvest/oc-pr-atomicity" >/dev/null 2>&1; [ $? -eq 1 ] && ok "no args -> 1 (usage)" || bad "no args -> expected 1"
 fi
 
 # ---- 8. oc-ci-parity RETIRED v0.4.117 (owner "3 - ok" 21:44Z: zero live use in 12d, C-H2; three-way-diff check in merge runbook supersedes) ----
@@ -678,16 +690,16 @@ Session-Id: $SA
 Issue-Ref: #11"
   ca x2 "no trailer drop"
   printf '{"workers":[{"uuid":"%s","role":"editor","topic_id":30090,"feature":"echo-lane"}]}\n' "$SA" > "$d/wl.json"
-  OUT="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range main --ledger "$d/wl.json")"; rc=$?
+  OUT="$("$TOOLS_DIR/state/oc-attrib" --repo "$d" --range main --ledger "$d/wl.json")"; rc=$?
   [ $rc -eq 0 ] && ok "attrib exit 0" || bad "attrib exit=$rc"
   echo "$OUT" | awk -F'\t' -v s="$SA" '$1==s && $2=="30090" && $3=="echo-lane" && $4=="#11" {f=1} END{exit !f}' \
     && ok "mapped row joins topic+feature+issue" || bad "mapped row wrong"
   echo "$OUT" | grep -q '(unsigned)' && ok "(unsigned) visible in rows" || bad "(unsigned) dropped"
-  J="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range main --ledger "$d/wl.json" --json)"
+  J="$("$TOOLS_DIR/state/oc-attrib" --repo "$d" --range main --ledger "$d/wl.json" --json)"
   echo "$J" | jq -e --arg s "$SA" 'map(select(.session==$s))[0].lane.topic_id == 30090' >/dev/null \
     && ok "--json lane object numeric topic_id" || bad "--json lane wrong"
-  "$TOOLS_DIR/oc-attrib" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2" || bad "no args -> expected 2"
-  "$TOOLS_DIR/oc-attrib" --repo "$d" --range main..main >/dev/null 2>&1; [ $? -eq 4 ] && ok "empty range -> 4" || bad "empty range -> expected 4"
+  "$TOOLS_DIR/state/oc-attrib" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2" || bad "no args -> expected 2"
+  "$TOOLS_DIR/state/oc-attrib" --repo "$d" --range main..main >/dev/null 2>&1; [ $? -eq 4 ] && ok "empty range -> 4" || bad "empty range -> expected 4"
   rm -rf "$d"
 fi
 
@@ -744,8 +756,8 @@ Session-Id: 22222222-2222-2222-2222-222222222222"
   S_REPLAY="$(printf '%s' "$REPLAY" | cut -c1-7)"
   S_NOVEL="$(printf '%s' "$NOVEL" | cut -c1-7)"
   S_EMPTY="$(printf '%s' "$EMPTY" | cut -c1-7)"
-  RAW="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range "$BASE..tip" 2>/dev/null)"
-  NOV="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range "$BASE..tip" --novel 2>"$d/nov.err")"; nrc=$?
+  RAW="$("$TOOLS_DIR/state/oc-attrib" --repo "$d" --range "$BASE..tip" 2>/dev/null)"
+  NOV="$("$TOOLS_DIR/state/oc-attrib" --repo "$d" --range "$BASE..tip" --novel 2>"$d/nov.err")"; nrc=$?
   [ "$nrc" -eq 0 ] && ok "#407 --novel exits 0" || bad "#407 --novel rc=$nrc want 0"
   [ "$(printf '%s\n' "$RAW" | wc -l)" -eq 3 ] && ok "#407 RAW range keeps all 3 commits (replay+novel+empty)" \
     || bad "#407 RAW rows=$(printf '%s\n' "$RAW" | wc -l) want 3"
@@ -757,7 +769,7 @@ Session-Id: 22222222-2222-2222-2222-222222222222"
   printf '%s\n' "$RAW" | grep -q "$S_REPLAY" && ok "#407 RAW still shows the replayed twin (filter is opt-in)" || bad "#407 RAW lost the replayed twin"
   grep -q "3 raw, 1 replayed, 1 empty, 1 contributing" "$d/nov.err" && ok "#407 stderr accounting names raw/replayed/empty/contributing" \
     || bad "#407 stderr accounting missing: $(cat "$d/nov.err" 2>/dev/null)"
-  NN="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range "$BASE..tip" --no-novel 2>/dev/null)"
+  NN="$("$TOOLS_DIR/state/oc-attrib" --repo "$d" --range "$BASE..tip" --no-novel 2>/dev/null)"
   [ "$NN" = "$RAW" ] && ok "#407 --no-novel is byte-identical to RAW" || bad "#407 --no-novel != RAW"
   # an ALL-REPLAYED tip — nothing but a re-sha'd original plus an empty commit,
   # against a baseline that already carries both — must yield ZERO rows at rc 0.
@@ -766,7 +778,7 @@ Session-Id: 22222222-2222-2222-2222-222222222222"
   git -C "$d" checkout -q -b tip2 "$B0"
   git -C "$d" cherry-pick "$TWIN" >/dev/null 2>&1 || bad "#407 fixture: tip2 cherry-pick failed"
   git -C "$d" commit -q --allow-empty -m "chore: sign tip2"
-  ALLF="$("$TOOLS_DIR/oc-attrib" --repo "$d" --range "$BASE..tip2" --novel 2>"$d/allf.err")"; arc=$?
+  ALLF="$("$TOOLS_DIR/state/oc-attrib" --repo "$d" --range "$BASE..tip2" --novel 2>"$d/allf.err")"; arc=$?
   [ "$arc" -eq 0 ] && [ -z "$ALLF" ] && ok "#407 all-replayed range -> rc 0 with no rows" \
     || bad "#407 all-replayed range rc=$arc rows=$(printf '%s\n' "$ALLF" | wc -l) want rc 0 / 0 rows"
   grep -q "0 contributing" "$d/allf.err" && ok "#407 all-replayed accounting reports 0 contributing" \
@@ -784,18 +796,18 @@ run_selftest oc-seal-state
 if tool oc-seal-state; then
   d="$(mktemp -d)"; O="$d/orders.json"
   printf '{"orders":[{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","features":"telegram","status":"queued"},{"order_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"dispatched","run_id":"7"}]}\n' > "$O"
-  "$TOOLS_DIR/oc-seal-state" --orders "$O" --mark-order aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --status deployed --order-evidence "PID 1 disk==proc" >/dev/null 2>&1
+  "$TOOLS_DIR/ship/oc-seal-state" --orders "$O" --mark-order aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --status deployed --order-evidence "PID 1 disk==proc" >/dev/null 2>&1
   [ $? -eq 0 ] && ok "status-only mark accepted" || bad "status-only mark rejected"
   [ "$(jq -r '.orders[0].status' "$O")" = "DEPLOYED" ] && ok "vocabulary uppercased + stored" || bad "status not DEPLOYED"
   [ "$(jq -r '.orders[0].evidence' "$O")" = "PID 1 disk==proc" ] && ok "per-row evidence stored" || bad "evidence missing"
-  "$TOOLS_DIR/oc-seal-state" --orders "$O" --mark-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --with-run 99 >/dev/null 2>&1
+  "$TOOLS_DIR/ship/oc-seal-state" --orders "$O" --mark-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --with-run 99 >/dev/null 2>&1
   [ "$(jq -r '.orders[1].run_id' "$O")" = "99" ] && ok "legacy order_sha row markable" || bad "legacy row missed"
   [ "$(jq -r '.orders[1].status' "$O")" = "DISPATCHED" ] && ok "default status DISPATCHED" || bad "default status wrong"
-  "$TOOLS_DIR/oc-seal-state" --orders "$O" --mark-order aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --status BOGUS >/dev/null 2>&1
+  "$TOOLS_DIR/ship/oc-seal-state" --orders "$O" --mark-order aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --status BOGUS >/dev/null 2>&1
   [ $? -eq 1 ] && ok "invalid vocabulary -> 1" || bad "BOGUS accepted"
-  "$TOOLS_DIR/oc-seal-state" --orders "$O" --purge-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >/dev/null 2>&1
+  "$TOOLS_DIR/ship/oc-seal-state" --orders "$O" --purge-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >/dev/null 2>&1
   [ "$(jq '.orders|length' "$O")" -eq 1 ] && ok "purge removes matching row" || bad "purge failed"
-  "$TOOLS_DIR/oc-seal-state" --orders "$O" --purge-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >/dev/null 2>&1
+  "$TOOLS_DIR/ship/oc-seal-state" --orders "$O" --purge-order bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >/dev/null 2>&1
   [ $? -eq 1 ] && ok "purge unknown sha -> 1" || bad "purge miss not refused"
   rm -rf "$d"
 fi
@@ -804,28 +816,28 @@ fi
 section "oc-carrier-features"
 run_selftest oc-carrier-features
 if tool oc-carrier-features; then
-  "$TOOLS_DIR/oc-carrier-features" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/ship/oc-carrier-features" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
 fi
 
 # ---- 9f. oc-issue-sweep (KERNEL C3) -----------------------------------------
 section "oc-issue-sweep"
 run_selftest oc-issue-sweep
 if tool oc-issue-sweep; then
-  "$TOOLS_DIR/oc-issue-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/issue/oc-issue-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
 fi
 
 # ---- 9g. oc-skew-scan (KERNEL C4) -------------------------------------------
 section "oc-skew-scan"
 run_selftest oc-skew-scan
 if tool oc-skew-scan; then
-  "$TOOLS_DIR/oc-skew-scan" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/state/oc-skew-scan" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
 fi
 
 # ---- 9h. oc-ping-proof (B25) -------------------------------------------------
 section "oc-ping-proof"
 run_selftest oc-ping-proof
 if tool oc-ping-proof; then
-  "$TOOLS_DIR/oc-ping-proof" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/notify/oc-ping-proof" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
 fi
 
 # ---- 9i. oc-watchdog-check — RETIRED v0.4.65 (lens E A1: pure passthrough to oc-deploy watch) ----
@@ -854,8 +866,8 @@ Issue-Ref: #77"
   CTIP="$(git -C "$d/crepo" rev-parse HEAD)"
   # contributors verb RETIRED (v0.4.91, lens E-2): loud deprecation rc 1, points at oc-attrib.
   # The working TSV projection is covered by oc-attrib --contributors (single shape now).
-  OUTK="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_ATTRIB="$TOOLS_DIR/oc-attrib" \
-    "$TOOLS_DIR/oc-deploy" contributors "$CBASE..$CTIP" --repo "$d/crepo" 2>&1)"; rck=$?
+  OUTK="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_ATTRIB="$TOOLS_DIR/state/oc-attrib" \
+    "$TOOLS_DIR/ship/oc-deploy" contributors "$CBASE..$CTIP" --repo "$d/crepo" 2>&1)"; rck=$?
   if [ "$rck" -eq 1 ] && case "$OUTK" in *"RETIRED"*"oc-attrib"*) true ;; *) false ;; esac; then
     ok "contributors: retired verb -> rc1 + loud oc-attrib pointer"
   else
@@ -892,7 +904,7 @@ NOTIFYSHIM
   chmod +x "$SD/notify"
   : > "$d/notify.log"
   OUTK="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" \
-    OC_DEPLOY_NOTIFY="$SD/notify" "$TOOLS_DIR/oc-deploy" fanout --run 222 2>&1)"; rck=$?
+    OC_DEPLOY_NOTIFY="$SD/notify" "$TOOLS_DIR/ship/oc-deploy" fanout --run 222 2>&1)"; rck=$?
   if [ "$rck" -eq 0 ] && case "$OUTK" in *"notified=1 skipped=1"*) true ;; *) false ;; esac; then
     ok "fanout GREEN: notified=1 skipped=1"
   else
@@ -903,7 +915,7 @@ NOTIFYSHIM
   jq -e '.runs["222"]' "$SD/fanout.state" >/dev/null 2>&1 && ok "fanout GREEN: state marked" || bad "fanout GREEN: state unmarked"
   grep -q '"reason":"dead"' "$SD"/oc-deploy/journal/fanout-222-*.jsonl 2>/dev/null && ok "dead uuid: skip journaled" || bad "dead uuid: no skip journal line"
   OUTK="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_ATTRIB="$SD/tools/attrib-stub" \
-    OC_DEPLOY_NOTIFY="$SD/notify" "$TOOLS_DIR/oc-deploy" fanout --run 222 2>&1)"; rck=$?
+    OC_DEPLOY_NOTIFY="$SD/notify" "$TOOLS_DIR/ship/oc-deploy" fanout --run 222 2>&1)"; rck=$?
   [ "$rck" -eq 0 ] && case "$OUTK" in *"reason=done"*) true ;; *) false ;; esac \
     && ok "fanout idempotent rerun: reason=done" || bad "fanout idempotent rerun (rc=$rck)"
   # RED leg: culprit commit (trailer cccccccc-1111) blamed at bad.txt:3
@@ -921,7 +933,7 @@ Session-Id: cccccccc-1111-2222-3333-444444444444"
   git -C "$d/redw1" push -q "$d/red1.git" HEAD
   git -C "$d/redw1" rev-parse HEAD > "$SD/red-head"
   OUTK="$(OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_GH="$SD/gh" OC_DEPLOY_REPO="$d/redc1" OC_DEPLOY_REMOTE="$d/red1.git" \
-    OC_DEPLOY_NOTIFY="$SD/notify" "$TOOLS_DIR/oc-deploy" fanout --run 666 2>&1)"; rck=$?
+    OC_DEPLOY_NOTIFY="$SD/notify" "$TOOLS_DIR/ship/oc-deploy" fanout --run 666 2>&1)"; rck=$?
   if [ "$rck" -eq 0 ] && case "$OUTK" in *"notified=1 skipped=0 unowned=0"*) true ;; *) false ;; esac; then
     ok "fanout RED: blamed culprit notified=1"
   else
@@ -935,7 +947,7 @@ Session-Id: cccccccc-1111-2222-3333-444444444444"
     bad "fanout RED: attributed line missing/wrong"
   fi
   jq -e '.runs["666"].notified == 1' "$SD/fanout.state" >/dev/null 2>&1 && ok "fanout RED: state marked" || bad "fanout RED: state unmarked"
-  OUTK="$(OC_DEPLOY_STATE_DIR="$SD" "$TOOLS_DIR/oc-deploy" fanout 2>&1)"; rck=$?
+  OUTK="$(OC_DEPLOY_STATE_DIR="$SD" "$TOOLS_DIR/ship/oc-deploy" fanout 2>&1)"; rck=$?
   [ "$rck" -eq 2 ] && ok "fanout without --run -> 2 (usage)" || bad "fanout usage (rc=$rck, want 2)"
   rm -rf "$d"
 fi
@@ -955,24 +967,24 @@ section "oc-deploy"
 LSE="$(mktemp -d)/selftest.log"
 run_capture "oc-deploy selftest (bare subcommand)" \
   env OC_TOOLS_NOLOG=0 OC_DEPLOY_STATE_DIR="$(mktemp -d)" OC_TOOLS_LOG="$LSE" \
-     "$TOOLS_DIR/oc-deploy" selftest
+     "$TOOLS_DIR/ship/oc-deploy" selftest
 if [ -s "$LSE" ]; then
   bad "bare selftest leaked $(wc -l < "$LSE") row(s) into OC_TOOLS_LOG (M2-21)"
 else
   ok "bare selftest is log-hermetic: 0 rows (M2-21)"
 fi
 if tool oc-deploy; then
-  "$TOOLS_DIR/oc-deploy" >/dev/null 2>&1; [ $? -eq 1 ] && ok "no args -> 1 (usage)" || bad "no args -> expected 1"
-  "$TOOLS_DIR/oc-deploy" --bogus >/dev/null 2>&1; [ $? -eq 1 ] && ok "unknown arg -> 1" || bad "unknown arg -> expected 1"
+  "$TOOLS_DIR/ship/oc-deploy" >/dev/null 2>&1; [ $? -eq 1 ] && ok "no args -> 1 (usage)" || bad "no args -> expected 1"
+  "$TOOLS_DIR/ship/oc-deploy" --bogus >/dev/null 2>&1; [ $? -eq 1 ] && ok "unknown arg -> 1" || bad "unknown arg -> expected 1"
   d="$(mktemp -d)"; printf x > "$d/oc-deploy.kill"
-  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-deploy" poll >/dev/null 2>&1
+  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/ship/oc-deploy" poll >/dev/null 2>&1
   [ $? -eq 9 ] && ok "kill file -> 9 (real-mode brake)" || bad "kill file -> expected 9"
   # Duty-6 lens F task 5: --wait validated BEFORE any RED-scan side effects —
   # bad --wait dies rc1 with no fanout/state writes (the kill-file brake sits at
   # the TOP of every real-mode arm, so poll with kill file + bad --wait -> 9,
   # not 1; contract fix ec4706bd moved it there from before arg parsing).
   d2="$(mktemp -d)"
-  OC_DEPLOY_STATE_DIR="$d2" OC_DEPLOY_GH=/bin/false "$TOOLS_DIR/oc-deploy" poll --wait abc >/dev/null 2>&1
+  OC_DEPLOY_STATE_DIR="$d2" OC_DEPLOY_GH=/bin/false "$TOOLS_DIR/ship/oc-deploy" poll --wait abc >/dev/null 2>&1
   [ $? -eq 1 ] && ok "poll bad --wait -> 1 before side effects" || bad "poll bad --wait -> expected 1"
   [ "$(ls -A "$d2" 2>/dev/null)" = "oc-deploy-shadow.log" ] && ok "poll bad --wait: no state writes beyond shadow log" || bad "poll bad --wait wrote state: $(ls "$d2")"
   rm -rf "$d2"
@@ -997,7 +1009,7 @@ esac
 GHEOF
   chmod +x "$d3/gh"
   OC_DEPLOY_STATE_DIR="$SD3" OC_DEPLOY_GH="$d3/gh" OC_DEPLOY_NOFANOUT=1 OC_DEPLOY_POLL_INTERVAL=1 \
-    "$TOOLS_DIR/oc-deploy" poll --wait 2 --sha "$PEN_SHA" --execute --features telegram >/dev/null 2>&1
+    "$TOOLS_DIR/ship/oc-deploy" poll --wait 2 --sha "$PEN_SHA" --execute --features telegram >/dev/null 2>&1
   RC3=$?
   grep -q "nothing new" "$d3"/oc-deploy-shadow.log 2>/dev/null && MISSED=1 || MISSED=0
   [ "$RC3" != 5 ] && [ "$MISSED" = 0 ] && ok "poll --sha pending: dispatched-sha GREEN never reports 'already deployed'" || bad "poll --sha pending: rc=$RC3 missed=$MISSED"
@@ -1017,16 +1029,16 @@ GHEOF
   git -C "$d/repo" push -q "$d/remote.git" HEAD~1:refs/heads/main
   (cd "$d/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$d/remote.git" \
     OC_DEPLOY_VALIDATE="$SD/tools/val" OC_DEPLOY_GH="$SD/gh" \
-    "$TOOLS_DIR/oc-deploy" ship --sha "$SHA2" --features telegram >/dev/null 2>&1)
+    "$TOOLS_DIR/ship/oc-deploy" ship --sha "$SHA2" --features telegram >/dev/null 2>&1)
   git -C "$d/repo" checkout -qb div HEAD~1
   echo div > "$d/repo/f3"; git -C "$d/repo" add f3; git -C "$d/repo" commit -qm div
   git -C "$d/repo" push -q -f "$d/remote.git" HEAD:refs/heads/main
   (cd "$d/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$d/remote.git" \
-    "$TOOLS_DIR/oc-deploy" ship --sha "$SHA2" --features telegram >/dev/null 2>&1)
+    "$TOOLS_DIR/ship/oc-deploy" ship --sha "$SHA2" --features telegram >/dev/null 2>&1)
   git -C "$d/repo" checkout -q -B main "$SHA2"
   git -C "$d/repo" push -q -f "$d/remote.git" main~1:refs/heads/main
   OUT2="$(cd "$d/repo" && OC_DEPLOY_STATE_DIR="$SD" OC_DEPLOY_REMOTE="$d/remote.git" \
-    OC_DEPLOY_VALIDATE="$SD/tools/val" OC_DEPLOY_GH="$SD/gh" "$TOOLS_DIR/oc-deploy" ship --sha "$SHA2" --features telegram 2>&1)"; rc=$?
+    OC_DEPLOY_VALIDATE="$SD/tools/val" OC_DEPLOY_GH="$SD/gh" "$TOOLS_DIR/ship/oc-deploy" ship --sha "$SHA2" --features telegram 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ] && case "$OUT2" in *"FF ok"*) true ;; *) false ;; esac; then
     ok "stale pinned ref: FF ok after diverge/restore round-trip"
   else
@@ -1042,10 +1054,10 @@ d="$(mktemp -d)"; mkdir -p "$d/state"
 printf '{"current_skill_version":"0.0.1","meta":{"skill_version":"0.0.1","current_skill_version":"0.0.1"},"updated_at":"x","workers":[],"events":[]}' > "$d/state/workers-ledger.json"
 # #19 (2026-09-12): stamp REFUSES an anonymous row, so the battery fixture
 # carries an actor the way a lane's shell does.
-OC_LEDGER="$d/state/workers-ledger.json" OC_ACTOR="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "$TOOLS_DIR/oc-ledger" stamp note "battery edge" >/dev/null 2>&1 \
+OC_LEDGER="$d/state/workers-ledger.json" OC_ACTOR="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "$TOOLS_DIR/state/oc-ledger" stamp note "battery edge" >/dev/null 2>&1 \
   && [ "$(jq '.events[-1].n' "$d/state/workers-ledger.json")" = "1" ] \
   && ok "empty-events fixture: first stamp -> n=1" || bad "empty-events fixture stamp"
-OC_LEDGER="$d/state/workers-ledger.json" "$TOOLS_DIR/oc-ledger" frobnicate >/dev/null 2>&1
+OC_LEDGER="$d/state/workers-ledger.json" "$TOOLS_DIR/state/oc-ledger" frobnicate >/dev/null 2>&1
 [ $? -eq 2 ] && ok "unknown subcommand -> 2 (usage)" || bad "unknown subcommand -> expected 2"
 rm -rf "$d"
 
@@ -1053,7 +1065,7 @@ rm -rf "$d"
 section "oc-review-persist"
 run_selftest oc-review-persist
 d="$(mktemp -d)"
-"$TOOLS_DIR/oc-review-persist" A "battery edge report" --dir "$d" >/dev/null 2>&1; rc=$?
+"$TOOLS_DIR/state/oc-review-persist" A "battery edge report" --dir "$d" >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 0 ] && [ -s "$d/skill-review-A-$(date -u +%Y%m%d).md" ] && [ -s "$d/skill-review-index.log" ]; then
   ok "persist + index receipt on disk"
 else
@@ -1066,8 +1078,8 @@ section "oc-prchecks"
 run_selftest oc-prchecks
 if tool oc-prchecks; then
   SD_PRC="$(mktemp -d)"   # hermetic: usage() writes .oc-prchecks-rc2 into the state dir (goal C, ts 18:34:19Z leak)
-  OC_DEPLOY_STATE_DIR="$SD_PRC" "$TOOLS_DIR/oc-prchecks" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
-  OC_DEPLOY_STATE_DIR="$SD_PRC" "$TOOLS_DIR/oc-prchecks" abc123 >/dev/null 2>&1; [ $? -eq 2 ] && ok "short sha -> 2 (FULL-sha shape gate)" || bad "short sha -> expected 2"
+  OC_DEPLOY_STATE_DIR="$SD_PRC" "$TOOLS_DIR/harvest/oc-prchecks" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  OC_DEPLOY_STATE_DIR="$SD_PRC" "$TOOLS_DIR/harvest/oc-prchecks" abc123 >/dev/null 2>&1; [ $? -eq 2 ] && ok "short sha -> 2 (FULL-sha shape gate)" || bad "short sha -> expected 2"
   rm -rf "$SD_PRC"
   [ ! -f "${OC_DEPLOY_STATE_DIR:-/root/.opencrabs/profiles/ops/opencrabs-dev}/.oc-prchecks-rc2" ] || true   # informational; real check: no NEW writes below
 fi
@@ -1076,33 +1088,33 @@ fi
 section "oc-upstream-delta"
 run_selftest oc-upstream-delta
 if tool oc-upstream-delta; then
-  "$TOOLS_DIR/oc-upstream-delta" --repo /nonexistent-repo-path >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad repo path -> 2" || bad "bad repo path -> expected 2"
+  "$TOOLS_DIR/harvest/oc-upstream-delta" --repo /nonexistent-repo-path >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad repo path -> 2" || bad "bad repo path -> expected 2"
 fi
 
 # ---- 15. oc-wt (KERNEL C7 — worktree add/remove, un-skippable index chain) -
 section "oc-wt"
 run_selftest oc-wt
 if tool oc-wt; then
-  "$TOOLS_DIR/oc-wt" add "Bad_Slug" some-branch >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad slug -> 2 (usage)" || bad "bad slug -> expected 2"
+  "$TOOLS_DIR/git/oc-wt" add "Bad_Slug" some-branch >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad slug -> 2 (usage)" || bad "bad slug -> expected 2"
 fi
 
 # ---- 16. lens-C tool builds (v0.4.58, owner Go 2026-08-31 04:20Z) -----------
 section "oc-drift-check"
 run_selftest oc-drift-check
 if tool oc-drift-check; then
-  "$TOOLS_DIR/oc-drift-check" u1 0.4 >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad version shape -> 2" || bad "bad shape -> expected 2"
+  "$TOOLS_DIR/state/oc-drift-check" u1 0.4 >/dev/null 2>&1; [ $? -eq 2 ] && ok "bad version shape -> 2" || bad "bad shape -> expected 2"
 fi
 
 section "oc-branch-sweep"
 run_selftest oc-branch-sweep
 if tool oc-branch-sweep; then
-  "$TOOLS_DIR/oc-branch-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no repo -> 2 (usage)" || bad "no repo -> expected 2"
+  "$TOOLS_DIR/git/oc-branch-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no repo -> 2 (usage)" || bad "no repo -> expected 2"
 fi
 
 section "oc-pr-fault-scope"
 run_selftest oc-pr-fault-scope
 if tool oc-pr-fault-scope; then
-  "$TOOLS_DIR/oc-pr-fault-scope" 1 >/dev/null 2>&1; [ $? -eq 2 ] && ok "missing --run -> 2 (usage)" || bad "missing --run -> expected 2"
+  "$TOOLS_DIR/harvest/oc-pr-fault-scope" 1 >/dev/null 2>&1; [ $? -eq 2 ] && ok "missing --run -> 2 (usage)" || bad "missing --run -> expected 2"
 fi
 
 section "oc-ledger confirm + derive_by"
@@ -1112,89 +1124,89 @@ section "oc-ledger confirm + derive_by"
 section "oc-shadow-rotate"
 if tool oc-shadow-rotate; then
   d="$(mktemp -d)"
-  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" --dry-run >/dev/null 2>&1; [ $? -eq 0 ] && ok "no live log -> noop rc 0" || bad "no live log -> expected 0"
+  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/state/oc-shadow-rotate" --dry-run >/dev/null 2>&1; [ $? -eq 0 ] && ok "no live log -> noop rc 0" || bad "no live log -> expected 0"
   printf 'line1\nline2\n' > "$d/oc-deploy-shadow.log"
-  OUTS="$(OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" --dry-run 2>&1)"; rc=$?
+  OUTS="$(OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/state/oc-shadow-rotate" --dry-run 2>&1)"; rc=$?
   [ "$rc" -eq 0 ] && case "$OUTS" in *"PLAN: append 2 lines"*) true ;; *) false ;; esac && ok "dry-run PLAN names 2 lines" || bad "dry-run PLAN (rc=$rc, got: $OUTS)"
-  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" >/dev/null 2>&1; rc=$?
+  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/state/oc-shadow-rotate" >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 0 ] && [ ! -s "$d/oc-deploy-shadow.log" ] && grep -q line1 "$d/oc-deploy-shadow.archive.log" \
     && ok "rotate: archive appended + live truncated" || bad "rotate (rc=$rc)"
-  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/oc-shadow-rotate" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage, C-#3: was 1)" || bad "unknown arg -> expected 2"
+  OC_DEPLOY_STATE_DIR="$d" "$TOOLS_DIR/state/oc-shadow-rotate" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage, C-#3: was 1)" || bad "unknown arg -> expected 2"
   rm -rf "$d"
 fi
 
 section "oc-smoke-evidence"
 run_selftest oc-smoke-evidence
 if tool oc-smoke-evidence; then
-  "$TOOLS_DIR/oc-smoke-evidence" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
-  "$TOOLS_DIR/oc-smoke-evidence" --unit oc-no-such-unit --strings m1 >/dev/null 2>&1; [ $? -eq 3 ] && ok "--strings deprecated alias parses (unit-fail rc 3, E2 #6)" || bad "--strings alias -> expected 3"
+  "$TOOLS_DIR/smoke/oc-smoke-evidence" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/smoke/oc-smoke-evidence" --unit oc-no-such-unit --strings m1 >/dev/null 2>&1; [ $? -eq 3 ] && ok "--strings deprecated alias parses (unit-fail rc 3, E2 #6)" || bad "--strings alias -> expected 3"
   # M2-2: the decoy-path guard. A bare/relative --append-log must resolve to the
   # CANONICAL log (no divergence note); a foreign absolute path must announce itself.
   SED_TMP="$(mktemp -d)"
-  OC_DEPLOY_STATE_DIR="$SED_TMP" "$TOOLS_DIR/oc-smoke-evidence" --append-log --unit oc-no-such-unit 2>&1 | grep -q 'NOT the canonical' && bad "bare --append-log diverged from canonical" || ok "bare --append-log -> canonical log (M2-2)"
-  OC_DEPLOY_STATE_DIR="$SED_TMP" "$TOOLS_DIR/oc-smoke-evidence" --append-log smoke-verdicts.log --unit oc-no-such-unit 2>&1 | grep -q 'NOT the canonical' && bad "relative --append-log escaped STATE_DIR" || ok "relative --append-log resolves to STATE_DIR, not CWD (M2-2)"
-  OC_DEPLOY_STATE_DIR="$SED_TMP" "$TOOLS_DIR/oc-smoke-evidence" --append-log /tmp/oc-elsewhere.log --unit oc-no-such-unit 2>&1 | grep -q 'NOT the canonical' && ok "divergent absolute --append-log announces itself (M2-2)" || bad "divergent --append-log was silent"
+  OC_DEPLOY_STATE_DIR="$SED_TMP" "$TOOLS_DIR/smoke/oc-smoke-evidence" --append-log --unit oc-no-such-unit 2>&1 | grep -q 'NOT the canonical' && bad "bare --append-log diverged from canonical" || ok "bare --append-log -> canonical log (M2-2)"
+  OC_DEPLOY_STATE_DIR="$SED_TMP" "$TOOLS_DIR/smoke/oc-smoke-evidence" --append-log smoke-verdicts.log --unit oc-no-such-unit 2>&1 | grep -q 'NOT the canonical' && bad "relative --append-log escaped STATE_DIR" || ok "relative --append-log resolves to STATE_DIR, not CWD (M2-2)"
+  OC_DEPLOY_STATE_DIR="$SED_TMP" "$TOOLS_DIR/smoke/oc-smoke-evidence" --append-log /tmp/oc-elsewhere.log --unit oc-no-such-unit 2>&1 | grep -q 'NOT the canonical' && ok "divergent absolute --append-log announces itself (M2-2)" || bad "divergent --append-log was silent"
   rm -rf "$SED_TMP"
 fi
 
 section "oc-issue-log"
 run_selftest oc-issue-log
 if tool oc-issue-log; then
-  "$TOOLS_DIR/oc-issue-log" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
-  OC_ISSUE_LOG_REPO=x/y "$TOOLS_DIR/oc-issue-log" 1 zznotasha --dry-run >/dev/null 2>&1; [ $? -eq 3 ] && ok "bad sha -> 3 (not found)" || bad "bad sha -> expected 3"
+  "$TOOLS_DIR/issue/oc-issue-log" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  OC_ISSUE_LOG_REPO=x/y "$TOOLS_DIR/issue/oc-issue-log" 1 zznotasha --dry-run >/dev/null 2>&1; [ $? -eq 3 ] && ok "bad sha -> 3 (not found)" || bad "bad sha -> expected 3"
 fi
 
 section "oc-commit"
 run_selftest oc-commit
 if tool oc-commit; then
-  "$TOOLS_DIR/oc-commit" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/git/oc-commit" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
 fi
 
 section "oc-ship-audit"
 run_selftest oc-ship-audit
 if tool oc-ship-audit; then
-  "$TOOLS_DIR/oc-ship-audit" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/ship/oc-ship-audit" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
 fi
 
 section "oc-tg-audit"
 run_selftest oc-tg-audit
 if tool oc-tg-audit; then
-  "$TOOLS_DIR/oc-tg-audit" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/audit/oc-tg-audit" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
 fi
 
 section "oc-harvest-sweep"
 run_selftest oc-harvest-sweep
 if tool oc-harvest-sweep; then
-  "$TOOLS_DIR/oc-harvest-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/harvest/oc-harvest-sweep" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
 fi
 
 section "oc-harvest-census"
 run_selftest oc-harvest-census
 if tool oc-harvest-census; then
-  "$TOOLS_DIR/oc-harvest-census" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/harvest/oc-harvest-census" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
 fi
 
 section "oc-rebase-safety"
 run_selftest oc-rebase-safety
 if tool oc-rebase-safety; then
-  "$TOOLS_DIR/oc-rebase-safety" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
-  "$TOOLS_DIR/oc-rebase-safety" overlap >/dev/null 2>&1; [ $? -eq 2 ] && ok "overlap missing args -> 2" || bad "overlap missing args -> expected 2"
-  "$TOOLS_DIR/oc-rebase-safety" audit >/dev/null 2>&1; [ $? -eq 2 ] && ok "audit missing args -> 2" || bad "audit missing args -> expected 2"
+  "$TOOLS_DIR/git/oc-rebase-safety" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/git/oc-rebase-safety" overlap >/dev/null 2>&1; [ $? -eq 2 ] && ok "overlap missing args -> 2" || bad "overlap missing args -> expected 2"
+  "$TOOLS_DIR/git/oc-rebase-safety" audit >/dev/null 2>&1; [ $? -eq 2 ] && ok "audit missing args -> 2" || bad "audit missing args -> expected 2"
 fi
 
 section "oc-roster"
 run_selftest oc-roster
 if tool oc-roster; then
-  "$TOOLS_DIR/oc-roster" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
-  "$TOOLS_DIR/oc-roster" --no-such-arg >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/state/oc-roster" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/state/oc-roster" --no-such-arg >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2" || bad "unknown arg -> expected 2"
 fi
 
 # ---- 18. oc-ship-chain (5→swapped orchestrator, owner GO 16:16Z) -----------
 section "oc-ship-chain (5→swapped orchestrator, owner GO 16:16Z)"
 run_selftest oc-ship-chain
 if tool oc-ship-chain; then
-  "$TOOLS_DIR/oc-ship-chain" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
-  "$TOOLS_DIR/oc-ship-chain" --no-such-arg >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/ship/oc-ship-chain" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no args -> 2 (usage)" || bad "no args -> expected 2"
+  "$TOOLS_DIR/ship/oc-ship-chain" --no-such-arg >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2" || bad "unknown arg -> expected 2"
 fi
 
 
@@ -1210,13 +1222,13 @@ done
 
 # ---- 61. oc-notify-fanout: placeholder guard + target validation (HQ ASSIGN 2026-09-09)
 section "oc-notify-fanout guards (law1 placeholder + dead-target skip + --roles)"
-NF="$TOOLS_DIR/oc-notify-fanout"
+NF="$TOOLS_DIR/notify/oc-notify-fanout"
 # LAW 16 (defect D-1, HQ 2026-09-12): self identity is DERIVED from the
 # invoking session and an unresolved self is a HARD ERROR (rc 2) — the old
 # hardcoded lane default is gone. So every fixture must name its invoker.
 # Resolve the live toolsmith lane; the fallback matches no real lane, which
 # keeps 61a/61b about the placeholder guard rather than about exclusion.
-NFSELF="$(bash "$TOOLS_DIR/oc-ledger" roster --live --role toolsmith 2>/dev/null | head -1 | awk '{print $1}')"
+NFSELF="$(bash "$TOOLS_DIR/state/oc-ledger" roster --live --role toolsmith 2>/dev/null | head -1 | awk '{print $1}')"
 [ -n "$NFSELF" ] || NFSELF="00000000-0000-4000-8000-00000000dead"
 # 61a. placeholder law: dangling token -> every send ABORTed, rc!=0
 NFOUT="$(OC_TOOLS_NOLOG=1 OC_FANOUT_SELF="$NFSELF" OC_FANOUT_LEDGER="$HOME/.opencrabs/profiles/ops/opencrabs-dev/workers-ledger.json" timeout 200 bash "$NF" \
@@ -1245,7 +1257,7 @@ run_selftest "oc-notify-fanout" "$NF"
 
 # ---- 62. oc-health (owner-ordered hourly health & cleanliness sweep, 2026-09-11)
 section "oc-health (hourly health & cleanliness sweep)"
-HZ="$TOOLS_DIR/oc-health"
+HZ="$TOOLS_DIR/state/oc-health"
 # 62a. hermetic selftest: fixture state dir + tmp glob + sqlite DB + git repos,
 #      so the reaping cases run without touching live state. The assertion count
 #      is read from the selftest's own PASS= line (never hardcoded — a hardcoded
@@ -1281,32 +1293,32 @@ printf '%s' "$WOUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/
 section "oc-watcher-audit (detached watcher compliance audit)"
 run_selftest oc-watcher-audit
 if tool oc-watcher-audit; then
-  "$TOOLS_DIR/oc-watcher-audit" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
-  "$TOOLS_DIR/oc-watcher-audit" --help >/dev/null 2>&1 && ok "oc-watcher-audit --help rc=0" || bad "oc-watcher-audit --help rc!=0"
+  "$TOOLS_DIR/audit/oc-watcher-audit" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/audit/oc-watcher-audit" --help >/dev/null 2>&1 && ok "oc-watcher-audit --help rc=0" || bad "oc-watcher-audit --help rc!=0"
 fi
 
 # ---- 65. oc-start (unified claim, branch, worktree initializer, Cycle c14)
 section "oc-start (unified task initializer)"
 run_selftest oc-start
 if tool oc-start; then
-  "$TOOLS_DIR/oc-start" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
-  "$TOOLS_DIR/oc-start" --help >/dev/null 2>&1 && ok "oc-start --help rc=0" || bad "oc-start --help rc!=0"
+  "$TOOLS_DIR/git/oc-start" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/git/oc-start" --help >/dev/null 2>&1 && ok "oc-start --help rc=0" || bad "oc-start --help rc!=0"
 fi
 
 # ---- 66. oc-smoke (unified 4-leg smoke verification & verdict row generator, Cycle c14)
 section "oc-smoke (unified 4-leg smoke verification)"
 run_selftest oc-smoke
 if tool oc-smoke; then
-  "$TOOLS_DIR/oc-smoke" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
-  "$TOOLS_DIR/oc-smoke" --help >/dev/null 2>&1 && ok "oc-smoke --help rc=0" || bad "oc-smoke --help rc!=0"
+  "$TOOLS_DIR/smoke/oc-smoke" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/smoke/oc-smoke" --help >/dev/null 2>&1 && ok "oc-smoke --help rc=0" || bad "oc-smoke --help rc!=0"
 fi
 
 # ---- 64. oc-issue-dispatch (mechanized fork issue dispatch, v0.4.169 Zero-Ack)
 section "oc-issue-dispatch (mechanized issue triage dispatch)"
 run_selftest oc-issue-dispatch
 if tool oc-issue-dispatch; then
-  "$TOOLS_DIR/oc-issue-dispatch" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
-  "$TOOLS_DIR/oc-issue-dispatch" --help >/dev/null 2>&1 && ok "oc-issue-dispatch --help rc=0" || bad "oc-issue-dispatch --help rc!=0"
+  "$TOOLS_DIR/issue/oc-issue-dispatch" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/issue/oc-issue-dispatch" --help >/dev/null 2>&1 && ok "oc-issue-dispatch --help rc=0" || bad "oc-issue-dispatch --help rc!=0"
   # Edge cases that proved fatal during the role-binding build (fork #342, task
   # 17). run_selftest above counts ONE case however many asserts the tool makes
   # internally, so the crash that actually cost a probing cycle is pinned here
@@ -1323,7 +1335,7 @@ from importlib.machinery import SourceFileLoader
 
 sys.dont_write_bytecode = True
 
-loader = SourceFileLoader("oid_edge", os.path.join(sys.argv[1], "oc-issue-dispatch"))
+loader = SourceFileLoader("oid_edge", os.path.join(sys.argv[1], "issue", "oc-issue-dispatch"))
 spec = importlib.util.spec_from_loader("oid_edge", loader)
 mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)
@@ -1334,7 +1346,7 @@ def chk(desc, got, want):
         fails.append("%s (got %r want %r)" % (desc, got, want))
 
 issue = {"number": 451, "title": "fix(tools): oc-issue-dispatch hangs",
-         "body": "the culprit is tools/oc-issue-dispatch"}
+         "body": "the culprit is tools/issue/oc-issue-dispatch"}
 
 # A lane dict that omits raw (or carries raw=None/{}) must score, not crash.
 for desc, lane in (
@@ -1377,24 +1389,24 @@ fi
 section "oc-lint-laws (law syntax & reference linter)"
 run_selftest oc-lint-laws
 if tool oc-lint-laws; then
-  "$TOOLS_DIR/oc-lint-laws" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
-  "$TOOLS_DIR/oc-lint-laws" --help >/dev/null 2>&1 && ok "oc-lint-laws --help rc=0" || bad "oc-lint-laws --help rc!=0"
+  "$TOOLS_DIR/audit/oc-lint-laws" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/audit/oc-lint-laws" --help >/dev/null 2>&1 && ok "oc-lint-laws --help rc=0" || bad "oc-lint-laws --help rc!=0"
 fi
 
 # ---- 68. oc-harvest-dispatch (automated harvest order dispatcher)
 section "oc-harvest-dispatch (harvest order dispatcher)"
 run_selftest oc-harvest-dispatch
 if tool oc-harvest-dispatch; then
-  "$TOOLS_DIR/oc-harvest-dispatch" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
-  "$TOOLS_DIR/oc-harvest-dispatch" --help >/dev/null 2>&1 && ok "oc-harvest-dispatch --help rc=0" || bad "oc-harvest-dispatch --help rc!=0"
+  "$TOOLS_DIR/harvest/oc-harvest-dispatch" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/harvest/oc-harvest-dispatch" --help >/dev/null 2>&1 && ok "oc-harvest-dispatch --help rc=0" || bad "oc-harvest-dispatch --help rc!=0"
 fi
 
 # ---- 69. oc-log-search (telemetry-only daemon-log search)
 section "oc-log-search (telemetry-only log search)"
 run_selftest oc-log-search
 if tool oc-log-search; then
-  "$TOOLS_DIR/oc-log-search" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
-  "$TOOLS_DIR/oc-log-search" --help >/dev/null 2>&1 && ok "oc-log-search --help rc=0" || bad "oc-log-search --help rc!=0"
+  "$TOOLS_DIR/audit/oc-log-search" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
+  "$TOOLS_DIR/audit/oc-log-search" --help >/dev/null 2>&1 && ok "oc-log-search --help rc=0" || bad "oc-log-search --help rc!=0"
 fi
 
 # ---- 71. oc-census (READ-ONLY pending-branch census) ------------------------
@@ -1493,10 +1505,14 @@ rm -rf "$NFSTUB"
 # keeps this cell a true single-variable discriminator indefinitely.
 section "oc-issue-dispatch SIGKILL evidence (#451)"
 D451STUB="$(mktemp -d)"
-mkdir -p "$D451STUB/tools/lib" "$D451STUB/bin" "$D451STUB/home"
-cp "$TOOLS_DIR/oc-issue-dispatch" "$D451STUB/tools/oc-issue-dispatch"
-chmod +x "$D451STUB/tools/oc-issue-dispatch"
+mkdir -p "$D451STUB/tools/lib" "$D451STUB/tools/issue" "$D451STUB/bin" "$D451STUB/home"
+cp "$TOOLS_DIR/issue/oc-issue-dispatch" "$D451STUB/tools/issue/oc-issue-dispatch"
+chmod +x "$D451STUB/tools/issue/oc-issue-dispatch"
 for f in "$TOOLS_DIR"/lib/*.py; do [ -e "$f" ] && cp "$f" "$D451STUB/tools/lib/"; done
+# lib/oc-root.sh is the marker the depth-agnostic bootstrap walks up to find. A
+# fixture that copies only *.py leaves the tool unable to resolve the tools root,
+# so TOOL_DIR collapses to the tool's own subdir and the shared lib/ disappears.
+[ -f "$TOOLS_DIR/lib/oc-root.sh" ] && cp "$TOOLS_DIR/lib/oc-root.sh" "$D451STUB/tools/lib/"
 # The send must BLOCK so the kill lands inside it. A real notify would either
 # reach the live bus or return instantly, and neither reproduces #451. Bounded
 # at 30s: the stub outlives the 10s kill by design, but never permanently.
@@ -1517,14 +1533,14 @@ chmod +x "$D451STUB/tools/lib/oc-notify.sh"
 cat > "$D451STUB/bin/gh" <<'D451GH'
 #!/bin/sh
 case "$1 $2" in
-  "issue view") echo '{"number":451,"title":"fix(tools): oc-issue-dispatch hangs","body":"the culprit is tools/oc-issue-dispatch","labels":[{"name":"tools"}],"state":"OPEN","stateReason":null}' ;;
+  "issue view") echo '{"number":451,"title":"fix(tools): oc-issue-dispatch hangs","body":"the culprit is tools/issue/oc-issue-dispatch","labels":[{"name":"tools"}],"state":"OPEN","stateReason":null}' ;;
   *) echo "[]" ;;
 esac
 D451GH
 chmod +x "$D451STUB/bin/gh"
 printf '{"workers":[],"events":[]}\n' > "$D451STUB/ledger.json"
 
-sed 's/line_buffering=True/line_buffering=False/' "$D451STUB/tools/oc-issue-dispatch" \
+sed 's/line_buffering=True/line_buffering=False/' "$D451STUB/tools/issue/oc-issue-dispatch" \
   > "$D451STUB/tools/oc-issue-dispatch-nolb"
 [ "$(grep -c 'line_buffering=False' "$D451STUB/tools/oc-issue-dispatch-nolb")" -eq 1 ] \
   && ok "control derived: the line-buffering mechanism inverted exactly once" \
@@ -1553,7 +1569,7 @@ d451_run() { # $1 = tool path, $2 = label
   if [ -z "$D451ANN" ]; then D451ANN=0; fi
 }
 
-d451_run "$D451STUB/tools/oc-issue-dispatch" postfix
+d451_run "$D451STUB/tools/issue/oc-issue-dispatch" postfix
 [ "$D451RC" -eq 137 ] \
   && ok "post-fix: killed mid-send (rc=137 SIGKILL -- the #451 precondition)" \
   || bad "post-fix: rc=$D451RC, want 137 -- the kill did not land mid-send"
@@ -1632,9 +1648,9 @@ rm -rf "$FLT"
 # clarified question unanswerable forever AND archived its whole set.
 section "oc-questions (Open Questions register)"
 run_selftest oc-questions
-"$TOOLS_DIR/oc-questions" --bogus >/dev/null 2>&1; [ $? -eq 2 ] \
+"$TOOLS_DIR/state/oc-questions" --bogus >/dev/null 2>&1; [ $? -eq 2 ] \
   && ok "unknown verb -> 2 (usage)" || bad "unknown verb -> expected 2"
-"$TOOLS_DIR/oc-questions" --help >/dev/null 2>&1; [ $? -eq 0 ] \
+"$TOOLS_DIR/state/oc-questions" --help >/dev/null 2>&1; [ $? -eq 0 ] \
   && ok "oc-questions --help rc=0" || bad "oc-questions --help failed"
 # The store must be injectable: a tool that defaulted into the skill repo would
 # have the battery commit a register.
@@ -1661,7 +1677,7 @@ c.commit()
 PYDB
 OC_QUESTIONS_DIR="$QDIR/store" OC_QUESTIONS_DB="$QDIR/sessions.db" \
   OPENCRABS_SESSION_ID="00000000-0000-0000-0000-000000000000" \
-  "$TOOLS_DIR/oc-questions" ask --factory probe --title t --description d \
+  "$TOOLS_DIR/state/oc-questions" ask --factory probe --title t --description d \
   >/dev/null 2>&1
 [ -f "$QDIR/store/open.json" ] && ok "OC_QUESTIONS_DIR override honoured (store is injectable)" \
   || bad "store override ignored — the selftest would write the real register"
@@ -1669,7 +1685,7 @@ OC_QUESTIONS_DIR="$QDIR/store" OC_QUESTIONS_DB="$QDIR/sessions.db" \
 # session's binding, so a caller cannot label itself.
 OC_QUESTIONS_DIR="$QDIR/store" OC_QUESTIONS_DB="$QDIR/sessions.db" \
   OPENCRABS_SESSION_ID="00000000-0000-0000-0000-000000000000" \
-  "$TOOLS_DIR/oc-questions" ask --factory probe --lane x --title t --description d \
+  "$TOOLS_DIR/state/oc-questions" ask --factory probe --lane x --title t --description d \
   >/dev/null 2>&1
 [ $? -eq 2 ] && ok "oc-questions REJECTS the removed --lane flag" \
   || bad "removed --lane flag was accepted"
