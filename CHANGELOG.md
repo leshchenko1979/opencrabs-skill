@@ -17,6 +17,8 @@
 
 **LOC** (8-file corpus, `sum(1 for _ in open(f))`, LINES READ): 3645 → **3648** (+3).
 
+**Bundled and named** (C8): `ccd8fc9f` — this law change · `bdaffb98` — names `f7f8dcf5` (#594) in the v0.4.258 entry · `ba0aac61` — `oc-questions list --lane` printed the FLEET open count against the filtered lane count (Toolsmith, #594) · `c0322e51` — `oc-ledger stamp` accepts a ref-less LANDED closing row, success closing nothing (Toolsmith).
+
 **Also landed in this window — a regroup regression, owner-facing.** `questions.l1979.ru` returned **502** on every answer submit: the vpn backend (`/opt/questions/backend.py:37`) hardcoded the **flat** tool path `tools/oc-questions`, which the v0.4.255 regroup moved to `tools/state/oc-questions`. The backend's own log carried it verbatim — `answer rc=127 err=bash: line 1: …/tools/oc-questions: No such file or directory`. Fixed to the new path (backup `backend.py.pre-regroup-fix`), service restarted, verified: **409** on an answered qid, **no rc=127** since. This was the **fifth** regroup regression and the first outside the repo — the sweep had covered law, crons, tools and the battery, but not a hardcoded path in a service on another host. The same sweep found one more live consumer, `321-harvest-state.md` (its wake-gate command and two refs), re-pointed.
 
 ## v0.4.258 — Duty-6 cycle c24: 79 findings triaged, the 24-item law batch landed, and the codification gap closed
