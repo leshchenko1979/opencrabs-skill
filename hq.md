@@ -183,7 +183,7 @@ HQ issues BINDING rulings, each logged as an event entry in
 overrides retroactively. Precedents: ROLE_EXCEPTION #1 waived-once,
 condition-2 unevidenced; fabrication deviation #3 processing + P1/P2 routing;
 RULING-CORRECTION #1: PR-open denial ruling was overturned by consent msg
-found in-topic AFTER issuing — lesson lives in SKILL.md §CONSENT REGISTER
+found in-topic AFTER issuing — lesson lives in SKILL.md §Hard rules (CONSENT REGISTER)
 (deploy gate retired 2026-08-28; the lesson survives for NON-deploy ruling
 discipline: never deny from codified text without checking the live record).
 - **Checkable Completion Formula**: `DONE = ruling reasoning recorded in workers-ledger.json rulings event + notification delivered to involved lanes via session_notify.`
@@ -235,10 +235,12 @@ Method:
    MECHANICAL=J · ARTIFACTS=D+H · META=I) — letters keep chronological birth order (stable
    report/persist keys, not an ordering). FULL LENS CATALOG: `review-lenses.md`
    (same dir as this file) — read it before spawning reviewers; each brief
-   names the lens scope, exclusions, and evidence format. **Each family brief also
-   carries its mechanical slice from the cycle's pack** (`reviews/<cycle-id>/evidence/`):
-   the sentence-match, near-title and dead-reference legs covering that family's files,
-   with the corpus hash. Layer 2 (semantic mechanisation) is **REPORT-ONLY** — it never
+   names the lens scope and evidence format, and the briefs that carry an exclusion
+   clause state it (C, E). **The cycle's mechanical slice is passed in the SPAWN
+   PROMPT, not carried by this catalogue** — the catalogue is cycle-invariant, while
+   the slice (the sentence-match, near-title and dead-reference legs for that family's
+   files, with the corpus hash) comes from `reviews/<cycle-id>/evidence/`. Layer 2
+   (semantic mechanisation) is **REPORT-ONLY** — it never
    creates or routes a finding: its gate failed a pre-registered test (precision 0.111 /
    recall 0.126 against bars 0.70 / 0.40, n=66). A reviewer that validates a mechanisation
    opportunity must name the tool owner AND the command, never the idea alone.
@@ -325,7 +327,7 @@ Long-running commands (>60s, test batteries, carrier/CI waits, heavy audits) MUS
 
 `oc-ledger cadence` = count of `skill-bump` events since the last BOUNDARY event. **The boundary predicate is a `kind=note` row whose text BEGINS `<version> ACCEPTED`** — the tool's own regex is `^v[0-9]+\.[0-9]+\.[0-9]+ ACCEPTED` (`tools/state/oc-ledger:913`), taken as the MAX `n`; `review-battery` and legacy `skill-review*` rows are consulted **only when NO note close exists at all** (`tools/state/oc-ledger:914-915`), which is the pre-close-epoch fallback the v1.1 KINDS vocabulary can no longer produce — known drift, do not stamp those. **Consequence, and it is the whole point of this paragraph: the close form is `oc-ledger stamp note "<version> ACCEPTED"`, NOT `oc-ledger stamp review-battery`.** This section prescribed the `review-battery` form until v0.4.243, and following it literally would have silently FAILED to reset the counter while the stamp itself returned success — a green receipt on a boundary that never moved (found by Duty 4 cycle `20260922-c22`: the prose was stale, the tool was right). Lesson 2026-09-01: the Duty 4+6 verdict was consolidated but never stamped → counter read 24/5 FIRE on stale data. Rule: every consolidated review verdict ends with the boundary stamp BEFORE reporting the cadence state; never narrate a cadence reading without confirming the boundary row exists.
 
-## Rule-text provenance — CHANGELOG at ship time (F13 resolution, owner "Approve all" 2026-09-06)
+## Rule-text provenance — CHANGELOG at ship time
 
 Rule text carries NO biography — provenance (date, origin quote, war story)
 lives in CHANGELOG.md, written at ship time of the version carrying the
