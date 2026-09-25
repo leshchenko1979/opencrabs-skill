@@ -635,7 +635,7 @@ treated as unverified input, not as a receipt.
 When a lane sends HQ work that belongs to an executing lane — editor-lane fixes/rebases/carrier chains, Triage-lane intake verification, TOOLSMITH tool code — HQ REFUSES execution and tells the requesting lane to reroute to the owning lane (`session_notify` back to sender, one line: refused per HQ-no-execute law, reroute to <owning lane>). HQ executes ONLY: rulings, skill authoring (via the Triage intake channel), verdicts/gates with same-turn receipts, dispatch GOs, and its own duties (Duty 4/6, patrols, board reporting). If ownership is genuinely ambiguous, HQ rules on ownership (that IS HQ work), then reroutes.
 
 
-## Telegram surface law vs lane obligations — file delivery and own-feature probes (HQ ruling 2026-09-21)
+## Telegram surface — file delivery & own-feature probes (HQ ruling 2026-09-21)
 
 - **The conflict was real as written.** `ops AGENTS.md §File delivery on Telegram` binds every session on the ops profile — a deliverable FILE cannot be carried by session text — and `SKILL.md §Telegram surface law` ("Editors NEVER invoke send/edit telegram tools ... not even into their own topic") binds the SAME actor with no carve-out. Leg-4 of the 4-leg smoke rubric compounds it: a live behavioural probe of a telegram-surface feature that only fires on a bot-initiated send needs the same forbidden tool.
 - **Ruling: the precedent EXTENDS to both remaining instances. NO editor carve-out** — the precedent's own words stand.

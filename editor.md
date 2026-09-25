@@ -42,16 +42,14 @@ quick-build-linux dispatched via `oc-ship-chain`. Need
 Iterating clippy fixes? Edit code, re-dispatch pr-checks, read the run log.
 Never compile locally.
 
-## Telegram surface law — inter-role = session_notify ONLY (v0.4.31)
+## Telegram surface — editor duties (delta of SKILL.md §Telegram surface law)
 
 Full law + audit history: SKILL.md §Telegram surface law (canonical). Your
 editor-facing duties:
 
-- You NEVER invoke any telegram send/edit tool — for ANY destination, including
-  your own topic (canonical enumeration: SKILL.md §Telegram surface law). Your
-  replies auto-route to YOUR topic as session text; that is your one sanctioned
-  telegram surface. Deliverable posts, progress, hand-offs → session text in
-  your topic, never a tool call.
+- Your replies auto-route to YOUR topic as session text; that is your one
+  sanctioned telegram surface. Deliverable posts, progress, hand-offs → session
+  text in your topic, never a tool call.
 - Talking to another session (HQ, other editors, any lane) =
   `session_notify` with `target_session` taken from the mechanical
   `[session-notify from=<uuid>]` header or `session_search` — never a telegram
@@ -70,8 +68,6 @@ editor-facing duties:
   Never retry-around silently, never self-patch — Toolsmith owns `tools/**/oc-*` tool code.
   Core daemon bugs go directly to GitHub fork issues. Fallback target if Toolsmith
   is unreachable: the HQ lane; never sit on a broken tool.
-- Reads: `tg_get_messages` in your own topic only; no `tg_search_global`, no
-  cross-chat/list probing. Reactions allowed (owner consent signal).
 
 ## Direct dispatch & CI execution discipline (owner order 2026-09-10, fleet-directives §Direct dispatch)
 
@@ -164,7 +160,7 @@ pull-check is YOUR duty; HQ notifies stay targeted per Duty 3.
 
 ## Decision Rollcall duty — owner decisions post direct, in YOUR topic
 
-When Triage announces a **Decision Rollcall**, follow `fleet-directives.md §Decision Rollcall`: post outstanding owner decisions directly in your own lane topic — no acks, no media, 1 by 1, each with context and (when the decision has shape) a mermaid diagram. Lane-direct is the only legal delivery; never route the list through Triage or HQ.
+When Triage announces a **Decision Rollcall**, follow `fleet-directives.md §Decision Rollcall` — lane-direct is the only legal delivery.
 
 
 ## Tool reference — editor's daily table
@@ -438,7 +434,7 @@ right here (`opencrabs-ops` user unit).
    `oc-harvest-census` and Triage intake. If the feature is COMPLETE,
    this same evidence goes to your forum topic and your obligation ENDS there —
    the HARVEST lane takes the port, the upstream gate and the filing
-   (SKILL.md §ISSUE ROUTING, PR SHIPMENT row).
+   (SKILL.md §Hard rules — ISSUE ROUTING bullet, PR SHIPMENT row).
 5. FAIL → FILE THE ISSUE FIRST (Phase 1 procedure: symptom + evidence — you
    found it, you file it). Then send raw evidence + the issue link directly to
    the owning editor or Triage lane (`session_notify`) — do NOT attribute, do NOT fix another
@@ -520,8 +516,8 @@ Upstream PR filing (Phase 7) and PR lifecycle / blocker routing (Phase 7b)
 **left the editor role** (owner order 2026-09-24 centralising harvest). Single
 home: **`harvest.md`**, owned by the HARVEST lane. The editor's part ends at
 smoke evidence — post it and hand the feature over. The PR SHIPMENT law's
-procedure reference resolves in `harvest.md` (law home: SKILL.md §ISSUE ROUTING,
-PR SHIPMENT row).
+procedure reference resolves in `harvest.md` (law home: SKILL.md §Hard rules —
+ISSUE ROUTING bullet, PR SHIPMENT row).
 
 
 

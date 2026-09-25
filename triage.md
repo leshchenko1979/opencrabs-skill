@@ -19,7 +19,7 @@ escalates to HQ.
 ROUTED to the owning worker lane — never executed by this session, no
 deputization. Expected reply shape: "routed to <lane>", not done-work.
 
-## Role boundaries & responsibilities
+## Role boundaries — responsibilities
 
 - **Skill file authoring**: Exclusively owned by HQ (SKILL.md §Hard rules census).
 - **Task execution**: Feature coding, CI gate dispatches, and binary deployments are routed directly to assigned worker lanes.

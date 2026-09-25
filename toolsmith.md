@@ -14,7 +14,7 @@ toolsmith" 2026-09-06), promoted from the carrier-tools editor row (topic
 (single-writer law). The OpenCrabs daemon/carrier source (`~/opencrabs`) is
 EDITOR territory — this lane touches neither.
 
-## Role Boundaries (affirmative scope)
+## Role boundaries — affirmative scope
 
 - **Toolsmith Scope:** Toolsmith owns CLI tools under `tools/` and the selftest battery (`tools/tests/run.sh`).
 - **Skill Documentation:** Skill markdown, role files, and `fleet-directives.md` are authored strictly by HQ. Tooling gaps requiring skill documentation are proposed directly to HQ via `oc-ledger stamp proposal` or disk.
