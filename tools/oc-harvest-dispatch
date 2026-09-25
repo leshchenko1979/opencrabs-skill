@@ -361,6 +361,62 @@ def get_commit_deploy_ts(commit_sha, repo_path, swaps, state_dir=None):
                 ts = smoke_ts
     return ts
 
+def fmt_hours(h):
+    # Hours as a compact human string: 0.3h / 19.4h / 484.0h.
+    return '%.1fh' % h
+
+
+# The 24h-soak anchor classification (#563). THREE states, and the third exists
+# because the code used to collapse it into the first:
+#
+#   fresh      the anchor resolved and the content is INSIDE the window -> refuse
+#   soaked     the anchor resolved and the window has PASSED            -> allow
+#   unresolved NO anchor resolved, so the clock cannot be shown to have started
+#              at all -> refuse, but under its own name
+#
+# Why 'unresolved' is not 'fresh': get_commit_deploy_ts returns 0 BOTH when the
+# deploy is genuinely just now AND when nothing could be resolved at all. The
+# old code set age_hours = 0.0 on the 0 path, so an unresolvable anchor refused
+# while PRINTING A FALSE AGE (age: 0.0h < 24h) and carried no schedule -- the
+# #415 anchor triple renders eligible_at=none with no reason given. Live
+# specimen 2026-09-24: commit 677c38af dated 2026-09-05 (19 days old) reported
+# as age: 0.0h < 24h, and fc194f05 (not an ancestor of fork main) likewise.
+# Refusing is kept deliberately: the failure is one-directional, and an anchor
+# that cannot be resolved must never produce an APPROVE.
+def classify_soak_anchor(commit_sha, commit_ts, repo_path, swaps, now_ts):
+    # Resolve ONE soak anchor -> (state, age_hours_or_None, anchor_fields).
+    #
+    # The legacy no-swap-history fallback is preserved: with an EMPTY swap
+    # journal the commit timestamp is the only anchor that exists, so it is used
+    # directly rather than reported as unresolved.
+    d_ts = get_commit_deploy_ts(commit_sha, repo_path, swaps)
+    if not d_ts and not swaps and not os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS'):
+        d_ts = commit_ts
+    if d_ts > 0:
+        age_hours = (now_ts - d_ts) / 3600.0
+        state = 'fresh' if age_hours < oc_claims.SOAK_HOURS else 'soaked'
+        return state, max(0.0, age_hours), oc_claims.soak_anchor_fields(commit_sha, d_ts)
+    return 'unresolved', None, oc_claims.soak_anchor_fields(commit_sha, 0)
+
+
+def soak_unresolved_note(commit_ts, now_ts):
+    # Why an unresolved anchor carries no schedule, and what the commit date says.
+    #
+    # The commit timestamp is an UPPER BOUND on the true age, never an anchor:
+    # the content cannot have deployed before the commit existed, but it may
+    # have deployed at any point since -- so a 19-day-old commit is NOT evidence
+    # that the 24h window has passed.
+    if commit_ts and commit_ts > 0:
+        bound = ('''the commit timestamp %s is an UPPER BOUND on the true age (%s old), not an '''
+                 '''anchor -- its content may have deployed at any point since'''
+                 % (oc_claims.fmt_iso_ts(commit_ts), fmt_hours((now_ts - commit_ts) / 3600.0)))
+    else:
+        bound = '''the commit timestamp is unreadable, so not even an upper bound is available'''
+    return ('''no resolvable deploy anchor (not an ancestor of any journaled swap, and neither the '''
+            '''patch-id twin nor the smoke anchor resolved it); %s; no eligible_at: there is no '''
+            '''schedule to give until the anchor resolves''' % bound)
+
+
 def run_cmd(cmd, cwd=None):
     res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     return res.returncode, res.stdout, res.stderr
@@ -732,17 +788,19 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
             c_ts = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
             is_feat = c_subj.startswith('feat')
             if is_feat:
-                d_ts = get_commit_deploy_ts(c, repo_path, swaps)
-                if not d_ts and not swaps and not os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS'):
-                    d_ts = c_ts
-                if d_ts > 0:
-                    age_hours = (now_ts - d_ts) / 3600.0
-                else:
-                    age_hours = 0.0
-                if age_hours < oc_claims.SOAK_HOURS:
+                _state, _age, _fields = classify_soak_anchor(c, c_ts, repo_path, swaps, now_ts)
+                if _state == 'fresh':
                     return {
                         'status': 'REJECTED',
-                        'verdict': f'SOAK_GATE_VIOLATION: Feature commit {c[:8]} is within 24h soak window (age: {max(0.0, age_hours):.1f}h < 24h) {oc_claims.soak_anchor_fields(c, d_ts)}',
+                        'verdict': f'SOAK_GATE_VIOLATION: Feature commit {c[:8]} is within 24h soak window (age: {_age:.1f}h < 24h) {_fields}',
+                        'issue': issue_num,
+                        'commits': commits,
+                        'exit_code': 1
+                    }
+                if _state == 'unresolved':
+                    return {
+                        'status': 'REJECTED',
+                        'verdict': f'SOAK_ANCHOR_UNRESOLVED: Feature commit {c[:8]} cannot be soak-certified -- {soak_unresolved_note(c_ts, now_ts)} {_fields}',
                         'issue': issue_num,
                         'commits': commits,
                         'exit_code': 1
@@ -778,17 +836,20 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                     if rc_code == 0 and rc_out.strip():
                         r_parts = rc_out.strip().split('\t')
                         r_ts = int(r_parts[1]) if len(r_parts) > 1 and r_parts[1].isdigit() else 0
-                        r_d_ts = get_commit_deploy_ts(rc_sha, repo_path, swaps)
-                        if not r_d_ts and not swaps and not os.environ.get('OC_HARVEST_MOCK_DEPLOYED_TS'):
-                            r_d_ts = r_ts
-                        if r_d_ts > 0:
-                            rel_age_hours = (now_ts - r_d_ts) / 3600.0
-                        else:
-                            rel_age_hours = 0.0
-                        if rel_age_hours < oc_claims.SOAK_HOURS:
+                        _rstate, _rage, _rfields = classify_soak_anchor(
+                            rc_sha, r_ts, repo_path, swaps, now_ts)
+                        if _rstate == 'fresh':
                             return {
                                 'status': 'REJECTED',
-                                'verdict': f'HELD_DEPENDENT_SOAK: Linked {rel_type} #{rel_num} commit {rc_sha[:8]} is within 24h soak window (age: {max(0.0, rel_age_hours):.1f}h < 24h) {oc_claims.soak_anchor_fields(rc_sha, r_d_ts)}',
+                                'verdict': f'HELD_DEPENDENT_SOAK: Linked {rel_type} #{rel_num} commit {rc_sha[:8]} is within 24h soak window (age: {_rage:.1f}h < 24h) {_rfields}',
+                                'issue': issue_num,
+                                'commits': commits,
+                                'exit_code': 1
+                            }
+                        if _rstate == 'unresolved':
+                            return {
+                                'status': 'REJECTED',
+                                'verdict': f'DEPENDENT_SOAK_ANCHOR_UNRESOLVED: Linked {rel_type} #{rel_num} commit {rc_sha[:8]} cannot be soak-certified -- {soak_unresolved_note(r_ts, now_ts)} {_rfields}',
                                 'issue': issue_num,
                                 'commits': commits,
                                 'exit_code': 1
@@ -1648,6 +1709,68 @@ EOF
     return 1
   fi
 
+  unset OC_HARVEST_NOW_TS
+  unset STATE_DIR
+
+  # 4g. #563: an UNRESOLVABLE anchor is NOT a fresh commit. get_commit_deploy_ts
+  #     returns 0 BOTH when the deploy is genuinely just now AND when nothing could
+  #     be resolved at all; the old code collapsed the second into the first, so a
+  #     19-day-old commit was refused as "age: 0.0h < 24h" while carrying no
+  #     schedule. Fixture mirrors the live specimen: swap history EXISTS and the
+  #     candidate sits on a diverged branch -- not an ancestor of the swap, no
+  #     patch-id twin, no smoke row -- so every resolution path returns 0. The leg
+  #     asserts the CLASS and the HONESTY; it does NOT assert a refusal, because a
+  #     refusal is also what the bug produced.
+  local un_state="$st_dir/unres-state"
+  local un_repo="$st_dir/unres-repo"
+  mkdir -p "$un_state/oc-deploy/journal" "$un_repo"
+  git -C "$un_repo" init -q -b main
+  git -C "$un_repo" config user.email "test@example.com"
+  git -C "$un_repo" config user.name "Test Runner"
+  echo "unres base" > "$un_repo/base.txt"
+  git -C "$un_repo" add base.txt
+  git -C "$un_repo" commit -q -m "base commit"
+  git -C "$un_repo" branch adolfousier/main
+  # A non-empty journal, so the legacy empty-journal fallback must NOT apply.
+  echo "unres swap" > "$un_repo/swap.txt"
+  git -C "$un_repo" add swap.txt
+  git -C "$un_repo" commit -q -m "release: swap marker"
+  local un_swap_sha
+  un_swap_sha="$(git -C "$un_repo" rev-parse HEAD)"
+  printf '{"step":"auto-swap","sha":"%s","ts":"2026-09-17T08:00:00Z"}\n' "$un_swap_sha" > "$un_state/oc-deploy/journal/swap-400.jsonl"
+  # The candidate: a DIVERGED branch off the base, unique content (no twin), and a
+  # commit date that is OLD -- the whole point is that an old commit must not be
+  # reported as 0.0h old.
+  git -C "$un_repo" checkout -q -b orphan adolfousier/main
+  echo "orphan feature content" > "$un_repo/orphan.txt"
+  git -C "$un_repo" add orphan.txt
+  GIT_AUTHOR_DATE="2026-09-05T05:40:19+00:00" GIT_COMMITTER_DATE="2026-09-05T05:40:19+00:00" \
+    git -C "$un_repo" commit -q -m "feat(orphan): content no swap ever carried (#9905)"
+  local un_sha
+  un_sha="$(git -C "$un_repo" rev-parse HEAD)"
+  export STATE_DIR="$un_state"
+  export OC_HARVEST_NOW_TS="1789633800"
+
+  rc=0
+  out="$(run_engine "vet" "$un_sha" "$un_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && oc_has "$out" "SOAK_ANCHOR_UNRESOLVED"; then
+    echo "  ok 4g - #563 an unresolvable soak anchor refuses under its OWN class"
+  else
+    echo "  bad 4g - #563 expected rc=1 SOAK_ANCHOR_UNRESOLVED, got rc=$rc ($out)"
+    return 1
+  fi
+  if oc_has "$out" "is within 24h soak window" || oc_has "$out" "age: 0.0h"; then
+    echo "  bad 4g-2 - #563 refusal still asserts a FALSE age: $out"
+    return 1
+  else
+    echo "  ok 4g-2 - #563 refusal carries NO false age claim"
+  fi
+  if oc_has "$out" "UPPER BOUND" && oc_has "$out" "2026-09-05" && oc_has "$out" "no eligible_at" && oc_has "$out" "anchor_deployed_ts=none"; then
+    echo "  ok 4g-3 - #563 refusal discloses the commit-date upper bound and WHY eligible_at is absent"
+  else
+    echo "  bad 4g-3 - #563 refusal must disclose the upper bound and the missing schedule, got: $out"
+    return 1
+  fi
   unset OC_HARVEST_NOW_TS
   unset STATE_DIR
 
