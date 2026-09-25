@@ -1,5 +1,17 @@
 # Changelog — opencrabs-dev
 
+## v0.4.257 — two dead law anchors fixed, and ISSUE CLUSTER enters the ontology (reviewer H + Triage)
+
+**Both reported independently, both verified at source before a word was written.** The class is the same: a citation that resolves to nothing, which is worse than no citation, because a reader follows it and finds an empty room.
+
+- **The soak anchor was dead in TWO places** — `fleet-directives.md:44` (the freeze-retirement tombstone's replacement table) and `upstream-merge-runbook.md:343` both cited `upstream-merge-runbook.md §24-Hour Feature Soak`. **No such heading exists anywhere in the corpus**: `grep '^#+ .*[Ss]oak'` over the law files returns only CHANGELOG history entries. The soak law lives in `§Upstream-merge cadence · HARVEST LAW · NO-HOLD` at runbook:278, which is what both now name. Reviewer H's verdict framed it precisely: the freeze retirement was **complete as a removal, incomplete as a hand-off** — one of the two replacement pointers led nowhere.
+- **ISSUE CLUSTER was load-bearing and undefined** — used in four live places (`SKILL.md:54` the HARVEST role row, `harvest.md:8/333/343/346`) and codified in neither vocabulary surface: not in `SKILL.md §Glossary`, not in the fork's `ONTOLOGY.md`. Its ONLY definition was a `--help` string at `tools/harvest/oc-harvest-census:74`, now lifted into the glossary verbatim, with NOT-references for *convergence cluster* and the retired freeze T-groups — the glossary header forbids one concept under two names. **Precision on Triage's report:** the three-sense collision is real across the corpus, but in LIVE law only the harvest sense appears; the other two are CHANGELOG-only.
+- **Not fixed here, and it is not mine** — `ONTOLOGY.md:105` points at `fleet-directives.md §Glossary`, a section that does not exist (`grep -iE '^#+ *(glossary)' fleet-directives.md` → rc 1); the glossary is at `SKILL.md:383`. That file is tracked in `/root/opencrabs` — **daemon source, Editor territory** — so it is routed, not edited here.
+- **Bundled in this range:** `c984e84f` (this law change).
+
+LOC (8-file corpus, `sum(1 for _ in open(f, encoding='utf-8'))`, per the v0.4.253 convention): **3610 -> 3619** (+9, all in `SKILL.md` 729 -> 738; both anchor fixes are same-line replacements, net 0). Anchor `8c31a293` reproduces 3610 exactly. **A scope error was caught here, not smoothed over:** a first computation returned 3474 because the corpus list carried `review-lenses.md` IN and `upstream-merge-runbook.md` OUT — the reverse of what the entries state. The predicate is worthless if the corpus membership is guessed, and this is the second time this session the same two files were transposed.
+
+`oc-lint-laws --strict`: **8 findings before, 8 after, byte-identical finding set** (proved by stashing the edits and re-running, then diffing the located findings) — this edit adds zero. All 8 remain the documented `flag_known` false-positive class.
 ## v0.4.256 — stuck lanes REGISTER, never re-ask (owner order 2026-09-25)
 
 **Owner directive, verbatim:** *"remove from agents.md"* + *"in the triage lane mention that stuck lanes should use the questions tool to register their questions"* — OC Dev Factory.
