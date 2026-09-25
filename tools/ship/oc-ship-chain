@@ -783,6 +783,13 @@ EOF_JOBNAMES
         *"no-job"*)
           die "gated-run verification failed: run $GATED_RUN has no job matching sha $SHA, and no job on that run is a content-identical rebase of it (run may be for unrelated content, or sha is invalid)" 4
           ;;
+        *"completed success success"*)
+          # Duty-4 n=2520: the carry above re-derived RUN_INFO from the TWIN's
+          # job line, so it reads GREEN while the run's OWN job (matched by
+          # contains($SHA)) did not. Without this arm the carry would journal,
+          # then fall through to the *) die below and abort the chain rc 4 —
+          # the fix would announce the carry and refuse anyway.
+          ;;
         *)
           die "gated-run verification failed: run status '$RUN_INFO' != 'completed success success'" 4
           ;;
@@ -1500,6 +1507,56 @@ EOF
   RC=0; OUT="$(OC_GH="$T/fake-gh" run_chain --sha "$FSHA" --branch feat --gated-sha "$FSHA" 2>&1)" || RC=$?
   check_rc "gated-sha-green" "$RC" 0
   grep -q "LEG1 gate pre-verified GREEN (gh run 11111" "$T/journal.log" && ok "journal-gated-sha" || bad "journal-gated-sha"
+  # 5b. Duty-4 n=2520: a METADATA-ONLY rebase rewrites the sha while the patch
+  # is unchanged, so strict sha equality voided a GREEN gate by construction
+  # (measured 2026-09-25: ONE patch, THREE shas, THREE full ~25-min gates). The
+  # twin below is built by amending only the commit DATE: same tree, same
+  # parent, same diff -> same patch-id, different sha.
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q --detach "$FSHA"
+  GIT_COMMITTER_DATE="2020-01-01T00:00:00Z" git -C "$T/clone" commit -q --amend --no-edit --date="2020-01-01T00:00:00Z"
+  TWIN="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" tag -f rebasetwin "$TWIN" >/dev/null 2>&1 || true
+  if [ "$TWIN" = "$FSHA" ]; then
+    bad "gated-sha-rebase-twin: fixture failed to build a distinct sha"
+  else
+    ok "gated-sha-rebase-twin: ${FSHA:0:8} -> ${TWIN:0:8}"
+    if oc_same_patch "$T/clone" "$FSHA" "$TWIN"; then
+      ok "gated-sha-rebase-patchid-equal"
+    else
+      bad "gated-sha-rebase-patchid-equal: twin is NOT content-identical (fixture broken)"
+    fi
+    git -C "$T/clone" checkout -q main
+    git -C "$T/clone" reset -q --hard origin/main
+    RC=0; OUT="$(OC_GH="$T/fake-gh" run_chain --sha "$FSHA" --branch feat --gated-sha "$TWIN" 2>&1)" || RC=$?
+    check_rc "gated-sha-rebase-carried" "$RC" 0
+    case "$OUT" in *"LEG1 gate carried forward"*) ok "gated-sha-rebase-loud" ;; *) bad "gated-sha-rebase-loud: $OUT" ;; esac
+  fi
+
+  # 5c. CONTROL: a gated-sha whose CONTENT genuinely differs must still die rc 2.
+  # Without this arm the content leg could silently degrade into a blanket
+  # acceptance of any mismatched sha, which is worse than the defect it fixes.
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  # NOTE: `main` is NOT usable here — an earlier leg force-pushed it to $FSHA,
+  # so rev-parse main == SHA and the equality check passes trivially (this leg
+  # failed that way on first run). Build a twin with a REAL tree change instead.
+  git -C "$T/clone" checkout -q --detach "$FSHA"
+  printf 'control\n' >> "$T/clone/README.md"
+  git -C "$T/clone" add README.md
+  GIT_COMMITTER_DATE="2020-01-02T00:00:00Z" git -C "$T/clone" commit -q --amend --no-edit --date="2020-01-02T00:00:00Z"
+  OTHER="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  if [ "$OTHER" = "$FSHA" ] || oc_same_patch "$T/clone" "$FSHA" "$OTHER"; then
+    bad "gated-sha-different-content: fixture built a CONTENT-IDENTICAL twin (control is vacuous)"
+  else
+    RC=0; OUT="$(OC_GH="$T/fake-gh" run_chain --sha "$FSHA" --branch feat --gated-sha "$OTHER" 2>&1)" || RC=$?
+    check_rc "gated-sha-different-content" "$RC" 2
+    case "$OUT" in *"LEG1 gate carried forward"*) bad "gated-sha-different-content-no-carry: carried a gate across DIFFERENT content" ;; *) ok "gated-sha-different-content-no-carry" ;; esac
+  fi
+
 
   # 6. gated-run with fake gh shim
   cat > "$T/fake-gh-run" <<'EOF'
@@ -1515,6 +1572,48 @@ EOF
   RC=0; OUT="$(OC_GH="$T/fake-gh-run" run_chain --sha "$FSHA" --branch feat --gated-run 11111 2>&1)" || RC=$?
   check_rc "gated-run-green" "$RC" 0
   grep -q "LEG1 gate pre-verified GREEN (gh run: 11111 completed success" "$T/journal.log" && ok "journal-gated-run" || bad "journal-gated-run"
+
+  # 6a. Duty-4 n=2520, the arm the editor lane ACTUALLY hit: --gated-run whose
+  # job name carries the PRE-rebase sha. The job match is by `contains($SHA)`,
+  # so a metadata-only rebase reads "no-job" and dies rc 4 by construction —
+  # exactly what voided #459's GREEN gate and forced a third full 25-min gate.
+  # The shim keys on which sha the query names: the twin is content-identical
+  # (leg 5b proved the patch-ids match), so the carry must fire.
+  # The shim models a REAL carrier run: its job NAME carries the pre-rebase sha
+  # ($TWIN), so the first job-match query (contains($SHA)) answers no-job while
+  # the jobs[]? | .name query returns the twin's job line.
+  cat > "$T/fake-gh-run-rebase" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"jobs[]? | .name"*) printf 'ship / Linux amd64 (%s, telegram)\n' "$TWIN" ;;
+  *"$TWIN"*) echo "completed success success" ;;
+  *) echo "completed success no-job" ;;
+esac
+exit 0
+EOF
+  chmod +x "$T/fake-gh-run-rebase"
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+  RC=0; OUT="$(OC_GH="$T/fake-gh-run-rebase" run_chain --sha "$FSHA" --branch feat --gated-run 11111 2>&1)" || RC=$?
+  check_rc "gated-run-rebase-carried" "$RC" 0
+  case "$OUT" in *"LEG1 gate carried forward"*) ok "gated-run-rebase-loud" ;; *) bad "gated-run-rebase-loud: $OUT" ;; esac
+
+  # 6b-CONTROL: a --gated-run whose job sha is NOT content-identical must still
+  # die rc 4. Without this arm the carry could degrade into accepting any run.
+  rm -f "$T/journal.log"
+  cat > "$T/fake-gh-run-unrelated" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *"jobs[]? | .name"*) echo "ship / Linux amd64 (1111111111111111111111111111111111111111, telegram)" ;;
+  *) echo "completed success no-job" ;;
+esac
+exit 0
+EOF
+  chmod +x "$T/fake-gh-run-unrelated"
+  RC=0; OUT="$(OC_GH="$T/fake-gh-run-unrelated" run_chain --sha "$FSHA" --branch feat --gated-run 11111 2>&1)" || RC=$?
+  check_rc "gated-run-unrelated-content" "$RC" 4
+  case "$OUT" in *"LEG1 gate carried forward"*) bad "gated-run-unrelated-no-carry: carried a gate across UNRELATED content" ;; *) ok "gated-run-unrelated-no-carry" ;; esac
 
   # 6b. gated-run with in_progress status triggers oc-prchecks resume
   cat > "$T/fake-gh-run-inprogress" <<'EOF'
