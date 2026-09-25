@@ -14,7 +14,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.250
+version: 0.4.251
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -150,6 +150,22 @@ recipes: `tools/RC-CONTRACT.md` §Unified tools log.
 
 Editors live in a Telegram forum group: one topic = one editor = one live session
 = ONE feature.
+
+- **TOPIC NAMES stay in sync with their lane, are `<Area>: <Qualifier>`, and are
+  <= 22 characters** (owner order 2026-09-25: "keep the telegram topic names in
+  sync. Use short names that would fit into the UI"). A lane that REPURPOSES a
+  topic renames it in the SAME turn it repurposes the lane — that pairing is the
+  sync the order asks for, and its absence is what left a topic reading
+  "streaming-guard-105-xfer" after the lane became the goal owner. The 22-char
+  bound is where the owner's CLIENT truncates the sidebar; it was measured by the
+  Triage lane on 2026-09-25 and is NOT derivable from this box, so re-derive it
+  rather than assume it if the client changes. Mechanism, verified at source:
+  `rename_topic` persists through `record_topic_created`
+  (`src/channels/telegram/mod.rs:51`) — an append-only INSERT into
+  `channel_messages`, never a read-modify-write — so parallel renames cannot
+  clobber each other, and a rename keys on `thread_id`, so session bindings are
+  unaffected. The live name for a thread is the NEWEST row for that `thread_id`,
+  not any row: the table is append-only and retains every historical name.
 
 - Every Editor commit carries a git trailer: `Session-Id: <full session uuid>`
   (`git commit --trailer "Session-Id: <uuid>"`). FULL uuid — the 8-char display
