@@ -583,8 +583,8 @@ uses them as a licence to fix outside its scope.
   introduced yourself**; modum RETIRED 2026-08-28; lint evidence =
   GREEN pr-checks.yml run. Full ban list: editor.md §Box law (canonical;
   "(box law)" tags elsewhere refer to it).
-- Live binary: `/usr/local/bin/opencrabs`. Daemons run as systemd **user** units
-  (`systemctl --user`) — system-scope queries (`systemctl`, `/etc/systemd`) find nothing.
+- Daemons run as systemd **user** units (`systemctl --user`) — system-scope queries
+  (`systemctl`, `/etc/systemd`) find nothing. (Binary path: `which opencrabs`.)
 - Daemon PID identity (v0.4.15): NEVER `pgrep | head -1` — three daemons share
   this box (family, default, ops) and pgrep can grab the wrong one. The ops unit's
   PID comes only from `systemctl --user show opencrabs-ops -p MainPID --value`.
@@ -689,7 +689,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
 - CONSENT REGISTER — **Never rule from codified memory — grep the live record
   (chat / ledger) before denying any permission** (v0.4.17 lesson, 2026-08-26).
   Deploy consent RETIRED 2026-08-28 (owner 18:50Z): GREEN carrier run + artifact
-  verify IS the authorization. Upstream-PR filing follows the PR SHIPMENT law (PR SHIPMENT row, §ISSUE ROUTING above), GATED BY THE MODE REGISTER below. APPROVAL
+  verify IS the authorization. Upstream-PR filing follows the PR SHIPMENT law (PR SHIPMENT row, the ISSUE ROUTING bullet above), GATED BY THE MODE REGISTER below. APPROVAL
   definition above governs everything that is owner-gated (silence is NOT consent).
   - **MODE REGISTER — the upstream-PR filing gate is a MODE SWITCH (owner ruling 2026-09-20).** Two modes, ONE declared current, and the switch is the OWNER's alone. Owner's words: *"we basically have two modes: 1. High-trust mode, when I'm sure that the factory is working so that the quality allows autonomous harvesting. 2. Degraded, like now, when I want to gate every PR group."*
 
