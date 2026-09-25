@@ -230,7 +230,7 @@ on census evidence + owner word (hq.md step 7).
      (grep tools/, crons, skill files, journal vocabulary), then classify
      DELETE-SAFE (evidence law, folded from D's own method note v0.4.116:
      a zero-hit claim from a |-pattern grep in literal mode is UNVERIFIED —
-     quote the query + scope for every negative-existence claim) / ARCHIVE / KEEP with that reference list as the evidence.
+     quote the query + scope for every negative-existence claim) / ARCHIVE / KEEP with that reference list as the evidence. **The reference enumeration is a TOOL-HALF wherever a tool already computes it** (J's T2 boundary — `oc-health` classes 4/18, `oc-claims-single-source`, `oc-watcher-audit`): NAME the tool and its command rather than hand-grepping, and where NO tool covers a class, say so and propose it. A hand grep held in a reviewer's head is agent memory as a gate input, which is the defect J exists to find.
      "Looks stale" is a hypothesis, never a verdict. Nothing deletes without
      HQ's poll triple-check + owner word.
    - **Reviewer H — LEDGER HEALTH (shipped v0.4.114, owner GO 2026-09-08 20:16Z):**
@@ -264,11 +264,17 @@ on census evidence + owner word (hq.md step 7).
      no lens owns an artifact class, (3) FALSE-POSITIVE/NEGATIVE HISTORY —
      per-lens accuracy record from HQ's premise-verification
      history (precedents: brain-scrub "cargo ban homeless" overstatement, the
-     B-8 misattribution — both rejected 2026-09-08), (4) EVIDENCE DISCIPLINE —
-     quote-or-no-finding adherence rate in persisted reports (I-4.1
-     v0.4.116 evidence unit: locator + verbatim snippet for HIGH/P-class;
-     locator-only permitted for mechanical nits; volatile files cited by
-     section header + short quote, line numbers secondary — I-4.2).
+     B-8 misattribution — both rejected 2026-09-08; later retractions are
+     recorded in the ledger and MUST be folded in at ship time, e.g. the
+     boot-instant arithmetic corrected against bytes at `n=449`), (4) CATALOG HYGIENE —
+     counts in prose must match their defining sections; the family map must
+     match the briefs; retired lenses marked RETIRED + date; (5)
+     MECHANICAL-VS-MEMORY — J's T1–T3 applied REFLEXIVELY to the catalog's
+     own assignments. EVIDENCE DISCIPLINE rides the same quote-or-no-finding
+     rule stated below (I-4.1 v0.4.116 evidence unit: locator + verbatim
+     snippet for HIGH/P-class; locator-only permitted for mechanical nits;
+     volatile files cited by section header + short quote, line numbers
+     secondary — I-4.2).
      CORPUS (I-5.1 v0.4.116): durable reports live in
      `reviews/<cycle>/reports/`; when two skill-review-index.log files
      diverge, the CYCLE-LOCAL index wins over the root one. Severity scale:
