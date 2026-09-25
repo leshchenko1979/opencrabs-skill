@@ -166,7 +166,7 @@ or record them onto the ledger via `oc-ledger stamp proposal "ADD|CHANGE <rule> 
 4. Validate every proposal three ways BEFORE reporting: disk truth (rule may
    already exist), live/log evidence (gap must have really happened), coherence
    with existing gates.
-5. Consolidated verdict table to the owner; ships ONLY on his word.
+5. Consolidated verdict table to the owner; **HQ lands every ACCEPTED proposal itself — in its entirety, in the cycle's version batch, with NO design gate, NO plan card and NO owner approval (owner order 2026-09-25: findings "not wasted but fixed in their entirety", human gate removed from the Duty 4/6 fixing process). The verdict table is the RECORD of what was decided and landed, not a request, and it does not wait.** Every accepted proposal lands, or the cycle is incomplete; a proposal whose fix belongs to another owner (daemon/carrier source, upstream repo, `tools/**` code) is ROUTED to that owner and recorded as routed. Canon: `fleet-directives.md §Discussion links + fix-approval gate` (the Duty 4/6 EXCEPTION bullet).
 6. Convergence beats volume: several workers burning independently on the same
    gap is stronger signal than any single proposal — merge them into one rule.
 - **Checkable Completion Formula**: `DONE = poll fanout dispatched + submissions read from reviews/<cycle-id>/proposals/ and oc-ledger events --kind proposal + verdict recorded in review state.`
@@ -263,10 +263,7 @@ Method:
 4. HQ VALIDATES every finding with the poll triple-check (disk truth /
    evidence / coherence): ACCEPT · KERNEL (already covered) · REJECT (reason
    recorded, never silently dropped).
-5. Mechanical fixes (dedup, wording, terminology, dead refs) land directly as
-   ONE version batch. Anything SEMANTIC (protocol behavior, authority
-   boundaries) goes to the owner as proposals — a review never widens the
-   HQ's own authority by itself.
+5. **HQ lands EVERY accepted finding in its entirety — mechanical AND semantic — as ONE version batch, with NO design gate, NO plan card and NO owner approval (owner order 2026-09-25: findings "not wasted but fixed in their entirety", human gate removed from the Duty 4/6 fixing process).** Nothing is deferred to the owner as a "proposal": the fix shape is HQ's decision, and the verdict table is the RECORD of what landed, not a request. **COMPLETENESS IS THE CHECK:** the verdict MUST enumerate every finding by ID and assert that the partition sums to the census count — an accepted finding with no landed home is a cycle-completion FAILURE, never a scheduling choice. A finding whose fix belongs to another owner (daemon/carrier source, upstream repo, `tools/**` code) is ROUTED to that owner and recorded as routed. This does NOT widen HQ's authority: scope stays this factory's law surface, and the owner-gated actions in `AGENTS.md` remain gated. Canon: `fleet-directives.md §Discussion links + fix-approval gate` (the Duty 4/6 EXCEPTION bullet).
 6. Verdict table posts to owner topic 30220; registry notes updated.
 7. **Reviewer-performance loop:** after every pass, HQ folds
    reviewer-execution lessons into the lens briefs and tool guarantees.
@@ -290,7 +287,7 @@ Method:
 - **Checkable Completion Formula**: `DONE = every catalog lens persisted via oc-review-persist (assert `./tools/state/oc-review-persist check-cycle reviews/<cycle-id>` rc 0 — the tool derives the lens set from the catalog AT GATE TIME; NEVER hardcode the count here) + receipts logged in skill-review-index.log + master verdict compiled in reviews/<cycle-id>/verdict.md + review manifest marked COMPLETED in reviews/<cycle-id>/state.json + oc-ledger stamp note "v<version> ACCEPTED — Duty 6 Cycle <id> closed" executed (resetting cadence to 0/5 WAIT).`
 
 Rationale: HQ authors most rules — author-blindness is structural.
-Independent subagent eyes + the owner gate keep the set honest.
+Independent subagent eyes keep the set honest, and **HQ's own completeness check keeps it whole** — the owner gate was REMOVED from the Duty 4/6 fixing process on 2026-09-25, so the reviewers' findings are landed in their entirety rather than triaged down to what an owner happened to approve.
 
 ## Duty 7 — RETIRED: Direct Process-Owner Feedback (owner order 2026-09-14, v0.4.176)
 
