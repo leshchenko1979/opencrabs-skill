@@ -1,5 +1,21 @@
 # Changelog — opencrabs-dev
 
+## v0.4.251 — Triage gets affinity-table and lane-repurposing authority (owner order 2026-09-25)
+
+**Owner order, verbatim:** *"New law - You have the authority to alter the affinity table and repurpose / rename lanes."* (2026-09-25 ~10:20Z, OC DEV Factory Triage topic.)
+
+Codified as a sibling of the Toolsmith `tools/**` carve-out in `fleet-directives.md` §Discussion links + fix-approval gate — same shape: **autonomy over the DECISION, never over the RECORD**. Triage may edit `AFFINITY_KEYWORDS` in `tools/oc-issue-dispatch` and repurpose/rename lane rows via `oc-ledger promote <uuid> <role> --feature X`, with no per-change owner approval and no design gate — but it still owes a report of what it decided and landed, and a keyword change must carry its own precision/recall measurement against a STATED ground truth, because a keyword set is a heuristic and its error rates are the thing being chosen.
+
+**Landing lane (HQ ruling, same day):** Triage lands the `AFFINITY_KEYWORDS` edit ITSELF on the skill repo — branch plus the `pr-checks` CI gate, per the gated landing flow — rather than handing the measured keyword set to the Toolsmith as a work order, which would make the grant hollow. Any OTHER part of `oc-issue-dispatch` returns to Toolsmith ownership.
+
+Origin: `oc-issue-dispatch --auto` proposed a goal-loop fix (#567) to a suggest-options lane because `AFFINITY_KEYWORDS` carried no `goal` domain (12 domains, none covering `src/brain/goal/`). First application under the grant: `oc-ledger promote 9fa7c71a` (ledger `n=11011`), after which `select_best_lane(#567)` returns the goal-domain owner instead of a UI lane.
+
+**Bundled tool fixes from the Toolsmith lane** (named per the v0.4.239 law): `efb5f230` (#565, the C8 self-commit skip now reads the Issue-Ref TRAILER rather than the subject — a subject is prose, the trailer is the contract) · `499bf062` (#547, the oc-questions factory-set model: `--factory` required and the factory key IS the standing set id, `--lane` removed and resolved from the asking session's own binding, an unbound session refused non-zero, constant slug, lane anchors, per-question return address) · `13bbb7f4` (#547, the answer form choice resolved by MEANING rather than position) · `a52f40a4` (#569, a typed answer is never discarded).
+
+**Bundled law commits, named per the same law:** `eb22f94c` (the Triage affinity-table and lane-repurposing grant) · `ff8244f7` (the Open Questions register: one standing set per FACTORY, `--lane` removed, constant readable URL with per-lane anchors, the store line and the corrected verb list) · `acb824ae` (topic names stay in sync with their lane, `<= 22` characters, the same-turn rename rule, and the rename mechanism verified at source).
+
+LOC: 3536 -> 3591 (net +55; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `c2efd097`, which reproduces the v0.4.250 entry's 3536 exactly, with `harvest.md` read as `editor-upstream-pr.md` at that ref because the rename postdates it). Per file: `harvest.md` 335 -> 364 (+29, the v0.4.250 rename and its assignee sweep) · `SKILL.md` 708 -> 727 (+19, the topic-naming clause and the HARVEST role row) · `fleet-directives.md` 647 -> 650 (+3, the Triage grant, the `--lane`-removed correction, the one-set-per-factory bullet, the constant-URL/anchor bullet and the store line) · `upstream-merge-runbook.md` 427 -> 430 (+3, the PHOP stage-4 re-owner and the retired resume idiom) · `editor.md` 533 -> 534 (+1, the upstream claim stripped); `hq.md`, `triage.md`, `toolsmith.md` unchanged. The always-loaded pointer landed in the ops brain `AGENTS.md`, which is NOT a corpus member.
+
 ## v0.4.250 — HARVEST becomes a fifth role; harvesting leaves the editor lanes (owner order 2026-09-24)
 
 **Owner order, verbatim:** *"I want to centralize harvesting again. I want the harvesting step be removed from the editor lanes."* (2026-09-24, OC DEV Factory.)
