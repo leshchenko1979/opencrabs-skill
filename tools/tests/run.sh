@@ -1214,11 +1214,22 @@ fi
 # ---- the skill repo via commit-pending --bundle) ------------------------------
 # ---- 60. rc contract: --help exits 0 fleet-wide (C-#3, tools/docs/RC-CONTRACT.md)
 section "rc contract --help=0 fleet-wide (C-#3)"
-for t in "$TOOLS_DIR"/oc-*; do
+# tools/ is grouped by KIND (owner order 2026-09-25), so the fleet executables
+# live one level down. A flat "$TOOLS_DIR"/oc-* glob matches NOTHING after the
+# regroup and this section then passes by counting zero legs -- a fleet-wide
+# check that cannot fail, which is the silent-skip class this battery exists to
+# catch. Enumerate recursively and assert a FLOOR, so a future layout change
+# reddens here instead of quietly reducing the leg count.
+HELP_N=0
+for t in "$TOOLS_DIR"/oc-* "$TOOLS_DIR"/*/oc-*; do
   [ -x "$t" ] || continue
+  case "$t" in */lib/*|*/tests/*|*/archive/*) continue ;; esac
   tn="$(basename "$t")"
+  HELP_N=$((HELP_N+1))
   OC_TOOLS_NOLOG=1 timeout 20 "$t" --help >/dev/null 2>&1     && ok "$tn --help rc=0" || bad "$tn --help rc!=0 (tools/docs/RC-CONTRACT.md violated)"
 done
+[ "$HELP_N" -ge 30 ] && ok "fleet --help floor: $HELP_N tool(s) enumerated" \
+  || bad "fleet --help floor: only $HELP_N tool(s) enumerated -- the glob stopped matching (want >= 30)"
 
 # ---- 61. oc-notify-fanout: placeholder guard + target validation (HQ ASSIGN 2026-09-09)
 section "oc-notify-fanout guards (law1 placeholder + dead-target skip + --roles)"
