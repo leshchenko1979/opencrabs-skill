@@ -1,5 +1,22 @@
 # Changelog — opencrabs-dev
 
+## v0.4.254 — tools/ gains subdirs by KIND, plus the resolver that unblocks grouping (owner directive 2026-09-25)
+
+**Owner directive, verbatim:** *"Your tools dir should have subdirs"* — OC Dev Factory.
+
+- **`tools/instruments/` declared** — the home for corpus-agnostic instruments that review an ARBITRARY corpus, so they never sit in the `oc-*` fleet namespace (the JEV rule-xref instrument is the first tenant). Nothing moved: the directory is a declared home, so it cost zero.
+- **`tools/docs/` created** — the three law `.md` files moved off the executable level: `RC-CONTRACT.md`, `HEALTH-CHECKS.md`, `HEALTH-CLASSES.md`. Law and executables no longer share one directory.
+- **Depth-agnostic tools root** — `tools/lib/oc-root.sh`, with 42 tools converted. Every tool resolved siblings as `$TOOLS_DIR/oc-x` from its own dir — a one-level depth assumption that made ANY grouping unsafe.
+- **The `oc-*` grouping is HELD, with measured reasons** (recon `n=11211`): the approved acceptance criterion read `grep -c 'tools/oc-' *.md` = 0, which is unsatisfiable because `CHANGELOG.md` alone carries 89 frozen-history refs; the real reach count is **102**, not the 35 the design assumed, and **91 of those sit in `run.sh`**; and 30 of 44 tools are singletons, so a `ci/ harvest/ state/ audit/` split would be editorial judgement applied 30 times. `oc-*` is already the namespace AND the public interface, so a subdir component carries no information a caller needs — bought with 18 cron prompts and ~148 law refs. The five kind-based subdirs the directive literally asks for are delivered.
+
+**Two findings the resolver work produced, both load-bearing:**
+- **The root marker must REJECT a symlinked `lib/`.** `/tmp/lib` was a symlink to the real `tools/lib` (dated Sep 19, NOT created by this repo), so a walk that followed symlinks stopped at `/tmp` for every script beneath it — `TOOLS_DIR` became `/tmp` and `oc-ship-chain`'s journal legs read **rc=127**. Negative control: re-creating the symlink no longer changes the result.
+- **The bootstrap must FALL BACK to the script's own dir.** Many selftests copy a tool into a temp dir beside **fake** siblings and assert the tool uses those. An unconditional walk escapes the fixture and silently defeats the isolation — measured by breaking three battery legs before the fallback was added.
+
+**`*.pre-*` gitignored.** Lane-created pre-edit backups accumulate, nothing reaps them, and `oc-ledger`'s stray-guard reads a full `git status --porcelain` — so ONE untracked `.pre-*` blocks every bump with `die 7`. Measured live: four such files held the v0.4.252 bump. (Corrects an earlier claim of mine: `tools/__pycache__` was ALREADY ignored in both repos; the unignored class was `.pre-*`.)
+
+**Bundled:** `6f34c3c9` (the `instruments/` declaration) · `344ba94e` (the `docs/` move) · `479bee01` (the depth-agnostic resolver) · `32ab96ed` (the `*.pre-*` ignore) · `ab8c4776` (#577 — an empty Clarify is refused, the clarifying state renders) · `cd3e3475` (#578 — `amend` clears `answer_kind` with the answer). LOC 3606 → 3608 (predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `4f9261ed`, which reproduces the v0.4.253 entry's 3606 exactly). Only `SKILL.md` changed (728 → 730 — the `instruments/` declaration and the `docs/` note); the three moved law files were never corpus members, so their move cost no lines.
+
 ## v0.4.253 — Duty 6 runs a mechanical corpus pack at cycle open (owner directive 2026-09-25)
 
 **Owner directive, verbatim:** *"First let's try to build it into the Opencrabs DEV Factory Duty 6"* — relayed by lane `ef83024b`.
