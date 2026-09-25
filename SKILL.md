@@ -470,6 +470,15 @@ it would FAIL on the pre-fix artifact — state the input on which it fails.**
   (`oc-smoke-evidence` artifact checksum), (3) CI Gate (GREEN run on head sha),
   (4) Behavioral Probe (executing live binary path or structural N/A). All four
   must pass before an upstream PR leaves a lane.
+- **issue cluster** — the harvest unit: fork-only commits grouped by their
+  canonical issue ref, filtered on the ISSUE TITLE for fix-type, with the
+  dependency leg built from the COMMIT/FILE graph. Defined by
+  `tools/harvest/oc-harvest-census clusters`, which derives it and emits every
+  cluster (never pages silently); the soak gate keys on it and Triage surfaces
+  by it. NOT "convergence cluster" (a Duty-4/6 group of rule proposals merged
+  into one law change) and NOT a retired freeze T-group (the register was
+  removed 2026-09-24); the bare word "cluster" in harvest law always means
+  this one.
 
 ## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
 

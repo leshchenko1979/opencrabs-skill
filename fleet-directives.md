@@ -41,7 +41,7 @@ The per-group register is **gone** — its `json` block, the T1–T18 / Tier-3 t
 
 | Concept | Home | Meaning |
 |---|---|---|
-| **SOAKING** | `upstream-merge-runbook.md` §24-Hour Feature Soak | unchanged — a feature soaks before its harvest is staged |
+| **SOAKING** | `upstream-merge-runbook.md` §Upstream-merge cadence · HARVEST LAW · NO-HOLD | unchanged — a feature soaks before its harvest is staged |
 | **DEGRADED = GLOBAL harvest freeze** | `SKILL.md` §MODE REGISTER | under DEGRADED **no** upstream PR group is filed without explicit owner approval — the hold is GLOBAL, not per-group |
 
 **Why the register was stale:** its own enforcement leg never existed (the fail-loud reader was never built), its machinery leg was vacuous (`oc-harvest-dispatch-4h` disabled), and MODE=DEGRADED already performed the same hold globally — a second mechanism for one concept. Its bookkeeping was a 2026-09-18 snapshot: T9 merged by the maintainer, one release ever (T6), T3 disputed and unresolved.
