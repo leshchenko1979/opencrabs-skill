@@ -113,7 +113,7 @@ on census evidence + owner word (hq.md step 7).
 
    - **Reviewer J — MECHANICAL ENFORCEMENT (law that should be a tool):** the LAW
      CORPUS itself — `SKILL.md`, `fleet-directives.md`, `editor.md`,
-     `editor-upstream-pr.md`, `hq.md`, `triage.md`, `toolsmith.md`,
+     `harvest.md`, `hq.md`, `triage.md`, `toolsmith.md`,
      `tools/RC-CONTRACT.md` — read as a specification of WHO DECIDES, and asked of
      every rule: **is this decision a pure function of state on disk?** If it is, the
      rule is a TOOL SPEC THAT HAS NOT BEEN WRITTEN YET and the finding names the tool

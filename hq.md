@@ -10,7 +10,7 @@ escalations from that lane land here. Skill-file authorship stays SOLELY
 with HQ (single-writer law unchanged; v0.4.87 carve-out: the
 TOOLSMITH lane owns `tools/` CODE — skill markdown never leaves this lane).
 
-Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `editor-upstream-pr.md`, `fleet-directives.md`,
+Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `harvest.md`, `fleet-directives.md`,
 `upstream-merge-runbook.md`, `war-stories.md`, `s2-swap-journal-spec.md`, `README.md`, `CHANGELOG.md`, `tools/RC-CONTRACT.md`,
 `tools/HEALTH-CHECKS.md`, `tools/HEALTH-CLASSES.md`; `tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
 turn field evidence into rules. The HQ NEVER dispatches builds, NEVER swaps
@@ -287,7 +287,7 @@ Legacy references to "hq.md Duty 7" are retired.
 - **Backlog assignment (Duty T5, v0.4.92):** post-compaction sweep of OPEN fork issues against ledger claim-refs; unclaimed → route or surface here for dispatch.
 - **Telegram-law TOOL_ACCUM enforcement (Duty T4, v0.4.43):** OPERATES in the TRIAGE lane since v0.4.86 — full procedure in `triage.md` §Duty T4. Repeat offenders escalate HERE for review-toggle decisions.
 
-**Upstream-relations ownership (v0.4.176)**: All upstream lifecycle tracking (upstream delta watch, upstream PR census, maintainer dependency tracking) is consolidated in **Triage** (`triage.md §Duty T4`). Fork branch lifecycle / clean sweep is executed by Triage (`triage.md §Duty T4`). Editor exclusively authors and files upstream PRs (`editor-upstream-pr.md`).
+**Upstream-relations ownership (v0.4.176)**: All upstream lifecycle tracking (upstream delta watch, upstream PR census, maintainer dependency tracking) is consolidated in **Triage** (`triage.md §Duty T4`). Fork branch lifecycle / clean sweep is executed by Triage (`triage.md §Duty T4`). **The HARVEST lane exclusively authors and files upstream PRs** (`harvest.md`); editors stop at smoke evidence (owner order 2026-09-24 centralising harvest).
 
 ## Upstream sync — watch & governance (sync execution delegated to Triage)
 

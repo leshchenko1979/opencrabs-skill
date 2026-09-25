@@ -265,7 +265,7 @@ General area, an unrelated chat, or the owner DM.
 The table above carries the content; what remains prose:
 
 - **SMOKE TEST** is the ONLY evidence that may back an upstream PR approval
-  request (hard rule + `editor-upstream-pr.md` Phase 7 step 0).
+  request (hard rule + `harvest.md` Phase 7 step 0).
 - **EXECUTION SANITY SIGNAL** — the swap-path `--version` run (`oc-deploy` swap
   path; archived anchor: `tools/archive/compiler.md` Step 3) — is NONE of the three kinds: it proves only "this file is a
   runnable opencrabs binary". Not behavioral, not analytical, not presence
@@ -609,8 +609,8 @@ Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
   format and named on owner word — never improvised mid-report. Reviewer A
   (REDUNDANCY + ONTOLOGY) enforces this lens-side.
 - **Context Manifest Curation (Compaction Section 10, owner order 2026-09-17):** when context compaction occurs, the compactor MUST explicitly retain `opencrabs-dev`, `opencrabs-dev/fleet-directives.md`, and the active role file (`opencrabs-dev/editor.md`, `opencrabs-dev/hq.md`, `opencrabs-dev/triage.md`, or `opencrabs-dev/toolsmith.md`) in `active_skills`. Only non-active role files are placed in `discard_skills`. Essential tools (`session_notify`, `session_search`, `bash`, `read_file`, `telegram_send`) must stay pre-activated. Canonical: `fleet-directives.md §Post-compaction skill reload & context manifest curation`.
-- ONLY HQ edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9; `tools/HEALTH-CHECKS.md` + `tools/HEALTH-CLASSES.md` added v0.4.171; `editor-upstream-pr.md` added v0.4.175): `SKILL.md` /
-  `editor.md` / `editor-upstream-pr.md` / `hq.md` / `triage.md` / `toolsmith.md` / `review-lenses.md` / `fleet-directives.md` /
+- ONLY HQ edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9; `tools/HEALTH-CHECKS.md` + `tools/HEALTH-CLASSES.md` added v0.4.171; `harvest.md` added v0.4.175): `SKILL.md` /
+  `editor.md` / `harvest.md` / `hq.md` / `triage.md` / `toolsmith.md` / `review-lenses.md` / `fleet-directives.md` /
   `upstream-merge-runbook.md` / `war-stories.md` /
   `s2-swap-journal-spec.md` / `README.md` / `CHANGELOG.md` / `tools/RC-CONTRACT.md` / `tools/HEALTH-CHECKS.md` / `tools/HEALTH-CLASSES.md` — including all worker lanes AND the TRIAGE lane AND the TOOLSMITH lane (decision 7,
   2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
@@ -653,7 +653,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
     | Filing unit | one feature PR, per lane | **PR GROUP** — related PRs approved together |
     | Smoke rubric / CI gate / rollback | 4 legs / unchanged / owner's call | 4 legs / unchanged / owner's call |
 
-    **CURRENT MODE: DEGRADED.** Resolution is LIVE, never remembered: read the newest `MODE:` row via `oc-ledger events --n 2000 --kind note` — **`--n` is MANDATORY, because `events` is a TAIL whose default window is ~21 rows, so a bare `events --kind note` returns an EMPTY result that is INDISTINGUISHABLE from "no `MODE:` row exists"** (the sole MODE row sat ~590 rows back and was invisible to the bare form; measured 2026-09-22T20:1xZ, and it had already produced two "no MODE row, therefore DEGRADED" findings in durable records that were RIGHT only because the law fails closed). **If NO `MODE:` row exists the default is DEGRADED** (fail closed — holding a filing costs nothing, an unapproved filing is a public act). **Under DEGRADED the harvest hold is GLOBAL**: it supersedes the retired per-group Owner Push Freeze register (removed by owner order 2026-09-24 21:04Z — see `fleet-directives.md` §Owner Push Freeze — RETIRED), so no PR group of ANY feature is filed without explicit owner approval. A feature's soak maturing, a green census, or an idle editor is never a release. The owner switches by word, receipted by `oc-ledger stamp note "MODE: <HIGH-TRUST|DEGRADED> — <provenance>" --by "hq <uuid>"`. Procedure: `editor-upstream-pr.md` §Phase 7 step 0a.
+    **CURRENT MODE: DEGRADED.** Resolution is LIVE, never remembered: read the newest `MODE:` row via `oc-ledger events --n 2000 --kind note` — **`--n` is MANDATORY, because `events` is a TAIL whose default window is ~21 rows, so a bare `events --kind note` returns an EMPTY result that is INDISTINGUISHABLE from "no `MODE:` row exists"** (the sole MODE row sat ~590 rows back and was invisible to the bare form; measured 2026-09-22T20:1xZ, and it had already produced two "no MODE row, therefore DEGRADED" findings in durable records that were RIGHT only because the law fails closed). **If NO `MODE:` row exists the default is DEGRADED** (fail closed — holding a filing costs nothing, an unapproved filing is a public act). **Under DEGRADED the harvest hold is GLOBAL**: it supersedes the retired per-group Owner Push Freeze register (removed by owner order 2026-09-24 21:04Z — see `fleet-directives.md` §Owner Push Freeze — RETIRED), so no PR group of ANY feature is filed without explicit owner approval. A feature's soak maturing, a green census, or an idle editor is never a release. The owner switches by word, receipted by `oc-ledger stamp note "MODE: <HIGH-TRUST|DEGRADED> — <provenance>" --by "hq <uuid>"`. Procedure: `harvest.md` §Phase 7 step 0a.
   (Deleted-tool history: CHANGELOG.md.)
 - ROLE-SCOPED BROADCASTS: messages reach non-owning roles ONLY when tagged
   [ALL]; otherwise send strictly to the owning role. CC-everyone is noise.
@@ -675,7 +675,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
   evidence is the GREEN `pr-checks.yml` run on the PR head branch (fmt/clippy/
   `cargo test --locked --profile ci --all-features` — flags VERBATIM from
   pr-checks.yml) — canonical procedure:
-  editor-upstream-pr.md §Phase 7 step 2c. One red = fix cycle, not a filed
+  harvest.md §Phase 7 step 2c. One red = fix cycle, not a filed
   PR ("PRs that fail CI will not be reviewed" — their words). Receipts ride
   the PR prep beside smoke evidence. Gate covers shipworthiness only;
   the SMOKE pass remains a required condition in BOTH modes, and owner approval

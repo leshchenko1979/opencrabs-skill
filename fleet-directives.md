@@ -8,7 +8,7 @@
 |---|---|
 | sync model & rebase, seam resolution, harvest cadence / HARVEST LAW / NO-HOLD, PHOP | `upstream-merge-runbook.md` |
 | editor phases, smoke procedure, carrier hotfix gates, swap-sha coverage, no auto-rollback | `editor.md` |
-| upstream PR lifecycle, deep-core heads-up gate, dependent PRs law, cross-fork PR inspection, upstream issue filings | `editor-upstream-pr.md` |
+| upstream PR lifecycle, deep-core heads-up gate, dependent PRs law, cross-fork PR inspection, upstream issue filings | `harvest.md` |
 | intake & assignment, dispatch hygiene, parked issues, creating new editors, night-shift cadence (Phase 3, Idle-Lane Issue Triage) | `triage.md` |
 | tool-problem reports | `toolsmith.md` |
 | HQ duties, cadence boundary, rule-text provenance | `hq.md` |
@@ -111,14 +111,14 @@ Every PR this fleet opens carries a type prefix in the title so upstream release
 - `fix:` (or `fix(scope):`) — bug fix; corrects broken behavior
 - `feat:` (or `feat(scope):`) — new capability or behavior change
 - `chore:` — tooling/CI/docs/deps; zero user-visible behavior change
-Applies to upstream (adolfousier/opencrabs) AND fork PRs. New branches mirror the type in the slug: `leshchenko1979/fix/<slug>` / `feat/<slug>` / `chore/<slug>` (existing branches untouched). Retro-check 2026-08-30: upstream PR #1265 already conforms (`fix(plan): …`). Procedure detail: `/opencrabs-dev` skill, editor-upstream-pr.md Phase 7.
+Applies to upstream (adolfousier/opencrabs) AND fork PRs. New branches mirror the type in the slug: `leshchenko1979/fix/<slug>` / `feat/<slug>` / `chore/<slug>` (existing branches untouched). Retro-check 2026-08-30: upstream PR #1265 already conforms (`fix(plan): …`). Procedure detail: `/opencrabs-dev` skill, harvest.md Phase 7.
 
 ## Strict Atomicity & Zero Bundling (owner order 2026-09-13; lane 1a63f103 proposal) [LANE]
 
 **1 Intent = 1 Unit.** Features and bug fixes MUST NEVER be bundled into the same issue, branch, or PR.
 - Never mix `feat:` and `fix:` in one PR: a feature PR must carry exclusively feature commits, and a bugfix PR must carry exclusively fix commits.
 - If a bug is uncovered while working on a feature: do NOT fix it inline on the feature branch. File a separate fork issue, claim it in a clean worktree/branch (or hand it to Triage), fix and smoke it independently, and land it atomically.
-- Bundling a "convenient small fix" into an active feature PR forces binary review on a mixed diff, poisons git bisect, muddles changelogs, and breaches upstream PR atomicity rules. Gate: `./tools/oc-pr-atomicity <pr>` enforces issue and trailer boundaries. Canonical procedure: `editor-upstream-pr.md §Phase 7`.
+- Bundling a "convenient small fix" into an active feature PR forces binary review on a mixed diff, poisons git bisect, muddles changelogs, and breaches upstream PR atomicity rules. Gate: `./tools/oc-pr-atomicity <pr>` enforces issue and trailer boundaries. Canonical procedure: `harvest.md §Phase 7`.
 
 ## LLM Ergonomics & Efficiency Law (owner order 2026-09-13) [LANE]
 
@@ -188,7 +188,7 @@ All observed runtime events, anomalies, proposals, and feature ideas MUST follow
 ## Full-Gate Pre-PR Testing Law (v0.4.149, owner order 2026-09-12) [LANE]
 
 - **Full CI Suite Mandatory for Upstream PRs**: The `--fast` flag (`fast=true`, lint/clippy only) is strictly permitted for internal Daytime Split-Gate merging (`oc-ship-chain`), but is **STRICTLY PROHIBITED** for final pre-PR verification.
-- **Upstream Triad Verification**: Before opening any upstream PR (`editor-upstream-pr.md` Phase 7 / 7c), editors MUST run the full test suite (`cargo test --all-features` + fmt + clippy) via `oc-prchecks` full gate:
+- **Upstream Triad Verification**: Before opening any upstream PR (`harvest.md` Phase 7 / 7c), the HARVEST lane MUST run the full test suite (`cargo test --all-features` + fmt + clippy) via `oc-prchecks` full gate:
   ```bash
   # Single-invocation blocking full gate:
   tools/oc-prchecks wait leshchenko1979/fix/<slug>
