@@ -471,10 +471,18 @@ links; development-time upstream contact is PR-comments only (supersedes the
   2026-08-27). Covers
   task starts (`editor.md` Phase 1) AND mid-loop finds: red-build bugs, failed
   smoke tests, defects in another editor's feature.
-- Continuous Issue Relationship Linking (owner order 2026-09-16): whenever a parent
+- Continuous Issue Relationship Linking (owner order 2026-09-16; creation gate added 2026-09-25): whenever a parent
   subsystem relationship, blocker dependency, or child sub-issue is established or discovered
   at ANY point in the lifecycle (creation, triage intake, editor in-flight discovery, decomposition,
-  or upstream PR staging), the lane identifying it MUST establish native links in the same turn
+  or upstream PR staging), the lane identifying it MUST establish native links in the same turn.
+  **CREATION-TIME PARENT GATE (owner order 2026-09-25 ~21:35Z, "go filing gate") — a `fix(`/`bug(`-titled
+  issue MUST carry its parent ON THE CREATING COMMAND, not as a follow-up edit: file it via
+  `tools/issue/oc-issue-create` (which refuses a parentless fix-title), or with `gh issue create --parent <N>`.
+  If no parent is derivable, the issue must carry an EXPLICIT declaration instead (`--no-parent "<reason>"`
+  on the tool). **Silence is the violation: a declared orphan is legal, a silent one is not.** Rationale,
+  measured 2026-09-25: of 143 open fix-titled issues, 36 carried a parent and 107 did not, and zero links had
+  ever been REMOVED — they were never created, and the practice lapsed 2026-09-22 for want of a gate. The
+  mandate was never wrong; it was unenforced. Raw `gh issue create` for a fix-title is a violation.
   via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
   **READ a relation with `gh issue view <N> --json parent,subIssues,blockedBy,blocking` (or the
   `/parent` endpoint) — NEVER via the issue object's `.parent` projection.** `gh api
