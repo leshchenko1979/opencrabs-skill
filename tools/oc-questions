@@ -36,7 +36,8 @@ VERSION = "2.0.0"
 
 # The verb set, named once so the selftest can assert a DELETED verb stays
 # deleted rather than merely unrouted (#547 C3).
-_VERBS = ("ask", "answer", "amend", "list", "publish", "lint", "gc", "notify")
+_VERBS = ("ask", "answer", "amend", "withdraw", "list", "publish", "lint",
+          "gc", "notify")
 
 DEFAULT_TTL_DAYS = 7
 
@@ -873,13 +874,14 @@ def cmd_answer(argv):
             return 3
 
         is_clarify = (str(choice).lower() == "clarify")
+        text = (flags.get("--text") or "").strip()
         if is_clarify:
             question["status"] = "clarifying"
             question["answer"] = flags.get("--text")
             question["answer_kind"] = "clarify"
         else:
             options = question.get("options") or []
-            text = flags.get("--text")
+            index = None
             if choice is not None:
                 try:
                     index = int(choice)
@@ -889,11 +891,24 @@ def cmd_answer(argv):
                     die(2, f"set {set_id}/{qid} has no options; answer with --text")
                 if not 0 <= index < len(options):
                     die(2, f"option {index} is outside 0..{len(options) - 1}")
-                question["answer"] = options[index]
-            else:
+            # A TYPED ANSWER IS NEVER DISCARDED (owner report 2026-09-25). The
+            # page pre-checks the recommended radio, so the browser always posts
+            # a choice index; a filled text box therefore arrives with BOTH
+            # fields set, and the old code took the index and dropped the text
+            # silently. Text WINS when present; the selected index is kept as
+            # context rather than lost.
+            if text:
                 question["answer"] = text
+                question["answer_kind"] = "text"
+                if index is not None:
+                    question["selected_option"] = index
+            elif index is not None:
+                question["answer"] = options[index]
+                question["answer_kind"] = "option"
+            else:
+                question["answer"] = flags.get("--text")
+                question["answer_kind"] = "text"
             question["status"] = "answered"
-            question["answer_kind"] = "option" if choice is not None else "text"
         question["answered_at"] = now_iso()
         question["answered_by"] = flags.get("--by")
         question["answered_via"] = via
@@ -1014,6 +1029,68 @@ def cmd_amend(argv):
     else:
         print(f"{set_id}/{qid} amended ({', '.join(changed)}) — "
               f"{was} -> open, amend #{question['amend_count']}")
+        if page:
+            print(f"  page {page}")
+    return 0
+
+# =============================================================================
+# withdraw — retract a question that has become moot (HQ 2026-09-25)
+#
+# "withdrawn" was in CLOSED_STATUSES and named by the law, but NOTHING WROTE IT
+# and --help listed no verb, so a lane whose question went moot had no way to
+# take it off the owner's page: it sat there until TTL expired. A register the
+# asker cannot correct is the noise it exists to remove.
+# =============================================================================
+def cmd_withdraw(argv):
+    _, flags = parse_flags(argv, valued=["--set", "--qid", "--text", "--by"],
+                           boolean=["--json", "--no-publish"])
+    set_id = (flags.get("--set") or "").strip()
+    qid = (flags.get("--qid") or "").strip()
+    if not set_id or not qid:
+        die(2, "withdraw requires --set <id> --qid <qid>")
+
+    with RegisterLock():
+        data = read_register()
+        entry = next((s for s in data["sets"] if s.get("id") == set_id), None)
+        if entry is None:
+            die(1, f"no open question set {set_id!r}")
+        question = next((q for q in entry.get("questions", [])
+                         if q.get("qid") == qid), None)
+        if question is None:
+            die(1, f"set {set_id} has no question {qid!r}")
+        if question_is_closed(question):
+            # Idempotent, like answer: a re-withdraw says so, it does not mutate.
+            if flags.get("--json"):
+                print(json.dumps({"set": set_id, "qid": qid,
+                                  "status": question.get("status"),
+                                  "idempotent": True}, indent=2))
+            else:
+                print(f"{set_id}/{qid} is already {question.get('status')} "
+                      f"-- re-withdraw ignored")
+            return 3
+        was = question.get("status")
+        question["status"] = "withdrawn"
+        question["withdrawn_at"] = now_iso()
+        if flags.get("--text"):
+            question["withdrawn_reason"] = flags["--text"]
+        if flags.get("--by"):
+            question["withdrawn_by"] = flags["--by"]
+        entry["updated_at"] = now_iso()
+        write_register_atomic(data)
+
+    oc_log_extra("set", set_id)
+    oc_log_extra("qid", qid)
+    meta = republish(flags)
+    page = (meta or {}).get("url")
+    total, sets = open_totals()
+    if flags.get("--json"):
+        print(json.dumps({"set": set_id, "qid": qid, "status": "withdrawn",
+                          "was": was, "open_questions": total,
+                          "open_sets": sets, "page": page},
+                         indent=2, ensure_ascii=False))
+    else:
+        print(f"{set_id}/{qid} withdrawn ({was} -> withdrawn)")
+        print(f"{total} open question(s) across {sets} set(s)")
         if page:
             print(f"  page {page}")
     return 0
@@ -1567,6 +1644,29 @@ HTMX_FILE = "htmx.min.js"
 HTMX_VERSION = "2.0.4"
 HTMX_URL = "https://unpkg.com/htmx.org@%s/dist/htmx.min.js" % HTMX_VERSION
 
+# The radio/text exclusivity affordance (owner report 2026-09-25). The page
+# pre-checks the recommended radio, so a reader who TYPES an answer was left
+# with a radio still selected -- confusing to the reader and, before the CLI
+# fix, destructive: the typed answer was discarded. This file makes the two
+# inputs visibly exclusive. It is a form AFFORDANCE, not client-side logic:
+# the page still submits and still works with no JS at all.
+UI_FILE = "questions.js"
+UI_JS = """(function () {
+  document.querySelectorAll('form').forEach(function (form) {
+    var box = form.querySelector('textarea[name="text"]');
+    var radios = form.querySelectorAll('input[name="choice"]');
+    if (!box || !radios.length) return;
+    box.addEventListener('input', function () {
+      if (box.value.trim() === '') return;
+      radios.forEach(function (r) { r.checked = false; });
+    });
+    radios.forEach(function (r) {
+      r.addEventListener('change', function () { if (r.checked) box.value = ''; });
+    });
+  });
+})();
+"""
+
 PAGE_CSS = """
 *{box-sizing:border-box}
 body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:0 auto;padding:1.5rem 1rem}
@@ -1610,6 +1710,7 @@ def page_wrapper(body, expires_at):
             # defer: the page is readable and submittable before htmx arrives,
             # and the attributes are inert if the file never loads.
             f'<script src="{HTMX_FILE}" defer></script>\n'
+            f'<script src="{UI_FILE}" defer></script>\n'
             f"<style>{PAGE_CSS}</style>\n"
             "</head><body>\n"
             f'<p class="meta">{html.escape(meta_line)}</p>\n'
@@ -1666,6 +1767,21 @@ def vendor_htmx(directory):
     except Exception as exc:  # noqa: BLE001
         _VENDOR_LAST = "%s: %s" % (exc.__class__.__name__, exc)
         oc_log_extra("htmx_vendor_failed", exc.__class__.__name__)
+        return False
+
+def vendor_ui(directory):
+    """Write the radio/text affordance beside the page. Unlike htmx this is
+    OURS, so it needs no download: it is written from the constant, which also
+    means a stale copy can never linger (the content is overwritten every
+    publish). Best-effort for the same reason as htmx: without it the form
+    still submits, the two inputs are just not visually exclusive."""
+    target = os.path.join(directory, UI_FILE)
+    try:
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write(UI_JS)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        oc_log_extra("ui_vendor_failed", exc.__class__.__name__)
         return False
 
 def prune_pages(keep=None):
@@ -1822,6 +1938,7 @@ def publish_page(set_id=None, action=None, prune=False, rotate=False, quiet=Fals
     page = build_page(entries, slug, None, action or "/answer")
     os.makedirs(directory, exist_ok=True)
     vendor_htmx(directory)
+    vendor_ui(directory)
     with open(os.path.join(directory, "index.html"), "w", encoding="utf-8") as fh:
         fh.write(page)
     # `expires_at` stays PRESENT and null: the live answer backend reads it and
@@ -2105,6 +2222,80 @@ def selftest():
                if not question_is_closed(q)) == 0,
            "…with 0 open questions, asserted on the RECORD")
 
+        # -- 5b. a TYPED answer is NEVER discarded (owner report 2026-09-25) -
+        # The page pre-checks the recommended radio, so the browser always
+        # posts a choice index; a filled text box therefore arrives with BOTH
+        # fields set. The old code took the index and dropped the text
+        # silently, so the recorded answer became the radio label. Text wins,
+        # and the selected index is kept as context rather than lost.
+        rc, out, _ = run("ask", "--factory", set_id, "--title", "typed",
+                         "--description", "d", "--option", "A", "--option", "B")
+        ck(rc == 0, "a further question joins the SAME standing set (rc=%d)" % rc)
+        rc, out, _ = run("answer", set_id, "q3", "1",
+                         "--text", "  the typed answer  ")
+        ck(rc == 0, "answer accepts a choice index AND text together (rc=%d)" % rc)
+        cur = get_set(set_id) or {}
+        q3 = next((q for q in cur.get("questions", [])
+                   if q.get("qid") == "q3"), {})
+        ck(q3.get("answer") == "the typed answer",
+           "a TYPED answer WINS over the pre-checked radio (%r)"
+           % q3.get("answer"))
+        ck(q3.get("answer_kind") == "text",
+           "\u2026and the record says which it was: answer_kind=%r"
+           % q3.get("answer_kind"))
+        ck(q3.get("selected_option") == 1,
+           "\u2026with the selected index KEPT as context (%r)"
+           % q3.get("selected_option"))
+        # The discriminator: an index with NO text must still record the option.
+        rc, out, _ = run("ask", "--factory", set_id, "--title", "index only",
+                         "--description", "d", "--option", "A", "--option", "B")
+        rc, out, _ = run("answer", set_id, "q4", "0")
+        cur = get_set(set_id) or {}
+        q4 = next((q for q in cur.get("questions", [])
+                   if q.get("qid") == "q4"), {})
+        ck(q4.get("answer") == "A" and q4.get("answer_kind") == "option",
+           "an index with NO text still records the OPTION (%r/%r)"
+           % (q4.get("answer"), q4.get("answer_kind")))
+
+        # -- 5c. withdraw — the moot-question exit (HQ 2026-09-25) -----------
+        # "withdrawn" was in CLOSED_STATUSES and named by the law, but nothing
+        # wrote it: a lane whose question went moot had no way to retract it.
+        rc, out, _ = run("ask", "--factory", set_id, "--title", "moot",
+                         "--description", "d")
+        ck(rc == 0, "a question to withdraw registers (rc=%d)" % rc)
+        rc, out, _ = run("withdraw", "--set", set_id, "--qid", "q5",
+                         "--text", "became moot")
+        ck(rc == 0, "withdraw closes a moot question (rc=%d)" % rc)
+        cur = get_set(set_id) or {}
+        q5 = next((q for q in cur.get("questions", [])
+                   if q.get("qid") == "q5"), {})
+        ck(q5.get("status") == "withdrawn",
+           "\u2026status is withdrawn (%r)" % q5.get("status"))
+        ck(q5.get("withdrawn_reason") == "became moot",
+           "\u2026the reason is recorded (%r)" % q5.get("withdrawn_reason"))
+        ck(question_is_closed(q5),
+           "\u2026and it counts as CLOSED, so it leaves the open total")
+        rc, out, _ = run("withdraw", "--set", set_id, "--qid", "q5")
+        ck(rc == 3, "a re-withdraw is idempotent rc=3 (rc=%d)" % rc)
+        rc, out, _ = run("withdraw", "--set", set_id)
+        ck(rc == 2, "withdraw without --qid is a usage error (rc=%d)" % rc)
+
+        # -- 5d. the help text documents the flags that EXIST (HQ 2026-09-25)
+        # The help opened with `ask --lane <NAME>` -- a flag that now exits 2 --
+        # and never mentioned --factory, the one flag you cannot call without.
+        rc, out, _ = run("--help")
+        ck(rc == 0, "help exits 0 (rc=%d)" % rc)
+        ck("--factory" in out,
+           "help documents --factory (the required flag)")
+        synopsis = [ln for ln in out.splitlines()
+                    if ln.strip().startswith("ask ")][0]
+        ck("--factory" in synopsis and "--lane" not in synopsis,
+           "the ask SYNOPSIS is --factory and carries no --lane (%r)"
+           % synopsis.strip())
+        ck("withdraw" in out, "help lists the withdraw verb")
+        ck("pages/<slug>/" in out,
+           "help names the constant-slug page path, not pages/<token>/")
+
         # -- 6. lint --------------------------------------------------------
         # --lane was REMOVED (owner order 2026-09-25): the lane is resolved
         # from the asking session's own binding, so a caller cannot label
@@ -2359,15 +2550,19 @@ def selftest():
         # vendored htmx from our own origin, and it must have a src (an INLINE
         # body is the thing the original leg actually guarded against).
         scripts = re.findall(r"<script\b[^>]*>", body, re.I)
-        # EXACTLY one, not "at most one": "at most" passes on a page with NO
-        # script at all, so the mutant that drops the tag passed this leg while
-        # the page had lost the whole inline-swap capability. A ceiling is not
-        # a presence test.
-        ck(len(scripts) == 1,
-           "1. EXACTLY one <script> tag on the page (found %d)" % len(scripts))
-        ck(all(re.search(r'src="' + re.escape(HTMX_FILE) + r'"', tag)
-               for tag in scripts),
-           "\u2026and it is the VENDORED htmx, from our own origin")
+        # TWO vendored files now: htmx, and our own questions.js affordance
+        # (owner report 2026-09-25 -- the pre-checked radio was still selected
+        # while the reader typed, and the typed answer used to be discarded).
+        # The property the original leg guarded was NO CLIENT-SIDE LOGIC OF
+        # OURS, so it is restated rather than deleted: every script must have a
+        # src, every src must be a file VENDORED beside the page, and no script
+        # may carry an inline body. An exact count is kept -- a ceiling is not
+        # a presence test, and an unbounded count would accept an injected tag.
+        ck(len(scripts) == 2,
+           "1. exactly two <script> tags on the page (found %d)" % len(scripts))
+        srcs = re.findall(r'<script\b[^>]*src="([^"]+)"', body, re.I)
+        ck(sorted(srcs) == sorted([HTMX_FILE, UI_FILE]),
+           "\u2026both VENDORED by name, from our own origin (%r)" % srcs)
         ck(not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", body, re.I),
            "\u2026with no INLINE script body anywhere (the real guard)")
 
@@ -2406,6 +2601,12 @@ def selftest():
            "htmx is VENDORED beside the page (same origin, no CDN dependency)")
         ck(os.path.isfile(vendored) and os.path.getsize(vendored) > 10000,
            "\u2026and is a real payload, not a stub or an error page")
+        ui = os.path.join(page["path"], UI_FILE)
+        ck(os.path.isfile(ui),
+           "questions.js is VENDORED beside the page too (same origin)")
+        ui_body = open(ui, encoding="utf-8").read() if os.path.isfile(ui) else ""
+        ck("textarea" in ui_body and "radio" in ui_body,
+           "\u2026and it wires the text box to the radios (the exclusivity)")
         ck('name="token"' in body and 'name="set"' in body and 'name="qid"' in body,
            "2. the form carries token + set + qid as hidden inputs -- the submit "
            "contract the answer backend reads")
@@ -2947,16 +3148,21 @@ def selftest():
 
 USAGE = """oc-questions — the Open Questions register (#547)
 
-  ask      --lane <NAME> [--session <id>]
+  ask      --factory <KEY> [--session <id>]
            [--questions-file F | --questions-json J |
             --title T --description D [--option O]... [--recommended N]]
            [--ttl-days N] [--subject S] [--no-clarify] [--close-when CMD]
            [--no-publish] [--json]
-           The asking session is read from OPENCRABS_SESSION_ID; --session is
-           an override for callers outside a turn. Prints the open-question
+           --factory is REQUIRED: the factory key IS the standing set id,
+           reused on every ask. There is no --lane: the asking session is read
+           from OPENCRABS_SESSION_ID and its display name is resolved from that
+           session's own binding, so a caller cannot mislabel itself. --session
+           is an override for callers outside a turn. Prints the open-question
            TOTAL and the page URL -- there is no card.
   answer   <set-id> <qid> <choice-index|clarify> [--text T] [--via card|page|cli]
            [--no-publish]
+  withdraw --set <id> --qid <qid> [--text REASON] [--no-publish] [--json]
+           retracts a question that has become moot; the set stays open
   amend    --set <id> --qid <qid> [--title T] [--description D]
            [--option O]... [--recommended N] [--clear-options]
            the CLARIFY return leg: edits the question and reopens it
@@ -2969,8 +3175,9 @@ USAGE = """oc-questions — the Open Questions register (#547)
   lint     [--json]
   gc       [--dry-run] [--json]        also applies mechanical closure
 
-Store: <profile home>/questions/open.json (+ archive.jsonl, pages/<token>/).
-The PAGE is the owner surface. --lane is a topic NAME, never a session id.
+Store: <profile home>/questions/open.json (+ archive.jsonl, pages/<slug>/).
+The PAGE is the owner surface and lives at a CONSTANT slug -- the directory is
+reused on every publish, never re-minted. --factory is the standing set id.
 --session is the RETURN ADDRESS: the calling session, never a cron or renderer.
 rc: 0 ok / 1 finding-or-not-found / 2 usage / 3 state-refused / 4 store-or-IO.
 """
@@ -2984,7 +3191,8 @@ def main(argv):
     if verb in ("--selftest", "selftest"):
         return selftest()
     handlers = {"ask": cmd_ask, "answer": cmd_answer, "amend": cmd_amend,
-                "list": cmd_list, "publish": cmd_publish, "lint": cmd_lint,
+                "withdraw": cmd_withdraw, "list": cmd_list,
+                "publish": cmd_publish, "lint": cmd_lint,
                 "gc": cmd_gc, "notify": cmd_notify}
     if set(handlers) != set(_VERBS):
         sys.stderr.write("%s: verb set drifted from _VERBS\n" % PROG)
