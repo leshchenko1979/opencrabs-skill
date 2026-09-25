@@ -3225,6 +3225,29 @@ def selftest():
                                            "Governance: Ontology & RSI"},
            "\u2026and its own lane (%r)" % sorted({q.get("lane") for q in _qs}))
 
+        # Derived from the fixture's OWN output: a leg naming a live lane goes
+        # stale the moment that lane changes.
+        rc, _all, _ = run("list")
+        _fleet = int(re.match(r"(\d+) open", _all.strip().splitlines()[0]).group(1))
+        _lanes = re.findall(r"^(\S.*?) \u2014 (\d+) open", _all, re.M)
+        ck(len(_lanes) >= 2 and _fleet > 0,
+           "list fixture has >= 2 lanes and a non-zero fleet total (fleet=%d)"
+           % _fleet)
+        _probe_lane, _probe_open = _lanes[0][0], int(_lanes[0][1])
+        rc, out, _ = run("list", "--lane", _probe_lane)
+        _hdr = out.strip().splitlines()[0] if out.strip() else ""
+        ck(rc == 0 and _hdr.startswith("%d open question(s) across 1 lane(s)" % _probe_open),
+           "list --lane counts within the FILTER, not the fleet (want %d, got %r)"
+           % (_probe_open, _hdr))
+        ck(re.search(r"^%s \u2014 %d open(, \d+ closed \(history\))?$"
+                     % (re.escape(_probe_lane), _probe_open), out, re.M) is not None,
+           "\u2026and the lane subtotal names the history it lists beneath it")
+        rc, out, _ = run("list", "--lane", _probe_lane, "--json")
+        _fj = json.loads(out)
+        ck(_fj.get("open_questions") == sum(r["open"] for r in _fj.get("lanes", [])),
+           "list --lane --json: open_questions agrees with the lanes it shows "
+           "(pre-fix it carried the fleet total beside a filtered lanes[])")
+
         # The page: ONE section per LANE, each with a STABLE anchor.
         rc, out, _ = run("publish", "--json")
         acc_page = json.loads(out)
@@ -3276,8 +3299,15 @@ def selftest():
         ck(rc == 0 and out.strip().splitlines()[0].endswith("lane(s)"),
            "list prints the OPEN COUNT as its primary output (%r)"
            % out.strip().splitlines()[:1])
-        ck(re.search(r"^Carrier tools \u2014 \d+ open$", out, re.M) is not None,
+        ck(re.search(r"^Carrier tools \u2014 \d+ open(, \d+ closed \(history\))?$",
+                     out, re.M) is not None,
            "\u2026and groups by lane with a per-lane open count")
+        # The header must describe what is SHOWN. Pre-fix the count was taken
+        # BEFORE the --lane filter, so a filtered view printed the FLEET total
+        # against the filtered lane count ("7 open ... across 1 lane(s)" for a
+        # lane holding zero) -- and the owner reads that header to decide what
+        # to answer. MUTATION KILL: move the total_open computation back above
+        # the --lane filter and leg (i) reddens.
         rc, out, _ = run("list", "--json")
         _lj = json.loads(out)
         ck(isinstance(_lj.get("open_questions"), int)
