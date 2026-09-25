@@ -1,5 +1,23 @@
 # Changelog — opencrabs-dev
 
+## v0.4.250 — HARVEST becomes a fifth role; harvesting leaves the editor lanes (owner order 2026-09-24)
+
+**Owner order, verbatim:** *"I want to centralize harvesting again. I want the harvesting step be removed from the editor lanes."* (2026-09-24, OC DEV Factory.)
+
+The role split: **HARVEST** owns port → CI gate → file → follow; **editors stop at smoke evidence**; **Triage surfaces, counts and prioritises but never ports or files**. Triage also gets the mechanised tier surfacer (`oc-harvest-tiers`, dispatched separately to the Toolsmith) — the primary unit is the **issue cluster**, because Triage measured the tier map covers only ~52 of 345 fork-only commits, so a tier-only view would render 85 % of the backlog invisible.
+
+**The four sites that made the editor a harvester are all re-pointed:** `editor.md` (the upstream-contribution claim), the SKILL.md role row 4, the PR SHIPMENT LAW row, and `upstream-merge-runbook.md`'s PHOP stage 4. The procedure file itself was **renamed, not rewritten** — `editor-upstream-pr.md` → `harvest.md` — because it already was exactly the harvest procedure (335 lines, Phase 7 → 7c → reference rules → dependent-PR law); `git mv` plus a six-mention assignee sweep achieved the split with a 25-line diff.
+
+**The resume idiom is RETIRED** (`upstream-merge-runbook.md` §Harvest patrol suspension & resume idiom), with all 15 `oc-harvest-*-resume` jobs disabled the same day (ledger `n=10828`); only `oc-harvest-403-resume` stays armed because it is event-driven — it reads the MODE register and exits 0 silently while DEGRADED. The idiom's body is kept as history, and its general-law traps (tracked state file, date-keyed one-shot, ~24 h floor) are explicitly preserved for any future resume job.
+
+**Rejected-upstream is now a TYPED state decided by a CONTENT DIFF** (`harvest.md` §Rejected-upstream). Measured 2026-09-24 over every upstream PR with `mergedAt == null` — **48 examined, 18 (37.5 %) carry content already on `adolfousier/main`** — so PR state can never be the rejection signal. Specimen: PR #1611 reads "closed unmerged" while upstream `5d326aa12` cites `(#1611)`. Three outcomes (`applied-upstream` / `absent-upstream` / `unmeasurable`, the last never read as absent), two-stage confirmation by Triage, three dispositions for dependents (`exclude` / `salvageable` / `needs-owner-ruling`), and `manual_records` formalised as that field with **no removal path written**.
+
+**Bundled tool fixes from the Toolsmith lane** (they rode this window and are named per the v0.4.239 law): `792bf2ad` (#559, harvest dispatch emits cherry-pickable commit order) · `611c97af` (#560, drift-check renders the post-ack verdict) · `555455cc` (#561, always deploy a page including a no-open-questions empty state) · `b37456a4` (#562, answered question swaps inline instead of loading a page) · `7fd4bba8` (#563, soak anchor gets a truthful class for the unresolvable case) · `ea2b7fec` (#564, a unit settled by hand is not re-proposed).
+
+**Frozen history untouched:** `reviews/**` and `CHANGELOG.md` hold 33 files' worth of references to the old file name and were deliberately NOT edited; only the live-law files changed.
+
+LOC: 3536 -> 3572 (net +36; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `c2efd097` which reproduces the v0.4.249 entry's 3536 exactly). Per file: `harvest.md` 335 -> 364 (+29), `SKILL.md` 708 -> 711 (+3), `upstream-merge-runbook.md` 427 -> 430 (+3), `editor.md` 533 -> 534 (+1); `hq.md`, `triage.md`, `toolsmith.md` and `fleet-directives.md` are unchanged. The corpus member is now `harvest.md` (renamed from `editor-upstream-pr.md`), so the 8-file set is unchanged in composition.
+
 ## v0.4.249 — the Owner Push Freeze register is RETIRED (owner order 2026-09-24)
 
 **Owner order, verbatim:** *"Remove the freeze register. It's stale. Now the concepts are soaking and degraded state with global harvest freeze"* (2026-09-24T21:04Z).
