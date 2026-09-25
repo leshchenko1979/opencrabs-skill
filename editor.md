@@ -66,7 +66,7 @@ editor-facing duties:
 - Tool PROBLEMS (QUIRK:) → the active **TOOLSMITH** lane directly (v0.4.130 Direct Dispatch Law; v0.4.133):
   `session_notify` (target resolved dynamically — `oc-ledger roster --live --role toolsmith`, never a uuid from memory),
   format `QUIRK: <tool> <observed behavior> BECAUSE <what you expected>` + evidence.
-  Never retry-around silently, never self-patch — Toolsmith owns `tools/oc-*` tool code.
+  Never retry-around silently, never self-patch — Toolsmith owns `tools/**/oc-*` tool code.
   Core daemon bugs go directly to GitHub fork issues. Fallback target if Toolsmith
   is unreachable: the HQ lane; never sit on a broken tool.
 - Reads: `tg_get_messages` in your own topic only; no `tg_search_global`, no
@@ -115,7 +115,7 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
 
 1. On every turn that resumes from a detached long command (result injection)
    or wakes to a `session_notify`, FIRST run
-   `tools/oc-drift-check <your-uuid> [--ack]` (canonical, omit-arg — it reads your OWN
+   `tools/state/oc-drift-check <your-uuid> [--ack]` (canonical, omit-arg — it reads your OWN
    `last_acked` from the roster; the legacy `<claimed-ver>` form still works. mechanical:
    version-shape validated; `--ack` stamps the adoption record directly).
 2. Drift → re-read SKILL.md + editor.md in full from disk, then stamp
@@ -175,12 +175,12 @@ dir; actor derived automatically from ambient `$OPENCRABS_SESSION_ID`):
 
 | Tool | Invocation | For |
 |------|-----------|-----|
-| `oc-start` | `tools/oc-start <issue-N> --branch <branch>` | Milestone 1: atomic issue claim + branch + worktree setup |
-| `oc-ship-chain` | `tools/oc-ship-chain --sha <sha> --branch <branch>` | Milestone 2: single-invocation gate → comment → ff-merge → carrier build → live swap |
-| `oc-smoke` | `tools/oc-smoke <issue-N> [--probe "<cmd>"]` | Milestone 3: unified 4-leg smoke verification & verdict logging |
-| `oc-commit` | `tools/oc-commit -m "<msg>" [--issue N]` | Gated SIGNED commit: Session-Id + Issue-Ref trailers derived from session ID + ledger claim |
-| `oc-drift-check` | `tools/oc-drift-check <your-uuid> [--ack]` | §Mid-cycle skill drift pull-check on detached resume |
-| `oc-issue-sweep` | `tools/oc-issue-sweep '<query>' [--fork R]` | Phase 1 uniqueness gate (fork open+closed + upstream closed) |
+| `oc-start` | `tools/git/oc-start <issue-N> --branch <branch>` | Milestone 1: atomic issue claim + branch + worktree setup |
+| `oc-ship-chain` | `tools/ship/oc-ship-chain --sha <sha> --branch <branch>` | Milestone 2: single-invocation gate → comment → ff-merge → carrier build → live swap |
+| `oc-smoke` | `tools/smoke/oc-smoke <issue-N> [--probe "<cmd>"]` | Milestone 3: unified 4-leg smoke verification & verdict logging |
+| `oc-commit` | `tools/git/oc-commit -m "<msg>" [--issue N]` | Gated SIGNED commit: Session-Id + Issue-Ref trailers derived from session ID + ledger claim |
+| `oc-drift-check` | `tools/state/oc-drift-check <your-uuid> [--ack]` | §Mid-cycle skill drift pull-check on detached resume |
+| `oc-issue-sweep` | `tools/issue/oc-issue-sweep '<query>' [--fork R]` | Phase 1 uniqueness gate (fork open+closed + upstream closed) |
 | `oc-ledger` | `stamp claim --what "…"` · `ack <uuid> <0.N.N>` | Roster receipts + version ack |
 
 *Note: Underlying plumbing tools (`oc-wt`, `oc-deploy`, `oc-prchecks`, `oc-issue-log`, `oc-attrib`, `oc-pr-fault-scope`) are orchestrated internally by `oc-start`, `oc-ship-chain`, and `oc-smoke`.*
@@ -213,13 +213,13 @@ git -C ~/opencrabs fetch origin && git -C ~/opencrabs fetch adolfousier
    - **Fresh Re-read**: FIRST action after claiming/waking — re-read `SKILL.md` + `editor.md` + `fleet-directives.md` from disk (never from recalled memory) — SKILL.md and editor.md in FULL, fleet-directives at thematic-index minimum with every `[LANE]`-tagged section in FULL. DONE = all three files re-read THIS turn.
    - **Design-gate precondition (owner order 2026-09-12)**: Issue the goal **ONLY AFTER the owner has confirmed the design** (owner design gate, v0.4.128). While the design is unapproved the editor stays in the design/approval phase — an early `/goal` would carry it past the very gate that requires owner approval BEFORE code. Fixed sequence: design → owner confirms → `/goal` → continuous execution through Phase 6b.
    - **Autonomous Goal Mandate**: After the owner's design confirmation, the editor MUST execute `/goal follow the skill until the smoke test phase` (via `slash_command`). The Editor is mandated to drive autonomously and continuously from Phase 1 through Phase 6b smoke testing (claim → worktree → code → sign → ship via `oc-ship-chain` → live behavioral smoke test on swapped binary → record 4-leg smoke verdict in `smoke-verdicts.log`). **Editors MUST NOT stop or ask for confirmation after Phase 4 (writing code) or after intermediate ship legs.** The task is only complete once the live behavioral smoke test is recorded in `smoke-verdicts.log`.
-1. **Uniqueness Gate**: Search existing issues first via `tools/oc-issue-sweep '<query>'` (sweeps fork open/closed + upstream closed).
+1. **Uniqueness Gate**: Search existing issues first via `tools/issue/oc-issue-sweep '<query>'` (sweeps fork open/closed + upstream closed).
 2. **Issue Creation & Continuous Relationship Linking**:
    - If no issue fits, open ONE issue on the fork: `gh issue create -R leshchenko1979/opencrabs` (symptom + evidence).
    - **Continuous Relationship Linking Mandate (owner order 2026-09-16)**: Whenever parent subsystem relationships, blocker dependencies, or child sub-issues are known at creation or discovered in-flight during implementation, the editor MUST establish native links in the same turn via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
 3. **Atomic Claim & Worktree (Milestone 1 — `oc-start`)**:
    ```bash
-   tools/oc-start <issue-N> --branch <type>/<slug>
+   tools/git/oc-start <issue-N> --branch <type>/<slug>
    ```
    `oc-start` automatically executes:
    - Uniqueness check and ledger claim (`oc-ledger claim`).
@@ -236,7 +236,7 @@ DONE = Issue verified/filed, atomically claimed on ledger, and clean worktree mo
 - **Inline Execution**: While holding an active worktree, ALL execution runs inline in the owning session (`isolated=false`). Auto-spawned isolated workers are forbidden.
 - **Teardown**: After shipping via `oc-ship-chain` (Phase 5), remove the worktree:
   ```bash
-  tools/oc-wt remove <task>
+  tools/git/oc-wt remove <task>
   ```
 DONE = Worktree exclusivity maintained, edits isolated to `~/oc-wt-<task>`.
 
@@ -286,7 +286,7 @@ detached HEAD commits silently to a nameless sha, invisible to branch pushes and
 unreachable by remote-tracking name. If detached: land the sha to an explicit
 ref immediately.
 
-Signing is not optional: an unsigned commit makes you invisible to the notification loop. `tools/oc-commit` adds the ambient Session-Id and Issue-Ref trailers automatically — never compose them by hand.
+Signing is not optional: an unsigned commit makes you invisible to the notification loop. `tools/git/oc-commit` adds the ambient Session-Id and Issue-Ref trailers automatically — never compose them by hand.
 
 **Verify the trailer block parses after ANY amend/rebase/cherry-pick that
 touches the trailer area** (v0.4.71, Duty-4 P2). `git interpret-trailers --parse` (or a `gh api`
@@ -325,7 +325,7 @@ The Editor runs `oc-ship-chain` in one detached invocation under one chain-id:
 git -C ~/oc-wt-<task> push -u origin <branch>
 
 # 2. Run the ship chain (runs in background; resumes session on finish)
-tools/oc-ship-chain --sha <commit-sha> --branch <branch> [--issue <issue-n>]
+tools/ship/oc-ship-chain --sha <commit-sha> --branch <branch> [--issue <issue-n>]
 ```
 
 `oc-ship-chain` executes the entire 5→swapped stretch mechanically:
@@ -352,7 +352,7 @@ When shipping features via `oc-ship-chain` or deploying via `oc-deploy`, failure
 | **4. Daemon Bounce Task Interruption** | Restart signal / `[BACKGROUND TASK INTERRUPTED]` | **State file + recovery re-run** (⚠️ there is **no `--resume` flag** — `oc-ship-chain` dies `rc=2` on an unknown arg): `oc-deploy swap-execute` writes the deployment result to `/root/.opencrabs/profiles/ops/opencrabs-dev/deployed.sha`. Only the `poll --execute` path hands Phase B to a transient `systemd-run` unit, so a **direct** `swap-execute` runs in the caller's cgroup and can be killed by the very restart it performs. | **Recover by state, not by resume**: read `deployed.sha`; if the swap landed, confirm `disk==proc MATCH` and go to Phase 6b. If the chain died before the swap, **re-run the same chain with `--gated-run <id>`** (reuses the GREEN gate run whose job name pins your sha) — see `upstream-merge-runbook.md`. | `SWAP_SUCCESSFUL: running binary matches deployed SHA. Ready for Phase 6b smoke.` |
 
 **Exit codes & Lane action:**
-- **Exit 0 — SWAPPED:** The new binary is running live on the host (`opencrabs-ops` user unit). Worktree can now be removed (`tools/oc-wt remove <task>`). Proceed immediately to Phase 6b (Smoke-test-on-notify).
+- **Exit 0 — SWAPPED:** The new binary is running live on the host (`opencrabs-ops` user unit). Worktree can now be removed (`tools/git/oc-wt remove <task>`). Proceed immediately to Phase 6b (Smoke-test-on-notify).
 - **Exit 2 — USAGE:** Bad or missing arguments (`--sha`/`--branch` are required; malformed flag). Correct the invocation and re-run — no lane state to resolve.
 - **Exit 3 — DIRTY CHECKOUT:** The fork checkout has uncommitted changes (pre-flight refusal). Clean or stash it, then re-run.
 - **Exit 4 — GATE-RED / CARRIER-RED:** The CI gate failed or the carrier build failed. Start a fix round (Phase 6c): keep the same branch, fix in a new worktree, commit, push, and re-run `oc-ship-chain`. Triage heuristics live in `SKILL.md §Red-run triage heuristics`. **Also the `--gated-run` / `--gated-sha` pre-verify failure:** the supplied run was not `completed success` on a job pinned to the sha, or `--gated-sha` did not match `--sha`. Do NOT re-dispatch the run — re-verify it with `gh run view <id> --json status,conclusion,jobs` and re-supply the correct id.
@@ -390,7 +390,7 @@ git -C ~/oc-wt-<task> merge-base --is-ancestor <branch> origin/main || {
 ⚠️ **Distinguish this from the v0.4.214 local-main reconcile — same `rc 5`, opposite fixes.** v0.4.214 covers LOCAL `main` being stale while the branch is *correctly* based on `origin/main`: that is a FALSE alarm and the fix is **do not rebase**. This check covers `origin/main` having genuinely MOVED during the gate: the rebase is **real and necessary**. The v0.4.214 diagnostic (`git merge-base --is-ancestor main origin/main`) does not separate the two — test against `origin/main`, never against local `main`. Automating the re-check inside the chain (pre-LEG3) is a Toolsmith call; until it lands, the LANE owes the check.
 
 **Gate-idle question sweep:** CI gate and carrier build waits are idle time — do not sit silent on open questions. Circle back to the user in your topic with anything unresolved (scope doubts, naming, approach forks) while the chain runs; waiting is never a reason to hold a question or to guess.
-DONE = `tools/oc-ship-chain` exited 0 (SWAPPED) with new binary running live on `opencrabs-ops` unit and worktree cleaned.
+DONE = `tools/ship/oc-ship-chain` exited 0 (SWAPPED) with new binary running live on `opencrabs-ops` unit and worktree cleaned.
 
 ## Phase 6b — Smoke Verification (oc-smoke)
 
@@ -405,14 +405,14 @@ right here (`opencrabs-ops` user unit).
 
 ```bash
 # Unified 4-leg smoke verification & verdict row logging:
-~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/oc-smoke <issue-N> --probe "<command-to-verify-behavior>"
+~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/smoke/oc-smoke <issue-N> --probe "<command-to-verify-behavior>"
 ```
 
 1. Read run id + built sha from the notification body. **If the daemon bounced**
    (any restart since your last turn), RE-SURFACE lazy tool schemas via
    `tool_search` BEFORE any smoke invocation — a restart kills activated schemas
    and intents misfire onto wrong tools.
-2. **IDENTITY RECEIPT & BEHAVIORAL PROBE:** Run `tools/oc-smoke <issue-N> --probe "<cmd>"`
+2. **IDENTITY RECEIPT & BEHAVIORAL PROBE:** Run `tools/smoke/oc-smoke <issue-N> --probe "<cmd>"`
    (or manual `oc-smoke-evidence`). It verifies unit exe identity vs deployed sha,
    executes the probe command, and writes the canonical row to `smoke-verdicts.log`.
    MISMATCH → STOP: you would be smoking a binary that is not the one that was
@@ -420,7 +420,7 @@ right here (`opencrabs-ops` user unit).
 3. Drive your feature end-to-end against the RUNNING unit on its normal
    surfaces (Telegram, cron, MCP — whatever the feature touches).
    **Checkable completion criteria (v0.4.170, Finding G-2):**
-   DONE = Mechanical proof demonstrating target feature execution against the running binary (command output, log line with PID/timestamp match, or API receipt); confirmed via `tools/oc-smoke` (exit 0) and recorded in `smoke-verdicts.log`.
+   DONE = Mechanical proof demonstrating target feature execution against the running binary (command output, log line with PID/timestamp match, or API receipt); confirmed via `tools/smoke/oc-smoke` (exit 0) and recorded in `smoke-verdicts.log`.
    **Receipt surface for a channel-RENDERING defect is the DELIVERED message, never a stored row
    (finding `1a63f103`, cycle `20260919-c21`):** the `pending_followups` row (`host_html` /
    `host_markdown`) is written BEFORE `normalize_rich_markdown_with_media` → `enforce_button_fit`,
@@ -498,19 +498,19 @@ Your answer is always the SAME sequence:
 
 ```bash
 # 1. fresh worktree at the relevant sha (worktree lifecycle, Phase 2)
-tools/oc-wt add <task> <branch>
+tools/git/oc-wt add <task> <branch>
 # 2. reproduce → fix → SIGNED commit (E1, v0.4.78)
-tools/oc-commit -m "<msg>"   # gated wrapper: Session-Id from ambient session ID, Issue-Ref
+tools/git/oc-commit -m "<msg>"   # gated wrapper: Session-Id from ambient session ID, Issue-Ref
 #    derived from your latest ledger claim, implementation comment folded in
 # 3. push branch, then re-run oc-ship-chain (Leg 1 CI gate -> Leg 2 comment -> Leg 3 ff-merge -> Leg 4 carrier build -> Leg 5 swap)
 git -C ~/oc-wt-<task> push origin <branch>
-tools/oc-ship-chain --sha <NEW-head-sha> --branch <branch> [--issue <issue-n>]
+tools/ship/oc-ship-chain --sha <NEW-head-sha> --branch <branch> [--issue <issue-n>]
 # 4. on exit 0 SWAPPED, remove the worktree — proceed to Phase 6 smoke re-test
-tools/oc-wt remove <task>
+tools/git/oc-wt remove <task>
 ```
 
 **Per-commit laws live in their phases:** branch-attached HEAD + signing → §Phase 4; worktree-writer exclusivity → §Phase 2. They bind EVERY commit in ANY phase — read them there.
-- **Checkable Completion Formula**: `DONE = Bug reproduced + memory_search caller check performed + fix committed with trailers + tools/oc-ship-chain exits 0 (SWAPPED) + worktree removed.`
+- **Checkable Completion Formula**: `DONE = Bug reproduced + memory_search caller check performed + fix committed with trailers + tools/ship/oc-ship-chain exits 0 (SWAPPED) + worktree removed.`
 
 
 ## Phase 7 + 7b — NOT the editor's → `harvest.md` (HARVEST lane)

@@ -39,7 +39,7 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | **HQ** | live | Worker ledger, duty cadence, multi-lens code/structure reviews, direct directive proposals |
 | **TRIAGE** | live (v0.4.86 carve-out) | Issue assignment, repo hygiene patrols, rebase/merge execution, upstream lifecycle tracking (folded from Harvester v0.4.176) |
 | **TOOLSMITH** | live (v0.4.87 carve-out) | Owns `tools/` CODE — makes and fixes the CLI tools every other role uses, direct recipient of tool quirks/defects (v0.4.176) |
-| **COMPILER** | **RETIRED 2026-08-28** (S3 cutover) | duties absorbed by `tools/oc-deploy` (ship / poll / swap-execute) |
+| **COMPILER** | **RETIRED 2026-08-28** (S3 cutover) | duties absorbed by `tools/ship/oc-deploy` (ship / poll / swap-execute) |
 
 ## Tool fleet (quick index)
 
@@ -64,7 +64,7 @@ Highlights:
 2. Battery GREEN: `bash tools/tests/run.sh` → receipt reads `PASS`.
 3. `CHANGELOG.md` gets a `## vX.Y.Z` entry (prepended at the top, newest-first).
 4. Bump `version:` in `SKILL.md`, commit, tag `vX.Y.Z`.
-5. `tools/oc-ledger sync --version X.Y.Z --why "..."` (gates on the battery receipt + changelog entry).
+5. `tools/state/oc-ledger sync --version X.Y.Z --why "..."` (gates on the battery receipt + changelog entry).
 6. Push skill mirror (main + tag); state mirror parity sweep.
 
 ## Conventions

@@ -19,7 +19,7 @@ this PR is the ONE sanctioned exception (completed features only).
 
 ```bash
 # 0a. MODE GATE (v0.4.226) — resolve the current mode LIVE, never from memory:
-#       tools/oc-ledger events --n 2000 --kind note | grep -o 'MODE: [A-Z-]*' | head -1
+#       tools/state/oc-ledger events --n 2000 --kind note | grep -o 'MODE: [A-Z-]*' | head -1
 #     NO `MODE:` row => DEGRADED (fail closed).
 #       DEGRADED   -> HOLD the PR GROUP. Request owner approval in YOUR forum topic
 #                     (reply or a positive reaction = approval; silence is NOT consent).
@@ -29,8 +29,8 @@ this PR is the ONE sanctioned exception (completed features only).
 #    YOUR forum topic (what you drove, what you saw, run id + built sha + PR URL).
 
 # 1. list fork-only commits, pick THIS feature's (trailers + touched files)
-#    — mechanized: `tools/oc-attrib --range <old>..<new> --contributors` (3-col TSV:
-#    session-uuid / issue_refs / sha7s) or `tools/oc-attrib --range` for
+#    — mechanized: `tools/state/oc-attrib --range <old>..<new> --contributors` (3-col TSV:
+#    session-uuid / issue_refs / sha7s) or `tools/state/oc-attrib --range` for
 #    roster-resolved roles; the raw form:
 git -C ~/opencrabs fetch adolfousier
 git -C ~/opencrabs log --format='%H%x09%s%x09%(trailers:key=Session-Id,valueonly)' \
@@ -40,7 +40,7 @@ git -C ~/opencrabs log --format='%H%x09%s%x09%(trailers:key=Session-Id,valueonly
 #    (E1, v0.4.80: `oc-wt add --create` IS the sanctioned creation path.
 #     The old "oc-wt never creates" raw `worktree add -b` ritual taught a
 #     false interface fact; use `--create` unless that flag is unavailable.)
-tools/oc-wt add up-<feature> leshchenko1979/<feature> --create --from adolfousier/main --repo ~/opencrabs
+tools/git/oc-wt add up-<feature> leshchenko1979/<feature> --create --from adolfousier/main --repo ~/opencrabs
 git -C ~/oc-wt-up-<feature> cherry-pick <sha1> <sha2> ...
 # 2-fresh. BASE FRESHNESS before the gate dispatch (Duty-4 P4, v0.4.80;
 #         AMENDED v0.4.93 — scope NARROWED to pre-filing only, owner "go all"
@@ -68,9 +68,9 @@ git -C ~/opencrabs rev-parse adolfousier/main   # must equal the sha the port wa
 #     FIRST push the head branch (step 3's command — the workflow checks the branch out from the fork).
 #     MANDATORY FULL-GATE FORM (v0.4.149, owner order 2026-09-12):
 #     Pre-PR testing MUST use the full gate (cargo test + fmt + clippy, NO --fast):
-#       tools/oc-prchecks leshchenko1979/<feature>
+#       tools/harvest/oc-prchecks leshchenko1979/<feature>
 #     or blocking wait form:
-#       tools/oc-prchecks wait leshchenko1979/<feature>
+#       tools/harvest/oc-prchecks wait leshchenko1979/<feature>
 #     (Do NOT pass --fast for final pre-PR verification. Full gate ensures 100% upstream test parity.)
 #   Standing rules PR-GATE-STANDING in the Rules list below (flags verbatim
 #   from pr-checks.yml; ANY red = fix cycle + re-dispatch, never a filed PR;
@@ -103,7 +103,7 @@ gh pr create -R adolfousier/opencrabs --base main --head leshchenko1979:leshchen
 gh issue close <issue-n> -R leshchenko1979/opencrabs -c "Implemented in upstream PR adolfousier/opencrabs#<pr-number>"
 
 # 6. remove the worktree — done (dirty-tree gate + journal via oc-wt)
-tools/oc-wt remove up-<feature>
+tools/git/oc-wt remove up-<feature>
 ```
 
 Rules:
@@ -161,7 +161,7 @@ Rules:
   into the feature work. Every harvested commit carries an `Issue-Ref: #N` trailer matching EXACTLY the single
   issue the PR claims; no commit without one, no PR claiming more than one. A PR
   whose diff mixes fixed and unfixed concerns forces a binary status on a mixed bag
-  and mislabels both. Gate with `./tools/oc-prchecks <branch>` and atomicity check BEFORE closing the issue.
+  and mislabels both. Gate with `./tools/harvest/oc-prchecks <branch>` and atomicity check BEFORE closing the issue.
 - **PR LIFECYCLE:** One PR = one atomic change; a bug found in review is fixed
   FORWARD on the same PR or the PR is closed — no draft limbo. A MERGED PR is
   closed forever: follow-up work = new branch + new PR, NEVER extend a merged
@@ -187,7 +187,7 @@ Rules:
   (box law); test-placement policy → §Phase 4.
 - Pre-flight gate (step 2c) is MANDATORY (v0.4.0): read the fmt STEP outcome,
   not just the run conclusion — soft-fail hides failures from the run.
-- **Harvest census pre-flight gate (Cycle 5 / Duty 4, v0.4.143):** before opening an upstream PR or creating a harvest branch, run `tools/oc-harvest-census check <issue-number-or-slug>`. Refuse to file if rc=1 (finding: already MERGED or IN_FLIGHT upstream, or blocked).
+- **Harvest census pre-flight gate (Cycle 5 / Duty 4, v0.4.143):** before opening an upstream PR or creating a harvest branch, run `tools/harvest/oc-harvest-census check <issue-number-or-slug>`. Refuse to file if rc=1 (finding: already MERGED or IN_FLIGHT upstream, or blocked).
 - **Read the ADVISORY drop-list before branching (v0.4.218, finding `63d775f9`, cycle `20260919-c21`):**
   rc=0 `ELIGIBLE` means the target is **unharvested**, NOT that its feature can travel alone — Gate 4
   (`#365`) passes when **at least one** derived subject symbol resolves upstream, so an ELIGIBLE unit may
@@ -242,12 +242,12 @@ Trigger: Operator harvest command (e.g. `/goal harvest ...`) dispatched to the H
 
 Contract:
 1. **Dedicated Worktree**: Create isolated worktree off `adolfousier/main` tip:
-   `tools/oc-wt add up-<slug> leshchenko1979/fix/<slug> --create --from adolfousier/main`
-2. **Cherry-pick & Pre-Sweep**: Cherry-pick source commits preserving trailers (`-x` / `Issue-Ref`), then verify clean lineage with `tools/oc-harvest-sweep leshchenko1979/fix/<slug> --base adolfousier/main`.
+   `tools/git/oc-wt add up-<slug> leshchenko1979/fix/<slug> --create --from adolfousier/main`
+2. **Cherry-pick & Pre-Sweep**: Cherry-pick source commits preserving trailers (`-x` / `Issue-Ref`), then verify clean lineage with `tools/harvest/oc-harvest-sweep leshchenko1979/fix/<slug> --base adolfousier/main`.
    - **Atomic Subsystem Bundling & Fix Squashing (Owner Order 2026-09-17, v0.4.200)**: A harvest unit is not a loose series of patch commits — it is a single, cohesive, self-contained atomic commit. Squash all follow-up bugfixes, clippy cleanups, test updates, and dependent child issue commits directly into the coherent parent feature commit before CI gating and filing upstream (`git reset --soft` / `git commit --amend` to consolidate into one clean commit). Maintainer Adolfo squashes multi-commit PRs into a single commit on upstream `main` anyway; shipping clean, all-in-one atomic commits eliminates upstream review noise and intermediate cherry-pick breakage.
    - **Dependency & Soak Inheritance (v0.4.187)**: Any `fix/*` modifying, depending on, or assuming an unharvested or soaking `feat/*` inherits the full 24h soak window of that base feature. It cannot be cherry-picked as a zero-hold fix if upstream lacks the underlying feature code.
    - **Native Sub-Issue / Child Pre-Flight Gate (Issue #188 / v0.4.198)**: A child issue, cleanup, or derivative task (such as deleting a script that exists only on fork or referencing unmerged docs/subsystems) must NEVER be harvested in isolation from its parent subsystem. If the parent subsystem is unharvested or unmerged upstream, refuse harvest staging until the parent lands upstream.
-   - **In-Flight Lane Fence (v0.4.187)**: `tools/oc-harvest-dispatch vet <issue>` enforces this mechanically — it refuses a candidate whose subsystem is held by an active editor lane (rc 4 on `dispatch`). Read the fence from `tools/oc-ledger claim-ref <issue>` rather than hand-reading `workers-ledger.json` (a hand ledger read is the agent-memory-as-gate-input defect, lens J / F26). If an active lane is working the subsystem, hold harvest dispatch until that lane finishes, hot-swaps, and lands.
+   - **In-Flight Lane Fence (v0.4.187)**: `tools/harvest/oc-harvest-dispatch vet <issue>` enforces this mechanically — it refuses a candidate whose subsystem is held by an active editor lane (rc 4 on `dispatch`). Read the fence from `tools/state/oc-ledger claim-ref <issue>` rather than hand-reading `workers-ledger.json` (a hand ledger read is the agent-memory-as-gate-input defect, lens J / F26). If an active lane is working the subsystem, hold harvest dispatch until that lane finishes, hot-swaps, and lands.
 3. **Smoke & Gate Verification (Hard Gate, v0.4.146 / v0.4.149 / v0.4.152)**:
    - **4-Leg Smoke Pass**: Verify full 4-leg smoke pass (Lineage, Identity, CI Gate, Behavioral probe) is recorded with live receipts in `smoke-verdicts.log`. NEVER file an unsmoked PR.
    - **Cross-Boundary Unit Test Standards (v0.4.198)**: Verify that all PR unit tests test real cross-boundary interactions (e.g. real file writer -> reader in tempdir) rather than tautological helper comparisons against internal delegate functions.
@@ -256,9 +256,9 @@ Contract:
    - **Mandatory Full PR Gate**: Push branch to origin (`leshchenko1979/opencrabs`) and trigger full PR checks (NO `--fast` mode):
      ```bash
      # Single-command blocking full PR gate:
-     tools/oc-prchecks wait leshchenko1979/fix/<slug>
+     tools/harvest/oc-prchecks wait leshchenko1979/fix/<slug>
      # Or standard dispatch:
-     tools/oc-prchecks leshchenko1979/fix/<slug>
+     tools/harvest/oc-prchecks leshchenko1979/fix/<slug>
      ```
      `--fast` is strictly prohibited for pre-PR testing; upstream PRs require 100% full test suite verification.
 4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log` (and ≥24h post-swap soak completed for `feat/*` or dependent fix bundles, counted strictly from the latest live deployment timestamp `deployed.ts` of ANY related node in the relationship graph — parent, sub-issues, and blockers, per 24h Feature Soak Harvest Law), the HARVEST lane verifies upstream baseline state (`git diff origin/main...adolfousier/main`) and files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug> [--draft]`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue. If the underlying issue was already clean or resolved in upstream `main`, frame the PR narrative accurately as a clean helper extraction / refactoring / hardening rather than asserting an upstream regression (Upstream Baseline & Narrative Verification Law v0.4.198). (Note: Use `--draft` if the PR depends on another in-flight upstream PR per Staged Upstream Draft PR Mandate). **A PR number is not FILED until a same-turn `gh pr create` (or `gh pr view <N>`) output names it** — if a guard flags the claim (`phantom_blocked`) or the output was not witnessed, the PR is UNFILED: re-verify and re-dispatch (v0.4.152 §Guard-Flag Escalation Law; worked example: an announced PR #1514 that never existed cost ~3 h).
