@@ -326,6 +326,30 @@ When PR B depends on PR A (which is not yet merged upstream):
 3. **Maintainer Order of Processing:** Upstream maintainer tackles dependent PRs in commit/chronological sequence (PR A merged before PR B).
 4. **Deferred Automated Publishing:** Alternatively, automated harvest pipelines may hold PR B until PR A merges via harvest watch / cron triggers.
 
+## Rejected-upstream — a TYPED state decided by a CONTENT DIFF (v0.4.250, owner order 2026-09-24)
+
+**PR state is not a rejection signal.** Measured 2026-09-24 over every upstream PR with `mergedAt == null` (**48 examined**): **18 (37.5 %)** carry content that is **already present on `adolfousier/main`** — the maintainer squashes, re-applies or reimplements, then closes our PR. Worked specimen: PR **#1611** reads "closed unmerged" while upstream `5d326aa12` cites `(#1611)` and carries the same content under a different sha. So a closed-unmerged PR is an **UNKNOWN**, never a rejection.
+
+**The predicate is a content diff, and it has three outcomes.** For each cluster, compare the PR's added lines against `adolfousier/main`:
+
+| Outcome | Meaning | Disposition |
+|---|---|---|
+| `applied-upstream` | the content is present upstream | nothing owed; record it and stop |
+| `absent-upstream` | genuinely not upstream | candidate for rejection, subject to Triage confirmation |
+| `unmeasurable` | the diff could not be fetched | **never read as absent** — report it and re-run |
+
+**Rejection is two-stage, and a human confirms.** An upstream PR closed unmerged creates a **candidate**; Triage confirms **rejected** vs **superseded** vs **withdrawn** after reading the maintainer outcome. Never auto-discard on PR state alone — 37.5 % of that population would be wrongly discarded.
+
+**A dependent cluster is never silently dropped.** It leaves the *ready* count and is retained visibly as `blocked-by-rejected-upstream`, carrying exactly one disposition:
+
+- **`exclude`** — the change only makes sense with the rejected behaviour.
+- **`salvageable`** — the dependency can be split out or rewritten; the cluster is re-workable without it.
+- **`needs-owner-ruling`** — the semantic dependency is unclear, so the owner decides.
+
+**`manual_records` IS this field — formalise it, do not fork it.** `oc-harvest-census` already carries a not-upstreamable marker, and it is **right in effect and wrong in wording**: specimen #209's record reads *"manually recorded as filed in PR #1510"* while PR 1510 **does not exist** — 1510 is an upstream **issue**, closed by direct upstream work with no PR (control: 11 sibling records name real PRs; only this one does not). The typed status above is the field that record was reaching for, so **extend the existing marker; do not add a parallel registry.**
+
+**REMOVAL IS FORBIDDEN — there is deliberately no verb, flag or procedure that deletes a `manual_records` entry.** These records are load-bearing in the direction that PREVENTS work: #209's effect is correct even though its wording misdescribes it, and deleting it would open the way to filing a PR that is **not owed**.
+
 ## Upstream issue filings — report-only (owner 2026-08-28 15:17Z)
 
 **Offload order — CORRECTED (owner 2026-09-01, "Wait, i was talking about prs only. Revert issues"):** "Offload to upstream" applies to **PRs only** (when we fix OpenCrabs-source bugs, the fix ships as an upstream PR per the existing PRs-only rule). **Issue reports NEVER go upstream** — the fork is the issues home, permanently. The 2026-09-01 issue-migration (adolfousier #1279–#1286 for fork 70/33/38/58/35/60/65 + TEXT_ACCUM) was misread, withdrawn same day: all 8 upstream issues closed as withdrawn, all 7 fork issues reopened, #1255 cross-link deleted. #66 remains not-upstream-eligible (upstream #1260 closed pointing back to the fork; needs owner-level follow-up with adolfo).
