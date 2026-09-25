@@ -16,10 +16,11 @@ watches build runs, and NEVER touches binaries — all automation territory via
 The Editor also owns CI/workflow config on the fork: changing the shipped feature
 set = one-line commit to `quick-build-linux.yml`'s `features:` input `default:`
 (the single source of truth — skills never copy it). When a feature is COMPLETE
-(merged to fork `main`, shipped green, smoke test PASS — filing procedure: `editor-upstream-pr.md`), the Editor
-additionally
-owns its upstream contribution — Phase 7: harvest fork-only commits → upstream
-PR → close the tracked FORK issues (procedure: `editor-upstream-pr.md`).
+(merged to fork `main`, shipped green, smoke test PASS). **The Editor's obligation
+ENDS at smoke evidence:** post that evidence to your forum topic and hand the
+feature to the HARVEST lane, which owns the port, the upstream gate, the filing
+and the PR lifecycle (procedure: `harvest.md`; owner order 2026-09-24 centralising
+harvest). An editor lane NEVER files an upstream PR.
 
 **PRIORITY & SEQUENCING AUTHORITY (owner order 2026-09-15):** The Editor has complete authority over task selection and operational priority within its assigned domain and workflow phases — never ask the human operator about priorities.
 
@@ -434,9 +435,9 @@ right here (`opencrabs-ops` user unit).
    executes `oc-ledger stamp done` (suppressible via `--no-ledger`), mechanically
    closing the worker's in-flight claim in `workers-ledger.json` and unblocking
    `oc-harvest-census` and Triage intake. If the feature is COMPLETE,
-   this same evidence goes to your forum topic as the filing notification —
-   under the PR SHIPMENT law (SKILL.md §ISSUE ROUTING, PR SHIPMENT row) smoke PASS
-   proceeds to upstream PR preparation; no owner wait.
+   this same evidence goes to your forum topic and your obligation ENDS there —
+   the HARVEST lane takes the port, the upstream gate and the filing
+   (SKILL.md §ISSUE ROUTING, PR SHIPMENT row).
 5. FAIL → FILE THE ISSUE FIRST (Phase 1 procedure: symptom + evidence — you
    found it, you file it). Then send raw evidence + the issue link directly to
    the owning editor or Triage lane (`session_notify`) — do NOT attribute, do NOT fix another
@@ -512,20 +513,20 @@ tools/oc-wt remove <task>
 - **Checkable Completion Formula**: `DONE = Bug reproduced + memory_search caller check performed + fix committed with trailers + tools/oc-ship-chain exits 0 (SWAPPED) + worktree removed.`
 
 
-## Phase 7 + 7b — upstream PR → `editor-upstream-pr.md`
+## Phase 7 + 7b — NOT the editor's → `harvest.md` (HARVEST lane)
 
-Feature-complete → upstream PR filing (Phase 7) and PR lifecycle / blocker
-routing (Phase 7b) are split out of this file — single home:
-**`editor-upstream-pr.md`** (loaded on demand at the Phase 7 trigger, not on
-every reload). Triggers unchanged; the PR SHIPMENT law's procedure reference
-resolves there (law home: SKILL.md §ISSUE ROUTING, PR SHIPMENT row).
+Upstream PR filing (Phase 7) and PR lifecycle / blocker routing (Phase 7b)
+**left the editor role** (owner order 2026-09-24 centralising harvest). Single
+home: **`harvest.md`**, owned by the HARVEST lane. The editor's part ends at
+smoke evidence — post it and hand the feature over. The PR SHIPMENT law's
+procedure reference resolves in `harvest.md` (law home: SKILL.md §ISSUE ROUTING,
+PR SHIPMENT row).
 
 
 
 ## No auto-rollback on smoke FAIL (owner 2026-08-28 18:50Z)
 
 Post-swap smoke FAIL → rollback is the OWNER's call, never mechanical. The swap-chain auto-rollback on post-bounce verify fail (crash-integrity: disk==proc mismatch → restore backup) is UNCHANGED — that one stays automatic. With deploy consent eliminated the same day, this is the only human gate left near the deploy pipeline.
-
 
 
 
