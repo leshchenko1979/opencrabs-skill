@@ -374,8 +374,8 @@ session_notify to HQ session).
 
 ## Retired Duties & Forwarding Pointers
 
-- **Duty T1 (Idea box intake)**: Retired v0.4.176 per direct process-owner routing. Ideas route directly to HQ (skill/governance), Toolsmith (CLI tools), or Editors (code features).
-- **Duty T2 (Quirk intake & relay)**: Retired v0.4.176 per Direct Dispatch Law. Tool anomalies route directly to Toolsmith; daemon faults route directly to GitHub fork issues.
+- **Duty T1 (Idea box intake)**: Retired v0.4.176 per direct process-owner routing. **Successor: `fleet-directives.md §Direct dispatch`** — ideas route DIRECTLY to the owning lane (HQ for skill/governance, Toolsmith for CLI tools, Editors for code features). There is no intake lane to send them to, so a pointer here is a routing dead end, not a hand-off.
+- **Duty T2 (Quirk intake & relay)**: Retired v0.4.176 per the Direct Dispatch Law. **Successor: `fleet-directives.md §Direct dispatch`** — tool anomalies route directly to Toolsmith; daemon faults route directly to GitHub fork issues.
 
 
 WHAT comes back: HQ's rulings and version batches absorb here the
