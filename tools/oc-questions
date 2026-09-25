@@ -1339,6 +1339,16 @@ def render_via_node(spec):
     return proc.stdout, None
 
 
+# The answer form is upgraded to an inline swap by htmx (owner question
+# 2026-09-24). It is VENDORED into the token dir and served from our own origin
+# rather than pulled from a CDN: the reader is in Russia, and a third-party
+# script the reader's browser must fetch is a dependency this page cannot
+# verify. Without the file the attributes are inert and the form still submits
+# as a normal POST, so the no-JS path degrades rather than breaks.
+HTMX_FILE = "htmx.min.js"
+HTMX_VERSION = "2.0.4"
+HTMX_URL = "https://unpkg.com/htmx.org@%s/dist/htmx.min.js" % HTMX_VERSION
+
 PAGE_CSS = """
 *{box-sizing:border-box}
 body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:0 auto;padding:1.5rem 1rem}
@@ -1350,6 +1360,8 @@ form td,form th{border:1px solid #ccc;padding:.25rem .5rem;text-align:left}
 form img{max-width:100%;height:auto}
 form pre{background:#f6f6f6;padding:.5rem;overflow-x:auto;max-width:100%}
 form ul,form ol{margin:.4rem 0 .4rem 1.2rem}
+section.answered{border-color:#0a0;background:#f4fbf6}
+section.answered h2{color:#0a7d32}
 .age,.meta{color:#666;font-size:.85em}
 form{margin:.6rem 0}
 textarea{display:block;width:100%;margin:.4rem 0;font:inherit}
@@ -1373,6 +1385,9 @@ def page_wrapper(body, expires_at):
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
             "<meta name=\"robots\" content=\"noindex, nofollow\">\n"
             "<title>Open questions</title>\n"
+            # defer: the page is readable and submittable before htmx arrives,
+            # and the attributes are inert if the file never loads.
+            f'<script src="{HTMX_FILE}" defer></script>\n'
             f"<style>{PAGE_CSS}</style>\n"
             "</head><body>\n"
             f'<p class="meta">expires {html.escape(expires_at)}</p>\n'
@@ -1396,6 +1411,40 @@ def build_page(entries, token, expires_at, action):
     oc_log_extra("renderer", "json-render")
     return page_wrapper(html_body, expires_at)
 
+
+# Why the last vendoring attempt ended as it did. Recorded so the selftest can
+# report the REASON rather than just the absence -- an unvendored page and a
+# failed download look identical from the artifact alone.
+_VENDOR_LAST = "not attempted"
+
+def vendor_htmx(directory):
+    global _VENDOR_LAST
+    """Copy the vendored htmx beside the page. Best-effort BY DESIGN: a failure
+    leaves the attributes inert and the form still submits normally, so this
+    must never fail a publish. Downloaded once into the build dir, then copied
+    from there -- the page never fetches it from a third party at runtime."""
+    target = os.path.join(directory, HTMX_FILE)
+    cached = os.path.join(render_dir(), HTMX_FILE)
+    try:
+        if not os.path.isfile(cached) or os.path.getsize(cached) < 10000:
+            import urllib.request
+            with urllib.request.urlopen(HTMX_URL, timeout=20) as response:
+                payload = response.read()
+            if len(payload) < 10000:
+                raise OSError("suspiciously small htmx payload")
+            with open(cached, "wb") as fh:
+                fh.write(payload)
+        with open(cached, "rb") as fh:
+            payload = fh.read()
+        if not os.path.isfile(target) or open(target, "rb").read() != payload:
+            with open(target, "wb") as fh:
+                fh.write(payload)
+        _VENDOR_LAST = "ok (%d bytes)" % len(payload)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _VENDOR_LAST = "%s: %s" % (exc.__class__.__name__, exc)
+        oc_log_extra("htmx_vendor_failed", exc.__class__.__name__)
+        return False
 
 def prune_pages():
     """Delete token directories past their TTL. The token IS the credential, so
@@ -1546,6 +1595,7 @@ def publish_page(set_id=None, action=None, prune=False, rotate=False, quiet=Fals
     page = build_page(entries, token, expires.replace(microsecond=0).isoformat(),
                       action or "/answer")
     os.makedirs(directory, exist_ok=True)
+    vendor_htmx(directory)
     with open(os.path.join(directory, "index.html"), "w", encoding="utf-8") as fh:
         fh.write(page)
     meta = {"token": token, "created_at": created.replace(microsecond=0).isoformat(),
@@ -2007,8 +2057,52 @@ def selftest():
         rc, out, _ = run("publish", "--json")
         page = json.loads(out)
         body = open(os.path.join(page["path"], "index.html"), encoding="utf-8").read()
-        ck(not re.search(r"<script", body, re.I),
-           "1. the rendered page carries NO <script> (the static property)")
+        # Owner question 2026-09-24: the answer form should swap inline instead
+        # of navigating. htmx breaks "no <script> at all", but the property that
+        # mattered was NO CLIENT-SIDE LOGIC OF OUR OWN -- so the assertion
+        # narrows instead of being deleted: at most ONE script, it must be the
+        # vendored htmx from our own origin, and it must have a src (an INLINE
+        # body is the thing the original leg actually guarded against).
+        scripts = re.findall(r"<script\b[^>]*>", body, re.I)
+        # EXACTLY one, not "at most one": "at most" passes on a page with NO
+        # script at all, so the mutant that drops the tag passed this leg while
+        # the page had lost the whole inline-swap capability. A ceiling is not
+        # a presence test.
+        ck(len(scripts) == 1,
+           "1. EXACTLY one <script> tag on the page (found %d)" % len(scripts))
+        ck(all(re.search(r'src="' + re.escape(HTMX_FILE) + r'"', tag)
+               for tag in scripts),
+           "\u2026and it is the VENDORED htmx, from our own origin")
+        ck(not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", body, re.I),
+           "\u2026with no INLINE script body anywhere (the real guard)")
+
+        # #562: the form swaps its own block in place instead of navigating.
+        # Asserted on the FORM, and the target must name the section the
+        # renderer actually emits -- a target that matches nothing swaps
+        # nothing, which looks identical to htmx not loading.
+        form_tag = re.search(r"<form\b[^>]*>", body)
+        ck(form_tag is not None, "the page renders a <form>")
+        form_html = form_tag.group(0) if form_tag else ""
+        ck('hx-post="/answer"' in form_html,
+           "the form carries hx-post=/answer (the inline swap)")
+        target = re.search(r'hx-target="#([^"]+)"', form_html)
+        ck(target is not None, "\u2026and an hx-target")
+        section_ids = re.findall(r'<section id="([^"]+)"', body)
+        ck(target is not None and target.group(1) in section_ids,
+           "\u2026naming a section the page actually renders (%r in %r)"
+           % (target.group(1) if target else None, section_ids))
+        ck('hx-swap="outerHTML"' in form_html,
+           "\u2026with outerHTML, so the answered block replaces the question")
+        # The vendored file must sit BESIDE the page: a same-origin script is
+        # the whole reason this is vendored rather than pulled from a CDN.
+        # page["path"] IS the token dir -- dirname() of it is the pages ROOT,
+        # which is what an earlier version of this leg checked, so it looked
+        # for htmx beside the wrong thing.
+        vendored = os.path.join(page["path"], HTMX_FILE)
+        ck(os.path.isfile(vendored),
+           "htmx is VENDORED beside the page (same origin, no CDN dependency)")
+        ck(os.path.isfile(vendored) and os.path.getsize(vendored) > 10000,
+           "\u2026and is a real payload, not a stub or an error page")
         ck('name="token"' in body and 'name="set"' in body and 'name="qid"' in body,
            "2. the form carries token + set + qid as hidden inputs -- the submit "
            "contract the answer backend reads")

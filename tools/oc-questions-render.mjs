@@ -97,7 +97,14 @@ const { registry } = defineRegistry(catalog, {
     Question: ({ props, children }) => h('section', { id: props.set + '-' + props.qid },
       h('h2', null, props.title),
       props.recommendation ? h('p', { className: 'rec' }, 'recommended: ' + props.recommendation) : null,
-      h('form', { method: 'post', action: props.action },
+      // hx-*: the form swaps THIS question's own block in place instead of
+      // navigating away (owner question 2026-09-24). The section id below is
+      // the swap target. Inert without the vendored htmx, in which case the
+      // form submits as a normal POST -- so the no-JS path is unaffected.
+      h('form', { method: 'post', action: props.action,
+                  'hx-post': props.action,
+                  'hx-target': '#' + props.set + '-' + props.qid,
+                  'hx-swap': 'outerHTML' },
         h('input', { type: 'hidden', name: 'token', value: props.token }),
         h('input', { type: 'hidden', name: 'set', value: props.set }),
         h('input', { type: 'hidden', name: 'qid', value: props.qid }),
