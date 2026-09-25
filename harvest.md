@@ -1,14 +1,19 @@
-# Editor upstream PR procedure — Phase 7 + 7b (split from editor.md, v0.4.131)
+# HARVEST — upstream PR lane: port → gate → file → follow
 
-> Single home for the upstream-PR phases. Loaded ON DEMAND when a feature
-> reaches COMPLETE (Phase 7 trigger) or an owned PR needs lifecycle action
-> (Phase 7b) — NOT part of the every-reload editor.md.
+**Load only after SKILL.md confirmed the role is HARVEST.**
+
+**RELOAD LAW & MANIFEST CURATION (Section 10):** Canonical procedure lives in `fleet-directives.md §Post-compaction skill reload & context manifest curation` (keep `opencrabs-dev`, `harvest.md`, `fleet-directives.md` in `active_skills`; re-read on compaction/spawn).
+
+> Single home for the upstream-PR phases. Loaded when Triage dispatches a
+> READY cluster (Phase 7 trigger) or an owned PR needs lifecycle action
+> (Phase 7b). Editors do NOT load this file — the editor's obligation ends at
+> smoke evidence; Triage surfaces and counts, never ports or files.
 
 ## Phase 7 — Feature complete → upstream PR
 
 Trigger: the feature is COMPLETE — merged into fork `main`, shipped inside a
 green swapped build, smoke test PASS (v0.4.104 four-leg rubric). With tests green
-and smoke confirmed, Editor prepares the harvested PR branch, posts the smoke
+and smoke confirmed, the HARVEST lane prepares the harvested PR branch, posts the smoke
 evidence, and files the upstream PR. Development-time contact stays issues-only;
 this PR is the ONE sanctioned exception (completed features only).
 
@@ -147,7 +152,7 @@ Rules:
   for UPSTREAM-local references. Incident + rationale:
   §Phase 7 Reference Rules below.
 - One feature = one PR; never bundle two features to save a PR.
-- **DEEP CORE ADVANCE HEADS-UP GATE (owner order 2026-09-17; paths corrected + executor assigned v0.4.204, HQ ruling 2026-09-18; config added to scope by owner order 2026-09-19):** If the PR touches **Deep Core** (runtime scheduler, compaction algorithms, provider routing/fallbacks, subagent orchestration, tool loop, configuration — loading, profile resolution, write guards, migrations — the PROSE scope is operative, paths are a reading aid: `src/cron/`, `src/brain/agent/service/tool_loop.rs`, `src/brain/agent/context.rs`, `src/brain/provider/`, `src/brain/tools/subagent/`, `src/config/`), post a concise 1-liner heads-up to either the **`OC Dev`** Telegram group chat (`-1003627148483`) or the **`Opencrabs Dev Factory`** group chat (tagging `@adolfodev`) before or simultaneously with opening the upstream PR: `Core heads-up: <symptom> → proposed fix in <subsystem> (PR #<N>)`. **HQ POSTS IT, not you** — §Telegram surface law bars an editor from invoking any telegram send tool, so send the 1-liner TEXT to HQ (`session_notify`, `delivery.mode="turn-end"`) in the turn you stage the PR; that discharges the gate and your harvest may proceed. Surface integrations (Telegram channel handler, cards, formatting) remain under autonomous maintainer authority and ship with 4-leg smoke receipts without advance group chat posting. Canon: `editor-upstream-pr.md §Deep Core Advance Heads-Up Gate`.
+- **DEEP CORE ADVANCE HEADS-UP GATE (owner order 2026-09-17; paths corrected + executor assigned v0.4.204, HQ ruling 2026-09-18; config added to scope by owner order 2026-09-19):** If the PR touches **Deep Core** (runtime scheduler, compaction algorithms, provider routing/fallbacks, subagent orchestration, tool loop, configuration — loading, profile resolution, write guards, migrations — the PROSE scope is operative, paths are a reading aid: `src/cron/`, `src/brain/agent/service/tool_loop.rs`, `src/brain/agent/context.rs`, `src/brain/provider/`, `src/brain/tools/subagent/`, `src/config/`), post a concise 1-liner heads-up to either the **`OC Dev`** Telegram group chat (`-1003627148483`) or the **`Opencrabs Dev Factory`** group chat (tagging `@adolfodev`) before or simultaneously with opening the upstream PR: `Core heads-up: <symptom> → proposed fix in <subsystem> (PR #<N>)`. **HQ POSTS IT, not you** — §Telegram surface law bars an editor from invoking any telegram send tool, so send the 1-liner TEXT to HQ (`session_notify`, `delivery.mode="turn-end"`) in the turn you stage the PR; that discharges the gate and your harvest may proceed. Surface integrations (Telegram channel handler, cards, formatting) remain under autonomous maintainer authority and ship with 4-leg smoke receipts without advance group chat posting. Canon: `harvest.md §Deep Core Advance Heads-Up Gate`.
 - **ATOMICITY & ZERO BUNDLING (owner order 2026-09-13; lane 1a63f103 proposal):** issues, PRs and commits are atomic —
   one problem per issue, one logical change per commit, one issue per PR. **1 Intent = 1 Unit.**
   Never mix features and bug fixes in the same issue, branch, or PR: a feature PR must carry exclusively
@@ -210,8 +215,8 @@ harvested commits. When a PR is not mergeable, route by BLOCKER CLASS:
 | Blocker | Who acts | Action |
 |---|---|---|
 | fmt/clippy/test failure in THIS feature's files | Owning editor (notified with log evidence via the mechanical post-swap fan-out — `oc-deploy fanout`) | **PR-freeze check first (v0.4.93):** fixes on a FILED PR only when CI failure exists at push time or maintainer asks. Otherwise frozen. If valid: fresh worktree off the PR head → fix → Phase 5 gate (pr-checks) + conflict-quality gate → signed push to the head |
-| Merge conflicts with new upstream `main` | **Maintainer (v0.4.93)** | **DO NOT rebase/force-push the filed PR** — PR-freeze law. Conflict resolution on a filed PR is the maintainer's side (he merges locally, fixes on top, pushes, comments). Editor action: NONE beyond a factual comment ONLY if the maintainer asks; pre-filing, 2-fresh governs |
-| Prerequisite unharvested (feature depends on fork-only changes from another issue) | **Editor / Triage (v0.4.174; Harvester RETIRED v0.4.176)** | **Explicit dependency notice permitted (v0.4.174 Dependent Upstream PRs Law)**: Allowed to file PR B while prerequisite PR A is pending, provided PR description states: `Depends on #<PR_A> (do not merge before #<PR_A>)`. Maintainer merges in chronological sequence. Alternatively, automated harvest pipeline holds PR B until PR A merges. |
+| Merge conflicts with new upstream `main` | **Maintainer (v0.4.93)** | **DO NOT rebase/force-push the filed PR** — PR-freeze law. Conflict resolution on a filed PR is the maintainer's side (he merges locally, fixes on top, pushes, comments). HARVEST action: NONE beyond a factual comment ONLY if the maintainer asks; pre-filing, 2-fresh governs |
+| Prerequisite unharvested (feature depends on fork-only changes from another issue) | **HARVEST / Triage (v0.4.174; Harvester RETIRED v0.4.176)** | **Explicit dependency notice permitted (v0.4.174 Dependent Upstream PRs Law)**: Allowed to file PR B while prerequisite PR A is pending, provided PR description states: `Depends on #<PR_A> (do not merge before #<PR_A>)`. Maintainer merges in chronological sequence. Alternatively, automated harvest pipeline holds PR B until PR A merges. |
 | PRE-EXISTING upstream red (base fails in files we never touched) | ❌ NO editor pings — our code is innocent | housekeeping-PR candidate: issue filed + ledger-registered first (v0.3.8), Alexey decides |
 | Maintainer rejects/closes the PR | Owning editor | REOPEN the linked issues with a pointer comment; record the outcome |
 
@@ -233,7 +238,7 @@ do not invest the round.
 
 ## Phase 7c — Mechanized Harvest Execution (v0.4.136, 2026-09-10; tightened v0.4.146)
 
-Trigger: Operator harvest command (e.g. `/goal harvest ...`) dispatched to Editor lane via `session_notify` `[HARVEST DISPATCH: #N]` wire envelope from Triage.
+Trigger: Operator harvest command (e.g. `/goal harvest ...`) dispatched to the HARVEST lane via `session_notify` `[HARVEST DISPATCH: #N]` wire envelope from Triage.
 
 Contract:
 1. **Dedicated Worktree**: Create isolated worktree off `adolfousier/main` tip:
@@ -256,7 +261,7 @@ Contract:
      tools/oc-prchecks leshchenko1979/fix/<slug>
      ```
      `--fast` is strictly prohibited for pre-PR testing; upstream PRs require 100% full test suite verification.
-4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log` (and ≥24h post-swap soak completed for `feat/*` or dependent fix bundles, counted strictly from the latest live deployment timestamp `deployed.ts` of ANY related node in the relationship graph — parent, sub-issues, and blockers, per 24h Feature Soak Harvest Law), Editor verifies upstream baseline state (`git diff origin/main...adolfousier/main`) and files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug> [--draft]`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue. If the underlying issue was already clean or resolved in upstream `main`, frame the PR narrative accurately as a clean helper extraction / refactoring / hardening rather than asserting an upstream regression (Upstream Baseline & Narrative Verification Law v0.4.198). (Note: Use `--draft` if the PR depends on another in-flight upstream PR per Staged Upstream Draft PR Mandate). **A PR number is not FILED until a same-turn `gh pr create` (or `gh pr view <N>`) output names it** — if a guard flags the claim (`phantom_blocked`) or the output was not witnessed, the PR is UNFILED: re-verify and re-dispatch (v0.4.152 §Guard-Flag Escalation Law; worked example: an announced PR #1514 that never existed cost ~3 h).
+4. **Ship Execution**: When gate run exits GREEN (SUCCESS) AND 4-leg smoke pass is confirmed in `smoke-verdicts.log` (and ≥24h post-swap soak completed for `feat/*` or dependent fix bundles, counted strictly from the latest live deployment timestamp `deployed.ts` of ANY related node in the relationship graph — parent, sub-issues, and blockers, per 24h Feature Soak Harvest Law), the HARVEST lane verifies upstream baseline state (`git diff origin/main...adolfousier/main`) and files the upstream PR (`gh pr create --repo adolfousier/opencrabs --base main --head leshchenko1979:leshchenko1979/fix/<slug> [--draft]`) citing the gate run ID, quoting the 4-leg smoke receipt, and linking the fork issue. If the underlying issue was already clean or resolved in upstream `main`, frame the PR narrative accurately as a clean helper extraction / refactoring / hardening rather than asserting an upstream regression (Upstream Baseline & Narrative Verification Law v0.4.198). (Note: Use `--draft` if the PR depends on another in-flight upstream PR per Staged Upstream Draft PR Mandate). **A PR number is not FILED until a same-turn `gh pr create` (or `gh pr view <N>`) output names it** — if a guard flags the claim (`phantom_blocked`) or the output was not witnessed, the PR is UNFILED: re-verify and re-dispatch (v0.4.152 §Guard-Flag Escalation Law; worked example: an announced PR #1514 that never existed cost ~3 h).
 5. **Ack & Cleanup**: Remove harvest worktree, stamp completion in ledger, and notify Triage via `session_notify`.
    - **Checkable Completion Formula**: `DONE = 4-leg smoke pass in smoke-verdicts.log + full oc-prchecks green + upstream PR filed + harvest worktree cleaned up.`
 
