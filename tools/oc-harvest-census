@@ -1068,17 +1068,16 @@ if action == 'check':
                 manual = json.load(f).get('manual_records', []) or []
         except Exception:
             manual = []
+    # #564: the match predicate AND the wording now live in tools/lib/oc_claims.py,
+    # because oc-harvest-dispatch needs the SAME predicate (it had none, so a unit
+    # a prior lane settled was re-proposed every wave) and the wording has to agree
+    # with the dispatcher's. Three arms now: filed / not-upstreamable / no PR
+    # recorded -- the last because a `pr` field cannot be trusted to hold a PR
+    # number (four live rows carry one that names nothing: 1510 is an upstream
+    # ISSUE, three carry 0, and the old emission rendered those as fact).
     for r in manual:
-        r_issues = set()
-        if r.get('issue'):
-            r_issues.add(r.get('issue'))
-        if r.get('issues') and isinstance(r.get('issues'), list):
-            for i_item in r.get('issues'):
-                r_issues.add(i_item)
-        by_issue = target_iss is not None and (target_iss in r_issues)
-        by_unit = bool(r.get('unit')) and str(r['unit']).lower() == target.lower()
-        if by_issue or by_unit:
-            refuse('REFUSED: Target %s is manually recorded as filed in PR #%s (unit %s)' % (target, r.get('pr'), r.get('unit')))
+        if oc_claims.manual_record_matches(r, target, target_iss):
+            refuse('REFUSED: ' + oc_claims.manual_record_claim(r, target))
 
     commits = get_ahead_commits(repo_path, mock_commits)
     matching_commits = []
@@ -1440,7 +1439,7 @@ cmd_check() {
 }
 
 cmd_record() {
-  local unit="" pr="" issue="" issues_str=""
+  local unit="" pr="" issue="" issues_str="" status="" reason=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --unit) unit="$2"; shift 2 ;;
@@ -1448,18 +1447,33 @@ cmd_record() {
       --pr) pr="$2"; shift 2 ;;
       --issue) issue="$2"; shift 2 ;;
       --issues) issues_str="$2"; shift 2 ;;
+      --status) status="$2"; shift 2 ;;
+      --reason) reason="$2"; shift 2 ;;
       --repo) REPO="$2"; shift 2 ;;
       -h|--help) usage 0 ;;
       *) usage ;;
     esac
   done
-  if [ -z "$unit" ] || [ -z "$pr" ]; then
+  if [ -z "$unit" ]; then
     usage
+  fi
+  # #564: a NOT-UPSTREAMABLE record has no PR to name -- demanding one is what
+  # forced the upstream-issue number into the pr field in the first place. Only
+  # the `filed` arm requires a PR number.
+  if [ -z "$status" ]; then
+    status="filed"
+  fi
+  if [ "$status" = "filed" ] && [ -z "$pr" ]; then
+    usage
+  fi
+  if [ -z "$pr" ]; then
+    pr=0
   fi
   if [ -f "$REGISTRY_FILE" ]; then
     python3 -c '
 import sys, json, os, datetime, re
 reg_file, unit, pr, issue, issues_str = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+status, reason = sys.argv[6], sys.argv[7]
 with open(reg_file) as f:
     data = json.load(f)
 records = data.setdefault("manual_records", [])
@@ -1477,12 +1491,27 @@ record_entry = {
     "issues": sorted(list(all_issues)),
     "recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
 }
+# #564: the status vocabulary is written ONLY when it carries information, so a
+# plain `filed` row keeps the pre-schema shape exactly and nothing downstream
+# has to know the field exists.
+if status and status != "filed":
+    record_entry["status"] = status
+if reason:
+    record_entry["reason"] = reason
 # Idempotent upsert keyed on (unit, pr, issue): re-recording the same unit
 # updates the existing entry instead of appending a duplicate (#325).
 key = (record_entry["unit"], record_entry["pr"], record_entry["issue"])
 replaced = 0
 for i, existing in enumerate(records):
     if (existing.get("unit"), existing.get("pr"), existing.get("issue")) == key:
+        # #564: the upsert REPLACES the whole row, so a re-record without --status
+        # would silently DROP a status a prior lane set -- the same shape as the
+        # old "write-only, dumps a two-key dict, erases manual_records" defect.
+        # Carry the prior values forward when this call does not supply them.
+        if "status" not in record_entry and existing.get("status"):
+            record_entry["status"] = existing["status"]
+        if "reason" not in record_entry and existing.get("reason"):
+            record_entry["reason"] = existing["reason"]
         records[i] = record_entry
         replaced = 1
         break
@@ -1491,8 +1520,10 @@ if not replaced:
 with open(reg_file, "w") as f:
     json.dump(data, f, indent=2)
 verb = "Updated" if replaced else "Recorded"
-print(f"{verb} Unit {unit} -> PR #{pr} (issues: {sorted(list(all_issues))}) in {reg_file}")
-' "$REGISTRY_FILE" "$unit" "$pr" "$issue" "$issues_str"
+_what = ("NOT UPSTREAMABLE" if status == "not-upstreamable"
+         else ("PR #%s" % pr if int(pr) else "NO PR recorded"))
+print(f"{verb} Unit {unit} -> {_what} (issues: {sorted(list(all_issues))}) in {reg_file}")
+' "$REGISTRY_FILE" "$unit" "$pr" "$issue" "$issues_str" "$status" "$reason"
   else
     echo "Recorded Unit $unit -> PR #$pr (registry uninitialized)"
   fi
@@ -2443,6 +2474,87 @@ PROSEEOF
     ok "unrelated target still ELIGIBLE with manual records present"
   else
     echo "  bad  - unrelated target expected rc=0 ELIGIBLE, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 9b. #564: a row marked NOT UPSTREAMABLE says so and carries its reason --
+  #     instead of the old emission, which rendered the record's `pr` field as a
+  #     filing. Live instance: unit restore-append-at-end-mig carries pr=1510,
+  #     which is an upstream ISSUE (pulls/1510 -> 404), and the census reported
+  #     "filed in PR #1510" while ledger n=6231 records the OPPOSITE decision
+  #     ("not upstreamable"). The row is written through the CLI on purpose, so
+  #     the new --status/--reason flags are exercised by the same leg.
+  local nu_reg="$selftest_tmp/mock_reg_notup.json"
+  printf '{"manual_records": []}\n' > "$nu_reg"
+  rc=0
+  bash "$0" record --unit "not-up-unit" --status not-upstreamable \
+      --reason "already carried upstream in issue 1510" --issue "999998" \
+      --state-file "$nu_reg" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ok "#564 record accepts --status not-upstreamable WITHOUT --pr"
+  else
+    echo "  bad  - #564 not-upstreamable record expected rc=0 without --pr, got rc=$rc"
+    return 1
+  fi
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$nu_reg" "not-up-unit" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && oc_has "$out" "manually recorded as NOT UPSTREAMABLE" && oc_has "$out" "already carried upstream in issue 1510"; then
+    ok "#564 a not-upstreamable record refuses AS not-upstreamable, carrying its reason"
+  else
+    echo "  bad  - #564 expected rc=1 NOT UPSTREAMABLE + reason, got rc=$rc ($out)"
+    return 1
+  fi
+  if oc_has "$out" "filed in PR"; then
+    echo "  bad  - #564 still emits a false 'filed in PR' claim for a not-upstreamable row: $out"
+    return 1
+  fi
+  ok "#564 a not-upstreamable row emits NO 'filed in PR' claim"
+
+  # 9c. #564: a row whose pr is falsy must not be reported as a filing either.
+  #     Three live rows carry pr:0 and the old emission rendered them as
+  #     "manually recorded as filed in PR #0" -- a statement about the world
+  #     that is false. The honest arm names the gap instead.
+  bash "$0" record --unit "no-pr-unit" --pr 0 --status filed --issue "999997" \
+      --state-file "$nu_reg" >/dev/null 2>&1
+  rc=0
+  out="$(run_engine "check" "mock/repo" "$selftest_tmp" "$nu_reg" "no-pr-unit" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && oc_has "$out" "manually recorded with NO PR number recorded"; then
+    ok "#564 a row with no PR number refuses honestly instead of claiming PR #0"
+  else
+    echo "  bad  - #564 expected rc=1 'NO PR number recorded', got rc=$rc ($out)"
+    return 1
+  fi
+  if oc_has "$out" "filed in PR #0"; then
+    echo "  bad  - #564 emitted the false 'filed in PR #0' claim: $out"
+    return 1
+  fi
+  ok "#564 no false 'filed in PR #0' claim"
+
+  # 9d. #564: `filed` still REQUIRES a PR number -- relaxing that would let a
+  #     filing record exist with nothing to look up, which is how the pr field
+  #     came to hold an issue number in the first place.
+  rc=0
+  bash "$0" record --unit "filed-no-pr" --issue "999996" --state-file "$nu_reg" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    ok "#564 status=filed still requires --pr (usage rc 2)"
+  else
+    echo "  bad  - #564 filed-without-pr expected rc=2 usage, got rc=$rc"
+    return 1
+  fi
+
+  # 9e. #564: the upsert REPLACES the whole row, so a re-record without --status
+  #     would silently DROP a status a prior lane set -- the same shape as the
+  #     old "write-only, dumps a two-key dict, erases manual_records" defect.
+  bash "$0" record --unit "not-up-unit" --pr 0 --issue "999998" --state-file "$nu_reg" >/dev/null 2>&1
+  if python3 -c '
+import json, sys
+recs = json.load(open(sys.argv[1]))["manual_records"]
+row = [r for r in recs if r.get("unit") == "not-up-unit"]
+sys.exit(0 if row and row[0].get("status") == "not-upstreamable" else 1)
+' "$nu_reg"; then
+    ok "#564 a re-record without --status PRESERVES the prior status"
+  else
+    echo "  bad  - #564 re-record dropped the not-upstreamable status"
     return 1
   fi
 

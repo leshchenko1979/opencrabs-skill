@@ -417,6 +417,30 @@ def soak_unresolved_note(commit_ts, now_ts):
             '''schedule to give until the anchor resolves''' % bound)
 
 
+
+def load_manual_records(st_dir):
+    # #564: the hand-settled registry -- the SAME file the census consults, read
+    # the same way. The predicate that decides WHICH row covers a target lives in
+    # tools/lib/oc_claims.py so the two tools cannot drift apart.
+    # OC_HARVEST_REGISTRY_FILE is the explicit override, and the selftest MUST
+    # set it: STATE_DIR is unset for most of that suite, so the engine falls back
+    # to the LIVE ops dir and a live manual record would decide a fixture's
+    # verdict (live record #188 alone would hijack the HELD_PARENT_UNHARVESTED
+    # leg). An override also keeps the gate testable without touching live state.
+    p = os.environ.get('OC_HARVEST_REGISTRY_FILE') or ''
+    if not p:
+        if not st_dir:
+            return []
+        p = os.path.join(st_dir, 'harvest-registry.json')
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p) as f:
+            return json.load(f).get('manual_records', []) or []
+    except Exception:
+        return []
+
+
 def run_cmd(cmd, cwd=None):
     res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     return res.returncode, res.stdout, res.stderr
@@ -741,6 +765,14 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
                     issue_num = int(m.group(1))
                     break
 
+    # The state dir is resolved HERE, above the gates, because Gate 1b (#564)
+    # consults the hand-settled registry that lives in it -- a manual record has
+    # to be readable before any automated lookup runs.
+    st_dir = os.environ.get('STATE_DIR', '')
+    if not st_dir:
+        home_dir = os.environ.get('HOME', '/root')
+        st_dir = os.path.join(home_dir, '.opencrabs/profiles/ops/opencrabs-dev')
+
     # Gate 1: Supersession audit from inventory / known supersessions
     if issue_num in [52, 53]:
         return {
@@ -750,6 +782,26 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
             'commits': commits,
             'exit_code': 1
         }
+
+    # Gate 1b (#564): a unit a prior lane SETTLED BY HAND must not be re-proposed.
+    # This tool had ZERO manual handling, so it gated only on check_upstream_pr,
+    # which looks for MERGED/OPEN upstream PRs and therefore cannot see a record
+    # whose entire point is that no PR is owed. Live instance: #209 was settled
+    # NOT UPSTREAMABLE on 2026-09-15 (ledger n=6231) and re-dispatched on
+    # 2026-09-24 to a lane that could only refuse it -- a full cycle spent to
+    # rediscover a nine-day-old decision, and it would recur on every wave. The
+    # gate runs BEFORE the upstream PR lookup because a hand decision outranks an
+    # automated one, and the wording comes from oc_claims so a lane reads the
+    # same sentence whichever tool refuses it.
+    for _mr in load_manual_records(st_dir):
+        if oc_claims.manual_record_matches(_mr, candidate_arg, issue_num):
+            return {
+                'status': 'REJECTED',
+                'verdict': 'MANUALLY_SETTLED: ' + oc_claims.manual_record_claim(_mr, candidate_arg),
+                'issue': issue_num,
+                'commits': commits,
+                'exit_code': 1
+            }
 
     # Gate 2: Check upstream PR history
     if issue_num:
@@ -773,10 +825,6 @@ def vet_candidate(candidate_arg, repo_path, base_ref, upstream_repo, mock_prs=No
 
     # Gate 2b: 24h feature soak gate across entire relationship graph (Owner 2026-09-15 / 2026-09-16)
     now_ts = int(os.environ.get('OC_HARVEST_NOW_TS') or time.time())
-    st_dir = os.environ.get('STATE_DIR', '')
-    if not st_dir:
-        home_dir = os.environ.get('HOME', '/root')
-        st_dir = os.path.join(home_dir, '.opencrabs/profiles/ops/opencrabs-dev')
     swaps = load_swap_history(st_dir)
     
     # Check candidate commits for feat soak
@@ -1377,6 +1425,11 @@ cmd_selftest() {
   selftest_tmp="$(mktemp -d)"
   trap cleanup_selftest EXIT
   local st_dir="$selftest_tmp"
+  # #564: pin the manual-records registry to the sandbox for the WHOLE suite.
+  # Without this the gate falls back to the live ops dir and a live record can
+  # decide a fixture's verdict.
+  export OC_HARVEST_REGISTRY_FILE="$selftest_tmp/harvest-registry.json"
+  printf '{"manual_records": []}\n' > "$OC_HARVEST_REGISTRY_FILE"
 
   local mock_repo="$st_dir/repo"
   mkdir -p "$mock_repo"
@@ -2321,6 +2374,110 @@ EOF
   # carries a column-0 brace, which closes the range after ~90 lines and
   # silently reported 0/0. The anchor also keeps this line out of its own count
   # (it starts with legs_total=, not with an echo).
+  # 12. #564: a unit a prior lane SETTLED BY HAND must not be re-proposed. This
+  #     tool had ZERO manual handling, so it gated only on check_upstream_pr,
+  #     which looks for MERGED/OPEN upstream PRs and therefore cannot see a
+  #     record whose entire point is that no PR is owed. Live instance: #209 was
+  #     settled NOT UPSTREAMABLE on 2026-09-15 (ledger n=6231) and re-dispatched
+  #     on 2026-09-24 to a lane that could only refuse it.
+  echo "manual gate fixture" > "$mock_repo/manual.txt"
+  git -C "$mock_repo" add manual.txt
+  GIT_COMMITTER_DATE="2026-08-01T12:00:00Z" GIT_AUTHOR_DATE="2026-08-01T12:00:00Z" \
+    git -C "$mock_repo" commit -q -m "fix(config): manual gate fixture (#9911)" \
+    --trailer "Issue-Ref: leshchenko1979/opencrabs#9911"
+  local commit_m
+  commit_m="$(git -C "$mock_repo" rev-parse HEAD)"
+
+  export OC_HARVEST_MOCK_DEPLOYED_TS="100000"
+  export OC_HARVEST_NOW_TS="1789010000"
+
+  # 12a. CONTROL FIRST: with an UNRELATED record present the unit still APPROVES,
+  #      so 12b cannot pass merely because the gate refuses everything it sees.
+  printf '{"manual_records": [{"unit": "some-other-unit", "pr": 1543, "issue": 9999}]}\n' > "$OC_HARVEST_REGISTRY_FILE"
+  rc=0
+  out="$(run_engine "vet" "$commit_m" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && oc_has "$out" "APPROVED"; then
+    echo "  ok 12a - #564 control: an UNRELATED manual record does not block a clean unit"
+  else
+    echo "  bad 12a - #564 control expected rc=0 APPROVED with an unrelated record, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 12b. Match by ISSUE: the record names the issue, the target is the commit.
+  printf '{"manual_records": [{"unit": "manual-gate-fixture", "pr": 1543, "issue": 9911}]}\n' > "$OC_HARVEST_REGISTRY_FILE"
+  rc=0
+  out="$(run_engine "vet" "$commit_m" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && oc_has "$out" "MANUALLY_SETTLED"; then
+    echo "  ok 12b - #564 a manual record matching by ISSUE refuses MANUALLY_SETTLED"
+  else
+    echo "  bad 12b - #564 expected rc=1 MANUALLY_SETTLED by issue, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 12c. Match by UNIT: the record names the target STRING itself, which is how a
+  #      lane records a unit whose issue number it never learned.
+  printf '{"manual_records": [{"unit": "9911", "pr": 1543, "issue": 9999}]}\n' > "$OC_HARVEST_REGISTRY_FILE"
+  rc=0
+  out="$(run_engine "vet" "9911" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && oc_has "$out" "MANUALLY_SETTLED"; then
+    echo "  ok 12c - #564 a manual record matching by UNIT refuses MANUALLY_SETTLED"
+  else
+    echo "  bad 12c - #564 expected rc=1 MANUALLY_SETTLED by unit, got rc=$rc ($out)"
+    return 1
+  fi
+
+  # 12d. A NOT-UPSTREAMABLE record says so and carries its reason. This is the
+  #      half the registry could not express: the lane that settled #209 had only
+  #      a `pr` field, wrote the upstream ISSUE number 1510 there, and the tool
+  #      reported "filed in PR #1510" -- the OPPOSITE of the recorded decision.
+  printf '{"manual_records": [{"unit": "manual-gate-fixture", "pr": 0, "issue": 9911, "status": "not-upstreamable", "reason": "carried upstream already"}]}\n' > "$OC_HARVEST_REGISTRY_FILE"
+  rc=0
+  out="$(run_engine "vet" "$commit_m" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && oc_has "$out" "NOT UPSTREAMABLE" && oc_has "$out" "carried upstream already"; then
+    echo "  ok 12d - #564 a not-upstreamable record refuses AS not-upstreamable, carrying its reason"
+  else
+    echo "  bad 12d - #564 expected rc=1 NOT UPSTREAMABLE + reason, got rc=$rc ($out)"
+    return 1
+  fi
+  if oc_has "$out" "filed in PR"; then
+    echo "  bad 12d-2 - #564 still emits a false 'filed in PR' claim for a not-upstreamable row: $out"
+    return 1
+  fi
+  echo "  ok 12d-2 - #564 a not-upstreamable row emits NO 'filed in PR' claim"
+
+  # 12e. A row with no PR number must not be reported as a filing either: three
+  #      live rows carry pr:0 and the old emission rendered them as "filed in
+  #      PR #0", which is a statement about the world that is false.
+  printf '{"manual_records": [{"unit": "manual-gate-fixture", "pr": 0, "issue": 9911}]}\n' > "$OC_HARVEST_REGISTRY_FILE"
+  rc=0
+  out="$(run_engine "vet" "$commit_m" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 1 ] && oc_has "$out" "NO PR number recorded"; then
+    echo "  ok 12e - #564 a row with no PR number refuses honestly instead of claiming PR #0"
+  else
+    echo "  bad 12e - #564 expected rc=1 'NO PR number recorded', got rc=$rc ($out)"
+    return 1
+  fi
+  if oc_has "$out" "filed in PR #0"; then
+    echo "  bad 12e-2 - #564 emitted the false 'filed in PR #0' claim: $out"
+    return 1
+  fi
+  echo "  ok 12e-2 - #564 no false 'filed in PR #0' claim"
+
+  # 12f. An ABSENT registry must not refuse: the gate is inert when there is no
+  #      record file, so a box that has never recorded a unit behaves as before.
+  export OC_HARVEST_REGISTRY_FILE="$st_dir/definitely-absent-registry.json"
+  rm -f "$OC_HARVEST_REGISTRY_FILE"
+  rc=0
+  out="$(run_engine "vet" "$commit_m" "$mock_repo" "adolfousier/main" "adolfousier/opencrabs" "false" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ] && oc_has "$out" "APPROVED"; then
+    echo "  ok 12f - #564 an ABSENT registry leaves the gate inert (no false refusal)"
+  else
+    echo "  bad 12f - #564 expected rc=0 APPROVED with no registry, got rc=$rc ($out)"
+    return 1
+  fi
+  export OC_HARVEST_REGISTRY_FILE="$st_dir/harvest-registry.json"
+  printf '{"manual_records": []}\n' > "$OC_HARVEST_REGISTRY_FILE"
+
   local legs_total
   legs_total="$(grep -cE '^[[:space:]]+echo "  ok ' "$0")"
   if [ "${legs_total:-0}" -lt 1 ]; then

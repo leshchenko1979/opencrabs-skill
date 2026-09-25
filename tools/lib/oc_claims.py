@@ -774,3 +774,76 @@ def get_active_claims(ledger_file, repo_path=None):
                 "files": files,
             })
     return claims
+
+
+#: The manual-records status vocabulary (#564). A unit recorded here was settled
+#: BY HAND because the automated upstream check could not settle it.
+#:
+#: The field exists because the registry had NO way to say "not upstreamable":
+#: the lane that settled #209 on 2026-09-15 had only a `pr` field to work with,
+#: so it wrote the upstream ISSUE number 1510 there, and the census emitted
+#: "manually recorded as filed in PR #1510" -- asserting the OPPOSITE of the
+#: decision ledger n=6231 records ("not upstreamable (upstream PR #1510 already
+#: carries add_project_repo_remote)"). Absent status means `filed`, so every
+#: pre-existing row keeps the meaning it already had.
+MANUAL_STATUS_FILED = "filed"
+MANUAL_STATUS_NOT_UPSTREAMABLE = "not-upstreamable"
+
+
+def manual_record_status(record):
+    """A manual_records row's status, defaulting to `filed`.
+
+    Absent, empty or unknown -> `filed`: the pre-schema meaning, so this
+    addition cannot silently reclassify a row that never carried a status.
+    """
+    st = str((record or {}).get("status") or "").strip().lower()
+    if st == MANUAL_STATUS_NOT_UPSTREAMABLE:
+        return MANUAL_STATUS_NOT_UPSTREAMABLE
+    return MANUAL_STATUS_FILED
+
+
+def manual_record_matches(record, target, target_iss):
+    """Does ONE manual_records row cover this target? (#564)
+
+    The same predicate the census has always used, lifted here so the dispatcher
+    applies it too: dispatch had ZERO manual handling, so a unit a prior lane
+    settled as not-upstreamable was re-proposed on EVERY wave (live instance
+    #209, settled 2026-09-15, re-dispatched 2026-09-24 to a lane that could only
+    refuse it).
+    """
+    if not isinstance(record, dict):
+        return False
+    r_issues = set()
+    if record.get("issue"):
+        r_issues.add(record.get("issue"))
+    if record.get("issues") and isinstance(record.get("issues"), list):
+        for i_item in record.get("issues"):
+            r_issues.add(i_item)
+    by_issue = target_iss is not None and (target_iss in r_issues)
+    by_unit = bool(record.get("unit")) and str(record["unit"]).lower() == str(target).lower()
+    return bool(by_issue or by_unit)
+
+
+def manual_record_claim(record, target):
+    """One honest sentence about a matching row (#564), WITHOUT the rc prefix.
+
+    Three arms, and the third exists because the registry cannot be trusted to
+    hold a PR number. Four live rows carry a `pr` that names no PR: 1510 is an
+    upstream ISSUE, and three rows carry `pr: 0`. The old emission rendered
+    those as "filed in PR #1510" and "filed in PR #0" -- statements about the
+    world that are simply false. A row whose `pr` is falsy is now reported as
+    recording NO PR rather than a fabricated one; a row marked not-upstreamable
+    says so.
+    """
+    unit = (record or {}).get("unit")
+    tail = " (unit %s)" % unit if unit else ""
+    if manual_record_status(record) == MANUAL_STATUS_NOT_UPSTREAMABLE:
+        reason = str((record or {}).get("reason") or "").strip()
+        why = "; reason: %s" % reason if reason else ""
+        return "Target %s is manually recorded as NOT UPSTREAMABLE%s%s" % (target, tail, why)
+    pr = (record or {}).get("pr")
+    if pr:
+        return "Target %s is manually recorded as filed in PR #%s%s" % (target, pr, tail)
+    return ("Target %s is manually recorded with NO PR number recorded%s -- the record is "
+            "incomplete, or a not-upstreamable marker stored in the pr field without a status"
+            % (target, tail))
