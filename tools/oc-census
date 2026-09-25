@@ -138,7 +138,7 @@ def is_lane(key):
     return bool(UUID_RE.match(key or ""))
 
 # ============================================================================
-# Unified tools log (parity with tools/lib/oc-log.sh; see RC-CONTRACT.md
+# Unified tools log (parity with tools/lib/oc-log.sh; see tools/docs/RC-CONTRACT.md
 # "Unified tools log").  One JSONL line per invocation, flock-serialized.
 # ============================================================================
 _LOG_ENABLED = False

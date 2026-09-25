@@ -25,9 +25,9 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `CHANGELOG.md` | Version history, **newest entry FIRST** |
 | `tools/` | The `oc-*` tool fleet |
 | `tools/lib/` | Shared shell libs: `oc-log.sh` (journal + rc register + flood guard), `oc-embed.sh` (job-embed decoder) |
-| `tools/RC-CONTRACT.md` | SOLE per-tool rc register: fleet conventions + verdict codes (v0.4.78) |
-| `tools/HEALTH-CHECKS.md` | Systematic health checks registry for the tool fleet |
-| `tools/HEALTH-CLASSES.md` | Health classification taxonomy and remediations |
+| `tools/docs/RC-CONTRACT.md` | SOLE per-tool rc register: fleet conventions + verdict codes (v0.4.78) |
+| `tools/docs/HEALTH-CHECKS.md` | Systematic health checks registry for the tool fleet |
+| `tools/docs/HEALTH-CLASSES.md` | Health classification taxonomy and remediations |
 | `tools/tests/run.sh` | Battery: full selftest suite + coverage sections. Receipt → `tools/tests/battery-last.json` |
 | `tools/archive/compiler.md` | ARCHIVED runbook for the retired COMPILER role (re-enable = load this file) |
 
@@ -43,7 +43,7 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 
 ## Tool fleet (quick index)
 
-Full register with rc codes lives in **`tools/RC-CONTRACT.md`** — that file is the source of truth (v0.4.79; SKILL.md carries purpose rows only).
+Full register with rc codes lives in **`tools/docs/RC-CONTRACT.md`** — that file is the source of truth (v0.4.79; SKILL.md carries purpose rows only).
 Highlights:
 
 - `oc-deploy` — ship / poll (fused `--wait N` bounded poll, v0.4.100) / swap-execute / fanout
@@ -56,7 +56,7 @@ Highlights:
 - `oc-seal-state` — order rows (QUEUED…VOID lifecycle)
 - `tests/run.sh` — run everything: `bash tools/tests/run.sh`
 
-  The tool inventory and every tool's exit-code contract live in `tools/RC-CONTRACT.md`.
+  The tool inventory and every tool's exit-code contract live in `tools/docs/RC-CONTRACT.md`.
 
 ## Ship discipline (per version bump)
 

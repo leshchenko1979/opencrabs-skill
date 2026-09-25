@@ -1197,12 +1197,12 @@ fi
 
 # ---- battery receipt (oc-ledger sync gate reads this; the file itself rides --
 # ---- the skill repo via commit-pending --bundle) ------------------------------
-# ---- 60. rc contract: --help exits 0 fleet-wide (C-#3, tools/RC-CONTRACT.md)
+# ---- 60. rc contract: --help exits 0 fleet-wide (C-#3, tools/docs/RC-CONTRACT.md)
 section "rc contract --help=0 fleet-wide (C-#3)"
 for t in "$TOOLS_DIR"/oc-*; do
   [ -x "$t" ] || continue
   tn="$(basename "$t")"
-  OC_TOOLS_NOLOG=1 timeout 20 "$t" --help >/dev/null 2>&1     && ok "$tn --help rc=0" || bad "$tn --help rc!=0 (RC-CONTRACT.md violated)"
+  OC_TOOLS_NOLOG=1 timeout 20 "$t" --help >/dev/null 2>&1     && ok "$tn --help rc=0" || bad "$tn --help rc!=0 (tools/docs/RC-CONTRACT.md violated)"
 done
 
 # ---- 61. oc-notify-fanout: placeholder guard + target validation (HQ ASSIGN 2026-09-09)

@@ -114,7 +114,7 @@ on census evidence + owner word (hq.md step 7).
    - **Reviewer J — MECHANICAL ENFORCEMENT (law that should be a tool):** the LAW
      CORPUS itself — `SKILL.md`, `fleet-directives.md`, `editor.md`,
      `harvest.md`, `hq.md`, `triage.md`, `toolsmith.md`,
-     `tools/RC-CONTRACT.md` — read as a specification of WHO DECIDES, and asked of
+     `tools/docs/RC-CONTRACT.md` — read as a specification of WHO DECIDES, and asked of
      every rule: **is this decision a pure function of state on disk?** If it is, the
      rule is a TOOL SPEC THAT HAS NOT BEEN WRITTEN YET and the finding names the tool
      half. Owner principle (2026-09-12, verbatim): *"that should be purely
@@ -219,7 +219,7 @@ on census evidence + owner word (hq.md step 7).
      It carries: hard rules, ontology/glossary, tool-table PURPOSE-only rows,
      role routing, load paths. Executable procedure, verb vocabularies, and
      step-by-step mechanics belong in the owning role file or reference page
-     (RC-CONTRACT.md = SOLE tool register). Every Duty-6 pass re-weighs
+     (tools/docs/RC-CONTRACT.md = SOLE tool register). Every Duty-6 pass re-weighs
      SKILL.md against this rule; growth beyond router scope = findings.
 
 #### FAMILY: ARTIFACTS — files, state, ledgers, flags (deletion verdicts — the family IS the owner gate; C usage-log YAGNI evidence feeds it from TOOLS; BOUNDARY vs J, v0.4.162 — this family owns the ARTIFACT and its verdict, J owns the law sentence that assigns a state-derivable decision: object is an artifact on disk → here, object is law text → J)

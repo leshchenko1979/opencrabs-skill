@@ -690,7 +690,7 @@ RC_UNVERIFIED = 6
 #: "the send MAY have landed, the dispatch IS recorded, do NOT re-send", which is
 #: the OPPOSITE operator action from a refusal that sent nothing. Collapsing them
 #: is the same defect RC_UNVERIFIED's own note warns about. Registered in
-#: tools/RC-CONTRACT.md.
+#: tools/docs/RC-CONTRACT.md.
 RC_TARGETED_LANDED = 8
 RC_TARGETED_ALREADY_DISPATCHED = 9
 

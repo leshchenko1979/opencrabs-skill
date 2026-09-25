@@ -2,7 +2,7 @@
 
 **Owner order 2026-09-11.** Toolsmith owns the cleanup/health process. This file
 is the operational runbook and remediation catalog mechanized by `tools/oc-health`
-(see `tools/HEALTH-CLASSES.md` for the 8-class architecture and CLI contract).
+(see `tools/docs/HEALTH-CLASSES.md` for the 8-class architecture and CLI contract).
 
 **Primary rule (owner):** *workers clean after themselves.* A lane that leaves
 debris behind owns that debris. This process exists to (a) catch mechanical

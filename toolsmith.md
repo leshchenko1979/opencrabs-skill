@@ -62,7 +62,7 @@ Hard discipline for every change:
 
 - Battery receipts MANDATORY: `tools/tests/run.sh` GREEN before the claim —
   a tool fix without battery receipts is an unverified claim.
-- `tools/RC-CONTRACT.md` is the exit-code register: any new/changed rc
+- `tools/docs/RC-CONTRACT.md` is the exit-code register: any new/changed rc
   surface updates the register in the SAME commit.
 - Journal/worker vocabulary fixes (ledger KINDS etc. — ex-HQ duty that flowed
   through the carrier-tool channel since 2026-09-03) execute HERE; HQ-authored
@@ -74,14 +74,14 @@ Hard discipline for every change:
   stdout contract lines like `RUN <url>` / `run=<id>`) — the tool's CONSUMERS
   get updated in the same batch: the role-file tool tables (`editor.md` §Tool
   reference, `triage.md`/`hq.md` where cited),
-  `tools/RC-CONTRACT.md` rows, and any dependent tool that parses the changed
+  `tools/docs/RC-CONTRACT.md` rows, and any dependent tool that parses the changed
   output (e.g. `oc-ship-chain`'s LEG1 gate attaches via `oc-prchecks resume`).
   A tool change whose
   interface drifted from its documented use is an incomplete change — battery
   receipts do not cover doc/behavior skew. Skill markdown (SKILL.md,
   CHANGELOG.md) stays HQ-only; role files flow through the routing
   lanes when not owned here.
-- **Checkable Completion Formula**: `DONE = tool code edited under tools/ + tools/tests/run.sh battery PASS (all tests pass) + tools/RC-CONTRACT.md updated (if rc changed) + dual-pushed.`
+- **Checkable Completion Formula**: `DONE = tool code edited under tools/ + tools/tests/run.sh battery PASS (all tests pass) + tools/docs/RC-CONTRACT.md updated (if rc changed) + dual-pushed.`
 
 ### Explore & DRY gate — before the first edit (mandatory, same intent as editor.md Phase 3)
 
@@ -94,7 +94,7 @@ and it is still mandatory:
    contract usually lives in its arg-parse block and its rc map, not in the
    docstring.
 2. **Find its consumers first.** `grep -rn 'oc-<tool>' tools/ tools/*.md` plus
-   `tools/RC-CONTRACT.md` — enumerate every caller and every parses-its-output
+   `tools/docs/RC-CONTRACT.md` — enumerate every caller and every parses-its-output
    dependency before touching an interface. The tool-surface sync duty above is
    the consequence of skipping this.
 3. **DRY — reuse `tools/lib/` before writing anything new.** The shared helpers
@@ -104,7 +104,7 @@ and it is still mandatory:
    almost fits, extend it rather than forking a parallel one.
 4. **Logging goes through `lib/oc-log.sh`** — every tool in `tools/` appends its
    one JSONL line on exit through it. Hand-rolled JSONL writes drift from the
-   schema at `tools/RC-CONTRACT.md` §Unified tools log.
+   schema at `tools/docs/RC-CONTRACT.md` §Unified tools log.
 5. **rc semantics are contract, not preference.** Check the register before
    inventing a new code; a changed rc needs its RC-CONTRACT row updated in the
    same commit.

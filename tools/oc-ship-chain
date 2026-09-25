@@ -948,7 +948,7 @@ SHIP_OUT="$(cd "$FORK_REPO" && OC_TOOLS_NOLOG=1 NOTIFY_SESSION= "$DEPLOY_BIN" sh
 SHIP_RC=$?
 set -e
 echo "$SHIP_OUT" | tail -5
-# rc mapping follows tools/RC-CONTRACT.md (the sole rc register), read live
+# rc mapping follows tools/docs/RC-CONTRACT.md (the sole rc register), read live
 # 2026-09-18: `oc-deploy ship --execute --wait` exits 0 GREEN / 5 non-terminal
 # / 6 terminal-RED. Two defects fixed here (#336):
 #  (a) the old arm mapped rc 3 -> "carrier RED". oc-deploy does NOT exit 3

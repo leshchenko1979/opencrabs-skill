@@ -2,7 +2,7 @@
 # =============================================================================
 # oc-health — 8-class rotating fleet health & cleanliness sweep (owner order 2026-09-11).
 #
-# Spec + per-check remediation: tools/HEALTH-CLASSES.md & tools/HEALTH-CHECKS.md.
+# Spec + per-check remediation: tools/docs/HEALTH-CLASSES.md & tools/docs/HEALTH-CHECKS.md.
 # This tool is the MECHANICAL half: it measures, decides SAFE vs QUIRK vs WARN,
 # and (with --reap) performs only the provably-dead class. It never touches evidence.
 #
@@ -397,7 +397,7 @@ print(m.group(1) if m else "none")
   "$TOOLS_DIR/lib/oc_sqlite" "$T/db.sqlite" "UPDATE cron_jobs SET name='oc-harvest-dispatch-4h', enabled=1 WHERE name='oc-harvest-dispatch-6h';"
 
   # 10d. Owner-order mode (2026-09-18 20:53Z "turn off all of your pacemakers",
-  #      still standing per HEALTH-CLASSES.md class 5). With the marker present a
+  #      still standing per tools/docs/HEALTH-CLASSES.md class 5). With the marker present a
   #      DISABLED law-carrying cron is the owner's own order and must NOT be
   #      reported back to him; what fails is one ENABLED against the order.
   mkdir -p "$T/state"; : > "$T/state/pacemakers-off"
@@ -847,11 +847,11 @@ if is_class_active "persistence"; then
   # 3b. GENERATED sidecar class retention (D3, #509) ---------------------------
   # The .gitignore'd generated class: *.bak / *.bak-* sidecars left beside the
   # file they are a PRE-IMAGE of. Nothing reaped it -- the class reached 75
-  # files / 4.1 MB in the live state dir. HEALTH-CLASSES.md's *.corrupt-*.bak
+  # files / 4.1 MB in the live state dir. tools/docs/HEALTH-CLASSES.md's *.corrupt-*.bak
   # row is a DIFFERENT pattern and never covered this one.
   # Three safety properties, each the reason a simpler rule was rejected:
   #  - allowlist generated PATTERNS only. A REQUIRED marker such as
-  #    `pacemakers-off` (HEALTH-CLASSES.md:93) is not a *.bak, so it can never be
+  #    `pacemakers-off` (tools/docs/HEALTH-CLASSES.md:93) is not a *.bak, so it can never be
   #    a candidate and the reaper cannot flip that check's direction.
   #  - a sidecar whose SOURCE is not tracked in the state repo is NEVER reaped.
   #    Taken while its source was still untracked it may be the ONLY copy of that
@@ -1068,7 +1068,7 @@ if is_class_active "schedulers"; then
     # Law-carrying dev crons. This check has TWO jobs and which one is live
     # depends on the OWNER ORDER of 2026-09-18 20:53Z ("turn off all of your
     # pacemakers"), which switched every ops pacemaker off and is STILL STANDING
-    # (HEALTH-CLASSES.md class 5). While it stands, a disabled law-carrying cron
+    # (tools/docs/HEALTH-CLASSES.md class 5). While it stands, a disabled law-carrying cron
     # is the owner's own order and flagging it only reports his decision back to
     # him; what is worth failing on is then one ENABLED AGAINST the order.
     # Absent marker = the direction is UNSET — NOT "the order was lifted" (#426).

@@ -14,7 +14,7 @@
 #
 # Verbs: ask · answer · amend · list · publish · lint · gc · notify
 #
-# rc vocabulary (tools/RC-CONTRACT.md): 0 ok / 1 finding-or-not-found /
+# rc vocabulary (tools/docs/RC-CONTRACT.md): 0 ok / 1 finding-or-not-found /
 # 2 usage / 3 state-refused (already answered, expired) / 4 store-or-IO fault.
 # =============================================================================
 

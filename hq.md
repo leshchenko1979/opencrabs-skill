@@ -11,8 +11,8 @@ with HQ (single-writer law unchanged; v0.4.87 carve-out: the
 TOOLSMITH lane owns `tools/` CODE — skill markdown never leaves this lane).
 
 Scope: own the skill set (full census in SKILL.md §Hard rules — incl. `harvest.md`, `fleet-directives.md`,
-`upstream-merge-runbook.md`, `war-stories.md`, `s2-swap-journal-spec.md`, `README.md`, `CHANGELOG.md`, `tools/RC-CONTRACT.md`,
-`tools/HEALTH-CHECKS.md`, `tools/HEALTH-CLASSES.md`; `tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
+`upstream-merge-runbook.md`, `war-stories.md`, `s2-swap-journal-spec.md`, `README.md`, `CHANGELOG.md`, `tools/docs/RC-CONTRACT.md`,
+`tools/docs/HEALTH-CHECKS.md`, `tools/docs/HEALTH-CLASSES.md`; `tools/archive/compiler.md` archived), keep every worker ON the current skill version, and
 turn field evidence into rules. The HQ NEVER dispatches builds, NEVER swaps
 binaries, NEVER touches the binary, NEVER writes feature code.
 
@@ -220,7 +220,7 @@ Method:
 
    Evidence lands at `reviews/<cycle-id>/evidence/`. **Record the corpus hash the pack prints — a report is valid only for that hash.** A re-run of the SAME cycle id is byte-identical by construction (the open instant is an input, never the wall clock). Called by **ABSOLUTE PATH for the trial**: its module set is 9+ files in a project dir, so routing it into `tools/` is a separate decision, not a packaging detail.
 
-   **Coverage limit, stated so it is not assumed:** the pack reads top-level `*.md` only, so `tools/RC-CONTRACT.md`, `tools/HEALTH-CHECKS.md` and `tools/HEALTH-CLASSES.md` (~139 KB of law) are OUTSIDE the corpus until the manifest leg lands. A cycle that needs those files read them directly. **A missing or failing pack is REPORTED, never silently skipped** — the lenses then run on semantic evidence only, and the cycle record says so.
+   **Coverage limit, stated so it is not assumed:** the pack reads top-level `*.md` only, so `tools/docs/RC-CONTRACT.md`, `tools/docs/HEALTH-CHECKS.md` and `tools/docs/HEALTH-CLASSES.md` (~139 KB of law) are OUTSIDE the corpus until the manifest leg lands. A cycle that needs those files read them directly. **A missing or failing pack is REPORTED, never silently skipped** — the lenses then run on semantic evidence only, and the cycle record says so.
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
    one per lens (A/B/C/D/E/F/G/H/I/J + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
    are ALWAYS sub-agent work, never HQ-only inline reading. Same-day

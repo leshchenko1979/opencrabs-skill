@@ -73,7 +73,7 @@ SKILL_DIR="$(dirname "$TOOLS_DIR")"
 # editor-upstream-pr.md was folded into editor.md and no longer exists -- naming
 # it made EVERY run exit rc 3 before a single file was checked, which is worse
 # than a missed file: a corpus that cannot load reports nothing at all.
-DEFAULT_CORPUS="SKILL.md fleet-directives.md editor.md harvest.md hq.md triage.md toolsmith.md review-lenses.md upstream-merge-runbook.md s2-swap-journal-spec.md tools/RC-CONTRACT.md"
+DEFAULT_CORPUS="SKILL.md fleet-directives.md editor.md harvest.md hq.md triage.md toolsmith.md review-lenses.md upstream-merge-runbook.md s2-swap-journal-spec.md tools/docs/RC-CONTRACT.md"
 
 usage() { awk 'NR>2 && /^#/ { sub(/^# ?/, ""); print; next } NR>2 { exit }' "$SELF"; exit 0; }
 
