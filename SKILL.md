@@ -5,7 +5,8 @@ description: >
   worktrees, CI gate (pr-checks), signed commits, push + sha hand-off, oc-deploy ship,
   smoke-test-on-notify, upstream PR), HQ (skill set + worker ledger),
   TRIAGE (interrupt lane: idea/QUIRK intake, fix routing, enforcement — carved out of HQ at v0.4.86),
-    TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87); Compiler role retired 2026-08-28).
+    TOOLSMITH (CLI tool lane: owns tools/ — makes and fixes the CLI tools every other role uses — carved out at v0.4.87),
+    HARVEST (upstream contribution lane: ports a READY cluster, gates it, files the upstream PR and owns its lifecycle — carved out at v0.4.250); Compiler role retired 2026-08-28).
   Use when editing/fixing OpenCrabs Rust code, debugging quick-build-linux carrier or other CI runs, fetching CI artifacts, or swapping /usr/local/bin/opencrabs.
   (/opencrabs-dev)
 globs:
@@ -29,7 +30,7 @@ metadata:
 
 **Owns:** everything touching `~/opencrabs` source, its GitHub Actions runs, or the
 installed `opencrabs` binary. This file = shared facts + role router only. Actual
-procedures live in FOUR role files (`editor.md` / `hq.md` / `triage.md` / `toolsmith.md`);
+procedures live in FIVE role files (`editor.md` / `hq.md` / `triage.md` / `toolsmith.md` / `harvest.md`);
 load ONLY the one matching the session's role.
 
 **Binding owner directives** (sync policy, upstream PR law, carriers/builds, cargo
@@ -219,6 +220,16 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
   Escalation ladder canonical: fleet-directives.md §Cross-lane message delivery discipline
   (`turn-end` is the default and `interrupt` is the URGENT tier — same boundary plus precedence framing, never pre-emption — lens A5
   v0.4.89: pointer only, no second copy).
+- **RATE LIMITS ARE ENFORCED PER SURFACE (owner ruling 2026-09-08, research-backed —
+  `governor.rs`):** Telegram's per-chat flood limits are enforced **per surface** —
+  1 msg/s per chat, 20 msg/min per group, ~20 edits/min per group — so a window
+  declared on the rich arm does NOT throttle the send arm's separate budget. On a
+  429 the daemon pauses **ONLY the offending arm**; pausing everything
+  over-punishes unrelated traffic, because the offending arm IS the evidence.
+  A proposal to bound the **SUM** of the buckets (an aggregate per-chat gate)
+  would REVERSE this ruling — the buckets are deliberately independent. Fork issue
+  #580 owns the open question of whether anything should bound their sum; until it
+  rules, do not add one.
 - Refusal handling: **the `session_notify` path never refuses.** `interrupt` is
   hardcoded true on this tool's route (`src/brain/tools/subagent/notify.rs:371`),
   so the mid-turn gate (`src/brain/agent/service/session_routes.rs:336`) is
@@ -471,8 +482,18 @@ it would FAIL on the pre-fix artifact — state the input on which it fails.**
   (4) Behavioral Probe (executing live binary path or structural N/A). All four
   must pass before an upstream PR leaves a lane.
 - **issue cluster** — the harvest unit: fork-only commits grouped by their
-  canonical issue ref, filtered on the ISSUE TITLE for fix-type, with the
-  dependency leg built from the COMMIT/FILE graph. Defined by
+  canonical issue ref, filtered on the ISSUE TITLE for fix-type. The dependency
+  leg is the **UNION of TWO graphs** (owner ruling 2026-09-25) — the COMMIT/FILE
+  graph AND the gh relationship graph — and they do NOT behave alike. The file
+  graph is unusable as a set former: transitive closure of file overlap over the
+  live delta collapses to **3 components (159+1+1)**, so only **1-HOP** file
+  overlap is a leg. The gh relationship graph is sparse and semantic (138 edges
+  over 123 sets carrying delta work, 21 non-trivial, largest 11 members) but is
+  structurally weak while parent-linking is unenforced — 13 of 55 open fix-titled
+  clusters carry a parent (23.6%). A set is **READY** iff (a) the most recent swap
+  among its ready members is >24h ago AND (b) it has **no unready members**, where
+  ready = swapped + smoked + **closed** — so an open own-issue holds its own set.
+  Defined by
   `tools/harvest/oc-harvest-census clusters`, which derives it and emits every
   cluster (never pages silently); the soak gate keys on it and Triage surfaces
   by it. NOT "convergence cluster" (a Duty-4/6 group of rule proposals merged
@@ -609,7 +630,6 @@ Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
 | Lifecycle Area | Owning Role | Key Tool / Procedure | Canonical Home |
 |---|---|---|---|
 | **1. Upstream Delta Watch** | Triage | `./tools/harvest/oc-upstream-delta` | `triage.md §Duty T4` |
-
 | **2. Sync Model (REBASE)** | Triage | `upstream-merge-runbook.md` | `upstream-merge-runbook.md §Remotes & sync` |
 | **3. Absorption & Dropping** | Triage / HQ | Auto-classify DROPPABLE patch-ids | `upstream-merge-runbook.md` |
 | **4. Upstream PR Lifecycle** | HARVEST | Phase 7b / Phase 7c (`oc-harvest-dispatch`) | `harvest.md` |
@@ -636,7 +656,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
   synonyms for existing concepts; a NEW concept gets proposed via the poll
   format and named on owner word — never improvised mid-report. Reviewer A
   (REDUNDANCY + ONTOLOGY) enforces this lens-side.
-- **Context Manifest Curation (Compaction Section 10, owner order 2026-09-17):** when context compaction occurs, the compactor MUST explicitly retain `opencrabs-dev`, `opencrabs-dev/fleet-directives.md`, and the active role file (`opencrabs-dev/editor.md`, `opencrabs-dev/hq.md`, `opencrabs-dev/triage.md`, or `opencrabs-dev/toolsmith.md`) in `active_skills`. Only non-active role files are placed in `discard_skills`. Essential tools (`session_notify`, `session_search`, `bash`, `read_file`, `telegram_send`) must stay pre-activated. Canonical: `fleet-directives.md §Post-compaction skill reload & context manifest curation`.
+- **Context Manifest Curation (Compaction Section 10, owner order 2026-09-17):** when context compaction occurs, the compactor MUST explicitly retain `opencrabs-dev`, `opencrabs-dev/fleet-directives.md`, and the active role file (`opencrabs-dev/editor.md`, `opencrabs-dev/hq.md`, `opencrabs-dev/triage.md`, `opencrabs-dev/toolsmith.md`, or `opencrabs-dev/harvest.md`) in `active_skills`. Only non-active role files are placed in `discard_skills`. Essential tools (`session_notify`, `session_search`, `bash`, `read_file`, `telegram_send`) must stay pre-activated. Canonical: `fleet-directives.md §Post-compaction skill reload & context manifest curation`.
 - ONLY HQ edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/docs/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9; `tools/docs/HEALTH-CHECKS.md` + `tools/docs/HEALTH-CLASSES.md` added v0.4.171; `harvest.md` added v0.4.175): `SKILL.md` /
   `editor.md` / `harvest.md` / `hq.md` / `triage.md` / `toolsmith.md` / `review-lenses.md` / `fleet-directives.md` /
   `upstream-merge-runbook.md` / `war-stories.md` /
@@ -708,7 +728,7 @@ links; development-time upstream contact is PR-comments only (supersedes the
   the PR prep beside smoke evidence. Gate covers shipworthiness only;
   the SMOKE pass remains a required condition in BOTH modes, and owner approval
   is required under **DEGRADED MODE** and waived under **HIGH-TRUST MODE**
-  (§CONSENT REGISTER — MODE REGISTER).
+  (§Hard rules — CONSENT REGISTER / MODE REGISTER).
 - Issue-first, no exceptions (2026-08-25): a DISCOVERED problem gets its issue
   FILED before any fix work starts — on the FORK `leshchenko1979/opencrabs`
   (ALL new issues — upstream-code bugs and fork-only infra alike; upstream
