@@ -723,6 +723,21 @@ DISPATCH_ROW_RE = re.compile(
     r"dispatch issue #([0-9]+) to (?:editor|lane)\s+([0-9a-fA-F-]{8,})",
     re.IGNORECASE)
 
+#: A dispatch row written BEFORE the send blocks, so an operator asking "did
+#: this already run?" gets a hit during the window instead of a clean zero.
+#: Measured 2026-09-25: the settled row is written only after the send returns,
+#: and the send can block for roster(120s)+send(120s)+grace(30s) against a 120s
+#: caller timeout -- so the tool STRUCTURALLY outlives its caller, and during
+#: that window every available check (`messages`, `notify_queue`, the ledger)
+#: reads absence. An operator re-sent by hand and the tool's own envelope landed
+#: 19s later: two envelopes for one issue.
+#:
+#: The dedup reader SKIPS these. That is load-bearing: an rc=2 `no_route` is the
+#: one PROVEN non-delivery and is deliberately NOT recorded so a retry stays
+#: correct, and counting an in-flight row as settled would suppress that retry
+#: for the whole 7-day window -- trading a visible duplicate for a silent loss.
+INFLIGHT_ROW_RE = re.compile(r"\bIN FLIGHT\b", re.IGNORECASE)
+
 def _parse_ledger_ts(value):
     """A ledger row's timestamp as an aware datetime, or None if unparseable."""
     try:
@@ -805,6 +820,11 @@ def recent_dispatches(ledger_data, window_days=DISPATCH_WINDOW_DAYS):
               - datetime.timedelta(days=window_days))
     out = {}
     for row in rows:
+        # An attempt that has STARTED is not an attempt that has SETTLED: the
+        # in-flight row exists so an operator can see a running dispatch, and
+        # it must not suppress a retry (see INFLIGHT_ROW_RE).
+        if INFLIGHT_ROW_RE.search(row["what"]):
+            continue
         m = DISPATCH_ROW_RE.search(row["what"])
         if not m:
             continue
@@ -1139,6 +1159,25 @@ def _stamp_dispatch(issue_num, target_uuid, unverified=False, rc=0):
     run_cmd([ledger_bin, "stamp", "note", stamp_text])
 
 
+def _stamp_inflight(issue_num, target_uuid, budget_secs):
+    """Record that a send has STARTED, before it blocks. See INFLIGHT_ROW_RE.
+
+    Deliberately worded with the literal `IN FLIGHT` marker the dedup reader
+    keys on, so the two halves cannot drift: if this text stops carrying the
+    marker the reader stops skipping it, and a proven non-delivery would then
+    suppress its own retry.
+    """
+    ledger_bin = os.path.join(TOOL_DIR, "oc-ledger")
+    if not os.path.exists(ledger_bin):
+        return
+    try:
+        run_cmd([ledger_bin, "stamp", "note",
+                 f"Triage dispatch issue #{issue_num} to editor {target_uuid[:8]}"
+                 f" \u2014 IN FLIGHT (send started, budget {budget_secs}s)"],
+                timeout=30)
+    except Exception:  # noqa: BLE001 -- best-effort by contract
+        pass
+
 def classify_notify_rc(receipt_seen, rc):
     """Pure predicate: what does a notify attempt's rc MEAN? (#S)
 
@@ -1204,6 +1243,11 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
     # side effect".
     print(f"Dispatching issue #{issue_num} -> {target_uuid[:8]} "
           f"(notify budget {notify_timeout}s + {RECEIPT_GRACE_SECS}s receipt grace)")
+    # BEFORE the send blocks: a row an operator can find DURING the run. Without
+    # it the ledger is silent for the whole window and "still running" is
+    # indistinguishable from "never ran" (HQ report 2026-09-25). Best-effort --
+    # a stamp fault must never abort a dispatch that is about to go out.
+    _stamp_inflight(issue_num, target_uuid, notify_timeout + RECEIPT_GRACE_SECS)
     if os.path.exists(notify_script):
         rc, out, err = run_cmd([notify_script, target_uuid, envelope, title], timeout=notify_timeout)
         label = "lib/oc-notify.sh"
