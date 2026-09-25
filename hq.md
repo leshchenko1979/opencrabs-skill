@@ -213,6 +213,14 @@ Method:
 
    Before spawning reviewers or codifying findings, HQ initializes `state.json`.
    **Step-0 Recovery Mandate:** After ANY context compaction or session restart during Duty 4+6, HQ must first check for an existing `reviews/<cycle-id>/state.json` before re-querying proposals, re-spawning reviewers, or re-drafting plans. Reading `state.json` restores the exact cycle state, preventing redundant tool calls or loss of completed work across compactions.
+
+   **Mechanical corpus pack at cycle open** (owner directive 2026-09-25, TRIAL; lane `ef83024b` instrument). Before spawning reviewers, run the law-corpus pack keyed to the SAME cycle id, so the mechanical evidence exists before any lens is briefed:
+
+   `python3 ~/.opencrabs/profiles/ops/projects/jev-bloat-review/pilot/pack.py --cycle-id <cycle-id> --cycle-opened-at <started_at> --corpus-root <skill dir> --reviews-root <state dir>/reviews --exclude CHANGELOG.md`
+
+   Evidence lands at `reviews/<cycle-id>/evidence/`. **Record the corpus hash the pack prints — a report is valid only for that hash.** A re-run of the SAME cycle id is byte-identical by construction (the open instant is an input, never the wall clock). Called by **ABSOLUTE PATH for the trial**: its module set is 9+ files in a project dir, so routing it into `tools/` is a separate decision, not a packaging detail.
+
+   **Coverage limit, stated so it is not assumed:** the pack reads top-level `*.md` only, so `tools/RC-CONTRACT.md`, `tools/HEALTH-CHECKS.md` and `tools/HEALTH-CLASSES.md` (~139 KB of law) are OUTSIDE the corpus until the manifest leg lands. A cycle that needs those files read them directly. **A missing or failing pack is REPORTED, never silently skipped** — the lenses then run on semantic evidence only, and the cycle record says so.
 1. Reviewers are READ-ONLY SUB-AGENTS (spawn read_only=true, allow_nested=false),
    one per lens (A/B/C/D/E/F/G/H/I/J + standing brain-scrub); they NEVER edit skill files. Duty-6 reviews
    are ALWAYS sub-agent work, never HQ-only inline reading. Same-day
@@ -227,7 +235,13 @@ Method:
    MECHANICAL=J · ARTIFACTS=D+H · META=I) — letters keep chronological birth order (stable
    report/persist keys, not an ordering). FULL LENS CATALOG: `review-lenses.md`
    (same dir as this file) — read it before spawning reviewers; each brief
-   names the lens scope, exclusions, and evidence format.
+   names the lens scope, exclusions, and evidence format. **Each family brief also
+   carries its mechanical slice from the cycle's pack** (`reviews/<cycle-id>/evidence/`):
+   the sentence-match, near-title and dead-reference legs covering that family's files,
+   with the corpus hash. Layer 2 (semantic mechanisation) is **REPORT-ONLY** — it never
+   creates or routes a finding: its gate failed a pre-registered test (precision 0.111 /
+   recall 0.126 against bars 0.70 / 0.40, n=66). A reviewer that validates a mechanisation
+   opportunity must name the tool owner AND the command, never the idea alone.
 
 3. PERSISTENCE (persist-first write-through, owner law 2026-09-08, v0.4.116):
    the SPAWN PROMPT instructs each reviewer to write its FULL report to
