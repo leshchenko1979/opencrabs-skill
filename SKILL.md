@@ -43,14 +43,15 @@ classes, migration-union rule, semantic-triage defaults).
 
 Ask the operator which role this session employs before doing anything:
 
-> **Editor, HQ, Triage, or Toolsmith?**
+> **Editor / HQ / Triage / Toolsmith / Harvest?**
 
 | Role | Owns | Procedure file |
 |------|------|----------------|
-| **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify; feature COMPLETE → upstream PR filed on smoke PASS (procedure `editor-upstream-pr.md` Phase 7) | `editor.md` |
+| **EDITOR** | Commits + error fixes: claim issue → worktree → code → CI gate → sign → push → ff-merge into fork `main` → `oc-deploy ship` → smoke on notify. **The editor's obligation ENDS at smoke evidence** — feature COMPLETE means the evidence is posted and the feature is handed to the HARVEST lane | `editor.md` |
 | **HQ** | Skill set maintenance, worker ledger, Duty 4 worker polls, Duty 6 periodic lens reviews — count derived from the catalog at gate time (details in `hq.md` and `review-lenses.md`) | `hq.md` |
 | **TRIAGE** | Intake & hygiene: issue assignment, repo hygiene patrols, rebase/merge execution delegated from HQ, upstream lifecycle tracking (delta watch, PR census, dependency tracking folded from Harvester v0.4.176) | `triage.md` |
 | **TOOLSMITH** | CLI tools author & maintainer: owns `tools/` code, test battery stewardship, direct recipient of tool quirks/defects (v0.4.176) | `toolsmith.md` |
+| **HARVEST** | Upstream contribution: port → CI gate → file → follow. Consumes a cluster Triage surfaced and marked READY; owns the harvest branch, the gate dispatch, the upstream PR and its lifecycle (v0.4.250, owner order 2026-09-24 centralising harvest) | `harvest.md` |
 
 Roles **DO NOT intersect**:
 
@@ -68,7 +69,9 @@ Roles **DO NOT intersect**:
 - The TOOLSMITH lane owns `tools/` CODE only (v0.4.87 carve-out) — skill markdown +
   fleet-directives stay HQ-only, daemon/carrier source stays Editor territory,
   NEVER settles protocol disputes (rulings = HQ Duty 5).
-- **PRIORITY AUTHORITY (owner order 2026-09-15):** ALL lanes (Editor, HQ, Triage, Toolsmith) have complete, independent authority over priorities, sequencing, and task ordering within their codified scopes — never ask the human operator about priorities.
+- The HARVEST lane owns the upstream PR lifecycle ONLY — it NEVER edits skill markdown (HQ-only), NEVER installs/swaps binaries, NEVER restarts daemons, NEVER dispatches builds, NEVER settles protocol disputes (rulings = HQ Duty 5).
+- **The EDITOR's obligation ends at smoke evidence.** Harvest census, porting, upstream branch creation, PR filing and upstream lifecycle belong to the HARVEST lane — an editor lane that finds itself harvesting has taken work it does not own.
+- **PRIORITY AUTHORITY (owner order 2026-09-15):** ALL lanes (Editor, HQ, Triage, Toolsmith, Harvest) have complete, independent authority over priorities, sequencing, and task ordering within their codified scopes — never ask the human operator about priorities.
 
 If the request mixes roles (e.g. "fix X and deploy it"), split into separate
 role loads — do not fuse the roles in one pass without Alexey saying so explicitly.
@@ -600,7 +603,7 @@ Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
 - Stick to the OFFICIAL ONTOLOGY (owner 2026-08-31): all roles use the
   vocabulary this SKILL defines — test ontology (§Test ontology: SMOKE TEST /
   CODE TESTS / FEATURE-PRESENCE CHECK), infra terms (§Glossary: selftest /
-  battery / CI gate), roles (Editor / HQ / Reviewer lenses),
+  battery / CI gate), roles (Editor / HQ / Triage / Toolsmith / Harvest / Reviewer lenses),
   gate colors (GREEN/RED with run receipt), phases, tool names. No ad-hoc
   synonyms for existing concepts; a NEW concept gets proposed via the poll
   format and named on owner word — never improvised mid-report. Reviewer A
