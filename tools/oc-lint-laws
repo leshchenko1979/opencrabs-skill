@@ -67,7 +67,13 @@ SKILL_DIR="$(dirname "$TOOLS_DIR")"
 # deliberate — CHANGELOG.md and war-stories.md quote historical invocations that
 # were correct when written and may legitimately name a retired flag; failing on
 # history makes the lint unusable. Law files are the live contract.
-DEFAULT_CORPUS="SKILL.md fleet-directives.md editor.md editor-upstream-pr.md hq.md triage.md toolsmith.md review-lenses.md upstream-merge-runbook.md s2-swap-journal-spec.md tools/RC-CONTRACT.md"
+# The normative law files. CHANGELOG.md and war-stories.md are deliberately
+# EXCLUDED (RC-CONTRACT): they quote historical invocations that were correct
+# when written, so linting them reports findings against the record itself.
+# editor-upstream-pr.md was folded into editor.md and no longer exists -- naming
+# it made EVERY run exit rc 3 before a single file was checked, which is worse
+# than a missed file: a corpus that cannot load reports nothing at all.
+DEFAULT_CORPUS="SKILL.md fleet-directives.md editor.md harvest.md hq.md triage.md toolsmith.md review-lenses.md upstream-merge-runbook.md s2-swap-journal-spec.md tools/RC-CONTRACT.md"
 
 usage() { awk 'NR>2 && /^#/ { sub(/^# ?/, ""); print; next } NR>2 { exit }' "$SELF"; exit 0; }
 
