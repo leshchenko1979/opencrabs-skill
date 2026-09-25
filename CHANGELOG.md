@@ -1,5 +1,15 @@
 # Changelog — opencrabs-dev
 
+## v0.4.256 — stuck lanes REGISTER, never re-ask (owner order 2026-09-25)
+
+**Owner directive, verbatim:** *"remove from agents.md"* + *"in the triage lane mention that stuck lanes should use the questions tool to register their questions"* — OC Dev Factory.
+
+- **`triage.md` Duty T4 gains the routing rule** — a lane found held on an owner decision is routed to the **Open Questions register** (`tools/state/oc-questions ask --factory <KEY>`). The bullet names the two things Triage must NOT do: tell a stuck lane to **re-ask in its own topic** (a daily topic ping is noise, not pressure — once registered, the register's own `asked_at` age is what re-surfaces the question), and **register on the lane's behalf** (the tool derives the asking session from `OPENCRABS_SESSION_ID` and REFUSES an unbound session, because a cron session can never receive the answer).
+- **`AGENTS.md` loses its copy of the register clause** — the always-loaded brain file had grown an 11-line duplicate of the canonical text in `fleet-directives.md §Open Questions register`, which is the one-concept-one-home violation the memory-routing law names. The canonical clause and the pointer to it remain; 717 -> 706 lines. (AGENTS.md is a brain file, not corpus law, so this does not move the LOC figure.)
+- **Bundled in this range:** `2c0e25f0` (oc-harvest-census clusters — the cluster surfacer the soak gate reads) · `ab510ea3` (this law change).
+
+LOC (8-file corpus, `sum(1 for _ in open(f, encoding='utf-8'))`, per the v0.4.253 convention): **3608 -> 3610** (+2, all in `triage.md` 402 -> 404).
+
 ## v0.4.255 — the oc-* fleet grouped by function (owner directive 2026-09-25)
 
 **Owner directive, verbatim:** *"Your tools dir should have subdirs"* — OC Dev Factory. v0.4.254 delivered the five kind-based subdirs and HELD the grouping; this entry lands it.
