@@ -22,6 +22,8 @@ This README is the repo map; **SKILL.md is the law.** Where they disagree, SKILL
 | `fleet-directives.md` | Binding owner directives that apply to EVERY lane — the `[LANE]` cross-role law + a residual of cross-cutting rulings, with a pointer table to the role/topic file that owns scoped law. Re-homed from ops AGENTS.md/MEMORY.md, 2026-09-02; split 2026-09-18 |
 | `upstream-merge-runbook.md` | Procedure for the REBASE sync model: gates, roles, conflict classes, migration-union rule |
 | `s2-swap-journal-spec.md` | Journal vocabulary spec for the oc-deploy swap leg |
+| `session-notify.md` | `session_notify` TOOL mechanics — split from SKILL.md v0.4.262 (the delivery LAW stays in fleet-directives) |
+| `environment.md` | Shared environment facts for `~/opencrabs` — split from SKILL.md v0.4.262 |
 | `CHANGELOG.md` | Version history, **newest entry FIRST** |
 | `tools/` | The `oc-*` tool fleet, grouped by function (`audit/` `git/` `harvest/` `issue/` `notify/` `ship/` `smoke/` `state/`) |
 | `tools/instruments/` | Corpus-agnostic analysis instruments — NOT fleet tools, so they carry no `oc-*` name |

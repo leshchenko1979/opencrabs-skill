@@ -17,6 +17,8 @@ Cycle `20260925-c24` lens B, both HIGH findings, landed in their entirety (the v
 - `### Unified tools log` — an explicit duplicate of `RC-CONTRACT.md §Unified tools log` — reduced to a pointer.
 - Compressions, each asserted 1:1: the Canonical-tooling preamble, the tests block, the Telegram surface law, the HQ-ownership census, two Hard-rules bullets, the war-stories pointer.
 
+**Two file lists updated so the new pages are discoverable:** the `README.md` law-file table and `hq.md`'s scope census both name `session-notify.md` and `environment.md` — a reference page no index names is a page nobody loads.
+
 **Two consequences chased down rather than left:** `hq.md:129` pointed at the moved `§session_notify mechanics` and is re-pointed; and the **lint corpus gains both new law files** — a law file outside `DEFAULT_CORPUS` is unlinted, which is exactly the #575 defect class (the corpus named a file that no longer existed, so every real run died rc 3 before checking anything).
 
 **LOC** (predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))`, LINES READ, anchored at `4a232a21` which reproduces the v0.4.261 entry's 3650 exactly). **8-file corpus: 3650 → 3519 (−131)**, per file: `SKILL.md` 767 → 498 (−269) · `editor.md` 533 → 665 (+132) · `upstream-merge-runbook.md` 431 → 437 (+6) · `fleet-directives.md` 652 · `harvest.md` 364 · `hq.md` 334 · `triage.md` 404 · `toolsmith.md` 165 all unchanged. **Two new law files: `session-notify.md` 71 + `environment.md` 114 = 185.** Net over the 10-file corpus: **3650 → 3704 (+54)** — the router sheds 269 lines and the corpus gains two reference pages, which is the point of the move: the load path changes, the content does not.
