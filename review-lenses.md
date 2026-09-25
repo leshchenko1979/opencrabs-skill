@@ -1,9 +1,9 @@
-# review-lenses.md — Duty-6 reviewer lens catalog (B4+G-F4 split, v0.4.78)
+# review-lenses.md — Duty-6 reviewer lens catalog
 
 Full briefs for the eleven Duty-6 review lenses (A–J + standing brain-scrub; regrouped v0.4.81 with C joining TOOLS and D sole in ARTIFACTS — H later joined D in ARTIFACTS, v0.4.113/115; the MECHANICAL family + Reviewer J added v0.4.161 on owner order). hq.md §Duty 6 owns the
 method (read-only sub-agents, verbatim-quote verification, oc-review-persist
 persistence, poll triple-check, verdict table) and keeps only the family map
-there; this file owns the per-lens scope briefs (brain-scrub brief lives at review-lenses.md § Review lens brain-scrub). Letters keep chronological
+there; this file owns the per-lens scope briefs (brain-scrub brief lives at review-lenses.md § STANDING LENS: brain-scrub). Letters keep chronological
 birth order (stable report/persist keys, not an ordering). Reviewer-performance
 loop lessons (hq.md step 7) fold INTO these briefs at ship time,
 attributed to the reviewer that produced the evidence. Family identity is the
@@ -99,7 +99,7 @@ on census evidence + owner word (hq.md step 7).
      editing or writing code. Flag any exploration phase that permits blind code edits
      based on literal text grep alone without symbol-graph, caller-tree, and
      shared-abstraction analysis.
-     LOAD-PATH MANDATE (owner order 2026-09-07): any split or regroup verdict
+     LOAD-PATH MANDATE: any split or regroup verdict
      MUST also trace the skill's LOADING — which parts are always-injected
      (AGENTS.md anchors) vs on-demand (`load_brain_file` / SKILL.md section
      loads) — and verify every moved section remains reachable on the paths
@@ -109,7 +109,7 @@ on census evidence + owner word (hq.md step 7).
      lands only in a file that role never opens. A split that breaks the
      load path is a REGRESSION finding against itself, not a cleanup.
 
-#### FAMILY: MECHANICAL — the law corpus read against on-disk state (enforceability class; family + Reviewer J added v0.4.161 on owner order)
+#### FAMILY: MECHANICAL — the law corpus read against on-disk state (enforceability class)
 
    - **Reviewer J — MECHANICAL ENFORCEMENT (law that should be a tool):** the LAW
      CORPUS itself — `SKILL.md`, `fleet-directives.md`, `editor.md`,
@@ -199,7 +199,7 @@ on census evidence + owner word (hq.md step 7).
      Each finding names the merge/verb-move + its single-command shape.
      EXCLUDES: one-off chains, anything with an approval gate between the
      steps (a gate is human judgment — never merged away).
-     STANDING EXTRA (owner ruling 2026-09-09 18:55Z): E also reviews the
+     STANDING EXTRA: E also reviews the
      upstream-drift census surface (`oc-upstream-delta` patrol output) for
      silent drift — the next merge window must never start blind.
    - **Reviewer F — TOOL CODE REVIEW:** the tools/ implementations themselves
@@ -212,7 +212,7 @@ on census evidence + owner word (hq.md step 7).
      ACCEPTED): the F adoption check also covers Duty-4 notify-brief quality
      (no separate lens).
 
-#### FAMILY: EFFICIENCY — SKILL.md size budget (lens B F3/F18, v0.4.96)
+#### RULE BLOCK: SKILL.md size budget — NOT a family (no lens of its own; Reviewer B enforces it)
 
    - **SKILL.md BUDGET RULE:** SKILL.md is the always-loaded router — every
      line costs 4x (all four roles re-read it IN FULL under the RELOAD LAW).
@@ -255,7 +255,7 @@ on census evidence + owner word (hq.md step 7).
 
 #### FAMILY: META — review machinery and catalog (added v0.4.114)
 
-   - **Reviewer I — META-REVIEW (added v0.4.114, owner pick 2026-09-08 ~20:4xZ, recommended shape 1):**
+   - **Reviewer I — META-REVIEW:**
      reviews the LENS CATALOG AND ITS OUTPUT — the only reviewer whose object
      is the review machinery itself. Scope: (1) BRIEF CORRECTNESS — each brief
      in this file (A–J) still matches what its reviewer actually checked in
@@ -281,7 +281,7 @@ on census evidence + owner word (hq.md step 7).
      brief's defects, but never reviews its own report (recursion capped at
      one level).
 
-#### STANDING LENS: `brain-scrub` — OUTSIDE the A–J families (owner order 2026-09-05)
+#### STANDING LENS: `brain-scrub` — OUTSIDE the A–J families
 
 *(Heading shape note, lens I F7 v0.4.206: this brief sat at `####` — the FAMILY level — with no family claiming it, so a cold reader could not tell whether it belonged to META or was a family of its own. It is neither: the rotation is `A–J + standing brain-scrub` (`hq.md §Duty 6` step 1), the family map stays A–J, and this lens owns its own report. Registered in `oc-review-persist` LENSES as `brain-scrub`.)*
 
