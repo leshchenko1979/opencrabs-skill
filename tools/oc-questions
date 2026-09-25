@@ -876,8 +876,17 @@ def cmd_answer(argv):
         is_clarify = (str(choice).lower() == "clarify")
         text = (flags.get("--text") or "").strip()
         if is_clarify:
+            # AN EMPTY CLARIFY IS NOT A REQUEST (owner report 2026-09-25).
+            # Tapping Clarify with an empty box flipped status to "clarifying"
+            # and stored answer=None: a state change carrying no content, so the
+            # asking lane received "CLARIFY REQUESTED" with nothing to act on and
+            # the owner's real intent was lost. A clarify exists to ask a
+            # question; refuse one that asks nothing.
+            if not text:
+                die(2, "clarify requires --text: say what you want clarified "
+                       "(an empty Clarify tap records nothing)")
             question["status"] = "clarifying"
-            question["answer"] = flags.get("--text")
+            question["answer"] = text
             question["answer_kind"] = "clarify"
         else:
             options = question.get("options") or []
@@ -1538,6 +1547,10 @@ def build_spec(entries, slug, expires_at, action):
                                                  and 0 <= recommended < len(options)
                                                  else None),
                               "token": slug, "set": set_id, "action": action,
+                              "status": question.get("status") or "open",
+                              "clarifyText": (question.get("answer")
+                                              if question.get("status") == "clarifying"
+                                              else None),
                               "footer": "asked %s / lane %s / %s %s"
                                         % (fmt_age(question.get("asked_at")
                                                    or entry.get("asked_at")),
@@ -1652,6 +1665,20 @@ HTMX_URL = "https://unpkg.com/htmx.org@%s/dist/htmx.min.js" % HTMX_VERSION
 # the page still submits and still works with no JS at all.
 UI_FILE = "questions.js"
 UI_JS = """(function () {
+  // htmx swaps only 2xx by default, so a REFUSED submit (400) left the reader
+  // with no feedback at all -- reported by the owner 2026-09-25 after tapping
+  // Clarify on an empty box. The backend already returns a proper swap
+  // fragment for errors; this just puts it on the page.
+  document.addEventListener('htmx:responseError', function (evt) {
+    var d = evt.detail || {};
+    var xhr = d.xhr;
+    var el = d.elt || d.target;
+    if (!xhr || !el || !xhr.responseText) return;
+    var sel = el.getAttribute && el.getAttribute('hx-target');
+    var node = sel ? document.querySelector(sel) : el;
+    if (node) node.outerHTML = xhr.responseText;
+  });
+
   document.querySelectorAll('form').forEach(function (form) {
     var box = form.querySelector('textarea[name="text"]');
     var radios = form.querySelectorAll('input[name="choice"]');
@@ -1703,6 +1730,16 @@ border-radius:0 7px 7px 0;padding:1.2rem 1.3rem 1.1rem;margin:0 0 .85rem}
 border-radius:0 5px 5px 0;background:var(--amber-soft);font-size:.95rem;line-height:1.5}
 .rec::before{content:'lane recommends';display:block;font:.6rem/1.4 var(--mono);
 letter-spacing:.15em;text-transform:uppercase;color:var(--amber);margin-bottom:.28rem}
+/* The clarifying state, made visible (owner report 2026-09-25): a question the
+reader asked to clarify rendered identically to an open one, so the state
+change was invisible and a reload looked like nothing had happened. Teal, not
+amber, so it cannot be mistaken for the recommendation band. */
+.clarifyband{position:relative;margin:.9rem 0 1.15rem;padding:.75rem .95rem;
+border-left:2px solid var(--teal);border-radius:0 5px 5px 0;
+background:var(--teal-soft);font-size:.95rem;line-height:1.5;color:var(--text)}
+.clarifyband::before{content:'clarification requested';display:block;
+font:.6rem/1.4 var(--mono);letter-spacing:.15em;text-transform:uppercase;
+color:var(--teal);margin-bottom:.28rem}
 .opt{display:flex;gap:.65rem;align-items:flex-start;margin:.45rem 0;padding:.65rem .8rem;
 border:1px solid var(--line);border-radius:6px;cursor:pointer;
 transition:border-color .12s ease,background .12s ease}
@@ -2329,6 +2366,39 @@ def selftest():
         ck(q4.get("answer") == "A" and q4.get("answer_kind") == "option",
            "an index with NO text still records the OPTION (%r/%r)"
            % (q4.get("answer"), q4.get("answer_kind")))
+
+        # -- 5b-2. an EMPTY clarify is refused, and the clarify STATE is visible
+        # (owner report 2026-09-25). Two halves of ONE report:
+        #   (i) tapping Clarify with an empty box recorded status=clarifying
+        #       with answer=None -- a state change carrying no content, so the
+        #       asking lane received "CLARIFY REQUESTED" with nothing to act on;
+        #   (ii) a clarifying question rendered IDENTICALLY to an open one, so
+        #       the owner reloaded and saw no change at all.
+        rc, out, _ = run("ask", "--factory", set_id, "--title", "clarify guard",
+                         "--description", "d", "--option", "A")
+        ck(rc == 0, "a question is registered to test the clarify guard (rc=%d)" % rc)
+        _cq = (get_set(set_id) or {}).get("questions", [{}])[-1].get("qid")
+        rc, out, err = run("answer", set_id, _cq, "clarify")
+        ck(rc == 2, "an EMPTY clarify is refused rc=2 (rc=%d)" % rc)
+        ck("clarify requires --text" in (err or out),
+           "\u2026naming the remedy (%r)" % (err or out).strip()[:70])
+        ck((get_set(set_id) or {}).get("questions", [{}])[-1].get("status") == "open",
+           "\u2026and the question is left OPEN, never half-transitioned")
+        rc, out, _ = run("answer", set_id, _cq, "clarify", "--text", "which option?")
+        ck(rc == 0, "a clarify WITH text is still accepted (rc=%d)" % rc)
+        ck((get_set(set_id) or {}).get("questions", [{}])[-1].get("status")
+           == "clarifying", "\u2026and records the clarifying state")
+        rc, out, _ = run("publish", "--json")
+        _uidir = json.loads(out)["path"]
+        _body = open(os.path.join(_uidir, "index.html"), encoding="utf-8").read()
+        ck("clarifyband" in _body,
+           "the page RENDERS the clarifying state, so a reload shows the change")
+        ck("Clarification requested" in _body,
+           "\u2026naming the reader's own request in the band")
+        _uijs = open(os.path.join(_uidir, "questions.js"), encoding="utf-8").read()
+        ck("htmx:responseError" in _uijs,
+           "the vendored UI surfaces a REFUSED submit -- htmx swaps only 2xx, "
+           "so a 400 was previously invisible to the reader")
 
         # -- 5c. withdraw — the moot-question exit (HQ 2026-09-25) -----------
         # "withdrawn" was in CLOSED_STATUSES and named by the law, but nothing

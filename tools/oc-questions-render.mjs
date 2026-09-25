@@ -49,6 +49,11 @@ const catalog = defineCatalog(schema, {
     Question: { props: z.object({
       qid: z.string(), title: z.string(), recommendation: z.string().nullable(),
       token: z.string(), set: z.string(), action: z.string(), footer: z.string(),
+      // status + clarifyText (owner report 2026-09-25): a question in the
+      // CLARIFYING state rendered identically to an open one, so the owner
+      // tapped Clarify, reloaded, and saw no change at all -- the state
+      // transition was invisible. clarifyText is the reader's own request.
+      status: z.string().optional(), clarifyText: z.string().nullable().optional(),
     }), description: 'One question and its form' },
     // --- content blocks: the description is typed DATA, not an HTML fragment ---
     Heading: { props: z.object({ level: z.number().int().min(1).max(3), text: z.string() }), description: 'A section heading' },
@@ -107,6 +112,12 @@ const { registry } = defineRegistry(catalog, {
       // carrying the lane's own counsel. The words "lane recommends" come from
       // CSS, not from this string, so the label cannot drift from the styling.
       props.recommendation ? h('p', { className: 'rec' }, props.recommendation) : null,
+      // A clarifying question must LOOK different from an open one, or the
+      // reader cannot tell their request was recorded.
+      props.status === 'clarifying'
+        ? h('p', { className: 'clarifyband' },
+            'Clarification requested' + (props.clarifyText ? ': ' + props.clarifyText : ''))
+        : null,
       // hx-*: the form swaps THIS question's own block in place instead of
       // navigating away (owner question 2026-09-24). The section id below is
       // the swap target. Inert without the vendored htmx, in which case the
