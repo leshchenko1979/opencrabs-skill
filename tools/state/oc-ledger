@@ -851,6 +851,29 @@ cmd_stamp() {
       "") die 2 "stamp: REFUSED — a claim must carry a numeric issue reference the scanner can see (\"CLAIM #<N> — ...\"; also accepted: \"issue <N>\", \"issue=#N\"). Every consumer keys on the ref, so a claim without one is a DEAD LETTER: cmd_claims cannot see the row, and the verify-unclaimed gate reports the issue CLEAN. If the row is deliberately ref-less: --allow-no-ref. (kind=$kind)" ;;
     esac
   fi
+
+  # A LANDED row is a closing row: it is supposed to address the issue it lands,
+  # so a ref-less one closes NOTHING while reporting success. Measured
+  # 2026-09-25: `stamp done "592 landed: b9ee661cc"` returned "read-back ok"
+  # rc=0 and left the claim open -- the issue kept reading CLAIMED to
+  # oc-issue-dispatch --auto, so it was never re-dispatched and no sweep saw
+  # the gap. "(read-back ok)" confirms the WRITE, never the ADDRESSING.
+  #
+  # WARN, not die, and scoped to LANDED_KINDS rather than CLOSING_KINDS: of 22
+  # ref-less closing rows in the live ledger, 16 are `done` (landings that
+  # should name their issue, incl. bare digits "169" / "235" / "592 landed: ...")
+  # while 6 are `confirm` ship/ACK records ("v0.4.124 ... SHIPPED", "battery
+  # fast-path shipped") that legitimately carry no issue. A blanket refusal
+  # would break that pattern; a blanket warn would fire on it.
+  if [ "$allow_noref" = 0 ]; then
+    case "$kind" in
+      done|close)
+        case "$(_issue_ref_tokens "$what" || true)" in
+          "") echo "oc-ledger: WARN — a '$kind' row carries NO parseable issue reference, so it closes NOTHING while reporting success. The predicate accepts \"#<N>\" or \"issue <N>\" — BARE DIGITS ARE NOT A REF (\"592 landed: ...\" does not close #592; \"#592 landed: ...\" does). If the row deliberately addresses no issue: --allow-no-ref. (what=${what:0:80})" >&2 ;;
+        esac
+        ;;
+    esac
+  fi
   _stamp_locked() {
     local n t; n=$(( $(max_n) + 1 )); t="$(now_iso)"
     # #329: a claim records its TARGETS as structured data. The prose is what a
@@ -2466,6 +2489,28 @@ AMBEOF
   # the honest verdict, not a silent clean.
   OC_ACTOR="$W3" bash "$ME" stamp claim "CLAIM without issue ref" --allow-no-ref >/dev/null 2>&1; chk "stamp-claim-no-ref-hatch-rc" 0 $?
   bash "$ME" claim-ref "$W3" >/dev/null 2>&1; chk "claim-ref-no-ref-rc3" 3 $?
+
+  # A LANDED (done/close) row that carries no parseable ref closes NOTHING
+  # while reporting success. Reported by editor lane 2ed8adeb: `stamp done
+  # "592 landed: b9ee661cc"` returned "read-back ok" rc=0 and left the claim
+  # OPEN, so the issue kept reading CLAIMED to oc-issue-dispatch --auto and was
+  # never re-dispatched. "(read-back ok)" confirms the WRITE, never the
+  # ADDRESSING. BARE DIGITS ARE NOT A REF — the predicate accepts "#<N>" or
+  # "issue <N>". MUTATION KILL: drop the LANDED_KINDS warn block and legs
+  # (i)-(iv) redden.
+  _lw="NO parseable issue reference"
+  _o="$(OC_ACTOR="$W3" bash "$ME" stamp done "601 landed: b9ee661cc" 2>&1)"
+  chk "stamp-done-ref-less-WARNS" 1 "$(printf '%s' "$_o" | grep -c "$_lw")"
+  _o="$(OC_ACTOR="$W3" bash "$ME" stamp done "#601 landed: b9ee661cc" 2>&1)"
+  chk "stamp-done-with-ref-is-silent" 0 "$(printf '%s' "$_o" | grep -c "$_lw")"
+  # A ref-less `confirm` is a ship/ACK record, not a landing: of the 22 ref-less
+  # closing rows in the live ledger, 6 are confirm and every one is legitimate
+  # ("v0.4.124 ... SHIPPED", "battery fast-path shipped", "reload ACK"). A
+  # blanket CLOSING_KINDS warn would fire on all of them.
+  _o="$(OC_ACTOR="$W3" bash "$ME" stamp confirm "v0.4.124 batch SHIPPED: sync ok" 2>&1)"
+  chk "stamp-confirm-ref-less-is-silent" 0 "$(printf '%s' "$_o" | grep -c "$_lw")"
+  _o="$(OC_ACTOR="$W3" bash "$ME" stamp done --allow-no-ref "deliberately ref-less" 2>&1)"
+  chk "stamp-done-no-ref-hatch-silent" 0 "$(printf '%s' "$_o" | grep -c "$_lw")"
   bash "$ME" claim-ref "00000000-0000-0000-0000-000000000000" >/dev/null 2>&1; chk "claim-ref-no-claim-rc3" 3 $?
   # #441 (Design Q shape 1, Decision 15): the ARGUMENT DOMAIN. Until the fix
   # this verb validated PRESENCE only, so a plain issue number was accepted as
