@@ -453,16 +453,36 @@ while [ $# -gt 0 ]; do
       # is the proof, and an orphaned fd is exactly what would lose it.
       rfp="$d/repair-peer.log"
       printf 'good-row-1\n%s\ngood-row-2\n' "$R_M1" > "$rfp"
-      ( exec 9>>"$rfp"; printf 'peer-BEFORE\n' >&9; sleep 0.4; printf 'peer-AFTER\n' >&9 ) &
+      # The peer WAITS for a go-file instead of sleeping a fixed window, and the
+      # parent reads the log's inode ITSELF. Both halves close a TOCTOU that made
+      # this leg flake under battery load and then report the WRONG cause (#566):
+      # with a fixed 0.4s sleep, a parent descheduled past it finds the peer gone,
+      # stat on /proc/<pid>/fd/9 reads EMPTY, and the leg exits claiming "the
+      # peer's fd is not on the log inode" -- a confident false diagnosis of an
+      # inode bug. The handshake makes both the reading and the splice window
+      # deterministic: the peer cannot exit before the go-file, so the splice
+      # provably happens while the fd is open.
+      rdy="$d/peer-ready"; rgo="$d/peer-go"; rgu="$d/peer-gaveup"; rm -f "$rdy" "$rgo" "$rgu"
+      ( exec 9>>"$rfp"
+        printf 'peer-BEFORE\n' >&9
+        : > "$rdy"
+        rg=0; while [ ! -e "$rgo" ] && [ "$rg" -lt 900 ]; do sleep 0.01; rg=$((rg+1)); done
+        [ -e "$rgo" ] || : > "$rgu"     # wait expired -> the fd was NOT held across the splice
+        printf 'peer-AFTER\n' >&9 ) &
       rpp=$!
       rw=0
-      while [ ! -e "/proc/$rpp/fd/9" ] && [ "$rw" -lt 100 ]; do sleep 0.01; rw=$((rw+1)); done
-      [ -e "/proc/$rpp/fd/9" ] || { echo "selftest: the peer never opened its fd" >&2; exit 1; }
-      rpeero="$(stat -Lc %i "/proc/$rpp/fd/9")"
-      [ "$rpeero" = "$(stat -c %i "$rfp")" ] || { echo "selftest: the peer's fd is not on the log inode" >&2; exit 1; }
-      repair_row "$rfp" "$R_M1" "$R_R1" || { echo "selftest: splice was refused while a peer held the log open" >&2; exit 1; }
-      [ "$(stat -c %i "$rfp")" = "$rpeero" ] || { echo "selftest: the log inode changed across a peer-held splice" >&2; exit 1; }
+      while [ ! -e "$rdy" ] && [ "$rw" -lt 900 ]; do sleep 0.01; rw=$((rw+1)); done
+      [ -e "$rdy" ] || { echo "selftest: the peer never opened its fd" >&2; kill "$rpp" 2>/dev/null; exit 1; }
+      rpeero="$(stat -c %i "$rfp")"
+      grep -qF 'peer-BEFORE' "$rfp" || { echo "selftest: the peer's fd was not writing the log" >&2; kill "$rpp" 2>/dev/null; exit 1; }
+      repair_row "$rfp" "$R_M1" "$R_R1" || { echo "selftest: splice was refused while a peer held the log open" >&2; kill "$rpp" 2>/dev/null; exit 1; }
+      [ "$(stat -c %i "$rfp")" = "$rpeero" ] || { echo "selftest: the log inode changed across a peer-held splice" >&2; kill "$rpp" 2>/dev/null; exit 1; }
+      : > "$rgo"     # release the peer: it appends AFTER the splice
       wait "$rpp" 2>/dev/null || true
+      # A weakened precondition must not pass as a clean result: if the peer's
+      # bounded wait expired before the release, the fd was never held ACROSS
+      # the splice, so the AFTER row proves nothing. Fail as INCONCLUSIVE.
+      [ ! -e "$rgu" ] || { echo "selftest: the peer's wait expired before the splice -- fd not held across it (inconclusive)" >&2; exit 1; }
       grep -qF 'peer-AFTER' "$rfp" || { echo "selftest: the peer's post-repair append was LOST -- its fd was orphaned (rename?)" >&2; exit 1; }
       grep -qF "$R_R1" "$rfp" || { echo "selftest: the peer-leg splice did not land" >&2; exit 1; }
       echo "selftest OK"; exit 0 ;;
