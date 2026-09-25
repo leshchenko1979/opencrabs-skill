@@ -322,6 +322,29 @@ BINSCRIPT
   assert_eq "suppression persisted via the dedup path" "0" "$supp_persisted"
 
   # Test 15d: the SAME watcher, same fixture, NON-terminal run -> still notified.
+  # The fixture copy + planted helper, hoisted above t15d.
+  # WHY A COPY AND NOT "$SELF": the child resolves its notify helper from the tools
+  # dir the SHELL computed, so the only way to make a delivery leg hermetic is to
+  # run a copy whose resolved tools dir is a fixture. A copy in a directory with no
+  # lib/oc-root.sh above it resolves to its own directory (oc-root.sh case 2), so
+  # the planted helper is the only thing that can be invoked.
+  #
+  # This also corrects a PRE-EXISTING false leg: t15d asserted notified=1 while
+  # invoking the REAL lib/oc-notify.sh with the synthetic session id
+  # "sess-running-arm", which the helper rejects outright (measured 2026-09-25:
+  # rc=2, "oc-notify: invalid target uuid"). The record used to claim notified from
+  # INTENTION, so the leg passed on a delivery that never happened and never could.
+  # With the record now stating the OUTCOME, the leg needs a helper that can accept.
+  local t17bin="$d/t17bin"
+  mkdir -p "$t17bin/lib"
+  cp -p "$SELF" "$t17bin/oc-watcher-audit"
+  cat > "$t17bin/lib/oc-notify.sh" <<'BINSCRIPT'
+#!/usr/bin/env bash
+# fake notify helper -- exit code supplied by OC_FAKE_NOTIFY_RC
+exit "${OC_FAKE_NOTIFY_RC:-0}"
+BINSCRIPT
+  chmod +x "$t17bin/lib/oc-notify.sh" "$t17bin/oc-watcher-audit"
+
   # This is the negative control for 15b: a fix that suppressed everything would
   # pass 15b and fail here.
   mkdir -p "$d/t15d/detached" "$d/t15d/state/runs/in-flight"
@@ -335,7 +358,7 @@ BINSCRIPT
 }
 JSON
   local out15d
-  out15d="$(OC_GH="$d/bin/fake-gh-running" OC_DEV_STATE="$d/t15d/state" OC_DEPLOY_STATE_DIR="$d/t15d/state" "$SELF" --dir "$d/t15d/detached" --notify-orphans --json 2>/dev/null)" || true
+  out15d="$(OC_GH="$d/bin/fake-gh-running" OC_DEV_STATE="$d/t15d/state" OC_DEPLOY_STATE_DIR="$d/t15d/state" OC_FAKE_NOTIFY_RC=0 "$t17bin/oc-watcher-audit" --dir "$d/t15d/detached" --notify-orphans --json 2>/dev/null)" || true
   local run_notified=0
   run_notified="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(sum(1 for r in d.get('orphans_recovered', []) if r.get('notified')))" "$out15d" 2>/dev/null || echo -1)"
   assert_eq "NON-terminal (in_progress) run still notifies" "1" "$run_notified"
@@ -412,6 +435,83 @@ JSON
   orph_active="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d.get('orphans_recovered', [])))" "$out16" 2>/dev/null || echo 0)"
   assert_eq "negative control: running task and live PID checkpoint produce 0 orphans" "0" "$orph_active"
 
+  # Test 17: the recovery notice's DELIVERY contract (F-M3, 2026-09-25, HQ lens F).
+  # Runs on the fixture copy set up above t15d, which carries the reason a copy is
+  # required for a hermetic delivery leg. What test 17 adds on top of t15d:
+  #
+  #   arm A  an ACCEPTING helper  -> notified, checkpoint consumed
+  #   arm B  a REFUSING helper    -> loud on stderr, NOT notified, checkpoint KEPT
+  #   arm C  NO helper at all     -> "CANNOT RESOLVE", never a silent pass
+  #
+  # Arm B is the half that matters most. A failed delivery must not be recorded as
+  # notified and must not delete the checkpoint: the checkpoint is what re-detects
+  # the orphan on a later sweep, so removing it after a failed send loses the
+  # notice permanently.
+  for arm in a b; do
+    mkdir -p "$d/t17$arm/detached" "$d/t17$arm/state/runs/in-flight"
+    cat > "$d/t17$arm/state/runs/in-flight/sess-cp.json" <<'JSON'
+{
+  "session_id": "sess-t17",
+  "run_id": "888111",
+  "repo": "leshchenko1979/opencrabs",
+  "pid": 99999999
+}
+JSON
+  done
+
+  # ---- arm A: the helper accepts -> recorded, checkpoint consumed -----------
+  local out17a
+  out17a="$(OC_GH="$d/bin/fake-gh-running" OC_DEV_STATE="$d/t17a/state" \
+    OC_DEPLOY_STATE_DIR="$d/t17a/state" OC_FAKE_NOTIFY_RC=0 \
+    "$t17bin/oc-watcher-audit" --dir "$d/t17a/detached" --notify-orphans --json \
+    2>"$d/t17a/err")" || true
+  local a_notif=0
+  a_notif="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(sum(1 for r in d.get('orphans_recovered',[]) if r.get('notified')))" "$out17a" 2>/dev/null || echo -1)"
+  assert_eq "arm A: accepted delivery records notified" "1" "$a_notif"
+  if [ -f "$d/t17a/state/runs/in-flight/sess-cp.json" ]; then
+    assert_eq "arm A: consumed checkpoint removed" "gone" "present"
+  else
+    assert_eq "arm A: consumed checkpoint removed" "gone" "gone"
+  fi
+
+  # ---- arm B: the helper refuses -> loud, unrecorded, checkpoint KEPT -------
+  local out17b
+  out17b="$(OC_GH="$d/bin/fake-gh-running" OC_DEV_STATE="$d/t17b/state" \
+    OC_DEPLOY_STATE_DIR="$d/t17b/state" OC_FAKE_NOTIFY_RC=3 \
+    "$t17bin/oc-watcher-audit" --dir "$d/t17b/detached" --notify-orphans --json \
+    2>"$d/t17b/err")" || true
+  local b_notif=0
+  b_notif="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(sum(1 for r in d.get('orphans_recovered',[]) if r.get('notified')))" "$out17b" 2>/dev/null || echo -1)"
+  assert_eq "arm B: refused delivery is NOT recorded as notified" "0" "$b_notif"
+  local b_diag=1
+  grep -q 'notify rc=3' "$d/t17b/err" 2>/dev/null && b_diag=0
+  assert_eq "arm B: refused delivery states the helper's rc on stderr" "0" "$b_diag"
+  if [ -f "$d/t17b/state/runs/in-flight/sess-cp.json" ]; then
+    assert_eq "arm B: failed delivery leaves the checkpoint for a retry" "kept" "kept"
+  else
+    assert_eq "arm B: failed delivery leaves the checkpoint for a retry" "kept" "deleted"
+  fi
+
+  # ---- arm C: no helper at all -> the resolution fault is VISIBLE ----------
+  rm -f "$t17bin/lib/oc-notify.sh"
+  mkdir -p "$d/t17c/detached" "$d/t17c/state/runs/in-flight"
+  cat > "$d/t17c/state/runs/in-flight/sess-cp.json" <<'JSON'
+{
+  "session_id": "sess-t17c",
+  "run_id": "888222",
+  "repo": "leshchenko1979/opencrabs",
+  "pid": 99999999
+}
+JSON
+  local out17c
+  out17c="$(OC_GH="$d/bin/fake-gh-running" OC_DEV_STATE="$d/t17c/state" \
+    OC_DEPLOY_STATE_DIR="$d/t17c/state" \
+    "$t17bin/oc-watcher-audit" --dir "$d/t17c/detached" --notify-orphans --json \
+    2>"$d/t17c/err")" || true
+  local c_diag=1
+  grep -q 'CANNOT RESOLVE' "$d/t17c/err" 2>/dev/null && c_diag=0
+  assert_eq "arm C: an unresolvable helper says so, never passes silently" "0" "$c_diag"
+
   rm -rf "$d"
   echo "oc-watcher-audit selftest: PASS=$pass FAIL=$fail"
   [ "$fail" -eq 0 ] || exit 1
@@ -469,7 +569,7 @@ LOCK_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-${HOME:-/root}/.opencrabs/profi
 CP_DIR="$LOCK_DIR/runs/in-flight"
 
 # Execute audit via python3
-python3 - "$TARGET_DIR" "$SINCE" "$JSON_MODE" "$NOTIFY_ORPHANS" "$DRY_RUN" "$CP_DIR" "$LOCK_DIR" << 'PYEOF'
+python3 - "$TARGET_DIR" "$SINCE" "$JSON_MODE" "$NOTIFY_ORPHANS" "$DRY_RUN" "$CP_DIR" "$LOCK_DIR" "$OC_TOOLS_DIR" << 'PYEOF'
 import sys, os, glob, json, re, datetime, subprocess
 
 target_dir = sys.argv[1]
@@ -479,6 +579,11 @@ notify_orphans = (sys.argv[4] == "1") if len(sys.argv) > 4 else False
 dry_run = (sys.argv[5] == "1") if len(sys.argv) > 5 else False
 cp_dir = sys.argv[6] if len(sys.argv) > 6 else ""
 lock_dir = sys.argv[7] if len(sys.argv) > 7 else ""
+# argv[8] is the tools dir the SHELL already resolved via lib/oc-root.sh. It is
+# passed IN rather than re-derived here: this body arrives on stdin as a quoted
+# heredoc, so __file__ does not exist and every dirname(__file__) branch built on
+# it is dead code. See notify_session.
+tools_dir = sys.argv[8] if len(sys.argv) > 8 else ""
 
 def check_task(task_text):
     violations = []
@@ -664,15 +769,42 @@ def human_age(created_at):
         return None
 
 def notify_session(uuid, title, text):
-    home_dir = os.environ.get("HOME", "/root")
-    script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.path.join(home_dir, ".opencrabs/profiles/ops/skills/opencrabs-dev/tools")
-    notify_sh = os.path.join(script_dir, "lib", "oc-notify.sh")
-    if not os.path.exists(notify_sh):
-        notify_sh = os.path.join(home_dir, ".opencrabs/profiles/ops/skills/opencrabs-dev/tools/lib/oc-notify.sh")
+    """Deliver a recovery notice. Returns True only if the helper accepted it.
+
+    WHY THE RESOLUTION CHANGED (measured 2026-09-25, HQ lens F-M3). The old form
+    built its own path from __file__, which does not exist in a heredoc-on-stdin
+    body, then reached for tools/audit/lib/oc-notify.sh - a path the KIND regroup
+    removed. It worked ONLY because a hardcoded flat $HOME/.../tools/lib fallback
+    still happened to resolve, and the whole thing sat inside `except Exception:
+    pass`. So the primary reach was DEAD, a fallback masked it, and any real
+    delivery fault was invisible. Two rules follow and both are enforced here:
+
+      - a sibling is resolved from the tools ROOT the SHELL already computed
+        (lib/oc-root.sh), never re-derived by a second mechanism in the child;
+      - a delivery fault is REPORTED on stderr, and the caller is told by return
+        value, because the caller records the orphan as notified - doing that on
+        a failed delivery would suppress the recovery notice PERMANENTLY, which
+        is the silent loss this leg exists to close.
+    """
+    notify_sh = os.path.join(tools_dir, "lib", "oc-notify.sh") if tools_dir else ""
+    if not notify_sh or not os.path.exists(notify_sh):
+        sys.stderr.write("oc-watcher-audit: CANNOT RESOLVE lib/oc-notify.sh "
+                         "(tools_dir=%r) - recovery notice for %s NOT sent\n"
+                         % (tools_dir, uuid))
+        return False
     try:
-        subprocess.run([notify_sh, uuid, text, title], capture_output=True, text=True, timeout=90)
-    except Exception:
-        pass
+        proc = subprocess.run([notify_sh, uuid, text, title],
+                              capture_output=True, text=True, timeout=90)
+    except Exception as exc:
+        sys.stderr.write("oc-watcher-audit: notify raised for %s: %s: %s - "
+                         "recovery notice NOT sent\n" % (uuid, type(exc).__name__, exc))
+        return False
+    if proc.returncode != 0:
+        sys.stderr.write("oc-watcher-audit: notify rc=%d for %s: %s\n"
+                         % (proc.returncode, uuid,
+                            (proc.stderr or proc.stdout or "").strip()[:200]))
+        return False
+    return True
 
 # Orphan recovery processing if --notify-orphans is requested
 orphan_recoveries = []
@@ -767,7 +899,13 @@ if notify_orphans:
             "issue": branch_issue(branch),
             "age": human_age(created),
             "source": c["source"],
-            "notified": not dry_run and not suppressed,
+            # The old form was `not dry_run and not suppressed`, which recorded
+            # an INTENTION: the row claimed a delivery that had not been attempted
+            # yet, and a failed send left the claim standing. Set False here and
+            # raised to True only once notify_session accepts the payload, so the
+            # field reports what happened. (F-M3, measured 2026-09-25: arm B of
+            # the selftest got rc=3 on stderr AND "notified": 1 in the same run.)
+            "notified": False,
             "suppressed_terminal": suppressed
         }
         orphan_recoveries.append(rec)
@@ -803,7 +941,13 @@ if notify_orphans:
         rec["notice"] = msg
 
         if not dry_run:
-            notify_session(sess, "Detached Watcher Recovered", msg)
+            delivered = notify_session(sess, "Detached Watcher Recovered", msg)
+            if not delivered:
+                sys.stderr.write("oc-watcher-audit: leaving the %s record in place so a "
+                                 "later sweep retries %s\n"
+                                 % (c.get("source", "orphan"), sess))
+                continue
+            rec["notified"] = True
             if c.get("key"):
                 notified_orphans_state[c["key"]] = {
                     "session_id": sess,

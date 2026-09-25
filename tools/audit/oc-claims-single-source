@@ -64,7 +64,46 @@ import re
 import sys
 import warnings
 
-TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+def _resolve_tools_dir(here):
+    """The tools ROOT that owns lib/ - the Python port of the bash bootstrap.
+
+    WHY NOT dirname(__file__): the fleet is grouped by KIND, so this file lives at
+    tools/audit/ and its own directory is NOT the root. Measured 2026-09-25 after
+    the regroup: the flat derivation scanned 1 of 36 python units and printed
+    `ok ... rc=0` - the guard was green over a surface it could not see, which is
+    the very failure this tool exists to prevent in others.
+
+    Resolves the way tools/lib/oc-root.sh does, and the two must agree:
+      - walk UP to the first ancestor holding lib/oc-root.sh. The marker is that
+        file, not a bare lib/, so an unrelated project's lib/ is never our root.
+      - a SYMLINKED lib/ is REJECTED: a borrowed lib/ means that ancestor is not
+        our root (measured 2026-09-25 - /tmp/lib was a symlink to the real
+        tools/lib, so a marker test that followed symlinks stopped the walk at
+        /tmp for every script under it).
+      - stop at a directory named `tools` even without the marker, so a stale or
+        foreign flat layout cannot escape upward into some ancestor's lib/.
+      - with NO root found, fall back to the script's own directory. That is the
+        fixture case and it is load-bearing: a selftest copies a tool beside FAKE
+        siblings and asserts the tool uses THOSE, so a walk that escaped the
+        fixture to the real tools/ would silently defeat the test's isolation.
+    """
+    d = here
+    while d != os.sep:
+        lib = os.path.join(d, "lib")
+        if (os.path.isdir(lib) and not os.path.islink(lib)
+                and os.path.isfile(os.path.join(lib, "oc-root.sh"))):
+            return d
+        if os.path.basename(d) == "tools":
+            break
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return here
+
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+TOOLS_DIR = _resolve_tools_dir(_HERE)
 CANONICAL_REL = os.path.join("lib", "oc_claims.py")
 
 # Keyed by VALUE, never by name - see the docstring for why.
@@ -729,9 +768,23 @@ def selftest():
         # behind a green line. Two independent facts must hold - the counts are
         # reported separately, and a skipped unit is NAMED (not merely counted).
         whole = unit_count(units) + len(skipped_live)
-        ck("coverage: the live tree declares more units than it parses",
-           whole >= unit_count(units),
-           "declared=%d parsed=%d" % (whole, unit_count(units)))
+        # The leg that used to sit here asserted `whole >= unit_count(units)`
+        # where `whole` is DEFINED as parsed + skipped - an identity that a
+        # coverage hole SATISFIES. Leg group 11 already carries the real bar
+        # (skipped_live == [] and declared == parsed), so this is not the place
+        # for a second copy of it. What was missing is the ROOT IDENTITY: a
+        # narrowed root passes every count leg in this file, because the counts
+        # are internally consistent however little they see. Measured 2026-09-25:
+        # with the flat derivation the tool reported "1 of 1" truthfully and
+        # green, while the surface was 36. These two legs fail on a root that is
+        # not the root, which no arithmetic over the scan can catch.
+        ck("root: TOOLS_DIR holds lib/oc-root.sh (it IS the tools root)",
+           os.path.isfile(os.path.join(TOOLS_DIR, "lib", "oc-root.sh")),
+           "TOOLS_DIR=%s" % TOOLS_DIR)
+        ck("root: the live scan saw more than one unit",
+           whole > 1,
+           "declared=%d TOOLS_DIR=%s - the root derivation resolved to the "
+           "tool's own kind-dir, not the tools root" % (whole, TOOLS_DIR))
         ck("coverage: every unparsed unit carries a non-empty reason",
            all(r.strip() for _, _, r in skipped_live),
            repr([r for _, _, r in skipped_live][:3]))

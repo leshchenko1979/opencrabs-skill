@@ -15,7 +15,8 @@
 # =============================================================================
 set -u
 # --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
-_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
 if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
 TOOLS_DIR="$OC_TOOLS_DIR"
 PASS=0 FAIL=0
@@ -1701,6 +1702,76 @@ OC_QUESTIONS_DIR="$QDIR/store" OC_QUESTIONS_DB="$QDIR/sessions.db" \
 [ $? -eq 2 ] && ok "oc-questions REJECTS the removed --lane flag" \
   || bad "removed --lane flag was accepted"
 rm -rf "$QDIR"
+# ---- 77. lib/oc-root.sh resolver coherence (F-L1/F-L2) -----------------------
+# Two defects HQ's lens F found in the v0.4.255 regroup's wake, both the
+# "green over a surface it cannot see" class:
+#   F-L1  oc_tools_dir tested only `[ -f .../lib/oc-root.sh ]`, omitting the
+#         `[ ! -L .../lib ]` guard the bootstrap in the SAME FILE calls
+#         load-bearing. A borrowed lib/ means that ancestor is not our root.
+#   F-L2  the doc block showed a 3-line bootstrap missing BOTH `basename` arms,
+#         while 40 of the 42 files carrying a bootstrap ran the 4-line form. A
+#         lane copying the documented form silently drops the arms.
+# The byte-equality leg is what keeps F-L2 closed: prose cannot drift from the
+# callers it documents without reddening here.
+section "lib/oc-root.sh resolver coherence (F-L1/F-L2)"
+RT="$(mktemp -d)"
+mkdir -p "$RT/tools/lib" "$RT/tools/audit"
+cp "$TOOLS_DIR/lib/oc-root.sh" "$RT/tools/lib/oc-root.sh"
+: > "$RT/tools/lib/oc-notify.sh"
+cp "$TOOLS_DIR/lib/oc-root.sh" "$RT/tools/audit/probe.sh"
+
+# F-L2: the documented bootstrap must equal a real caller's, byte for byte.
+# Both sides are extracted BY PATTERN, never by line number, so drift in either
+# file moves the comparison with it instead of silently comparing nothing.
+# The 3 LOGIC lines are compared byte-identically; the trailing `TOOLS_DIR=`
+# assignment is asserted by pattern, because tools legitimately annotate it with
+# their own comment (oc-deploy carries a Duty-6 note there). Comparing all four
+# byte-for-byte would redden on a comment, which is not the arm set F-L2 is about.
+DOC="$RT/doc.txt"
+sed -n '/^# USAGE/,/^#   TOOLS_DIR=/p' "$TOOLS_DIR/lib/oc-root.sh" \
+  | sed 's/^#   //' | grep -E '^(_oc_r=|if \[ "\$\(basename|if \[ -f "\$_oc_r)' > "$DOC"
+CALLER="$RT/caller.txt"
+grep -E '^(_oc_r=|if \[ "\$\(basename|if \[ -f "\$_oc_r)' \
+  "$TOOLS_DIR/ship/oc-deploy" | head -3 > "$CALLER"
+if [ -s "$DOC" ] && cmp -s "$DOC" "$CALLER"; then
+  ok "oc-root: documented bootstrap == a real caller's ($(wc -l < "$DOC" | tr -d ' ') logic lines, byte-identical)"
+else
+  bad "oc-root: doc block and caller bootstrap DIVERGE ($(wc -l < "$DOC" | tr -d ' ') doc vs $(wc -l < "$CALLER" | tr -d ' ') caller logic lines)"
+fi
+grep -q '^TOOLS_DIR="\$OC_TOOLS_DIR"' "$TOOLS_DIR/ship/oc-deploy" \
+  && ok "oc-root: caller carries the TOOLS_DIR assignment the doc block shows" \
+  || bad "oc-root: doc block shows a TOOLS_DIR assignment the caller does not carry"
+
+# F-L1 arm A — control: a REAL lib/ must still resolve, or the guard broke the
+# normal path and every sibling reach with it.
+resolved="$(oc_tools_dir "$RT/tools/audit/probe.sh" 2>/dev/null)"
+[ "$resolved" = "$RT/tools" ] \
+  && ok "oc_tools_dir: real lib/ resolves to the tools root" \
+  || bad "oc_tools_dir: real lib/ resolved to '$resolved' (want $RT/tools)"
+
+# F-L1 arm B — the defect: a SYMLINKED lib/ is a borrowed lib/, so that ancestor
+# is not our root. Pre-fix this returned the fixture root.
+rm -rf "$RT/tools/lib"
+ln -s "$TOOLS_DIR/lib" "$RT/tools/lib"
+leaked="$(oc_tools_dir "$RT/tools/audit/probe.sh" 2>/dev/null)"
+[ "$leaked" != "$RT/tools" ] \
+  && ok "oc_tools_dir: symlinked lib/ is REJECTED (does not adopt the fixture)" \
+  || bad "oc_tools_dir: symlinked lib/ was ACCEPTED — the F-L1 defect is back"
+
+# The `basename != tools` arm: a marker-less tools/ must STOP the walk rather
+# than let it adopt an ancestor's marker as its root. Without the arm the helper
+# returns $ANC — a root ABOVE the tree the tool actually lives in.
+ANC="$(mktemp -d)"
+mkdir -p "$ANC/lib" "$ANC/tools/sub"
+cp "$TOOLS_DIR/lib/oc-root.sh" "$ANC/lib/oc-root.sh"
+: > "$ANC/lib/oc-notify.sh"
+cp "$TOOLS_DIR/lib/oc-root.sh" "$ANC/tools/sub/probe.sh"
+adopted="$(oc_tools_dir "$ANC/tools/sub/probe.sh" 2>/dev/null)"
+[ "$adopted" != "$ANC" ] \
+  && ok "oc_tools_dir: marker-less tools/ stops the walk (no ancestor adoption)" \
+  || bad "oc_tools_dir: adopted the ANCESTOR root $ANC across a marker-less tools/ — basename arm missing"
+rm -rf "$ANC" "$RT"
+
 
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 finalize_fail_log

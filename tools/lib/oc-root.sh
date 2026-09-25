@@ -27,12 +27,31 @@
 #   common ancestor, while an unreadlink'd shim converges there too. So a shim
 #   at tools/oc-x pointing into tools/state/oc-x yields tools/ in both cases.
 #
-# USAGE — the bootstrap is the same 3 lines in every tool, because the resolver
+# USAGE — the bootstrap is the same 4 lines in every tool, because the resolver
 # cannot be found without first finding the tools dir:
 #
-#   _oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+#   _oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+#   if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
 #   if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
 #   TOOLS_DIR="$OC_TOOLS_DIR"
+#
+# WHY THIS BLOCK WAS DOCUMENTED WRONG (F-L2, measured 2026-09-25). 40 of the 42
+# files carrying a bootstrap ran the 4-line form above; this file described a
+# 3-line form missing BOTH `basename` arms. A lane copying the documented form
+# silently drops the arms, and nothing in the battery compares the two, so the
+# divergence was invisible. The battery now asserts byte equality between this
+# block and a real caller for exactly that reason -- on the three LOGIC lines,
+# with the trailing `TOOLS_DIR=` assignment checked by pattern instead, because
+# tools annotate that line with their own comments and comparing it byte-for-byte
+# would redden on a comment rather than on the arm set this leg exists to protect.
+#
+# WHAT THE `basename != tools` ARM DOES. It stops the walk AT the nearest
+# directory named `tools` even when that directory carries no marker, and then
+# makes `_oc_d` that dir. Without it, a marker-less or stale tools/ keeps walking
+# and can adopt an ANCESTOR's lib/oc-root.sh as its root — a root above the tree
+# the tool actually lives in. The battery pins this with a fixture that plants a
+# marker above a marker-less tools/: with the arm the helper refuses, without it
+# the helper returns the ancestor.
 #
 # On return: OC_TOOLS_DIR is the absolute tools dir. Two cases, and the second
 # is why the bootstrap is not a bare walk:
@@ -57,12 +76,31 @@
 
 # oc_tools_dir <script-path> — print the tools dir for an arbitrary script.
 # Useful for resolving a SIBLING's root; the bootstrap above uses _oc_r instead.
+#
+# IT AGREES WITH THE BOOTSTRAP NOW, AND THAT IS THE POINT OF THIS LEG.
+# Measured 2026-09-25: this helper tested only `[ -f "$_ocd/lib/oc-root.sh" ]`,
+# omitting the `[ ! -L "$_ocd/lib" ]` guard the bootstrap in the SAME FILE calls
+# load-bearing. A borrowed lib/ means that ancestor is not our root, and the
+# symlink case is not hypothetical — /tmp/lib was found to be a symlink to the
+# real tools/lib, so a marker test that follows symlinks stopped the walk at /tmp
+# for every script under it and resolved OC_TOOLS_DIR=/tmp (rc=127 on every
+# sibling reach, which reads as a broken tool rather than a broken layout).
+#
+# At the time of the fix this helper had ZERO callers outside this file (grep over
+# tools/ returns the definition only), so the guard is written for its NEXT caller,
+# not to repair live behaviour — and that is precisely when such a disagreement is
+# cheapest to close. A helper and a bootstrap that resolve the same question by
+# different rules will eventually be used side by side, and the divergence will be
+# found by whoever is debugging a sibling reach at 3am.
 oc_tools_dir() {
   _ocd="${1:-$0}"
   _ocd="$(readlink -f "$_ocd" 2>/dev/null || printf '%s' "$_ocd")"
   _ocd="$(dirname "$_ocd")"
   while [ -n "$_ocd" ] && [ "$_ocd" != "/" ]; do
-    if [ -f "$_ocd/lib/oc-root.sh" ]; then printf '%s\n' "$_ocd"; return 0; fi
+    if [ -f "$_ocd/lib/oc-root.sh" ] && [ ! -L "$_ocd/lib" ]; then
+      printf '%s\n' "$_ocd"; return 0
+    fi
+    if [ "$(basename "$_ocd")" = "tools" ]; then return 1; fi
     _ocd="$(dirname "$_ocd")"
   done
   return 1

@@ -224,6 +224,37 @@ EOT
   OUTP="$(OC_LINT_LAWS_TOOLS_DIR="$T/tools" bash "$SELF" --file "$T/nope.md" 2>&1)"; RC=$?
   chk "missing corpus file -> rc 3 (never a silent empty verdict)" 3 ""
 
+  # --- F-M2: the LIVE corpus, not just the fixture -------------------------
+  # Every run above points OC_LINT_LAWS_TOOLS_DIR at "$T/tools", so SKILL_DIR
+  # becomes the FIXTURE's parent and DEFAULT_CORPUS is never read at all. That
+  # is exactly how #575 stayed green: the corpus named the renamed
+  # editor-upstream-pr.md, every REAL run died rc 3 before checking a single
+  # file, and this selftest reported clean throughout. A fixture-only corpus
+  # check cannot see the corpus that ships.
+  #
+  # This leg reads DEFAULT_CORPUS out of the tool's OWN source and asserts each
+  # member is readable in the live skill dir. It is deliberately a STATIC read
+  # of the declared list rather than a re-declaration here: a second copy would
+  # drift from the one the linter uses, which is the defect it guards against.
+  # The pattern is anchored on the assignment so a mention inside a comment
+  # cannot satisfy it (and CANNOT_FIRE is asserted, so a broken extraction fails
+  # loudly instead of passing over an empty list).
+  _corpus="$(sed -n 's/^DEFAULT_CORPUS="\(.*\)"$/\1/p' "$SELF" | head -n1)"
+  if [ -z "$_corpus" ]; then
+    bad "live corpus: could not extract DEFAULT_CORPUS from the tool source"
+  else
+    _live_skill="$(dirname "$OC_TOOLS_DIR")"
+    _missing=""
+    for _f in $_corpus; do
+      [ -r "$_live_skill/$_f" ] || _missing="$_missing $_f"
+    done
+    if [ -z "$_missing" ]; then
+      ok "live corpus: all $(printf '%s' "$_corpus" | wc -w | tr -d ' ') declared law files exist"
+    else
+      bad "live corpus: declared but MISSING on the live tree:$_missing"
+    fi
+  fi
+
   printf 'selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" = 0 ] || return 1
   return 0
