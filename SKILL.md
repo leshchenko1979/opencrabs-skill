@@ -744,6 +744,14 @@ links; development-time upstream contact is PR-comments only (supersedes the
   at ANY point in the lifecycle (creation, triage intake, editor in-flight discovery, decomposition,
   or upstream PR staging), the lane identifying it MUST establish native links in the same turn
   via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
+  **READ a relation with `gh issue view <N> --json parent,subIssues,blockedBy,blocking` (or the
+  `/parent` endpoint) — NEVER via the issue object's `.parent` projection.** `gh api
+  repos/O/R/issues/N --jq '.parent.number'` returns a confident **null for every issue**, including
+  ones that demonstrably have a parent, because the REST issue object does not carry that field; the
+  same call returns a real title and state, so the null is indistinguishable from "no parent". It has
+  already produced one recorded false negative (ledger n=11340) and defeated a GUARD that used it to
+  skip already-parented issues — a verification instrument and a guard need the same authority, so one
+  correct read at the end does not protect a wrong read at the gate.
 - Restart scope: **`opencrabs-ops` ONLY.** The `family` and default-profile daemons
   require Alexey's explicit approval EVERY time. Exception (v0.4.71, lens B2 #3;
   sanctioned v0.4.59 #47): HQ may mechanically restart the
