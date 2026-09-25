@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-issue-create — creation-time parent gate for fork issues
+# =============================================================================
+# Owner order 2026-09-25 ~21:35Z ("go filing gate"). The Continuous Issue
+# Relationship Linking Mandate (owner 2026-09-16) LAPSED on 2026-09-22 because
+# nothing mechanical enforced it: measured at filing, of 143 open fix-titled
+# fork issues 107 had NO parent, and GitHub's PARENT_ISSUE_REMOVED timeline
+# event was 0 across every sampled issue -- so this is never-created, not lost.
+# A mandate with no gate lapses; this is the gate.
+#
+# The parent is settable AT CREATION: `gh issue create --parent <N>` exists
+# (gh 2.100.0, `gh issue create --help:41`), so no follow-up edit is needed.
+#
+# Usage: oc-issue-create [--parent <N>] [--no-parent <reason>] [--propose-parent]
+#                        [--repo <slug>] [--repo-path <dir>] [--dry-run] [--selftest]
+#                        [--] <gh issue create flags...>
+# Exit:  0 created / 2 usage / 3 REFUSED by the gate (nothing filed)
+#        4 gh failed / 5 no repo at --repo-path
+#
+# GATE: a title matching ^(fix|bug)[(:] with NO --parent is REFUSED. The refusal
+# prints the rule + law citation, mechanically-derived candidate parents, and
+# the escape hatch. `--no-parent "<reason>"` files anyway and records the
+# declaration as the first comment: the gate forbids a SILENT default, never a
+# DECLARED one, so a legitimate orphan bug is not blocked.
+#
+# Solo-surface (editor.md:96): the create output is the only receipt of the
+# identifier, so it is surfaced unambiguously on this tool's own stdout.
+# =============================================================================
+set -u
+
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-issue-create" "$@"; else oc_log_finish() { :; }; oc_log_extra() { :; }; fi
+trap 'oc_log_finish $?' EXIT
+
+SELF="$0"
+FORK_REPO="leshchenko1979/opencrabs"
+REPO_PATH="${OC_ISSUE_CREATE_REPO:-$HOME/opencrabs}"
+GH_BIN="${OC_ISSUE_CREATE_GH:-gh}"
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: oc-issue-create [--parent <N>] [--no-parent <reason>] [--propose-parent]
+                       [--repo <slug>] [--repo-path <dir>] [--dry-run] [--selftest]
+                       [--] <gh issue create flags...>
+
+Wraps `gh issue create` and REFUSES a fix/bug-titled issue that names no parent.
+
+  --parent <N>        set the parent AT CREATION (gh issue create --parent)
+  --no-parent <why>   file anyway, recording the declaration as the first
+                      comment. The gate forbids a SILENT default, not a
+                      declared one.
+  --propose-parent    compute and print candidate parents only; file nothing
+  --repo <slug>       override the target repo (default leshchenko1979/opencrabs)
+  --repo-path <dir>   override the git checkout used for blame (default ~/opencrabs)
+  --dry-run           print the gh command without running it
+  --selftest          run the built-in checks
+
+Everything else is passed through to `gh issue create` unchanged
+(--title, --body, --body-file, --label, --assignee, --milestone, ...).
+
+Exit: 0 created / 2 usage / 3 REFUSED (nothing filed) / 4 gh failed / 5 no repo
+
+KNOWN LIMIT OF --propose-parent: the proposal blames the pre-image lines each
+fix commit touched and takes the blamed commit's issue token. Blame is
+confidently WRONG when a fix adds new plumbing whose pre-image lines were
+written by unrelated infrastructure (live specimen: #487's top-1 blamed
+candidate was #405; the real feature is #286). The proposal is an INPUT to your
+judgement, never an auto-link. It is also structurally blind for the ~44% of
+fix issues with no commit on main at all -- those print "no commit on main",
+never a guess.
+USAGE
+  exit 2
+}
+
+# ---- arg parsing: ours vs gh's ----------------------------------------------
+PARENT=""; NO_PARENT=""; NO_PARENT_SET=0; PROPOSE=0; DRY=0; SELFTEST=0
+REPO_SLUG="$FORK_REPO"; PASSTHRU=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --selftest) SELFTEST=1; shift ;;
+    -h|--help) (usage); exit 0 ;;   # fleet contract (RC-CONTRACT): --help exits 0
+    --parent) [ $# -ge 2 ] || { echo "oc-issue-create: --parent needs a value" >&2; usage; }; PARENT="$2"; shift 2 ;;
+    --parent=*) PARENT="${1#--parent=}"; shift ;;
+    --no-parent) [ $# -ge 2 ] || { echo "oc-issue-create: --no-parent needs a reason" >&2; usage; }; NO_PARENT="$2"; NO_PARENT_SET=1; shift 2 ;;
+    --no-parent=*) NO_PARENT="${1#--no-parent=}"; NO_PARENT_SET=1; shift ;;
+    --propose-parent) PROPOSE=1; shift ;;
+    --repo) [ $# -ge 2 ] || usage; REPO_SLUG="$2"; shift 2 ;;
+    --repo=*) REPO_SLUG="${1#--repo=}"; shift ;;
+    --repo-path) [ $# -ge 2 ] || usage; REPO_PATH="$2"; shift 2 ;;
+    --repo-path=*) REPO_PATH="${1#--repo-path=}"; shift ;;
+    --dry-run) DRY=1; shift ;;
+    --) shift; while [ $# -gt 0 ]; do PASSTHRU+=("$1"); shift; done ;;
+    *) PASSTHRU+=("$1"); shift ;;
+  esac
+done
+
+# ---- extract --title from the passthrough (both forms) -----------------------
+TITLE=""
+i=0
+while [ $i -lt ${#PASSTHRU[@]} ]; do
+  a="${PASSTHRU[$i]}"
+  case "$a" in
+    --title) i=$((i+1)); TITLE="${PASSTHRU[$i]:-}" ;;
+    --title=*) TITLE="${a#--title=}" ;;
+    -t) i=$((i+1)); TITLE="${PASSTHRU[$i]:-}" ;;
+  esac
+  i=$((i+1))
+done
+
+is_fix_title() {
+  # ^(fix|bug)[(:] case-insensitive -- the mandate's own scope.
+  printf '%s' "$1" | grep -Eiq '^(fix|bug)[(:]'
+}
+
+# ---- candidate proposal ------------------------------------------------------
+LIB_PY="$OC_TOOLS_DIR/lib/oc_parent_propose.py"
+OPEN_ISSUES_JSON="$(mktemp)"
+trap 'rm -f "$OPEN_ISSUES_JSON"; oc_log_finish $?' EXIT
+
+fetch_open_issues() {
+  # A FAILED fetch must never read as "no candidates": the two lead to opposite
+  # advice. Returns 1 and leaves the file empty on failure.
+  if ! "$GH_BIN" issue list -R "$REPO_SLUG" --state open --limit 300 \
+        --json number,title > "$OPEN_ISSUES_JSON" 2>/dev/null; then
+    return 1
+  fi
+  [ -s "$OPEN_ISSUES_JSON" ]
+}
+
+print_scope_candidates() {  # $1 = title
+  local title="$1"
+  if ! fetch_open_issues; then
+    echo "  (candidate lookup FAILED -- gh could not read the open-issue list;"
+    echo "   this is NOT 'no candidates'. Re-run, or pass --parent explicitly.)"
+    return 0
+  fi
+  python3 - "$LIB_PY" "$title" "$OPEN_ISSUES_JSON" <<'PYEOF'
+import json, sys
+sys.path.insert(0, sys.argv[1].rsplit("/", 1)[0])
+import oc_parent_propose as pp
+title, path = sys.argv[2], sys.argv[3]
+issues = json.load(open(path))
+scope, cands = pp.propose_by_scope(title, issues)
+if scope is None:
+    print("  no (scope) token in the title -- nothing mechanically derivable.")
+elif not cands:
+    print("  scope '%s': no OPEN issue shares it." % scope)
+else:
+    print("  scope '%s': %d open issue(s) share it. Newest 8:" % (scope, len(cands)))
+    for n, t in cands[:8]:
+        print("    #%d  %s" % (n, t[:88]))
+    print("  (a shared scope is NOT a parent -- it narrows where to look.)")
+PYEOF
+}
+
+print_blame_candidates() {  # $1 = issue number
+  [ -f "$LIB_PY" ] || { echo "  (engine missing: $LIB_PY)"; return 0; }
+  python3 - "$LIB_PY" "$REPO_PATH" "$1" <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1].rsplit("/", 1)[0])
+import oc_parent_propose as pp
+repo, iss = sys.argv[2], int(sys.argv[3])
+r = pp.propose_by_blame(repo, iss)
+st = r["status"]
+if st == "no_commit":
+    print("  no commit on main names #%d -- the blame engine is structurally" % iss)
+    print("  blind here (~44%% of parentless issues). Not a guess: say so.")
+elif st == "no_hunk":
+    print("  commits found but ZERO hunks parsed (%d blamed lines) -- the" % r["blamed"])
+    print("  hunk-regex trap; the engine is blind, not the tree.")
+elif st == "no_originator":
+    print("  commits found, %d hunks blamed, but no blamed commit carries an" % r["hunks"])
+    print("  issue token (~25%% case). Not a guess.")
+else:
+    print("  blame-derived candidates (hits, blamed sha):")
+    for tok, hits, sha in r["candidates"]:
+        print("    #%-5d %3d hit(s)  %s" % (tok, hits, sha[:10]))
+    print("  KNOWN LIMIT: blame is confidently wrong when a fix adds new plumbing")
+    print("  whose pre-image lines came from unrelated infrastructure. Judgement,")
+    print("  never an auto-link.")
+PYEOF
+}
+
+
+# =============================================================================
+# SELFTEST — hermetic. A stub gh stands in for the network; no issue is ever
+# created. Both instrument traps get a POSITIVE CONTROL (a check that can only
+# pass if the trap is avoided), because each produces a confident 0% rather
+# than an error.
+# =============================================================================
+selftest() {
+  local T rc out fails=0
+  T="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$T'" RETURN
+  mkdir -p "$T/bin"
+  # Stub gh: `issue list` answers a canned open set; `issue create` answers a URL.
+  cat > "$T/bin/gh" <<'STUB'
+#!/bin/sh
+case "$1 $2" in
+  "issue list")   cat "$OC_STUB_ISSUES" ;;
+  "issue create") echo "https://github.com/leshchenko1979/opencrabs/issues/4242" ;;
+  "issue comment") exit 0 ;;
+  *) exit 0 ;;
+esac
+STUB
+  chmod +x "$T/bin/gh"
+  cat > "$T/issues.json" <<'JSN'
+[{"number":10,"title":"fix(tools): an older tools fix"},
+ {"number":11,"title":"feat(telegram): a telegram feature"},
+ {"number":12,"title":"fix(tools): a newer tools fix"}]
+JSN
+  export OC_ISSUE_CREATE_GH="$T/bin/gh" OC_STUB_ISSUES="$T/issues.json"
+
+  chk() { # chk <label> <want-rc> <got-rc>
+    if [ "$2" = "$3" ]; then echo "  ok   - $1 (rc=$3)"; else echo "  FAIL - $1 (want rc=$2 got $3)"; fails=$((fails+1)); fi
+  }
+  has() { # has <label> <file> <pattern>
+    if grep -qE "$3" "$2"; then echo "  ok   - $1"; else echo "  FAIL - $1"; fails=$((fails+1)); fi
+  }
+
+  # --- gate behaviours -------------------------------------------------------
+  bash "$SELF" --title "fix(tools): probe" --body x >"$T/o1" 2>&1; chk "fix title + no parent REFUSES" 3 $?
+  has "…the refusal names the law"        "$T/o1" 'Continuous Issue Relationship Linking'
+  has "…and prints scope candidates"      "$T/o1" '#12|#10'
+  has "…and the escape hatch"             "$T/o1" 'no-parent'
+  bash "$SELF" --title "bug: bare colon" --body x >"$T/o2" 2>&1; chk "bug: form is also gated" 3 $?
+  bash "$SELF" --title "fix(tools): with parent" --body x --parent 10 --dry-run >"$T/o3" 2>&1
+  chk "fix + --parent passes" 0 $?
+  has "…and the parent reaches gh"        "$T/o3" 'parent.*10'
+  bash "$SELF" --title "fix(tools): declared" --body x --no-parent "standalone" --dry-run >"$T/o4" 2>&1
+  chk "fix + --no-parent passes" 0 $?
+  has "…and the declaration is recorded"  "$T/o4" 'no parent derivable: standalone'
+  bash "$SELF" --title "feat(tools): unrelated" --body x --dry-run >"$T/o5" 2>&1
+  chk "non-fix title is unaffected" 0 $?
+  has "…and carries no parent"            "$T/o5" 'issue create'
+  bash "$SELF" --propose-parent --title "fix(telegram): x" >"$T/o6" 2>&1
+  chk "--propose-parent files nothing" 0 $?
+  has "…and proposes by scope"            "$T/o6" "#11"
+
+  # --- trap controls: each check can only pass if the trap is AVOIDED ---------
+  # (a) `git blame -s` ABBREVIATES, so a 40-hex match finds nothing. The control
+  #     proves the bare form yields zero matches and the --abbrev=40 form yields
+  #     the full sha -- i.e. the engine's choice of flag is load-bearing.
+  R="$T/repo"; mkdir -p "$R"; ( cd "$R" && git init -q . && git config user.email t@t && git config user.name t \
+    && printf 'a\nb\nc\n' > f.txt && git add f.txt && git commit -qm one \
+    && printf 'a\nB\nc\n' > f.txt && git add f.txt && git commit -qm two ) >/dev/null 2>&1
+  local bare full
+  bare="$(cd "$R" && git blame -s -L1,1 HEAD -- f.txt 2>/dev/null | awk '{print $1}')"
+  full="$(cd "$R" && git blame -s --abbrev=40 -L1,1 HEAD -- f.txt 2>/dev/null | awk '{print $1}')"
+  if [ "${#bare}" -ne 40 ] && [ "${#full}" -eq 40 ]; then
+    echo "  ok   - trap(a) control: bare blame is ${#bare} chars, --abbrev=40 is 40 (the flag is load-bearing)"
+  else
+    echo "  FAIL - trap(a) control: bare=${#bare} full=${#full}"; fails=$((fails+1))
+  fi
+  # (b) `^@@` without re.M matches ZERO hunks on a real diff.
+  local nom ult
+  nom="$(cd "$R" && git diff HEAD~1 HEAD -- f.txt | grep -cE '^@@' || true)"
+  ult="$(cd "$R" && git diff HEAD~1 HEAD -- f.txt | grep -c '@@' || true)"
+  if [ "${nom:-0}" -eq 1 ] && [ "${ult:-0}" -ge 1 ]; then
+    echo "  ok   - trap(b) control: anchored ^@@ finds the hunk (the re.M/anchoring choice is load-bearing)"
+  else
+    echo "  FAIL - trap(b) control: anchored=${nom:-0} unanchored=${ult:-0}"; fails=$((fails+1))
+  fi
+  # and the ENGINE's own regexes behave: HUNK_RE is compiled with re.M.
+  local eng
+  eng="$(python3 -c "
+import sys; sys.path.insert(0,'$OC_TOOLS_DIR/lib')
+import oc_parent_propose as pp, re
+d = open('$R/f.txt').read() or ''
+diff = 'x\n@@ -1,2 +1,2 @@\n-a\n+b\n'
+print(len(pp.HUNK_RE.findall(diff)))
+" 2>/dev/null)"
+  if [ "${eng:-0}" -eq 1 ]; then echo "  ok   - engine HUNK_RE is compiled with re.M (finds 1 hunk)";
+  else echo "  FAIL - engine HUNK_RE found ${eng:-0} hunks (want 1)"; fails=$((fails+1)); fi
+
+  # --- the FAILED-fetch guard: a failed candidate lookup must not read as none
+  bash "$SELF" --title "fix(tools): x" --body x >"$T/o7" 2>&1
+  mv "$T/issues.json" "$T/issues.gone"
+  bash "$SELF" --title "fix(tools): x" --body x >"$T/o8" 2>&1
+  has "a FAILED candidate lookup says so, never 'no candidates'" "$T/o8" 'lookup FAILED'
+  mv "$T/issues.gone" "$T/issues.json"
+
+  unset OC_ISSUE_CREATE_GH OC_STUB_ISSUES
+  echo "oc-issue-create selftest: FAIL=$fails"
+  return $(( fails > 0 ? 1 : 0 ))
+}
+
+if [ "$SELFTEST" = 1 ]; then selftest; exit $?; fi
+
+# ---- propose-only mode -------------------------------------------------------
+if [ "$PROPOSE" = 1 ]; then
+  echo "oc-issue-create --propose-parent"
+  if [ -n "$TITLE" ]; then
+    echo "by scope (title: ${TITLE:0:80}):"
+    print_scope_candidates "$TITLE"
+  else
+    echo "by scope: no --title given, nothing to derive a scope from."
+  fi
+  # An explicit numeric positional turns on the blame engine for an EXISTING issue.
+  for a in "${PASSTHRU[@]:-}"; do
+    case "$a" in
+      ''|--*|-*) continue ;;
+      [0-9]*)
+        if [ ! -d "$REPO_PATH/.git" ]; then
+          echo "oc-issue-create: no git checkout at $REPO_PATH -- the blame engine" >&2
+          echo "needs one. Pass --repo-path <dir>." >&2
+          exit 5
+        fi
+        echo; echo "by blame (existing issue #$a):"; print_blame_candidates "$a" ;;
+    esac
+  done
+  exit 0
+fi
+
+# ---- the gate ----------------------------------------------------------------
+if [ -z "$TITLE" ]; then
+  echo "oc-issue-create: no --title supplied; gh would prompt, which this wrapper" >&2
+  echo "cannot do non-interactively. Pass --title (or --title=)." >&2
+  exit 2
+fi
+
+if is_fix_title "$TITLE" && [ -z "$PARENT" ] && [ "$NO_PARENT_SET" = 0 ]; then
+  cat >&2 <<REFUSAL
+oc-issue-create: REFUSED — nothing filed.
+
+  The title is fix/bug-scoped and names no parent.
+    title: $TITLE
+
+  LAW: the Continuous Issue Relationship Linking Mandate (owner 2026-09-16;
+  skills/opencrabs-dev/AGENTS.md § "Continuous Issue Relationship Linking")
+  requires the relationship to be established AT CREATION. Measured at the gate's
+  filing: 107 of 143 open fix-titled issues had NO parent, and GitHub recorded
+  ZERO PARENT_ISSUE_REMOVED events — so this is never-created, not lost.
+
+  MECHANICAL CANDIDATES (an input to your judgement, never an auto-link):
+REFUSAL
+  print_scope_candidates "$TITLE"
+  cat >&2 <<ESCAPE
+
+  ESCAPE HATCH — either name the parent, or declare that none applies:
+    oc-issue-create --parent <N> ...              # set it AT CREATION
+    oc-issue-create --no-parent "<reason>" ...    # file anyway; the reason is
+                                                 # recorded as the first comment
+  A legitimate orphan bug is never blocked: the gate forbids a SILENT default,
+  not a DECLARED one.
+ESCAPE
+  exit 3
+fi
+
+# ---- create ------------------------------------------------------------------
+CMD=("$GH_BIN" "issue" "create" "-R" "$REPO_SLUG")
+[ -n "$PARENT" ] && CMD+=("--parent" "$PARENT")
+for a in "${PASSTHRU[@]:-}"; do [ -n "$a" ] && CMD+=("$a"); done
+
+if [ "$DRY" = 1 ]; then
+  echo "oc-issue-create --dry-run:"
+  printf ' %q' "${CMD[@]}"; echo
+  [ "$NO_PARENT_SET" = 1 ] && echo "  (then comment: no parent derivable: $NO_PARENT)"
+  exit 0
+fi
+
+OUT="$("${CMD[@]}" 2>&1)"; RC=$?
+printf '%s\n' "$OUT"
+if [ "$RC" != 0 ]; then
+  echo "oc-issue-create: gh issue create failed rc=$RC" >&2
+  exit 4
+fi
+
+# Solo-surface (editor.md:96): the create output is the ONLY receipt of the
+# identifier, so restate it unambiguously on our own stdout.
+NUM="$(printf '%s' "$OUT" | grep -oE '/issues/[0-9]+' | grep -oE '[0-9]+' | tail -1)"
+if [ -n "$NUM" ]; then
+  echo "oc-issue-create: created #$NUM"
+  oc_log_extra "issue=$NUM"
+  oc_log_extra "parent=${PARENT:-none}"
+  if [ "$NO_PARENT_SET" = 1 ]; then
+    BODY_FILE="$(mktemp)"
+    printf 'no parent derivable: %s\n' "$NO_PARENT" > "$BODY_FILE"
+    if "$GH_BIN" issue comment "$NUM" -R "$REPO_SLUG" --body-file "$BODY_FILE" >/dev/null 2>&1; then
+      echo "oc-issue-create: recorded the no-parent declaration on #$NUM"
+    else
+      echo "oc-issue-create: WARN — created #$NUM but the no-parent declaration" >&2
+      echo "  could NOT be recorded. Add it by hand; the gate's contract is that" >&2
+      echo "  silence is impossible, so an unrecorded declaration is a breach." >&2
+    fi
+    rm -f "$BODY_FILE"
+  fi
+else
+  echo "oc-issue-create: WARN — could not parse an issue number from gh's output" >&2
+  echo "  above. The create may have SUCCEEDED; read the output before retrying." >&2
+fi
+exit 0

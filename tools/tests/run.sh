@@ -1820,6 +1820,24 @@ _reach="$(awk -v want="$_nch" '
 
 
 
+# ---- 79. oc-issue-create (creation-time parent gate, #599) -------------------
+if [ -f "$TOOLS_DIR/issue/oc-issue-create" ]; then
+  bash "$TOOLS_DIR/issue/oc-issue-create" --selftest >/dev/null 2>&1 \
+    && ok "oc-issue-create --selftest" || bad "oc-issue-create --selftest"
+  bash "$TOOLS_DIR/issue/oc-issue-create" --help >/dev/null 2>&1 \
+    && ok "oc-issue-create --help rc=0" || bad "oc-issue-create --help rc=0"
+  # The gate's whole point: a fix-titled issue with no parent is REFUSED. Run it
+  # with the stub gh so no real issue can be created.
+  _ic_t="$(mktemp -d)"; mkdir -p "$_ic_t/bin"
+  printf '#!/bin/sh\ncase "$1 $2" in "issue list") echo "[{\"number\":1,\"title\":\"fix(tools): x\"}]" ;; *) exit 0 ;; esac\n' > "$_ic_t/bin/gh"
+  chmod +x "$_ic_t/bin/gh"
+  OC_ISSUE_CREATE_GH="$_ic_t/bin/gh" bash "$TOOLS_DIR/issue/oc-issue-create" \
+    --title "fix(tools): battery probe" --body x >/dev/null 2>&1
+  [ $? -eq 3 ] && ok "oc-issue-create REFUSES a fix title with no parent (rc=3)" \
+               || bad "oc-issue-create did NOT refuse a fix title with no parent"
+  rm -rf "$_ic_t"
+fi
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 finalize_fail_log
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s",\n  "fail_log": "%s"\n}\n' \
