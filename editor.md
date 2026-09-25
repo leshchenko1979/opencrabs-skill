@@ -34,7 +34,7 @@ not the rule — and there is nothing left to bypass to: `/root/.rustup` is gone
 from this host and the `rustfmt` wrapper was RETIRED 2026-09-19 (it exits 1
 `BLOCKED`). **There is NO sanctioned local Rust tool, fmt included**; a local
 invocation that WORKS would still be a ruling violation. CODE TESTS = CI gate (`pr-checks.yml`, run in
-Phase 5 via `oc-ship-chain`; Phase 7 step 2c reuses it on upstream PR heads).
+Phase 5 via `oc-ship-chain`; `harvest.md §Phase 7 step 2c` reuses it on upstream PR heads).
 Everything
 else — build, test, clippy — is CI dispatch: `pr-checks.yml` or
 quick-build-linux dispatched via `oc-ship-chain`. Need
@@ -56,9 +56,10 @@ editor-facing duties:
   `session_notify` with `target_session` taken from the mechanical
   `[session-notify from=<uuid>]` header or `session_search` — never a telegram
   tool aimed at their topic/thread or at the owner DM.
-- Process/tooling ideas (IDEA:) → the TRIAGE lane's IDEA BOX intake —
-  `session_notify` to the Triage session, strict format canonical at
-  triage.md §Duty T1. You propose; Triage ACKs, stamps the ledger, and routes.
+- Process/tooling ideas (IDEA:) → route DIRECTLY to the owning lane by scope
+  (`fleet-directives.md §Direct dispatch`): HQ for skill/governance, Toolsmith for
+  CLI tools, Editors for code features. The TRIAGE IDEA BOX intake was RETIRED at
+  v0.4.176 — do not send ideas there.
 - Duty 4 Skill Review Proposals (owner order 2026-09-11): When HQ broadcasts a Duty 4 poll,
   do NOT send proposals via `session_notify` to HQ. Write your proposal directly to disk at
   `~/.opencrabs/profiles/ops/opencrabs-dev/reviews/<cycle-id>/proposals/<session-uuid>.md`
@@ -355,7 +356,7 @@ When shipping features via `oc-ship-chain` or deploying via `oc-deploy`, failure
 - **Exit 0 — SWAPPED:** The new binary is running live on the host (`opencrabs-ops` user unit). Worktree can now be removed (`tools/git/oc-wt remove <task>`). Proceed immediately to Phase 6b (Smoke-test-on-notify).
 - **Exit 2 — USAGE:** Bad or missing arguments (`--sha`/`--branch` are required; malformed flag). Correct the invocation and re-run — no lane state to resolve.
 - **Exit 3 — DIRTY CHECKOUT:** The fork checkout has uncommitted changes (pre-flight refusal). Clean or stash it, then re-run.
-- **Exit 4 — GATE-RED / CARRIER-RED:** The CI gate failed or the carrier build failed. Start a fix round (Phase 6c): keep the same branch, fix in a new worktree, commit, push, and re-run `oc-ship-chain`. Triage heuristics live in `SKILL.md §Red-run triage heuristics`. **Also the `--gated-run` / `--gated-sha` pre-verify failure:** the supplied run was not `completed success` on a job pinned to the sha, or `--gated-sha` did not match `--sha`. Do NOT re-dispatch the run — re-verify it with `gh run view <id> --json status,conclusion,jobs` and re-supply the correct id.
+- **Exit 4 — GATE-RED / CARRIER-RED:** The CI gate failed or the carrier build failed. Start a fix round (Phase 6-Fix): keep the same branch, fix in a new worktree, commit, push, and re-run `oc-ship-chain`. Triage heuristics live in `SKILL.md §Red-run triage heuristics`. **Also the `--gated-run` / `--gated-sha` pre-verify failure:** the supplied run was not `completed success` on a job pinned to the sha, or `--gated-sha` did not match `--sha`. Do NOT re-dispatch the run — re-verify it with `gh run view <id> --json status,conclusion,jobs` and re-supply the correct id.
 - **Exit 5 — NON-FF / MERGE CONFLICT · TIP-MOVED · REBASE-GATE:** THREE distinct causes share this code (tool text `oc-ship-chain:828-829`; full register in `tools/docs/RC-CONTRACT.md`). **(a) NON-FF / MERGE CONFLICT** — `oc-ship-chain` LEG3 ran `git merge --ff-only` and refused. A **clean** non-FF and a **conflicted** one are the SAME code from the chain's side: the chain performs **no rebase of its own**, so the LANE rebases `$BRANCH` onto fork main and force-pushes first; a **semantic conflict** additionally requires hand adjudication. (The automatic in-tool rebase belongs to `oc-deploy`'s own push path — that is cause **(c)**, not this one. Do not wait for an auto-rebase that the chain never runs.)
   ```bash
   git -C ~/oc-wt-<task> fetch origin
@@ -400,7 +401,7 @@ since v0.4.37; `[session-notify from=<uuid>]` header) means your
 commits are in it — prove the FEATURE works. This phase produces SMOKE TEST
 evidence (SKILL.md Test ontology): behavioral, against the RUNNING binary,
 zero cargo. CODE TESTS (fmt/clippy/cargo test) are a different kind, CI-only —
-Phase 5 (Phase 7 step 2c reuses it on upstream PR heads). The binary is live
+Phase 5 (`harvest.md §Phase 7 step 2c` reuses it on upstream PR heads). The binary is live
 right here (`opencrabs-ops` user unit).
 
 ```bash
@@ -505,7 +506,7 @@ tools/git/oc-commit -m "<msg>"   # gated wrapper: Session-Id from ambient sessio
 # 3. push branch, then re-run oc-ship-chain (Leg 1 CI gate -> Leg 2 comment -> Leg 3 ff-merge -> Leg 4 carrier build -> Leg 5 swap)
 git -C ~/oc-wt-<task> push origin <branch>
 tools/ship/oc-ship-chain --sha <NEW-head-sha> --branch <branch> [--issue <issue-n>]
-# 4. on exit 0 SWAPPED, remove the worktree — proceed to Phase 6 smoke re-test
+# 4. on exit 0 SWAPPED, remove the worktree — proceed to Phase 6b smoke re-test
 tools/git/oc-wt remove <task>
 ```
 
