@@ -201,3 +201,20 @@ oc_has() { # <haystack> <needle> -> 0 present / 1 absent
   case "${1:-}" in *"${2:-}"*) return 0 ;; *) return 1 ;; esac
 }
 
+# J-5 (c23): the newline-safe append predicate has ONE home.
+# An unterminated append poisons the NEXT writer -- the last row of the log
+# glues onto the first line of the new one, and the damage is silent (a reader
+# sees a longer line, never an error). Two tools each hand-rolled this check
+# before this helper existed (oc-smoke's append_log_safe, oc-smoke-evidence's
+# append_log); they were functionally identical, which is the shape the
+# single-source guard exists to collapse. Cost already paid: proposal n=4177,
+# the glued-rows incident on lane c10cd97b (2026-09-12).
+oc_append_line_safe() { # <file> <line> -> appends, terminating a prior unterminated row
+  local f="${1:-}" c="${2:-}"
+  [ -n "$f" ] || return 2
+  mkdir -p "$(dirname "$f")" 2>/dev/null || true
+  if [ -s "$f" ] && [ -n "$(tail -c 1 "$f" 2>/dev/null || true)" ]; then
+    printf '\n' >> "$f"   # terminate the previous writer's unterminated row
+  fi
+  printf '%s\n' "$c" >> "$f"
+}

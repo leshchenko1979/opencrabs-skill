@@ -124,18 +124,8 @@ flatten() {
   printf '%s' "$flat"
 }
 
-append_log_safe() {
-  local log_file="$1"
-  local line="$2"
-  mkdir -p "$(dirname "$log_file")"
-  if [ -s "$log_file" ]; then
-    local last_byte
-    last_byte="$(tail -c1 "$log_file" 2>/dev/null || true)"
-    if [ -n "$last_byte" ]; then
-      printf '\n' >> "$log_file"
-    fi
-  fi
-  printf '%s\n' "$line" >> "$log_file"
+append_log_safe() { # J-5: predicate lives in lib/oc-log.sh (one home)
+  oc_append_line_safe "$1" "$2"
 }
 
 do_selftest() {

@@ -46,12 +46,32 @@ as hanging "with no output and no side effect". Two behaviours address that: the
 tool announces its budget before every send, and it line-buffers stdout, so a
 killed run leaves the evidence of where it died instead of a 0-byte file.
 
-Exit codes:
+Exit codes (tools/docs/RC-CONTRACT.md row 36 is the canonical register):
   0: Success / Approved / Dispatched
   1: Rejected / Vetting failed / a TARGETED issue could not be resolved (#483)
   2: Invalid arguments / CLI error
   3: Delivery / session_notify failed, or an upstream gh READ failed
   4: Capacity exhausted / No available idle lane
+  5: Claim-gated -- a targeted dispatch without --force, and the issue is claimed
+  6: sent-receipt-unverified -- the send may have landed and no receipt was seen
+     yet. The dispatch IS recorded, so do NOT re-send. rc 2 is the ONLY code
+     that proves nothing was sent.
+  7: FLOOD-GUARD -- this exact tool+args already failed >=4x in the last 120s, so
+     the run was refused at init and NOTHING happened. Bypass with
+     OC_NO_FLOODGUARD=1 (and say why in the lane journal). This code is the
+     tool's OWN guard; the fleet-wide guard in tools/lib/oc-log.sh raises the
+     same class and exits 8 -- see the note below.
+  8: targeted-landed-refused (#370) -- the issue's fix has already landed, so
+     NOTHING was sent. Override with --allow-landed.
+  9: targeted-already-dispatched (#370) -- already wired to a lane and not yet
+     acked, so NOTHING was sent. Override with --redispatch.
+
+  rc 8 is shared with the FLEET-WIDE flood guard (tools/lib/oc-log.sh, which
+  pre-empts ANY tool and exits 8). Both leave nothing sent; they are told apart
+  by their message, and the tool's own flood guard is rc 7 above. Any consumer
+  branching on rc 8 must therefore match the message, not the code alone.
+  6 is DISTINCT from 8/9: 6 means the dispatch IS recorded and must NOT be
+  re-sent, while 7/8/9 prove nothing was sent -- opposite operator actions.
 """
 
 import os
@@ -203,10 +223,10 @@ def _oc_log_flood_guard():
                 continue
         if failed_count >= 4:
             sys.stderr.write(
-                f"FLOOD-GUARD (rc 8): {_LOG_TOOL} with identical args already failed {failed_count}x in the last 120s — refusing to run again.\n"
+                f"FLOOD-GUARD (rc 7): {_LOG_TOOL} with identical args already failed {failed_count}x in the last 120s — refusing to run again.\n"
                 f"  Fix the underlying failure, change the args, or set OC_NO_FLOODGUARD=1 to bypass (and say why in the lane journal).\n"
             )
-            sys.exit(8)
+            sys.exit(7)
     except SystemExit:
         raise
     except Exception:

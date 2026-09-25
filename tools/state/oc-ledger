@@ -1318,6 +1318,24 @@ cmd_ack() {
   version="${version#v}"  # tolerate display spelling v0.N.N; store bare, matching sync
   echo "$version" | grep -Eq '^0\.[0-9]+\.[0-9]+$' || die 2 "ack: version shape invalid (want 0.N.N, v prefix tolerated): '$version'"
   [ -n "$at" ] || at="$(now_iso)"
+  # H-2 (c23) WRITE-SIDE VALIDATION. `--at` is the ONLY caller-supplied stamp on
+  # any path, and it was written verbatim. The live ledger carried 19 stamps that
+  # cannot be true -- 9 with a literal `x` for a redacted digit ("2026-09-05T10:1xZ"),
+  # 2 space-separated ("2026-08-27 03:25:54Z") and 8 minute-precision values
+  # missing their seconds -- and because `events --since` compares
+  # BYTE-LEXICOGRAPHICALLY on the stamp, each one silently MIS-RANKED instead of
+  # erroring: a blank or malformed value is always-less-than and drops out of
+  # every window. A stamp that cannot be parsed is not a cosmetic problem; it is
+  # a row that no window can reach. Validate here, refuse loudly, never guess.
+  # Accept the ISO-8601 UTC FAMILY and canonicalise it, rather than demanding one
+  # spelling. A stamp carrying fractional seconds or an explicit +00:00 offset is
+  # WELL-FORMED; refusing it would be a guard that blocks a legitimate write --
+  # the same defect as one that admits a malformed value, failing in the
+  # direction nobody reports. Normalising on write is what keeps the stored form
+  # single-shaped, which is what --since's byte-lexicographic compare needs.
+  at="$(printf '%s' "$at" | sed -E 's/\.[0-9]+//; s/\+00:00$//; s/Z$//')Z"
+  echo "$at" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' \
+    || die 2 "ack: --at must be an ISO-8601 UTC stamp (YYYY-MM-DDThh:mm:ssZ, fractional seconds and +00:00 accepted); got '$at'"
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
   jq -e --arg u "$uuid" '.workers[]? | select(.uuid == $u)' "$LEDGER" >/dev/null 2>&1 \
     || die 3 "ack: unknown uuid $uuid — roster discovery first (Duty 2), or: oc-ledger enroll"
@@ -3002,6 +3020,44 @@ EOF
   # that never asked for a live read.
   bash "$ME" roster --role TESTER > "$T/roster-nl.out" 2>/dev/null
   chk "roster-nonlive-keeps-stored-topic" "42" "$(awk -F'\t' -v u="$W2" '$1==u {print $3}' "$T/roster-nl.out")"
+
+  # ---- J-3 (c23): BINDING-MISMATCH detection ------------------------------
+  # The fixture above is ALREADY the drifted case by construction: the ledger
+  # stores topic_id 42 for $W2 while the authoritative binding says 55555.
+  # The table silently PREFERS the binding, which is exactly why the drift is
+  # invisible without --reconcile -- so these legs assert the DETECTION, not
+  # the table.
+  OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role TESTER --live --reconcile > "$T/rec.out" 2> "$T/rec.err"
+  chk "reconcile-rc" 0 $?
+  grep -q "BINDING-MISMATCH" "$T/rec.err" && grep -q "stored=42 live=55555" "$T/rec.err" && ok || bad "reconcile-names-the-drift"
+  grep -q "promote --uuid $W2 --topic 55555" "$T/rec.err" && ok || bad "reconcile-names-the-remedy"
+  grep -q "1 BINDING-MISMATCH row(s)" "$T/rec.err" && ok || bad "reconcile-counts-the-drift"
+  # The CLEAN case must say so explicitly -- an empty result must never read as
+  # "no such data" (the class this whole cycle is closing).
+  OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role fallbackprobe --live --reconcile >/dev/null 2> "$T/rec2.err"
+  grep -q "0 BINDING-MISMATCH" "$T/rec2.err" && ok || bad "reconcile-clean-is-explicit"
+  # --reconcile without --live has no binding to reconcile against: refuse.
+  bash "$ME" roster --reconcile >/dev/null 2>&1; chk "reconcile-requires-live" 2 $?
+
+  # ---- H-3 (c23): duplicated identities -----------------------------------
+  # Plant the two classes the finding names. The pair carries DIFFERENT `by`
+  # strings for one act -- grouping by the actor finds nothing on exactly the
+  # specimens the verb exists for, which is the bug this leg pins.
+  bash "$ME" stamp note "h3 dup specimen one" --by "editor aaa11111" >/dev/null 2>&1
+  bash "$ME" stamp note "h3 dup specimen one" --by "editor aaa11111" >/dev/null 2>&1
+  bash "$ME" stamp note "h3 split specimen two" --by "editor bbb22222" >/dev/null 2>&1
+  bash "$ME" stamp note "h3 split specimen two" --by "editor ccc33333" >/dev/null 2>&1
+  bash "$ME" duplicates > "$T/dup.out" 2>&1; chk "duplicates-rc" 0 $?
+  grep -q "DUPLICATE kind=note count=2 by=editor aaa11111" "$T/dup.out" && ok || bad "duplicates-finds-same-actor-pair"
+  grep -q "IDENTITY-SPLIT kind=note count=2" "$T/dup.out" && ok || bad "duplicates-finds-identity-split"
+  grep -qE "[0-9]+ DUPLICATE \(one fact" "$T/dup.out" && grep -qE "[0-9]+ IDENTITY-SPLIT \(one act" "$T/dup.out" && ok || bad "duplicates-splits-the-two-classes"
+  # A kind filter that matches nothing must say "none", not print a blank.
+  bash "$ME" duplicates --kind no-such-kind > "$T/dup2.out" 2>&1
+  grep -q "duplicates: none" "$T/dup2.out" && ok || bad "duplicates-clean-is-explicit"
+  # --json must be parseable JSON, and its length must equal the text count.
+  bash "$ME" duplicates --json > "$T/dup3.out" 2>&1
+  # >= 2: the two planted classes must both appear; a fixture may carry more
+  chk "duplicates-json-parseable" "true" "$(jq 'length >= 2' "$T/dup3.out" 2>/dev/null || echo BAD)"
   OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live >/dev/null 2>&1; chk "roster-live-subagent-excluded" 1 $?
   OC_LEDGER_DB="$T/sessions.db" bash "$ME" roster --role subprobe --live --json >/dev/null 2>&1; chk "roster-live-json-nomatch-rc1" 1 $?
   OC_LEDGER_DB="$T/nope.db" bash "$ME" roster --live >/dev/null 2>&1; chk "roster-live-db-missing-rc3" 3 $?
@@ -3125,6 +3181,36 @@ EOF
   chk "events-nc-since-reach" 1 "$(jq 'length' "$T/nc-s.out" 2>/dev/null || echo X)"
   bash "$ME" events --kind nc-schema --json > "$T/nc-k.out" 2>/dev/null
   chk "events-nc-kind-reach" 1 "$(jq 'length' "$T/nc-k.out" 2>/dev/null || echo X)"
+  # ---- events: H-1 (c23) the {at,detail,id,type} LEGACY BLOCK ---------------
+  # 22 live rows carry this shape. The old projection read only
+  # {kind,type}/{by,actor,role}/{t,ts}/{what,text,summary,note}, so EVERY one of
+  # them rendered a BLANK stamp AND a blank content column -- and the blank stamp
+  # also dropped them out of every --since window (byte-lexicographic compare
+  # against "" is always-less-than). `detail`/`at`/`id` are now in the
+  # projection, so the row renders AND is reachable.
+  #
+  # The assertions are FILTER-scoped (`--kind legacy-shape`), never positional:
+  # a `--n 1` tail read would be moved by any later leg that appends a row, and
+  # this block sits upstream of several that do.
+  LEG_AT="2026-08-27T02:55:00Z"
+  LEG_DETAIL="legacy at/detail row must render its stamp and its content"
+  jq --arg s "$LEG_AT" --arg d "$LEG_DETAIL" \
+     '.events += [{"at":$s,"detail":$d,"id":99002,"type":"legacy-shape"}]' \
+     "$T/state/workers-ledger.json" > "$T/state/leg.json" \
+     && mv "$T/state/leg.json" "$T/state/workers-ledger.json"
+  bash "$ME" events --kind legacy-shape --n 1 > "$T/leg.out" 2>"$T/leg.err"
+  chk "events-legacy-render-rc" 0 $?
+  chk "events-legacy-stamp"   "$LEG_AT"      "$(awk -F'\t' '{print $2}' "$T/leg.out")"
+  chk "events-legacy-content" "$LEG_DETAIL"  "$(awk -F'\t' '{print $5}' "$T/leg.out")"
+  chk "events-legacy-kind"    "legacy-shape" "$(awk -F'\t' '{print $3}' "$T/leg.out")"
+  # ...and it is REACHABLE by --since, which is the half a blank stamp broke.
+  bash "$ME" events --since "$LEG_AT" --kind legacy-shape --n 1 --json > "$T/leg-s.out" 2>/dev/null
+  chk "events-legacy-since-reach" 1 "$(jq 'length' "$T/leg-s.out" 2>/dev/null || echo X)"
+  # Remove the probe row: it is a fixture, and later legs assert a TAIL row.
+  jq '.events |= map(select((.id // 0) != 99002))' "$T/state/workers-ledger.json" > "$T/state/leg2.json" \
+    && mv "$T/state/leg2.json" "$T/state/workers-ledger.json"
+
+
   # the truncation nudge must measure the NORMALISED field it prints, not .what
   LONGNC="$(printf 'y%.0s' $(seq 1 300))"
   jq --arg t "$LONGNC" '(.events[] | select(.n==99001) | .text) |= $t' \
@@ -3133,6 +3219,20 @@ EOF
   bash "$ME" events --n 1 > "$T/nc-t.out" 2>"$T/nc-t.err"; chk "events-nc-trunc-rc" 0 $?
   chk "events-nc-trunc-160" "160" "$(awk -F'\t' '{print length($5)}' "$T/nc-t.out")"
   grep -q "truncated" "$T/nc-t.err" && ok || bad "events-nc-trunc-nudge"
+  # ---- H-2 (c23) WRITE-SIDE stamp validation -------------------------------
+  # The live ledger carried 19 stamps that cannot be true (9 literal-x, 2
+  # space-separated, 8 minute-precision). Because --since compares
+  # BYTE-LEXICOGRAPHICALLY they silently mis-ranked. `--at` is the only
+  # caller-supplied stamp, so it is validated at WRITE: refuse, never guess.
+  # Placed AFTER the truncation legs on purpose: a successful ack APPENDS a row,
+  # and those legs assert a tail row.
+  H2_U="$(jq -r '.workers[0].uuid' "$OC_LEDGER")"
+  for _bad in "2026-01-02 03:04:05Z" "2026-01-02T03:04Z" "2026-01-02T03:0x:05Z" "not-a-stamp"; do
+    bash "$ME" ack "$H2_U" 0.9.9 --at "$_bad" >/dev/null 2>&1
+    chk "h2 ack --at refuses '$_bad'" 2 $?
+  done
+  bash "$ME" ack "$H2_U" 0.9.9 --at "2026-01-02T03:04:05Z" >/dev/null 2>&1
+  chk "h2 ack --at accepts a well-formed stamp" 0 $?
 
   # --- D2/#507: the atomic_jq temp leak --------------------------------------
   # A corpse left by a SIGKILL must be collected by the NEXT mutation — no trap
@@ -3713,15 +3813,16 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   # rc 0 rows printed · 1 NO-MATCH (a VERDICT, deliberately not a silent empty:
   # a caller that gets 1 must fall back to session_search, NEVER assemble an id)
   # · 2 usage · 3 ledger or session DB unreadable.
-  local role="" live=0 json=0 include_retired=0
+  local role="" live=0 json=0 include_retired=0 reconcile=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --role) [ -n "${2:-}" ] || die 2 "roster: --role needs a value"; role="$2"; shift 2 ;;
       --live) live=1; shift ;;
       --include-retired) include_retired=1; shift ;;
+      --reconcile) reconcile=1; shift ;;
       --json) json=1; shift ;;
-      -h|--help) echo "usage: oc-ledger roster [--role <substr>] [--live] [--include-retired] [--json]"; exit 0 ;;
-      *) die 2 "roster: unknown arg '$1' (usage: oc-ledger roster [--role <substr>] [--live] [--include-retired] [--json])" ;;
+      -h|--help) echo "usage: oc-ledger roster [--role <substr>] [--live] [--reconcile] [--include-retired] [--json]"; exit 0 ;;
+      *) die 2 "roster: unknown arg '$1' (usage: oc-ledger roster [--role <substr>] [--live] [--reconcile] [--include-retired] [--json])" ;;
     esac
   done
   ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
@@ -3811,6 +3912,42 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
   done <<< "$sel"
   [ -n "$livef" ] && rm -f "$livef"
 
+  # ---- J-3 (c23): BINDING-MISMATCH detection -------------------------------
+  # triage.md Duty T6: "a lane that MOVES leaves its roster row unreconciled
+  # -- reconcile the row to its LIVE binding". The table above already PREFERS
+  # the binding, which is exactly why the drift is invisible in the output:
+  # the stored field goes stale the moment a topic is reassigned, and nothing
+  # re-derives it. enroll/promote write facts true at ONE instant. Measured
+  # cost: 4 of 32 live-bound workers had drifted (lesson n=8722; lanes
+  # 212b3c83, a5b34466, d5863180 -> cbdfde4a), each found by a lane reading
+  # two stores and comparing by eye. This is the detect half; the fix half
+  # already exists (retire / promote --topic).
+  if [ "$reconcile" -eq 1 ]; then
+    [ "$live" -eq 1 ] || die 2 "roster --reconcile requires --live (there is no binding to reconcile against otherwise)"
+    local drift_n=0
+    local dline
+    while IFS= read -r dline; do
+      [ -n "$dline" ] || continue
+      printf '%s\n' "$dline" >&2
+      drift_n=$(( drift_n + 1 ))
+    done <<< "$(jq -r --argjson ir "$include_retired" --argjson live "$livejson" --arg lr "$lrole" \
+      '.workers[]?
+       | select(($ir == 1) or ((.state // "") != "RETIRED"))
+       | select(($lr == "") or (((.role // "") | ascii_downcase) | contains($lr)))
+       | . as $w
+       | ($w.uuid // "") as $u
+       | ($live[$u] // null) as $lt
+       | select($lt != null and $lt != "")
+       | (($w.topic_id // "") | tostring) as $st
+       | select($st != "" and $st != $lt)
+       | "BINDING-MISMATCH uuid=\($u[0:8]) role=\($w.role // "-") stored=\($st) live=\($lt) -- reconcile with: oc-ledger promote --uuid \($u) --topic \($lt)"' "$LEDGER")"
+    if [ "$drift_n" -eq 0 ]; then
+      printf '%s\n' "roster --reconcile: 0 BINDING-MISMATCH over the live-bound rows" >&2
+    else
+      printf '%s\n' "roster --reconcile: ${drift_n} BINDING-MISMATCH row(s) -- each is a lane that MOVED and left its roster row unreconciled" >&2
+    fi
+  fi
+
   [ -n "$out" ] || {
     local lsfx=""; [ "$live" -eq 1 ] && lsfx=" (live sessions only)"
     echo "roster: no row matches${role:+ role~'$role'}${lsfx} — fall back to session_search; NEVER hand-assemble a uuid" >&2
@@ -3830,6 +3967,74 @@ cmd_roster() { # oc-ledger roster [--role <substr>] [--live] [--json]
     local nrows; nrows="$(printf '%s' "$out" | grep -c .)"
     if [ -n "$role" ] && [ "$live" -eq 0 ] && [ "$nrows" -gt 1 ]; then
       echo "roster: $nrows rows match role~'$role' — add --live to keep only live sessions before dispatching" >&2
+    fi
+  fi
+  exit 0
+}
+
+# ---- duplicates (read-only; c23 H-3) -----------------------------------------
+# H-3: "one fact, two rows". Two rows for one event double EVERY count that
+# reads the ledger and admit two distinct `by` identities for one act, which
+# breaks the attribution discipline the ledger exists to provide. Measured
+# specimens: byte-identical DONE rows (n=4144 / n=4146, 2m17s apart) and issue
+# #34 carrying two claim rows 73s apart with no unclaim between.
+# Read-only. It REPORTS; it never deletes -- a duplicate may carry the only
+# copy of a detail, so removal stays a human call (the class is known and
+# recurring: patrol row n=10298 recorded 13 phantom instances).
+cmd_duplicates() {
+  local json=0 kind=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      --kind) [ -n "${2:-}" ] || die 2 "duplicates: --kind needs a value"; kind="$2"; shift 2 ;;
+      -h|--help) echo "usage: oc-ledger duplicates [--kind <k>] [--json]"; exit 0 ;;
+      *) die 2 "duplicates: unknown arg '$1' (usage: oc-ledger duplicates [--kind <k>] [--json])" ;;
+    esac
+  done
+  ledger_ok || die 3 "ledger missing or unparseable: $LEDGER"
+  # Group by the FACT -- (kind, what) -- NOT by the actor. Grouping by
+  # (kind, by, what) finds nothing on the very specimens this verb exists for,
+  # because the two rows carry DIFFERENT `by` strings for one act; the actor
+  # difference is the second half of the defect, not a reason to exclude the
+  # row. Measured live 2026-09-25: 111 groups by (kind, what), of which the
+  # two classes below are reported separately.
+  local sel
+  sel="$(jq -r --arg k "$kind" '
+    [ .events[]?
+      | select($k == "" or ((.kind // .type // "") == $k))
+      | { k: (.kind // .type // "-"),
+          t: (.t // .ts // .at // ""),
+          b: (.by // .actor // .role // "-"),
+          w: ((.what // .text // .summary // .note // .detail // "") | tostring),
+          n: (.n // 0) } ]
+    | map(select(.w != ""))
+    | group_by([.k, .w])
+    | map(select(length > 1))
+    | .[]
+    | { kind: .[0].k, count: length,
+        bys: ([ .[].b ] | unique),
+        rows: [ .[].n ], ts: [ .[].t ],
+        what: (.[0].w | .[0:90]) }
+    | . + { cls: (if (.bys | length) == 1 then "DUPLICATE" else "IDENTITY-SPLIT" end) }
+  ' "$LEDGER")" || die 3 "duplicates: ledger unreadable"
+  # jq -s slurps the stream into ONE array; a per-input -r would print one
+  # count per row, and a multi-line value then fails the digit test below and
+  # reads as 0 -- a clean verdict over a non-empty result.
+  local ntot ndup nsplit
+  ntot="$(printf '%s' "$sel" | jq -s 'length' 2>/dev/null || echo 0)"
+  case "$ntot" in ''|*[!0-9]*) ntot=0 ;; esac
+  ndup="$(printf '%s' "$sel" | jq -s '[.[] | select(.cls=="DUPLICATE")] | length' 2>/dev/null || echo 0)"
+  case "$ndup" in ''|*[!0-9]*) ndup=0 ;; esac
+  nsplit="$(printf '%s' "$sel" | jq -s '[.[] | select(.cls=="IDENTITY-SPLIT")] | length' 2>/dev/null || echo 0)"
+  case "$nsplit" in ''|*[!0-9]*) nsplit=0 ;; esac
+  if [ "$json" -eq 1 ]; then
+    printf '%s' "$sel" | jq -s '.'
+  else
+    if [ "$ntot" -eq 0 ]; then
+      printf '%s\n' "duplicates: none -- no two rows share (kind, what)"
+    else
+      printf '%s\n' "$sel" | jq -r '"\(.cls) kind=\(.kind) count=\(.count) by=\(.bys|join(" | ")) rows=\(.rows|join(",")) ts=\(.ts|join(" ")) :: \(.what)"'
+      printf '%s\n' "duplicates: ${ntot} group(s) -- ${ndup} DUPLICATE (one fact, one actor, repeated) + ${nsplit} IDENTITY-SPLIT (one act, two distinct actor identities). Each doubles every count that reads the ledger; removal is a human call, because a duplicate may hold the only copy of a detail."
     fi
   fi
   exit 0
@@ -3888,11 +4093,32 @@ cmd_events() { # oc-ledger events|tail [--n N] [--kind K] [--actor U] [--since T
   # The projection below is normalised ONCE and used by BOTH the filter and the
   # render, so a row can never be SELECTABLE by a value it does not PRINT.
   sel="$(jq -c --arg kind "$kind" --arg actor "$actor" --arg since "$since" --argjson n "$n" '
-    def n_kind: ((.kind // .type // "") | tostring);
-    def n_by:   ((.by // .actor // .role // "") | tostring);
-    def n_t:    ((.t // .ts // "") | tostring);
-    def n_what: ((.what // .text // .summary // .note // "") | tostring);
-    def n_n:    (.n // .seq // 0);
+    # H-1 (c23): the ledger is not ONE schema. Widened to every key the live
+    # corpus actually uses -- measured over 10300 events: the 22-row
+    # {at,detail,id,type} block rendered a BLANK stamp AND a blank content
+    # column, and further shapes carry their content in event/action/directive/
+    # details and their actor in `who`.
+    def n_kind: ((.kind // .type // .event // .ev // "") | tostring);
+    def n_by:   ((.by // .actor // .role // .who // "") | tostring);
+    def n_what: ((.what // .text // .summary // .note // .detail // .event
+                  // .action // .directive // .details // "") | tostring);
+    def n_n:    (.n // .seq // .id // 0);
+    # H-2 (c23): --since compares BYTE-LEXICOGRAPHICALLY, so a malformed stamp
+    # silently mis-ranks instead of erroring, and a BLANK one is always-less-than
+    # and is dropped from EVERY window. Normalise the two LOSSLESS shapes here (a
+    # space separator, and a minute-precision stamp missing its seconds) so
+    # historical rows stay reachable. `ack --at` now REFUSES a stamp outside the
+    # ISO-8601 UTC family, so this is a compatibility path for OLD rows only,
+    # never a licence to write a new one. It covers three lossless shapes:
+    # a space separator, minute precision missing its seconds, and -- measured
+    # against the live corpus, which is how this third one was found -- the
+    # fractional-second / +00:00 spellings that are perfectly valid and that a
+    # stricter predicate had been counting as malformed. Windowing stays STRICT: a row that is
+    # still non-ISO is NOT forced into every window, because that would make
+    # `--since` unable to report an empty window at all.
+    def n_t: ((.t // .ts // .at // "") | tostring
+              | sub("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2}) "; .d + "T")
+              | sub("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2})Z$"; .d + ":00Z"));
     [ .events[]?
       | select(($kind == "") or (n_kind == $kind))
       | select(($actor == "") or (n_by | contains($actor)))
@@ -3912,11 +4138,16 @@ cmd_events() { # oc-ledger events|tail [--n N] [--kind K] [--actor U] [--since T
 
   local trunc=160; [ "$full" -eq 1 ] && trunc=1000000
   printf '%s' "$sel" | jq -r --argjson t "$trunc" '
-    def n_kind: ((.kind // .type // "") | tostring);
-    def n_by:   ((.by // .actor // .role // "") | tostring);
-    def n_t:    ((.t // .ts // "") | tostring);
-    def n_what: ((.what // .text // .summary // .note // "") | tostring);
-    def n_n:    (.n // .seq // 0);
+    def n_kind: ((.kind // .type // .event // .ev // "") | tostring);
+    def n_by:   ((.by // .actor // .role // .who // "") | tostring);
+    def n_t:    ((.t // .ts // .at // "") | tostring
+                 | sub("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2}) "; .d + "T")
+                 | sub("\\.[0-9]+Z$"; "Z")
+                 | sub("\\+00:00$"; "Z")
+                 | sub("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2})Z$"; .d + ":00Z"));
+    def n_what: ((.what // .text // .summary // .note // .detail // .event
+                  // .action // .directive // .details // "") | tostring);
+    def n_n:    (.n // .seq // .id // 0);
     .[] | [ n_n,
             (n_t    | if . == "" then "?" else . end),
             (n_kind | if . == "" then "?" else . end),
@@ -3925,7 +4156,8 @@ cmd_events() { # oc-ledger events|tail [--n N] [--kind K] [--actor U] [--since T
   if [ "$full" -eq 0 ]; then
     local clipped
     clipped="$(printf '%s' "$sel" | jq --argjson t "$trunc" '
-      def n_what: ((.what // .text // .summary // .note // "") | tostring);
+      def n_what: ((.what // .text // .summary // .note // .detail // .event
+                    // .action // .directive // .details // "") | tostring);
       [.[] | select((n_what | length) > $t)] | length')"
     [ "${clipped:-0}" -gt 0 ] && echo "events: $clipped row(s) had 'what' truncated to $trunc chars — rerun with --full for the complete text" >&2
   fi
@@ -3955,9 +4187,10 @@ case "$sub" in
   lessons) cmd_lessons "${rest[@]+"${rest[@]}"}" ;;
   roster) cmd_roster "${rest[@]+"${rest[@]}"}" ;;
   events|tail) cmd_events "${rest[@]+"${rest[@]}"}" ;;
+  duplicates) cmd_duplicates "${rest[@]+"${rest[@]}"}" ;;
   selftest) cmd_selftest; exit $? ;;
   --verbs)
-    echo "stamp sync check-version cadence ack enroll promote retire commit-pending confirm claim claim-ref claims sweep-closed-claims lessons roster events tail"
+    echo "stamp sync check-version cadence ack enroll promote retire commit-pending confirm claim claim-ref claims sweep-closed-claims lessons roster events tail duplicates"
     exit 0
     ;;
   *)

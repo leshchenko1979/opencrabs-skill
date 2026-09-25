@@ -976,6 +976,27 @@ if [ "$TIP" != "$SHA" ]; then
   journal "LEG3 TIP-MOVED branch=$BRANCH tip=$(printf '%s' "$TIP" | cut -c1-8) expected=$(printf '%s' "$SHA" | cut -c1-8)"
   die "branch tip moved under the chain: $BRANCH is now $(printf '%s' "$TIP" | cut -c1-8), expected $SHA — the gate validated $SHA, so re-gate and relaunch: oc-ship-chain --sha $TIP --branch $BRANCH" 5
 fi
+
+# ---- J-1 (c23): PRE-LEG3 ANCESTRY RE-CHECK --------------------------------
+# The gate (LEG1) runs BEFORE the landing lock is taken, so the window
+# between "gate green" and "lock acquired" is unprotected: origin/main can
+# move while this chain waits in the ship-lock queue, and the ff-merge below
+# performs NO rebase of its own. Measured cost (finding 127429e6, cycle
+# 20260919-c21; re-measured 2026-09-25 on one branch in one afternoon):
+# one patch, three shas, three full ~25-minute gates, two already void.
+# The state needed here is pure git ref state and the chain already holds the
+# lock -- so the cause is named NOW instead of being discovered as a generic
+# NON-FF after a failed merge. The rc-5 handler below still discriminates the
+# two sub-cases, so this pre-check mirrors it rather than inventing a verdict.
+if ! git -C "$FORK_REPO" merge-base --is-ancestor origin/main "$TIP" 2>/dev/null; then
+  if git -C "$FORK_REPO" merge-base --is-ancestor "$TIP" origin/main 2>/dev/null; then
+    journal "LEG3 PRE-ANCESTRY ALREADY-LANDED tip=$(printf '%s' "$TIP" | cut -c1-8) — tip is already IN origin/main"
+    die "ALREADY-LANDED (rc 5): $BRANCH ($TIP) is already contained in origin/main -- another lane landed this work. Nothing to rebase and nothing to ship; verify the issue's state and close it. Do NOT re-gate." 5
+  fi
+  journal "LEG3 PRE-ANCESTRY MISS origin-main=$(git -C "$FORK_REPO" rev-parse --short origin/main 2>/dev/null || echo '?') tip=$(printf '%s' "$TIP" | cut -c1-8) — origin/main moved while this chain waited on the lock"
+  die "STALE-BASE (rc 5, caught BEFORE the merge attempt): origin/main advanced while this chain waited for the landing lock, so $BRANCH is no longer based on it. The gate validated $SHA, but the range is now based on a superseded main. Rebase onto the current main and re-run: oc-rebase-safety (then) oc-ship-chain --sha <rebased-tip> --branch $BRANCH. NOTE: if the rebase changes NOTHING but the parent -- i.e. the same patch-id -- oc-ship-chain --gated-run carries the existing GREEN forward instead of burning a fresh ~25-min gate (Duty-4 n=2520)." 5
+fi
+
 set +e
 git -C "$FORK_REPO" merge --ff-only "$TIP" >/dev/null 2>&1
 FF_RC=$?
@@ -1471,6 +1492,63 @@ EOF
   grep -q "LEG3 STALE-LOCAL-MAIN" "$T/journal.log" && ok "stale-local-main-journal" || bad "stale-local-main-journal"
   [ "$(git -C "$T/clone" rev-parse HEAD)" = "$STALE_MAIN" ] && ok "stale-local-main-main-untouched" || bad "stale-local-main-main-untouched"
   # restore for the tests that follow
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" reset -q --hard origin/main
+
+  # ---- J-1 (c23): PRE-LEG3 ANCESTRY RE-CHECK ------------------------------
+  # The gate runs BEFORE the landing lock, so origin/main can move while the
+  # chain waits in the queue and the ff-merge performs no rebase of its own.
+  # This fixture makes the branch's base genuinely superseded: base a branch on
+  # origin/main, then advance origin/main PAST it. The pre-check must name the
+  # cause BEFORE attempting the merge, so the operator is never left reading a
+  # generic NON-FF whose remedy (rebase) is one of two opposite answers.
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" push -q -f origin "$FSHA:main"
+  git -C "$T/clone" reset -q --hard origin/main
+  git -C "$T/clone" checkout -qb preanc-feat origin/main
+  echo preanc > "$T/clone/preanc.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "preanc-feat on a base that will be superseded"
+  git -C "$T/clone" push -q origin preanc-feat
+  PREANC_TIP="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" checkout -q main
+  echo later > "$T/clone/later.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "main advances past preanc-feat's base"
+  git -C "$T/clone" push -q origin main
+  RC=0; OUT="$(run_chain --sha "$PREANC_TIP" --branch preanc-feat 2>&1)" || RC=$?
+  check_rc "pre-ancestry-rc5" "$RC" 5
+  case "$OUT" in *"STALE-BASE (rc 5, caught BEFORE the merge attempt)"*) ok "pre-ancestry-message" ;; *) bad "pre-ancestry-message: $OUT" ;; esac
+  case "$OUT" in *"oc-rebase-safety"*) ok "pre-ancestry-names-the-remedy" ;; *) bad "pre-ancestry-names-the-remedy: $OUT" ;; esac
+  # the carry-forward is what makes the remedy affordable rather than a fresh
+  # ~25-min gate for identical bytes (Duty-4 n=2520) -- the message must name it
+  case "$OUT" in *"--gated-run"*) ok "pre-ancestry-names-the-carry-forward" ;; *) bad "pre-ancestry-names-the-carry-forward: $OUT" ;; esac
+  grep -q "LEG3 PRE-ANCESTRY MISS" "$T/journal.log" && ok "pre-ancestry-journal" || bad "pre-ancestry-journal"
+  # the whole point of a PRE-check: the generic NON-FF text must NOT be what
+  # the operator reads, because it cannot distinguish the two opposite causes
+  case "$OUT" in *"NON-FF"*) bad "pre-ancestry-must-not-read-as-non-ff" ;; *) ok "pre-ancestry-not-non-ff" ;; esac
+  # the ALREADY-LANDED arm: a tip already contained in origin/main is not a
+  # rebase problem either, and must say so rather than advise a rebase
+  rm -f "$T/journal.log"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" checkout -qb landed-feat origin/main
+  echo landed > "$T/clone/landed.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "landed-feat"
+  git -C "$T/clone" push -q origin landed-feat
+  LANDED_TIP="$(git -C "$T/clone" rev-parse HEAD)"
+  git -C "$T/clone" checkout -q main
+  git -C "$T/clone" merge -q --ff-only landed-feat
+  # main must advance PAST the landed tip, or TIP == origin/main and the
+  # pre-check correctly falls through as a harmless no-op merge (rc 0) --
+  # the ALREADY-LANDED arm is for a tip CONTAINED in a main that moved on.
+  echo after > "$T/clone/after.txt"
+  git -C "$T/clone" add -A && git -C "$T/clone" commit -qm "main advances past the landed tip"
+  git -C "$T/clone" push -q origin main
+  RC=0; OUT="$(run_chain --sha "$LANDED_TIP" --branch landed-feat 2>&1)" || RC=$?
+  check_rc "pre-ancestry-already-landed-rc5" "$RC" 5
+  case "$OUT" in *"ALREADY-LANDED"*) ok "pre-ancestry-already-landed-message" ;; *) bad "pre-ancestry-already-landed-message: $OUT" ;; esac
+  case "$OUT" in *"Do NOT re-gate"*) ok "pre-ancestry-already-landed-forbids-regate" ;; *) bad "pre-ancestry-already-landed-forbids-regate: $OUT" ;; esac
+  # restore for the tests that follow
+  rm -f "$T/journal.log"
   git -C "$T/clone" checkout -q main
   git -C "$T/clone" reset -q --hard origin/main
   git -C "$T/clone" branch -q -D stale-feat

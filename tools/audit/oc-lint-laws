@@ -112,8 +112,29 @@ add_cit() { # $1=file $2=line $3=tool $4=flag
 }
 
 # A law line that DOCUMENTS an absence is a citation, not a prescription.
-citation_line() { # $1=file $2=line
-  sed -n "$2p" "$1" 2>/dev/null | grep -qE 'never existed|does not exist|no such|0 occurrences|zero occurrences|phantom|unavailable|is rejected|rejected with rc|silently ignored'
+citation_line() { # $1=file $2=line [$3=cited token]
+  _cl="$(sed -n "$2p" "$1" 2>/dev/null)"
+  # Word-level markers: a line that says a flag "does not exist" is citing it.
+  printf '%s' "$_cl" | grep -qE 'never existed|does not exist|no such|0 occurrences|zero occurrences|unavailable|is rejected|rejected with rc|silently ignored' && return 0
+  # `phantom` is PROXIMITY-SCOPED (c24 J-1). Line-level matching let ANY line
+  # containing the word suppress its own findings, and the live corpus carries
+  # lines that discuss phantom CLAIMS, or the lint's own phantom-flag verdicts,
+  # while holding a perfectly good flag span -- measured: 4 live law lines were
+  # suppressed by the bare word alone. A citation names THIS token as the
+  # phantom ("`oc-ship-chain --resume` phantom"), so the word must sit within 20
+  # chars either side of the cited token. Narrowing it to the uppercase verdict
+  # forms instead was tried and produced a FALSE POSITIVE on fleet-directives.md
+  # :440, a correct law line -- a false accusation against a correct law is the
+  # one failure this tool must not make, which is why proximity (not a stricter
+  # spelling) is the fix.
+  [ -n "${3:-}" ] || return 1
+  _win="$(printf '%s' "$_cl" | awk -v t="$3" '{
+      i = index($0, t); if (i == 0) { exit }
+      s = i - 20; if (s < 1) s = 1
+      print substr($0, s, 20 + length(t) + 20)
+  }')"
+  case "$_win" in *phantom*|*PHANTOM*|*Phantom*) return 0 ;; esac
+  return 1
 }
 
 flag_known() { # $1=tool src  $2=flag
@@ -186,6 +207,14 @@ EOT
   printf 'Dispatches `oc-good` (`cargo test --locked --all-features`).\n'                 > "$T/cargo-span.md"
   printf '`oc-good`'"'"'s `--gamma` flag is rejected with rc 2.\n'                        > "$T/possessive.md"
   printf 'Do not forget to run `oc-good --bogus` before you start.\n'                     > "$T/weak-negation.md"
+  # c24 J-1: the `phantom` marker is PROXIMITY-SCOPED. Line-level matching let
+  # any line containing the word suppress its own findings -- measured on the
+  # live corpus, 4 law lines were suppressed by the bare word alone, and
+  # narrowing it to the uppercase verdict spellings produced a FALSE POSITIVE on
+  # fleet-directives.md:440 (a correct citation). These two legs pin both
+  # directions of the real discriminator: DISTANCE, not spelling.
+  printf 'The phantom claim author was excluded; run `oc-good --resume` now.\n'          > "$T/prox-real.md"
+  printf 'Same family as the `oc-good --resume` phantom: law names only what exists.\n'  > "$T/prox-citation.md"
   cat > "$T/fence.md" <<'EOT'
 Recovery:
 
@@ -200,6 +229,8 @@ EOT
   run "$T/unknown-tool.md";  chk "unknown tool -> rc 1"                1 "UNKNOWN-TOOL oc-nope"
   run "$T/fence.md";         chk "invocation inside a fence -> rc 1"   1 "PHANTOM-FLAG oc-good --resume"
   run "$T/weak-negation.md"; chk "weak negation does NOT suppress"     1 "PHANTOM-FLAG oc-good --bogus"
+  run "$T/prox-real.md";     chk "a DISTANT 'phantom' word does NOT suppress"  1 "PHANTOM-FLAG oc-good --resume"
+  run "$T/prox-citation.md"; chk "an ADJACENT 'phantom' still suppresses"      0 "" "PHANTOM-FLAG"
 
   # --- the checks that must stay SILENT (the false-positive wall) ----------
   run "$T/clean.md";       chk "clean corpus -> rc 0"                 0 "" ""
@@ -350,7 +381,7 @@ EOC
     continue
   fi
   if ! flag_known "$CTOOL_PATH" "$cflag"; then
-    if citation_line "$cfile" "$cln"; then
+    if citation_line "$cfile" "$cln" "$cflag"; then
       add_cit "$rel" "$cln" "$ctool" "$cflag"
     else
       add "$rel" "$cln" "PHANTOM-FLAG" "$ctool" "$cflag" "the tool's source contains ZERO occurrences of this flag"

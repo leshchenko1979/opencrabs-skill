@@ -101,14 +101,10 @@ marker_scan() { # byte-level feature-presence scan (#376). rc 0 = found, 1 =
   grep -q -a -F -- "$2" "$1"
 }
 
-append_log() { # newline-safe append (defect #13): a log left unterminated by a
+append_log() { # newline-safe append (defect #13, J-5): predicate lives in
+               # lib/oc-log.sh (one home) -- a log left unterminated by a
                # previous writer must not glue the next row onto its last line
-  local f="$1" c="$2"
-  [ -n "$f" ] || return 2
-  if [ -s "$f" ] && [ -n "$(tail -c 1 "$f" 2>/dev/null)" ]; then
-    printf '\n' >> "$f"   # terminate the previous writer's unterminated row
-  fi
-  printf '%s\n' "$c" >> "$f"
+  oc_append_line_safe "$1" "$2"
 }
 
 STATE_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"

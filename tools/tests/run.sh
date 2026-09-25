@@ -1410,6 +1410,25 @@ run_selftest oc-lint-laws
 if tool oc-lint-laws; then
   "$TOOLS_DIR/audit/oc-lint-laws" --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown arg -> 2 (usage)" || bad "unknown arg -> expected 2"
   "$TOOLS_DIR/audit/oc-lint-laws" --help >/dev/null 2>&1 && ok "oc-lint-laws --help rc=0" || bad "oc-lint-laws --help rc!=0"
+  # c24 J-1: the LIVE corpus, actually LINTED. Every leg above and every leg in
+  # the tool's own selftest points at a fixture tools/ dir, so DEFAULT_CORPUS is
+  # never read and a phantom flag in the SHIPPED law stays green -- which is how
+  # the dead `oc-ship-chain --resume` citation went unseen for weeks. The leg
+  # below runs the real corpus and requires rc 0; the control plants a phantom
+  # and requires rc 1, so the leg cannot pass by measuring nothing.
+  _LLT="$(mktemp -d -t oc-battery-lint.XXXXXX)"
+  _ll_rc=0
+  "$TOOLS_DIR/audit/oc-lint-laws" >"$_LLT/live.out" 2>&1 || _ll_rc=$?
+  if [ "$_ll_rc" -eq 0 ]; then
+    ok "live corpus lint -> rc 0 (every flag/verb named by the shipped law exists)"
+  else
+    bad "live corpus lint -> rc=$_ll_rc: $(head -2 "$_LLT/live.out" | tr '\n' ' ')"
+  fi
+  printf 'Run `oc-lint-laws --qqzz-probe` to check.\n' > "$_LLT/probe.md"
+  _ll_p=0
+  "$TOOLS_DIR/audit/oc-lint-laws" --file "$_LLT/probe.md" >/dev/null 2>&1 || _ll_p=$?
+  [ "$_ll_p" -eq 1 ] && ok "live corpus lint control: a planted phantom reddens (rc 1)" || bad "live corpus lint control -> rc=$_ll_p want 1"
+  rm -rf "$_LLT"
 fi
 
 # ---- 68. oc-harvest-dispatch (automated harvest order dispatcher)
