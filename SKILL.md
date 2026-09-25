@@ -85,6 +85,8 @@ register + test source of truth (archived compiler-step anchors stripped
 2026-08-29 — `tools/archive/compiler.md` carries the old numbering for re-enable context).
 Fleet-wide rc conventions + FULL per-tool rc register: `tools/RC-CONTRACT.md` — the SOLE register (lens A H1/B F1, v0.4.79; rows below carry purpose only):
 
+**Directory layout — one level per KIND (v0.4.254):** `tools/` holds the `oc-*` fleet executables (the public interface), `tools/lib/` shared helpers, `tools/tests/` the battery, `tools/archive/` retired tools, `tools/docs/` the law that documents the tools, and **`tools/instruments/` corpus-agnostic analysis tools that are NOT fleet tools** — an instrument that reviews an arbitrary corpus has no place in the `oc-*` namespace, and lands there instead.
+
 | Tool | Slot |
 |---|---|
 | `./tools/oc-order-validate <sha>` | ORDER gates inside `oc-deploy ship` |
