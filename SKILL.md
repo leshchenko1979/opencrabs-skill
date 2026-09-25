@@ -287,14 +287,11 @@ probe hygiene, and the single-sided-probe sufficiency ruling — are canonical a
   disk; workers absorb re-reads at their own boundaries (turn start, role-file
   load), no reload pings are owed or sent (defined here lens A16 v0.4.89;
   used in editor.md/triage.md/toolsmith.md).
-- **Triage lane** — the interrupt lane carved out of HQ at v0.4.86
-  (idea/QUIRK intake, fix routing, enforcement patrols — `triage.md`); never
-  edits skill files. Discover its session via `session_search`, never
-  uuid-from-memory.
-- **Toolsmith lane** — the CLI tool lane carved out at v0.4.87 (owner "Go toolsmith"
-  2026-09-06): owns `tools/` code — makes + fixes the CLI tools every other role
-  uses (`toolsmith.md`); never edits skill markdown. Discover its session via
-  `session_search`, never uuid-from-memory.
+- **Triage lane** — the interrupt lane carved out of HQ at v0.4.86 (idea/QUIRK intake, fix routing,
+  enforcement patrols — `triage.md`); never edits skill files.
+- **Toolsmith lane** — the CLI tool lane carved out at v0.4.87 (owner "Go toolsmith" 2026-09-06): owns
+  `tools/` code — makes + fixes the CLI tools every other role uses (`toolsmith.md`); never edits skill
+  markdown. (Discover EITHER session via `session_search`, never uuid-from-memory.)
 - **Roster** — the worker registry in `workers-ledger.json` (enroll / claim /
   ack rows); `oc-attrib` joins Session-Id trailers against it.
 - **Lens (Reviewer A–J)** — one Duty-6 read-only review perspective
@@ -475,14 +472,10 @@ links; development-time upstream contact is PR-comments only (supersedes the
   subsystem relationship, blocker dependency, or child sub-issue is established or discovered
   at ANY point in the lifecycle (creation, triage intake, editor in-flight discovery, decomposition,
   or upstream PR staging), the lane identifying it MUST establish native links in the same turn.
-  **CREATION-TIME PARENT GATE (owner order 2026-09-25 ~21:35Z, "go filing gate") — a `fix(`/`bug(`-titled
-  issue MUST carry its parent ON THE CREATING COMMAND, not as a follow-up edit: file it via
-  `tools/issue/oc-issue-create` (which refuses a parentless fix-title), or with `gh issue create --parent <N>`.
-  If no parent is derivable, the issue must carry an EXPLICIT declaration instead (`--no-parent "<reason>"`
-  on the tool). **Silence is the violation: a declared orphan is legal, a silent one is not.** Rationale,
-  measured 2026-09-25: of 143 open fix-titled issues, 36 carried a parent and 107 did not, and zero links had
-  ever been REMOVED — they were never created, and the practice lapsed 2026-09-22 for want of a gate. The
-  mandate was never wrong; it was unenforced. Raw `gh issue create` for a fix-title is a violation.
+  **CREATION-TIME PARENT GATE (owner order 2026-09-25) — a `fix(`/`bug(`-titled issue MUST carry its parent ON
+  the creating command (`tools/issue/oc-issue-create`, or `gh issue create --parent <N>`); no derivable parent ->
+  an explicit `--no-parent "<reason>"`. A declared orphan is legal, a silent one is not. Full clause + the Duty T5
+  backstop: `upstream-merge-runbook.md`, `triage.md`.
   via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
   **READ a relation with `gh issue view <N> --json parent,subIssues,blockedBy,blocking` (or the
   `/parent` endpoint) — NEVER via the issue object's `.parent` projection.** `gh api
