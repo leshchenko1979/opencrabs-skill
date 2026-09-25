@@ -148,12 +148,14 @@ files read on demand — nothing is cached in-session — so "reload" = re-read:
    the lane shell's PATH — never invoke them bare and never `which` them
    (empty result ⇒ the rc=127 discovery class, first catalogued 2026-09-06).
 They are path-invoked skill scripts. Canonical anchor:
-`~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/<tool>` — relative
-`tools/<tool>` forms in these docs assume the skill dir as cwd. ALWAYS
+`~/.opencrabs/profiles/ops/skills/opencrabs-dev/tools/<group>/<tool>` — the fleet is
+grouped one level per FUNCTION (`audit/` `git/` `harvest/` `issue/` `notify/` `ship/`
+`smoke/` `state/`); relative `tools/<group>/<tool>` forms in these docs assume the skill
+dir as cwd. ALWAYS
 invoke that CANONICAL copy — never a worktree's `tools/` copy, and never
 the invoking script's own location (worktree self-resolution produced
 contradicting same-day drift verdicts; `oc-drift-check` resolves the
-canonical profile copy by default — §Skill-dir resolution, v0.4.130).
+canonical profile copy by default).
 
 No reload volley is owed to you (v0.4.19 disk absorption stands) — the
 pull-check is YOUR duty; HQ notifies stay targeted per Duty 3.

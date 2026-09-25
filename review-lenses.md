@@ -291,4 +291,4 @@ Standing lens in the Duty 4+6 skill-review rotation (registered in `oc-review-pe
 2. **MEMORY.md** carries no discipline laws — passive memory never binds on a cold session (shipped template law); directives found there are findings.
 3. **Every finding lands as a move-with-verification:** the canonical copy is verified present in the skill BEFORE anything is removed from the brain file. Brain files are append-only — shrink/cleanup requires explicit owner approval and `dedup_intent`/`cleanup_intent`.
 
-Reports persist via `oc-review-persist brain-scrub <text|@file>`. Same mechanics as every other lens: verdict consolidated → stamped (the `review-battery` boundary law at `hq.md §Duty 6` applies unchanged).
+Reports persist via `oc-review-persist brain-scrub <text|@file>`. Same mechanics as every other lens: verdict consolidated → stamped (the boundary-stamp law at `hq.md §Duty 6` applies unchanged — the close form is `oc-ledger stamp note "v<version> ACCEPTED"`, NOT `review-battery`, which does not reset the counter).
