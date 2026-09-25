@@ -1,5 +1,23 @@
 # Changelog — opencrabs-dev
 
+## v0.4.260 — the Duty 4/6 backlog sweep: every ignored finding from cycles c20–c24 dispositioned
+
+**Owner order, 2026-09-25:** *"can you sweep the 5 recent reviews and fix all the ignored findings?"* — executed under the v0.4.259 law (findings land in their entirety, no human gate).
+
+**The gap that made this necessary.** c23's own verdict reads *"Nothing was edited this cycle"* — 38 findings, none landed. c24's 79 were triaged but its codification plan named only the 24 converged items. This entry closes the accumulated backlog.
+
+**Doc-vs-tool mismatches (each verified against its own `--help`/usage block, not against the law):** `SKILL.md`'s directory-layout law described a **flat** `tools/` tree while the fleet is grouped one level per function (`audit/` `git/` `harvest/` `issue/` `notify/` `ship/` `smoke/` `state/`) · the BUILD-TRIGGER named `oc-deploy ship <full-sha>` where the tool takes `--sha` · `oc-log-search`'s `--log <f>` is really `--log-dir <P>` · `oc-commit`'s `--state` is comment TEXT, not a dir · `oc-harvest-dispatch` needs a verb (`vet`|`dispatch`) · `oc-questions`' verb list omitted `withdraw`, which is live in `_VERBS` · `oc-wt`'s `--force` is a flag, not a verb · `README.md` advertised the RETIRED `oc-prchecks --notify` · `harvest.md` cited `claim-ref <issue>` where the tool takes a **uuid** · `editor.md`'s canonical tools anchor was still flat.
+
+**Citation and duplication class:** `editor.md` carried a dead pointer to a `Skill-dir resolution` section that exists nowhere · `harvest.md` cited its own `Phase 4`, which lives in `editor.md` · **two different v0.4.170 findings shared the label `Finding H-1`** — the row number is the immutable discriminator the corpus already requires, so the colliding label is dropped · `review-lenses.md` pointed at the `review-battery` boundary form that `hq.md` now explicitly forbids.
+
+**CHANGELOG correction.** The v0.4.259 entry mis-attributed `ba0aac61` to **#594** (its own trailer is **#595**) and left `c0322e51` unnamed (its trailer is **#596**) — an attribution taken from row adjacency rather than from the commit's own trailer. Both corrected; `grep -n -E '#59[456]'` now resolves each.
+
+**Brain-file class (ops profile, not git-tracked):** `AGENTS.md` named `[memory] external_paths` — the live key is the array-of-tables `[[memory.extra_paths]]` with `path`+`pattern` · `TELEGRAM.md` still framed `tg_*` as *"the primary path in this profile"*, superseded by the 2026-09-04 owner identity law · `BOOT.md` pointed at `~/srv/rs/opencrabs` and `~/.opencrabs/source/`, neither of which exists on this box (the source tree is `/root/opencrabs`).
+
+**Bundled and named** (C8): `9b494218` — `oc-issue-create`, the creation-time parent gate (Toolsmith, from Triage's law order) · `d834a6d2` — this sweep.
+
+**LOC** (8-file corpus, `sum(1 for _ in open(f))`, LINES READ): 3648 → **3650** (+2, the `editor.md` anchor replacement).
+
 ## v0.4.259 — the Duty 4/6 fix gate is removed: reviewers' findings land in their entirety
 
 **Owner order, 2026-09-25 21:29Z, verbatim:** *"update your duty 4 and 6 laws so that next time reviewers findings are not wasted but fixed in their entirety. remove the human gate fro the duty 4 and 6 fixing process"*
