@@ -69,6 +69,13 @@ Usage:
   $PROG record --unit <slug> --pr <number> [--issue <N>] [--state-file <path>]
   $PROG purge --unit <slug> [--pr <N>] [--issue <N>] [--state-file <path>] [--dry-run]
   $PROG sync [--repo <path>] [--state-file <path>]
+  $PROG clusters [--repo <path>] [--open-fix] [--json]
+      Derives the ISSUE CLUSTERS the soak gate keys on: fork-only commits
+      grouped by their canonical issue ref, filtered on the ISSUE TITLE for
+      fix-type, with the dependency leg built from the COMMIT/FILE graph.
+      Emits every cluster (never pages silently); --open-fix narrows the
+      view to open fix-titled clusters. Exits 3 if the fork issue list
+      cannot be read -- never classifies against an empty map.
   $PROG --help | -h
   $PROG --selftest
 
@@ -823,6 +830,126 @@ def declared_subject_present(declared, repo_path, base_ref='adolfousier/main'):
                          capture_output=True)
     return res.returncode == 0
 
+
+# ---- clusters: the CLUSTER SURFACER -----------------------------------------
+# The soak gate holds a CLUSTER while OPEN FIX-TYPE issues are linked to its
+# population, so clusters have to be DERIVED. Hand-building them in a chat turn
+# is what produced three different published numbers (46 -> 41 -> 35) for the
+# same tree, through three separate manual errors: a commit-prefix classifier
+# used where the owner said fix-type ISSUES, an OPEN/open case bug, and a
+# silent head truncation. This verb removes all three by construction.
+
+# Trap (a): the owner's unit is fix-type ISSUES, so the filter is the ISSUE
+# TITLE. A commit-prefix classifier is a different population -- measured at 90
+# clusters against the title filter's 41, the largest single error source.
+FIX_TITLE_RE = re.compile(r'^\s*fix\b', re.I)
+FEAT_SUBJECT_RE = re.compile(r'^\s*feat\b', re.I)
+
+
+def get_fork_issues(fork_repo='leshchenko1979/opencrabs', mock_file=None):
+    """ONE call for every fork issue: number -> {title, state}.
+
+    Batched deliberately -- a per-issue `gh issue view` is ~110 calls for a
+    cluster run. Trap (b): gh returns `state` LOWERCASE ('open'), so every
+    comparison against 'OPEN' returns zero silently. Lowercasing happens here,
+    once, so no caller can reintroduce it.
+    """
+    if mock_file and os.path.exists(mock_file):
+        try:
+            with open(mock_file) as f:
+                loaded = json.load(f)
+        except Exception:
+            return None
+        recs = loaded if isinstance(loaded, list) else loaded.get('issues', [])
+        out = {}
+        for rec in recs:
+            try:
+                out[int(rec['number'])] = {
+                    'title': rec.get('title', ''),
+                    'state': str(rec.get('state', '')).lower(),
+                }
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
+    res = subprocess.run(
+        ['gh', 'issue', 'list', '--repo', fork_repo, '--state', 'all',
+         '--limit', '1000', '--json', 'number,title,state'],
+        capture_output=True, text=True)
+    if res.returncode != 0:
+        return None
+    try:
+        recs = json.loads(res.stdout)
+    except Exception:
+        return None
+    out = {}
+    for rec in recs:
+        try:
+            out[int(rec['number'])] = {
+                'title': rec.get('title', ''),
+                'state': str(rec.get('state', '')).lower(),
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def cluster_ahead_commits(commits):
+    """Group fork-only commits by their canonical issue ref.
+
+    Predicate is `oc_claims.commit_issue_refs` -- the SAME canonical parse
+    `scan` already uses: the machine-readable Issue-Ref TRAILER first, the
+    subject's explicit `#N` only as a fallback. Clustering on the subject's
+    first `#NNN` alone would file a prose mention ("law: name the four #547
+    commits bundled in v0.4.249") as that issue's work -- the false-credit the
+    C8 gate was corrected for (#565).
+    """
+    clusters = {}
+    unclustered = []
+    for c in commits:
+        refs = oc_claims.commit_issue_refs(c.get('trailer', ''), c.get('subject', ''))
+        if not refs:
+            unclustered.append(c)
+            continue
+        iss = min(refs)
+        entry = clusters.setdefault(iss, {'issue': iss, 'commits': []})
+        entry['commits'].append(c)
+    return clusters, unclustered
+
+
+def cluster_is_mixed(commits):
+    """Trap (d): a fix-TITLED cluster can still carry feat(...) commits.
+
+    Flagged, never counted as pure -- a cluster whose issue reads fix but whose
+    history adds a feature is not a fix cluster, and the soak gate keys on the
+    cluster's population.
+    """
+    return any(FEAT_SUBJECT_RE.match(c.get('subject', '') or '') for c in commits)
+
+
+def cluster_files(commits, repo_path):
+    return set(get_affected_files_for_commits(commits, repo_path))
+
+
+def cluster_links(files_by_cluster):
+    """The dependency leg, from the COMMIT/FILE graph.
+
+    Deliberately NOT the gh blockedBy link: a live dependent (#218) passed the
+    vet CLEAN with no link at all and only flipped to REJECTED after the lane
+    declared it by hand. A link nobody wrote cannot be the gate's input, so the
+    graph is the input and the link is at best a corroboration.
+    """
+    links = {}
+    for iss, files in files_by_cluster.items():
+        linked = set()
+        for other, other_files in files_by_cluster.items():
+            if other == iss:
+                continue
+            if filter_substantive_overlap(files & other_files):
+                linked.add(other)
+        links[iss] = sorted(linked)
+    return links
+
+
 action = sys.argv[1]
 upstream_repo = sys.argv[2]
 repo_path = sys.argv[3]
@@ -1327,6 +1454,93 @@ if action == 'check':
         sys.exit(0)
 
     print(f'ELIGIBLE: Target {target} is confirmed UNHARVESTED (clean to branch and gate)')
+    sys.exit(0)
+
+elif action == 'clusters':
+    # Trap (c): NEVER page silently. Every cluster is emitted; if a bound is
+    # ever added it must print what it withheld. A `head -80` on this output is
+    # how a tail group vanished from a published count with no warning.
+    as_json = '--json' in sys.argv
+    open_fix_only = '--open-fix' in sys.argv
+
+    commits = get_ahead_commits(repo_path, mock_commits)
+    clusters, unclustered = cluster_ahead_commits(commits)
+    issues = get_fork_issues(mock_file=os.environ.get('OC_HARVEST_MOCK_ISSUES'))
+    if issues is None:
+        sys.stderr.write('oc-harvest-census clusters: cannot read the fork issue list '
+                         '(gh failed) -- refusing to classify against an empty map\n')
+        sys.exit(3)
+
+    files_by_cluster = {}
+    for iss, entry in clusters.items():
+        files_by_cluster[iss] = cluster_files(entry['commits'], repo_path)
+    links = cluster_links(files_by_cluster)
+
+    rows = []
+    for iss, entry in sorted(clusters.items()):
+        meta = issues.get(iss) or {}
+        title = meta.get('title', '')
+        state = meta.get('state', '')
+        mixed = cluster_is_mixed(entry['commits'])
+        rows.append({
+            'cluster': iss,
+            'title': title,
+            'state': state,
+            'fix_titled': bool(FIX_TITLE_RE.match(title or '')),
+            'kind': 'MIXED' if mixed else 'PURE',
+            'commits': len(entry['commits']),
+            'files': len(files_by_cluster.get(iss, ())),
+            'linked': links.get(iss, []),
+            'shas': [c.get('short_sha', '') for c in entry['commits']],
+        })
+
+    # The gate's view: open, fix-titled, with at least one linked OPEN fix-type
+    # cluster in the same file graph.
+    open_fix = {r['cluster'] for r in rows if r['state'] == 'open' and r['fix_titled']}
+    for r in rows:
+        r['linked_open_fix'] = sorted(
+            (set(r['linked']) & open_fix) - {r['cluster']})
+        r['held'] = bool(r['linked_open_fix'])
+
+    summary = {
+        'clusters': len(rows),
+        'open_fix_titled': sum(1 for r in rows if r['state'] == 'open' and r['fix_titled']),
+        'pure': sum(1 for r in rows if r['kind'] == 'PURE'),
+        'mixed': sum(1 for r in rows if r['kind'] == 'MIXED'),
+        'unclustered_commits': len(unclustered),
+        'ahead_commits': len(commits),
+        'issues_unresolved': sum(1 for r in rows if not r['title']),
+    }
+
+    shown = [r for r in rows if r['state'] == 'open' and r['fix_titled']] if open_fix_only else rows
+
+    if as_json:
+        print(json.dumps({
+            'summary': summary,
+            'clusters': shown,
+            'unclustered': [c.get('short_sha', '') for c in unclustered],
+        }, indent=2))
+    else:
+        print('=== Issue Clusters ===')
+        print('  ahead commits: %d   clusters: %d   unclustered commits: %d'
+              % (summary['ahead_commits'], summary['clusters'], summary['unclustered_commits']))
+        print('  open fix-titled: %d   PURE: %d   MIXED: %d   issue lookup missed: %d'
+              % (summary['open_fix_titled'], summary['pure'], summary['mixed'],
+                 summary['issues_unresolved']))
+        if open_fix_only:
+            print('  (--open-fix: showing only open fix-titled clusters)')
+        print('')
+        for r in shown:
+            mark = ' [open fix]' if (r['state'] == 'open' and r['fix_titled']) else ''
+            print('CLUSTER #%-4d%s %s  commits=%d files=%d' % (
+                r['cluster'], mark, r['kind'], r['commits'], r['files']))
+            print('  %s' % (r['title'] or '(issue not resolvable on the fork)'))
+            if r['linked_open_fix']:
+                print('  linked open fix-type (file graph): %s'
+                      % ', '.join('#%d' % n for n in r['linked_open_fix']))
+            elif r['linked']:
+                print('  linked (file graph, not open fix-type): %s'
+                      % ', '.join('#%d' % n for n in r['linked']))
     sys.exit(0)
 
 elif action in ('scan', 'sync'):
@@ -3068,8 +3282,146 @@ sys.exit(0 if row and row[0].get("status") == "not-upstreamable" else 1)
     return 1
   fi
 
+
+  # ---- clusters: the cluster surfacer -------------------------------------
+  # Every trap in the build order gets a leg, because each one cost a published
+  # number when it was hit by hand: 46 -> 41 -> 35 for one tree.
+  local mock_cl_c="$selftest_tmp/mock_cl_commits.json"
+  local mock_cl_i="$selftest_tmp/mock_cl_issues.json"
+
+  # `files` rides the mock commit dicts, which get_affected_files_for_commits
+  # honours directly -- so the dependency leg is exercised without a git fixture.
+  cat << 'EOF' > "$mock_cl_c"
+[
+ {"sha":"a1","short_sha":"a1","subject":"fix(tools): real work (#701)","trailer":"leshchenko1979/opencrabs#700","commit_ts":1,"files":["src/shared.rs","src/a.rs"]},
+ {"sha":"a2","short_sha":"a2","subject":"fix(tools): a COMMIT that reads like a fix (#800)","trailer":"leshchenko1979/opencrabs#800","commit_ts":2,"files":["src/shared.rs","src/b.rs"]},
+ {"sha":"a3","short_sha":"a3","subject":"feat(tools): a FEATURE landed inside a fix-titled cluster (#801)","trailer":"leshchenko1979/opencrabs#801","commit_ts":3,"files":["src/c.rs"]},
+ {"sha":"a4","short_sha":"a4","subject":"chore: untrailered and unreferenced","trailer":"","commit_ts":4,"files":["src/d.rs"]}
+]
+EOF
+  # #700's state is UPPERCASE on purpose -- trap (b). gh returns lowercase in
+  # production, and a naive OPEN comparison returns zero silently.
+  # The two directions are deliberate: #800's COMMIT prefix is fix(...) while
+  # its ISSUE title is feat(...) -- the title must win (trap a). #801's COMMIT
+  # is feat(...) while its ISSUE title is fix(...) -- fix-titled AND MIXED
+  # (trap d). One fixture, both directions, so a prefix-keyed classifier
+  # cannot pass both.
+  cat << 'EOF' > "$mock_cl_i"
+[
+ {"number":700,"title":"fix(tools): the trailer must win","state":"OPEN"},
+ {"number":800,"title":"feat(tools): a feature, not a fix","state":"open"},
+ {"number":801,"title":"fix(tools): a fix-titled issue holding a feat commit","state":"open"}
+]
+EOF
+
+  rc=0
+  cl_out="$(STATE_DIR="$selftest_tmp" OC_HARVEST_MOCK_PRS="$mock_prs" \
+    OC_HARVEST_MOCK_COMMITS="$mock_cl_c" OC_HARVEST_MOCK_ISSUES="$mock_cl_i" \
+    OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+    run_engine "clusters" "adolfousier/opencrabs" "$selftest_tmp" "$mock_reg" "" "" "--json" 2>&1)" || rc=$?
+  cl_verdicts="$(printf '%s' "$cl_out" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print("PARSE_FAIL"); sys.exit(0)
+by={c["cluster"]:c for c in d["clusters"]}
+# (1) the TRAILER wins over the subject ref
+print("trailer_wins", "PASS" if (700 in by and 701 not in by) else "FAIL")
+# (2) fix-type is the ISSUE TITLE, never the commit prefix (trap a)
+print("title_not_prefix", "PASS" if (800 in by and not by[800]["fix_titled"] and by[801]["fix_titled"]) else "FAIL")
+# (3) MIXED is flagged for a fix-titled cluster carrying a feat commit (trap d)
+print("mixed_flag", "PASS" if by[801]["kind"]=="MIXED" else "FAIL")
+# (4) the dependency leg comes from the FILE GRAPH, not the gh blockedBy link
+print("graph_link", "PASS" if (800 in by[700]["linked"] and 700 in by[800]["linked"]) else "FAIL")
+# (5) unclustered commits are REPORTED, never silently dropped
+print("unclustered", "PASS" if d["summary"]["unclustered_commits"]==1 else "FAIL")
+')"
+  if [ "$rc" -eq 0 ] && ! oc_has "$cl_verdicts" "FAIL" && ! oc_has "$cl_verdicts" "PARSE_FAIL"; then
+    ok "clusters: trailer wins, title-not-prefix, MIXED flagged, file-graph link, unclustered reported"
+  else
+    echo "  bad  - clusters fixture expected all PASS, got rc=$rc ($cl_verdicts)"
+    return 1
+  fi
+
+  # Trap (b) discrimination on the COUNT: with #700's state UPPERCASE, a
+  # case-sensitive comparison yields 1 open fix-titled instead of 2 -- and a
+  # zero would look exactly like an empty tree.
+  if printf '%s' "$cl_out" | python3 -c '
+import json,sys
+sys.exit(0 if json.load(sys.stdin)["summary"]["open_fix_titled"]==2 else 1)
+'; then
+    ok "clusters: uppercase state counts as open (trap b -- OPEN vs open)"
+  else
+    echo "  bad  - clusters expected open_fix_titled=2 with UPPERCASE state"
+    return 1
+  fi
+
+  # Trap (c): NEVER pages silently. Every cluster the JSON reports must appear
+  # as a row in the table.
+  rc=0
+  cl_tbl="$(STATE_DIR="$selftest_tmp" OC_HARVEST_MOCK_PRS="$mock_prs" \
+    OC_HARVEST_MOCK_COMMITS="$mock_cl_c" OC_HARVEST_MOCK_ISSUES="$mock_cl_i" \
+    OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+    run_engine "clusters" "adolfousier/opencrabs" "$selftest_tmp" "$mock_reg" "" "" 2>&1)" || rc=$?
+  cl_rows="$(printf '%s\n' "$cl_tbl" | grep -c '^CLUSTER #')"
+  cl_json_n="$(printf '%s' "$cl_out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["clusters"]))' 2>/dev/null || echo -1)"
+  if [ "$rc" -eq 0 ] && [ "$cl_rows" = "$cl_json_n" ] && [ "$cl_rows" = "3" ]; then
+    ok "clusters: table emits every cluster the JSON reports (no silent paging)"
+  else
+    echo "  bad  - clusters table rows=$cl_rows json=$cl_json_n (want 3 and equal)"
+    return 1
+  fi
+
+  # --open-fix narrows to open fix-titled only, and DISCLOSES the narrowing.
+  rc=0
+  cl_of="$(STATE_DIR="$selftest_tmp" OC_HARVEST_MOCK_PRS="$mock_prs" \
+    OC_HARVEST_MOCK_COMMITS="$mock_cl_c" OC_HARVEST_MOCK_ISSUES="$mock_cl_i" \
+    OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+    run_engine "clusters" "adolfousier/opencrabs" "$selftest_tmp" "$mock_reg" "" "" "--open-fix" 2>&1)" || rc=$?
+  # #801 must be IN the narrowed view: it is fix-titled by ISSUE TITLE while its
+  # commit is feat(...), so a commit-prefix classifier drops it and the row
+  # count alone would still read 2 (it would swap in #800 instead).
+  if [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$cl_of" | grep -c '^CLUSTER #')" = "2" ] \
+     && oc_has "$cl_of" "CLUSTER #801" && ! oc_has "$cl_of" "CLUSTER #800" \
+     && oc_has "$cl_of" "--open-fix: showing only open fix-titled clusters"; then
+    ok "clusters --open-fix narrows to open fix-titled and discloses the narrowing"
+  else
+    echo "  bad  - clusters --open-fix expected 2 rows + disclosure, got rc=$rc"
+    return 1
+  fi
+
+  # rc=3 when the fork issue list cannot be read. A stub gh on PATH is the
+  # injection; mock PRs stay supplied so ONLY the issue call fails.
+  local cl_stub="$selftest_tmp/cl_bin"
+  mkdir -p "$cl_stub"
+  printf '#!/bin/sh\nexit 1\n' > "$cl_stub/gh"
+  chmod +x "$cl_stub/gh"
+  rc=0
+  cl_bad="$(PATH="$cl_stub:$PATH" STATE_DIR="$selftest_tmp" OC_HARVEST_MOCK_PRS="$mock_prs" \
+    OC_HARVEST_MOCK_COMMITS="$mock_cl_c" OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+    run_engine "clusters" "adolfousier/opencrabs" "$selftest_tmp" "$mock_reg" "" "" 2>&1)" || rc=$?
+  if [ "$rc" -eq 3 ] && oc_has "$cl_bad" "cannot read the fork issue list"; then
+    ok "clusters: unreadable issue list exits 3 and says why (never classifies against an empty map)"
+  else
+    echo "  bad  - clusters expected rc=3 with a clear message, got rc=$rc ($cl_bad)"
+    return 1
+  fi
+
   echo "selftest: ${ok_n}/${ok_n} OK"
   return 0
+}
+
+cmd_clusters() {
+  local json_flag="" openfix_flag=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) REPO="$2"; shift 2 ;;
+      --json) json_flag="--json"; shift ;;
+      --open-fix) openfix_flag="--open-fix"; shift ;;
+      -h|--help) usage 0 ;;
+      *) usage ;;
+    esac
+  done
+  run_engine "clusters" "$UPSTREAM_REPO" "$REPO" "$REGISTRY_FILE" "" "$DECLARED_SUBJECT" $json_flag $openfix_flag
 }
 
 # --- Main Dispatcher ---
@@ -3079,6 +3431,7 @@ case "${1:-}" in
   record) shift; cmd_record "$@" ;;
   purge) shift; cmd_purge "$@" ;;
   sync) shift; cmd_sync "$@" ;;
+  clusters) shift; cmd_clusters "$@" ;;
   --selftest) cmd_selftest ;;
   -h|--help) usage 0 ;;
   *) usage ;;
