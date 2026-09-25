@@ -101,9 +101,12 @@ const { registry } = defineRegistry(catalog, {
     // submitting -- the one regression that would break the live endpoint. The
     // description blocks are children of the form, which is where the pre-port
     // page carried them.
-    Question: ({ props, children }) => h('section', { id: props.set + '-' + props.qid },
-      h('h3', null, props.title),
-      props.recommendation ? h('p', { className: 'rec' }, 'recommended: ' + props.recommendation) : null,
+    Question: ({ props, children }) => h('section', { id: props.set + '-' + props.qid, className: 'q' },
+      h('h3', { className: 'qt' }, props.title),
+      // The recommendation band is the page's SIGNATURE: an amber-ruled block
+      // carrying the lane's own counsel. The words "lane recommends" come from
+      // CSS, not from this string, so the label cannot drift from the styling.
+      props.recommendation ? h('p', { className: 'rec' }, props.recommendation) : null,
       // hx-*: the form swaps THIS question's own block in place instead of
       // navigating away (owner question 2026-09-24). The section id below is
       // the swap target. Inert without the vendored htmx, in which case the
@@ -138,13 +141,16 @@ const { registry } = defineRegistry(catalog, {
     CodeBlock: ({ props }) => h('pre', { 'data-lang': props.lang }, h('code', null, props.code)),
     List: ({ props }) => h(props.ordered ? 'ol' : 'ul', null,
       props.items.map((item, i) => h('li', { key: i }, renderSpans(item)))),
+    // `chip`, not `rec`: the recommendation BAND and this badge are different
+    // elements, and giving them one class name is the specificity trap where a
+    // rule for one silently restyles the other.
     Option: ({ props }) => h('label', { className: 'opt' },
       h('input', { type: 'radio', name: 'choice', value: props.value, defaultChecked: !!props.recommended }),
-      ' ' + props.label,
-      props.recommended ? h('span', { className: 'rec' }, ' recommended') : null),
+      h('span', null, props.label,
+        props.recommended ? h('span', { className: 'chip' }, 'recommended') : null)),
     FreeText: ({ props }) => h('textarea', { name: 'text', rows: 2, placeholder: props.label }),
-    Submit: ({ props }) => h('button', { type: 'submit', name: 'choice', value: props.value }, props.label),
-    Clarify: ({ props }) => h('button', { type: 'submit', name: 'choice', value: 'clarify' }, props.label),
+    Submit: ({ props }) => h('button', { type: 'submit', name: 'choice', value: props.value, className: 'primary' }, props.label),
+    Clarify: ({ props }) => h('button', { type: 'submit', name: 'choice', value: 'clarify', className: 'ghost' }, props.label),
   },
 });
 
