@@ -1019,6 +1019,12 @@ def cmd_amend(argv):
         was = question.get("status")
         question["status"] = "open"
         question.pop("answer", None)
+        # answer_kind must go WITH the answer. Leaving "clarify" (or "text" /
+        # "option") on an OPEN, unanswered question is a record asserting
+        # something untrue -- the same class this register exists to remove.
+        # Found live 2026-09-25: q14 read status=open, answer=None, but
+        # answer_kind="clarify" after a clarify was amended back open.
+        question.pop("answer_kind", None)
         question["amended_at"] = now_iso()
         question["amend_count"] = int(question.get("amend_count") or 0) + 1
         if flags.get("--by"):
@@ -2399,6 +2405,18 @@ def selftest():
         ck("htmx:responseError" in _uijs,
            "the vendored UI surfaces a REFUSED submit -- htmx swaps only 2xx, "
            "so a 400 was previously invisible to the reader")
+        # (iii) amend must clear answer_kind WITH the answer. Found live: q14
+        # read status=open, answer=None, answer_kind="clarify" after a clarify
+        # was amended back open -- a durable record asserting something untrue.
+        rc, out, _ = run("amend", "--set", set_id, "--qid", _cq,
+                         "--description", "d2")
+        ck(rc == 0, "a clarified question can be amended back open (rc=%d)" % rc)
+        _aq = (get_set(set_id) or {}).get("questions", [{}])[-1]
+        ck(_aq.get("status") == "open" and not _aq.get("answer")
+           and not _aq.get("answer_kind"),
+           "\u2026and amend clears answer AND answer_kind together "
+           "(status=%r answer=%r kind=%r)"
+           % (_aq.get("status"), _aq.get("answer"), _aq.get("answer_kind")))
 
         # -- 5c. withdraw — the moot-question exit (HQ 2026-09-25) -----------
         # "withdrawn" was in CLOSED_STATUSES and named by the law, but nothing
