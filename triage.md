@@ -24,7 +24,7 @@ deputization. Expected reply shape: "routed to <lane>", not done-work.
 - **Skill file authoring**: Exclusively owned by HQ (SKILL.md §Hard rules census).
 - **Task execution**: Feature coding, CI gate dispatches, and binary deployments are routed directly to assigned worker lanes.
 - **Protocol governance**: Binding protocol rulings are owned by HQ (hq.md Duty 5); protocol disputes escalate to HQ.
-- **Upstream lifecycle tracking**: Harvester role lifecycle duties are consolidated in Triage (upstream delta watch, upstream PR census, maintainer dependency tracking). Editor exclusively authors, smokes, and files upstream PRs per Phase 7.
+- **Upstream lifecycle tracking**: Harvester role lifecycle duties are consolidated in Triage (upstream delta watch, upstream PR census, maintainer dependency tracking). **Triage SURFACES, COUNTS and PRIORITISES, and owns the tier tool (`oc-harvest-tiers`) — it NEVER ports, NEVER files an upstream PR, and NEVER follows one.** Editors end at smoke evidence; the HARVEST lane ports, gates and files per `harvest.md` Phase 7 (owner order 2026-09-24 centralising harvest).
 - **Priority authority (owner order 2026-09-15)**: Triage has complete, independent authority over intake triage, patrol sequence, and backlog sorting — never ask the human operator about priorities.
 
 ## Duty T3 — Create a new editor (standing authority, transferred from HQ at v0.4.86)
