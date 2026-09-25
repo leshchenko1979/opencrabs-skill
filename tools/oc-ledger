@@ -980,6 +980,12 @@ c8_naming_warn() { # $1 = version. Prints to stderr; ALWAYS rc 0 (never a gate).
     selfids="$(git -C "$SKILL_DIR" log --format='%h %(trailers:key=Session-Id,valueonly)' --no-merges "$anchor"..HEAD 2>/dev/null \
       | awk -v id="$self_id" 'NF>1 && index($0, id)>0 { printf "%s ", $1 }' || true)"
   fi
+  # Commits carrying an Issue-Ref TRAILER -- the machine-readable statement that
+  # a commit IS the work for an issue, as opposed to a subject that merely
+  # MENTIONS one in prose. The trailer is the contract every commit carries;
+  # a subject is free text. Same one-git-call idiom as selfids above.
+  refids="$(git -C "$SKILL_DIR" log --format='%h %(trailers:key=Issue-Ref,valueonly)' --no-merges "$anchor"..HEAD 2>/dev/null \
+    | awk 'NF>1 { printf "%s ", $1 }' || true)"
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     sha="${c%% *}"; subj="${c#* }"
@@ -1009,17 +1015,29 @@ c8_naming_warn() { # $1 = version. Prints to stderr; ALWAYS rc 0 (never a gate).
     # the trailer is this session's own. An unmatched or absent session id
     # excludes nothing — fail-open, which suits a WARN-only leg.
     #
-    # TIGHTENED: skip only a self-commit that ALSO carries no issue ref. A
-    # self-commit naming an issue is real shipped work whose ship date belongs
-    # in the record, so it stays flagged — measured on the v0.4.243 range,
-    # this keeps the Toolsmith's `873495a2 (#519)` and `0c39b940 (#517)` listed
-    # while removing the law commit that could not be named. Without this, a
-    # sync run by a lane that had also shipped a fix would silently drop that
-    # fix from the WARN — trading one false positive for one false negative.
+    # TIGHTENED (v0.4.243): skip only a self-commit that ALSO carries no
+    # Issue-Ref trailer. A self-commit that IS the work for an issue is real
+    # shipped work whose ship date belongs in the record, so it stays flagged —
+    # measured on the v0.4.243 range, this keeps the Toolsmith's `873495a2
+    # (#519)` and `0c39b940 (#517)` listed while removing the law commit that
+    # could not be named. Without this, a sync run by a lane that had also
+    # shipped a fix would silently drop that fix from the WARN — trading one
+    # false positive for one false negative.
+    #
+    # CORRECTED (2026-09-25, HQ report, verified first-hand): the test read the
+    # SUBJECT for '#' and a subject is PROSE, so a commit that merely NAMES an
+    # issue was treated as fixing it. Measured: `b1307038` "law: name the four
+    # #547 commits bundled in v0.4.249 (C8 leg)" carries a Session-Id trailer
+    # and NO Issue-Ref trailer, yet its subject's `#547` kept it listed — the
+    # right commit for the wrong reason, so the next reader cannot tell a real
+    # miss from a prose mention. Population over the last 500 non-merge
+    # commits: 177 carry an Issue-Ref trailer, 41 carry '#' in the subject
+    # without one. The trailer is the field the rest of the fleet keys identity
+    # on and prose drift cannot make it lie.
     case " $selfids " in
       *" $sha "*)
-        case "$subj" in
-          *'#'*) : ;;   # carries an issue ref -> nameable, keep flagging it
+        case " $refids " in
+          *" $sha "*) : ;;   # carries an Issue-Ref TRAILER -> real shipped work, keep flagging
           *) selfskip=$(( selfskip + 1 )); continue ;;
         esac
         ;;
@@ -1045,7 +1063,7 @@ EOF
     echo "sync: note — C8 naming: $skipped commit(s) skipped as this tool's own sweeper bookkeeping (subject carries '(oc-ledger commit-pending --bundle)'). Disclosed so the exclusion is never silent; those commits carry no issue ref and need no naming." >&2
   fi
   if [ "$selfskip" -gt 0 ]; then
-    echo "sync: note — C8 naming: $selfskip commit(s) skipped as made by THIS syncing session (Session-Id trailer = $self_id) and naming no issue. The entry is written before those commits exist, so it cannot name them; disclosed so the exclusion is never silent. A self-commit that DOES name an issue is still listed — only the unnameable ones are skipped." >&2
+    echo "sync: note — C8 naming: $selfskip commit(s) skipped as made by THIS syncing session (Session-Id trailer = $self_id) and carrying no Issue-Ref trailer. The entry is written before those commits exist, so it cannot name them; disclosed so the exclusion is never silent. A self-commit that DOES carry an Issue-Ref trailer is still listed — only the unnameable ones are skipped." >&2
   fi
   [ -n "$missing" ] || return 0   # named-everything is otherwise SILENT
   echo "sync: WARN — C8 naming: the '## v$v' entry does not name every commit this sync bundles." >&2
@@ -1880,12 +1898,27 @@ PAYLOAD
   #     and stays LISTED. Without this the skip would trade a false positive for
   #     a false negative on exactly the commits this leg exists to surface.
   printf 'v\n' > "$C8S/fix.txt"; git -C "$C8S" add -A
-  git -C "$C8S" commit -q -m "fix(tools): #780 a self-commit that ships real work" -m "Session-Id: $OC_ACTOR"
+  git -C "$C8S" commit -q -m "fix(tools): a self-commit that ships real work (#780)" -m "Session-Id: $OC_ACTOR" -m "Issue-Ref: #780"
   C8HSHA="$(git -C "$C8S" rev-parse --short HEAD)"
   printf 'name: fixture\nversion: 0.4.8\n---\n' > "$C8S/SKILL.md"
   printf '\n## v0.4.8\nc8 receipt\n' >> "$C8S/CHANGELOG.md"
   C8H="$(c8sync 0.4.8)"
   case "$C8H" in *"unnamed: $C8HSHA"*) ok ;; *) bad "c8-selfcommit-with-issue-hidden" ;; esac
+  # (i) CORRECTED (2026-09-25, HQ report, verified first-hand): a self-commit
+  #     whose SUBJECT merely MENTIONS an issue in prose carries no Issue-Ref
+  #     trailer and IS skipped. Measured on HQ's v0.4.250 sync: `b1307038`
+  #     "law: name the four #547 commits bundled in v0.4.249 (C8 leg)" was
+  #     flagged although it fixes nothing -- it NAMES that window's commits.
+  #     A subject is prose; the trailer is the contract the fleet keys on.
+  #     Discriminating: pre-fix the subject test saw '#' and kept it listed.
+  printf 'w\n' > "$C8S/prose.txt"; git -C "$C8S" add -A
+  git -C "$C8S" commit -q -m "law: name the four #781 commits bundled elsewhere (C8 leg)" -m "Session-Id: $OC_ACTOR"
+  C8ISHA="$(git -C "$C8S" rev-parse --short HEAD)"
+  printf 'name: fixture\nversion: 0.4.9\n---\n' > "$C8S/SKILL.md"
+  printf '\n## v0.4.9\nc8 receipt\n' >> "$C8S/CHANGELOG.md"
+  C8I="$(c8sync 0.4.9)"
+  case "$C8I" in *"unnamed: $C8ISHA"*) bad "c8-prose-mention-still-listed ($C8ISHA)" ;; *) ok ;; esac
+  case "$C8I" in *"skipped as made by THIS syncing session"*) ok ;; *) bad "c8-prose-mention-skip-undisclosed" ;; esac
   # 23-26: ack (v0.4.55: full 0.N.N shape — the old N.N regex could never
   # record a real skill version, which broke the reload convention's ack step)
   bash "$ME" ack short-uuid 0.4.2 >/dev/null 2>&1; chk "ack-bad-uuid" 2 $?
