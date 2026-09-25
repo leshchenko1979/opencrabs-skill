@@ -42,6 +42,15 @@ quick-build-linux dispatched via `oc-ship-chain`. Need
 Iterating clippy fixes? Edit code, re-dispatch pr-checks, read the run log.
 Never compile locally.
 
+**`#[cfg(test)]` boundary — both directions, and the cost asymmetry is the point.**
+A test-only fn must NEVER be called from production code: when it performs the
+identical mutation it reads as the production API, and with no local cargo the
+error surfaces only at CI as `error[E0599]` — one full ~30 min gate cycle.
+**Before swapping a field assignment for a method call, confirm the method is not
+`cfg(test)`-gated.** The mirror direction: a fn used ONLY by `src/tests` needs a
+`#[cfg(test)]` gate, not deletion (clippy `dead_code` fires in the non-test lib
+target). Incidents: `war-stories.md §OpenCrabs fork ops — tooling lessons`.
+
 ## Telegram surface — editor duties (delta of SKILL.md §Telegram surface law)
 
 Full law + audit history: SKILL.md §Telegram surface law (canonical). Your
