@@ -1,5 +1,17 @@
 # Changelog — opencrabs-dev
 
+## v0.4.253 — Duty 6 runs a mechanical corpus pack at cycle open (owner directive 2026-09-25)
+
+**Owner directive, verbatim:** *"First let's try to build it into the Opencrabs DEV Factory Duty 6"* — relayed by lane `ef83024b`.
+
+- **Duty 6 step 0** — the law-corpus pack runs at cycle open, keyed to the SAME cycle id, evidence at `reviews/<cycle-id>/evidence/`, with the **corpus hash recorded as the report's validity anchor**. Byte-identical on re-run by construction (the open instant is an input, never the wall clock). Called by **absolute path** for the trial; a missing or failing pack is **reported, never silently skipped**.
+- **Duty 6 step 2** — each family brief carries its mechanical slice (sentence-match, near-title, dead-reference) with the corpus hash. Layer 2 is **REPORT-ONLY**: its gate failed a pre-registered test (precision 0.111 / recall 0.126 against bars 0.70 / 0.40, n=66), so it never creates or routes a finding.
+- **Coverage limit stated in law** — the pack reads top-level `*.md` only, so `tools/RC-CONTRACT.md`, `tools/HEALTH-CHECKS.md` and `tools/HEALTH-CLASSES.md` (~139 KB of law) sit **outside** the corpus until the declared-manifest leg lands.
+
+**Trial evidence (reproduced first-hand, rc=0):** 12 files · 186 sections · 66 sentence matches · 16 near-title pairs · 7 dead refs · corpus hash `8bf9518a997d` · 8.53 s · coverage law reports not_read 109 files / 2 056 457 B.
+
+**Bundled:** `aa0875bc` (this change). LOC 3592 → 3606.
+
 ## v0.4.252 — the tool table is corrected against the live tools (owner order 2026-09-25)
 
 **Owner order, verbatim:** *"assign fix tool table docs"*.
