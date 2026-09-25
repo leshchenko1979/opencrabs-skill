@@ -5,3 +5,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.bak
+# Lane-created pre-edit backups (e.g. tools/oc-x.pre-20260925-115731). Generated
+# residue: they accumulate, nothing reaps them, and because oc-ledger's
+# stray-guard reads a full `git status --porcelain`, a single UNTRACKED one
+# blocks every version bump with die 7. Same class as *.bak above.
+*.pre-*
