@@ -1,5 +1,24 @@
 # Changelog — opencrabs-dev
 
+## v0.4.255 — the oc-* fleet grouped by function (owner directive 2026-09-25)
+
+**Owner directive, verbatim:** *"Your tools dir should have subdirs"* — OC Dev Factory. v0.4.254 delivered the five kind-based subdirs and HELD the grouping; this entry lands it.
+
+- **44 executables grouped into 8 functional subdirs** — `audit/` (5) · `git/` (5) · `harvest/` (8) · `issue/` (4) · `notify/` (2) · `ship/` (9) · `smoke/` (2) · `state/` (11). `tools/` now reads as: the `oc-*` fleet (grouped), plus `lib/` `tests/` `archive/` `docs/` `instruments/` as the kind-level subdirs.
+- **Gated on the depth-agnostic resolver** (`479bee01`) — the hold was correct: every tool reached siblings as `$TOOLS_DIR/oc-x` from its own dir, so ANY move broke the fleet. 42 tools carry the bootstrap; the three pure-python tools (`oc-issue-dispatch`, `oc-harvest-census`, `oc-harvest-dispatch`) walk up in python instead, and **`tools/lib/oc_root.py`** is the shared twin.
+- **Back-compat verified:** a shim at the old flat path (`tools/oc-x` -> `tools/<group>/oc-x`) still resolves the real root, because `readlink -f` sends the walk to the real script's directory. A caller that has not been updated keeps working.
+- **Re-pointed in the same landing:** 187 code reaches, 148 law references across 9 live law files, the 3 law `.md` under `tools/docs/`, the `oc-lint-laws` corpus **and its tool lookup**, the 18 cron prompts that invoke these paths, and the battery's own fixtures whose `mkdir`/`cp` targets moved with the tools (5 in `oc-deploy`, 1 in `oc-review-persist`, 3 in `oc-ship-chain`, 2 in `run.sh`).
+
+**The defect the move exposed — a check that could not fail.** Section 60's fleet-wide `--help` contract check globbed `"$TOOLS_DIR"/oc-*` **flat**, so after the regroup it matched NOTHING: the section ran zero legs and reported success, hiding a 43-leg drop in the count (249 -> 206) that read like a genuine reduction. It now enumerates `"$TOOLS_DIR"/oc-*` **plus** `"$TOOLS_DIR"/*/oc-*`, skips `lib/tests/archive`, and asserts a **floor of 30** enumerated tools — so a future layout change reddens there instead of quietly shrinking the leg count. Measured: **43 tools enumerated, 250 PASS / 0 FAIL** (249 before the move, +1 for the floor leg).
+
+**Also reaped: 850 stale `/tmp/oc-snap-*` mirrors, 2.3 GB.** `oc_snap_reap` is correct — it checks the name pid is gone AND that no live process references the mirror path — but nothing calls it on the battery path, so every battery run left mirrors behind. One day's runs accumulated 850 (2.3 GB, /tmp on the root filesystem). Routed to the Toolsmith as a finding rather than patched here; the reap itself was run via the tool's own function.
+
+**Corpus hygiene note:** the acceptance criterion this step originally carried (`grep -c 'tools/oc-' *.md` = 0) was unsatisfiable — `CHANGELOG.md` alone holds 89 frozen-history references, and `reviews/**` holds more. Frozen history is deliberately NOT rewritten: it records what the paths were at the time. The live-law criterion is the one that matters, and it reads **0**.
+
+**Bundled commits, named:** `5fb053bd` (the move) · `3f4213f3` (battery recursion + floor) · `6cd0ac43` (law re-point) · `f5571fdb` **#581** — the Toolsmith's gate-forward fix across a content-identical rebase, which landed in this range after the entry was drafted.
+
+LOC 3608 → 3608 (net 0; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `05b530e1`, which reproduces the v0.4.254 entry's 3608 exactly). Every law edit in this landing is a same-line path replacement, so the corpus is unchanged in size — which is itself the check that nothing but paths moved.
+
 ## v0.4.254 — tools/ gains subdirs by KIND, plus the resolver that unblocks grouping (owner directive 2026-09-25)
 
 **Owner directive, verbatim:** *"Your tools dir should have subdirs"* — OC Dev Factory.
