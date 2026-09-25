@@ -46,7 +46,10 @@
 # =============================================================================
 set -u
 set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
-_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-commit" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
@@ -258,7 +261,7 @@ $G diff --cached --quiet 2>/dev/null \
 # still overrides — that is the lane taking the decision on the record.
 DERIVE_ERR=""
 if [ -z "$ISSUE" ]; then
-  OC_LEDGER_BIN="$(cd "$(dirname "$0")" && pwd)/oc-ledger"
+  OC_LEDGER_BIN="$OC_TOOLS_DIR/oc-ledger"
   if ! ISSUE="$("$OC_LEDGER_BIN" claim-ref "$OC_ACTOR" --open 2>/dev/null)"; then
     ISSUE=""
     # second call only on the failure path, to surface the verb's diagnostic
@@ -359,7 +362,7 @@ if $G -c trailer.ifexists=replace commit --trailer "Session-Id: $OC_ACTOR" --tra
   echo "committed on $($G rev-parse --abbrev-ref HEAD): $CSHA (actor $OC_ACTOR, issue #$ISSUE)"
   # folded post leg (E2 finding 2): one implementation comment per commit
   if [ "$NO_COMMENT" = 0 ] && [ "${OC_COMMIT_COMMENT:-1}" = 1 ]; then
-    IL="${OC_ISSUE_LOG_BIN:-$(cd "$(dirname "$0")" && pwd)/oc-issue-log}"
+    IL="${OC_ISSUE_LOG_BIN:-$OC_TOOLS_DIR/oc-issue-log}"
     if "$IL" "$ISSUE" "$CSHA" ${CSTATE:+--state "$CSTATE"} --repo "${OC_ISSUE_LOG_REPO:-leshchenko1979/opencrabs}" --repo-path "$REPO" >/dev/null 2>&1; then
       echo "implementation comment posted on #$ISSUE"
     else

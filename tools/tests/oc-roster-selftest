@@ -7,13 +7,16 @@ set -u
 set -o pipefail
 export OC_TOOLS_NOLOG=1
 
-SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-TOOL="$(dirname "$SELF_DIR")/oc-roster"
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+SELF_DIR="$OC_TOOLS_DIR"
+TOOL="$OC_TOOLS_DIR/oc-roster"
 # SQLite reader: tools/lib/oc_sqlite, NOT the `sqlite3` CLI (#371). Until
 # 2026-09-19 the CLI was not on this box at all, so the fixture DB below was
 # never created — every live-DB leg then read "session DB unreadable" while the
 # suite still reported success. One binding, three call sites.
-SQLITE="$(dirname "$SELF_DIR")/lib/oc_sqlite"
+SQLITE="$OC_TOOLS_DIR/lib/oc_sqlite"
 D="$(mktemp -d)"
 trap 'rm -rf "$D"' EXIT
 

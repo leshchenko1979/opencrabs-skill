@@ -21,14 +21,17 @@
 #   3 Precondition/infra failure (state-dir missing, daemon dead)
 # =============================================================================
 # --- oc-snap guard: run from an immutable mirror (fork #167; tools/lib/oc-snap.sh)
-_OC_SNAP="$(cd "$(dirname "$0")" && pwd)/lib/oc-snap.sh"
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_SNAP="$OC_TOOLS_DIR/lib/oc-snap.sh"
 if [ -f "$_OC_SNAP" ]; then . "$_OC_SNAP"; oc_snap_guard "$0" "$@"; fi
 
 set -u
 set -o pipefail
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$OC_TOOLS_DIR"
 STATE_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"
 CANON_LOG="$STATE_DIR/smoke-verdicts.log"
 EVIDENCE_TOOL="$SCRIPT_DIR/oc-smoke-evidence"

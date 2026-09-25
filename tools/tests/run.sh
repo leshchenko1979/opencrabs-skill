@@ -14,7 +14,10 @@
 # this suite goes red before anyone trusts a seal.
 # =============================================================================
 set -u
-TOOLS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+TOOLS_DIR="$OC_TOOLS_DIR"
 PASS=0 FAIL=0
 # Battery stays silent in the unified tools log: every suite invocation is a
 # synthetic run, not fleet activity (KERNEL batch D0, 2026-08-28).

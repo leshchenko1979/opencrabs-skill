@@ -30,9 +30,12 @@
 #   4: CAPACITY_EXHAUSTED / Target lane busy with active claims
 # =============================================================================
 set -u
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
 set -o pipefail
 
-_OC_TOOLS="$(cd "$(dirname "$0")" && pwd)"
+_OC_TOOLS="$OC_TOOLS_DIR"
 export SKILL_DIR="${SKILL_DIR:-$(cd "$_OC_TOOLS/.." && pwd)}"
 # The python engine runs as 'python3 -c', so sys.argv[0] is '-c' and cannot
 # locate this tool's own lib/ — hand it the tools dir explicitly (#307).

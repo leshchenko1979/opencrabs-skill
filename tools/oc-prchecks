@@ -59,7 +59,10 @@
 #         Resolve: gh run view <id>; live -> resume <id>; dead -> re-run.
 # =============================================================================
 # --- oc-snap guard: run from an immutable mirror (fork #167; tools/lib/oc-snap.sh)
-_OC_SNAP="$(cd "$(dirname "$0")" && pwd)/lib/oc-snap.sh"
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_SNAP="$OC_TOOLS_DIR/lib/oc-snap.sh"
 if [ -f "$_OC_SNAP" ]; then . "$_OC_SNAP"; oc_snap_guard "$0" "$@"; fi
 
 set -u
@@ -68,7 +71,7 @@ set -e            # F-lens (HQ GO batch 2026-09-09): a bare-typo command like th
                   # old OC_PR_SKIPPED_DISPAT line (n=2226 batch) must abort the
                   # tool, not be swallowed — silent no-op on unbound var/typos
                   # is the #124 time-bomb class.
-_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-prchecks" "$@"; else oc_log_finish() { :; }; fi
 # Exit-honesty guard (n=1725 A, Triage verdict n=1721; field tools.log:3190,
 # 2026-09-06T18:22:17Z): a harness budget-kill of an in-flight watch journaled
@@ -147,7 +150,7 @@ RESOLVE_POLL="${OC_PRCHECKS_RESOLVE_POLL:-15}"
 LOCK_DIR="${OC_DEPLOY_STATE_DIR:-${OC_DEV_STATE:-$HOME/.opencrabs/profiles/ops/opencrabs-dev}}"
 LOCK_FILE="$LOCK_DIR/.oc-prchecks-dispatch.lock"
 LOCK_WAIT="${OC_PRCHECKS_LOCK_WAIT:-90}"
-FAULT_TOOL="${OC_PRCHECKS_FAULT_SCOPE:-$(cd "$(dirname "$0")" && pwd)/oc-pr-fault-scope}"   # E5: RED triage backend
+FAULT_TOOL="${OC_PRCHECKS_FAULT_SCOPE:-$OC_TOOLS_DIR/oc-pr-fault-scope}"   # E5: RED triage backend
 
 # In-flight run checkpoint directory and state file
 CHECKPOINT_DIR="$LOCK_DIR/runs/in-flight"

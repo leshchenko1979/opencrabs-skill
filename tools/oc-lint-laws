@@ -59,8 +59,11 @@ _OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-lint-laws" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?; [ -n "${ST_TMPDIR:-}" ] && rm -rf "$ST_TMPDIR"' EXIT
 
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-TOOLS_DIR="${OC_LINT_LAWS_TOOLS_DIR:-$(dirname "$SELF")}"
+TOOLS_DIR="${OC_LINT_LAWS_TOOLS_DIR:-$OC_TOOLS_DIR}"
 SKILL_DIR="$(dirname "$TOOLS_DIR")"
 
 # The LAW corpus: the skill's normative markdown. Two exclusions, both

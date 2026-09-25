@@ -36,7 +36,10 @@
 # =============================================================================
 set -u
 set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
-_OC_LIB="$(cd "$(dirname "$0")" && pwd)/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"   # unified tools log (D0, 2026-08-28)
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-seal-state" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 
@@ -115,7 +118,7 @@ NEW_CONTRIB=""
 if [ -n "$CONTRIB_TO" ]; then
   [ -n "$CONTRIB_FROM" ] || fail 1 "--contrib-to needs --contrib-from (left edge = previous baseline sha)"
   [ -d "$GIT/.git" ] || fail 2 "clone not found: $GIT"
-  ATTRIB="$(cd "$(dirname "$0")" && pwd)/oc-attrib"
+  ATTRIB="$OC_TOOLS_DIR/oc-attrib"
   OUT="$("$ATTRIB" --repo "$GIT" --trailers-only --range "$CONTRIB_FROM..$CONTRIB_TO" 2>/dev/null)" \
     || fail 2 "contributor scan failed ($CONTRIB_FROM..$CONTRIB_TO in $GIT); fetch the clone first"
   NEW_CONTRIB="$(printf '%s\n' "$OUT" | cut -f2 | tr '|' '\n' \
@@ -180,7 +183,7 @@ if [ -n "$ADD_ORDER" ] || [ -n "$MARK_ORDER" ] || [ -n "$PURGE_ORDER" ]; then
       # the single source of truth (SKILL.md §Shared environment facts);
       # resolve via oc-carrier-features,
       # abort loudly on read failure (same law as oc-deploy ship).
-      ADD_ORDER_FEAT="$("$(cd "$(dirname "$0")" && pwd)/oc-carrier-features" 2>/dev/null)" \
+      ADD_ORDER_FEAT="$("$OC_TOOLS_DIR/oc-carrier-features" 2>/dev/null)" \
         || fail 3 "--order-features unset and oc-carrier-features failed — pass --order-features explicitly"
       [ -n "$ADD_ORDER_FEAT" ] || fail 3 "oc-carrier-features returned an empty feature set"
     fi

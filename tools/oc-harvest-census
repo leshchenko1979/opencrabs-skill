@@ -43,11 +43,13 @@ else
 fi
 trap 'oc_log_finish $?' EXIT
 
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
 PROG="$(basename "$0")"
 # The Python engine arrives on stdin, so it has no __file__ and sys.argv[0] is
 # "-". Hand it the tool dir explicitly so it can import tools/lib/oc_claims.py
 # (#307 — the claim-closure + claim-footprint predicates live there, not here).
-OC_TOOLS_DIR="$(cd "$(dirname "$0")" && pwd)"
 export OC_TOOLS_DIR
 REPO="${HOME}/opencrabs"
 UPSTREAM_REPO="adolfousier/opencrabs"
@@ -2006,7 +2008,7 @@ EOF
   export OC_HARVEST_MOCK_LEDGER="$mock_ledger"
   export OC_HARVEST_MOCK_SQUASHED="$mock_squashed"
   export OC_HARVEST_MOCK_ISSUE_STATE="$mock_issue_state"
-  export OC_TOOLS_DIR="$(cd "$(dirname "$0")" && pwd)"
+  export OC_TOOLS_DIR="${OC_TOOLS_DIR:?oc-root bootstrap did not run}"
   export OC_HARVEST_NOW_TS="1789010000"
 
   # 1. Check on MERGED issue (#132) -> exits 1 REFUSED.

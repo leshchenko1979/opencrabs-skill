@@ -43,7 +43,7 @@ oc_snap_guard() {
     return 0
   fi
 
-  _os_sd="$(cd "$(dirname "$_os_tool")" && pwd)" || return 0
+  _os_sd="${OC_TOOLS_DIR:-$(cd "$(dirname "$_os_tool")" && pwd)}" || return 0
   _os_sn="$(basename "$_os_tool")"
   _os_mir="$_os_root/oc-snap-${_os_sn}-$$"
 

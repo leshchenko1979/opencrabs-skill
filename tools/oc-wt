@@ -35,15 +35,18 @@ set -o pipefail   # F7 (lens F, v0.4.72): pipeline failures are never masked
 # $0 may be reached through a symlink, so the lib dir is derived from the
 # SYMLINK-RESOLVED path: `dirname "$0"` alone can point at the wrong lib/ and
 # degrade to silence.
+# --- oc-root bootstrap: resolve the tools dir at ANY depth (tools/lib/oc-root.sh)
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; }; do _oc_r="$(dirname "$_oc_r")"; done
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
 _SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 _SELF_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-_OC_LIB="$_SELF_DIR/lib/oc-log.sh"
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"
 if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-wt" "$@"; else oc_log_finish() { :; }; fi
 trap 'oc_log_finish $?' EXIT
 # #429: the shared task -> path predicate. Load-bearing for add/remove/list, so a
 # missing lib is a HARD stop: oc-log may degrade (it is telemetry), this one
 # decides which tree gets removed.
-_OC_WT_LIB="$_SELF_DIR/lib/oc-wt-resolve.sh"
+_OC_WT_LIB="$OC_TOOLS_DIR/lib/oc-wt-resolve.sh"
 if [ -f "$_OC_WT_LIB" ]; then source "$_OC_WT_LIB"; else
   echo "oc-wt: $_OC_WT_LIB not found — the tool ships beside its lib/ (broken install)" >&2; exit 5
 fi
