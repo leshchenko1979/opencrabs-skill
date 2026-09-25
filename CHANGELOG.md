@@ -76,10 +76,21 @@ held for the Duty-4 cycle the day before; nothing asserted the equivalent for Du
   `lib/oc-root.sh`) plus a root-IDENTITY assertion, because no arithmetic leg can catch a
   narrowed root. Also `oc-lint-laws` gains the two legs whose absence let #575 ship, and
   `oc_tools_dir` gains the symlink guard the bootstrap calls load-bearing.
+- **`f7f8dcf5`** (Toolsmith, #594) — **four** dead `negctl` controls, not one: each pinned a
+  flat `tools/oc-*` path, so after the v0.4.255 regroup each reported "guard is inert"
+  instead of testing anything, and two also read a pre-regroup baseline sha that returned
+  empty, leaving the load-bearing arm **skipped** and the run INCONCLUSIVE rather than
+  green. Repaired by giving each location one `REL` home. Two further defects surfaced while
+  fixing them: the #576 in-flight note asserted a send was in flight on the `no_route` path
+  that provably sends nothing (now an append-only `NOT SENT` row that deliberately omits the
+  marker, so a retry is not suppressed); and the battery's `extract_chunk` stops at
+  `verdict=PASS`, so **a section placed after the receipt write extracts to an empty chunk
+  and runs zero legs while the summary still prints clean** — section 78 landed there and the
+  count read 255 before and after. Battery 255 → 261.
 
-**Bundled commits (13).** `99917304` (#589/#591) · `57bfb719` · `9246a3c9` · `c26be37f` ·
-`2e5a7191` · `eeba63af` · `2fa67fc7` · `af265896` · `97f8d57c` · `d88a66ea` · `6c1c29c4` ·
-`c291bdae` · `4d4a612b`.
+**Bundled commits (14).** `99917304` (#589/#591) · `f7f8dcf5` (#594) · `57bfb719` · `9246a3c9` ·
+`c26be37f` · `2e5a7191` · `eeba63af` · `2fa67fc7` · `af265896` · `97f8d57c` · `d88a66ea` ·
+`6c1c29c4` · `c291bdae` · `4d4a612b`.
 
 LOC (8-file corpus, `sum(1 for _ in open(f, encoding='utf-8'))`, per the v0.4.253 convention): **3610 -> 3645** (+35). Anchor `8c31a293` reproduces 3610 exactly. Per file: `SKILL.md` 730 -> 767 (+37) · `fleet-directives.md` 650 -> 646 (-4) · `editor.md` 534 -> 531 (-3) · `hq.md` 333 -> 337 (+4) · `upstream-merge-runbook.md` 430 -> 431 (+1). The corpus EXCLUDES `review-lenses.md` and `CHANGELOG.md`; transposing those two files is the scope error that produced a wrong figure earlier in this session, so the membership is stated here rather than assumed.
 
