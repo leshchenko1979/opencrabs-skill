@@ -69,7 +69,7 @@ os.environ["OC_REPRO_DEPTH"] = "1"
 # Repo root derived from this file's own location (tools/tests/<this>) so the
 # control is portable -- never a hardcoded absolute path.
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TOOL_POST = os.path.join(REPO, "tools", "oc-issue-dispatch")
+TOOL_POST = os.path.join(REPO, "tools", "issue", "oc-issue-dispatch")
 #: Last commit before the #462 fix. Immutable, and an ancestor of main.
 BASE_SHA = "11e5ca34"
 TARGET = "40427d4f-1a2b-4c3d-8e9f-000000000001"
@@ -104,15 +104,24 @@ def load(path):
 
 def materialize_baseline():
     """Write the pre-fix revision to a temp file; return its path or None."""
+    # BASE_SHA predates the v0.4.255 regroup, when the fleet was flat. Read the
+    # path as it was THEN, falling back to the regrouped one so a future
+    # baseline sha still resolves.
+    candidates = ["%s:tools/oc-issue-dispatch" % BASE_SHA,
+                  "%s:tools/issue/oc-issue-dispatch" % BASE_SHA]
+    proc = None
     try:
-        proc = subprocess.run(
-            ["git", "-C", REPO, "show", "%s:tools/issue/oc-issue-dispatch" % BASE_SHA],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+        for spec in candidates:
+            proc = subprocess.run(
+                ["git", "-C", REPO, "show", spec],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+            if proc.returncode == 0 and proc.stdout:
+                break
     except Exception as exc:
         print("  baseline: git invocation failed (%s)" % exc)
         return None
     if proc.returncode != 0 or not proc.stdout:
-        print("  baseline: `git show %s:tools/issue/oc-issue-dispatch` returned rc=%d, %d bytes"
+        print("  baseline: neither flat nor regrouped path resolved at %s (rc=%d, %d bytes)"
               % (BASE_SHA, proc.returncode, len(proc.stdout or b"")))
         return None
     fd, path = tempfile.mkstemp(prefix="oid-pre-", suffix=".py")
@@ -170,6 +179,13 @@ def run_arm(label, tool_src, seed_receipt, stub_rc=124):
     scratch = tempfile.mkdtemp(prefix="oid-neg-")
     tools = os.path.join(scratch, "tools")
     os.makedirs(os.path.join(tools, "lib"), exist_ok=True)
+    os.makedirs(os.path.join(tools, "state"), exist_ok=True)
+    # The tool resolves its tools root by walking up to the dir holding
+    # lib/oc-root.sh (its twin of the shell bootstrap), so the scratch tree
+    # must carry that marker -- without it the walk falls back to the tool's
+    # own dir and every sibling reach (state/oc-ledger) misses.
+    shutil.copy2(os.path.join(REPO, "tools", "lib", "oc-root.sh"),
+                 os.path.join(tools, "lib", "oc-root.sh"))
     shutil.copy2(tool_src, os.path.join(tools, "oc-issue-dispatch"))
 
     # The tool imports the canonical claim predicate from tools/lib/ and REFUSES
@@ -192,7 +208,7 @@ def run_arm(label, tool_src, seed_receipt, stub_rc=124):
 
     # Stub the ledger: record every `stamp note <text>` invocation.
     stamp_log = os.path.join(scratch, "ledger-rows.txt")
-    ledger = os.path.join(tools, "oc-ledger")
+    ledger = os.path.join(tools, "state", "oc-ledger")
     with open(ledger, "w") as fh:
         fh.write('#!/bin/sh\nprintf "%s\\n" "$*" >> "' + stamp_log + '"\n')
     os.chmod(ledger, 0o755)
@@ -251,14 +267,30 @@ if pre_path:
 else:
     print("  SKIP: the baseline is unavailable -- ARM 2 cannot run")
 
+def split_rows(rows):
+    """Separate the pre-send IN FLIGHT note from the settled dispatch records.
+
+    #576 writes the note BEFORE the send blocks, so a settled run carries both.
+    A dispatch RECORD is what a reader counts; the note only says a send
+    started. Asserting on raw row counts reads the note where it means the
+    verdict.
+    """
+    notes = [r for r in rows if "IN FLIGHT" in r or "NOT SENT" in r]
+    inflight = [r for r in rows if "IN FLIGHT" in r]
+    records = [r for r in rows if r not in notes]
+    return inflight, records
+
 # --- ARM 1: post-fix, timeout, no receipt ---------------------------------
 print("\n[ARM 1] post-fix | rc124 | empty journal  -> expect rc 6 + unverified stamp")
 rc1, rows1 = run_arm("arm1", TOOL_POST, seed_receipt=False)
+inf1, rec1 = split_rows(rows1)
 check("arm1 rc is RC_UNVERIFIED (6)", rc1 == 6, "got %r" % (rc1,))
-check("arm1 DID stamp the dispatch", len(rows1) == 1, "%d row(s)" % len(rows1))
-if rows1:
+check("arm1 DID stamp the dispatch", len(rec1) == 1, "%d record(s)" % len(rec1))
+check("arm1 recorded the send as STARTED before it blocked (#576)",
+      len(inf1) == 1, "%d in-flight note(s)" % len(inf1))
+if rec1:
     check("arm1 stamp says the receipt is unverified",
-          "receipt unverified" in rows1[0], rows1[0][:120])
+          "receipt unverified" in rec1[0], rec1[0][:120])
 
 # --- ARM 2: PRE-FIX, timeout, no receipt  (THE LOAD-BEARING LEG) ----------
 if pre_path:
@@ -270,7 +302,7 @@ if pre_path:
     check("CONTROL DISCRIMINATES: post-fix rc != pre-fix rc", rc1 != rc2,
           "post=%r pre=%r" % (rc1, rc2))
     check("CONTROL DISCRIMINATES: post-fix stamped, pre-fix did not",
-          (len(rows1) == 1 and len(rows2) == 0))
+          (len(rec1) == 1 and len(rows2) == 0))
 else:
     print("\n[ARM 2] SKIPPED -- no pre-fix baseline; the control cannot name an")
     print("        input it FAILS on, so this run is INCONCLUSIVE, not PASS.")
@@ -278,29 +310,35 @@ else:
 # --- ARM 3: post-fix, receipt already present -----------------------------
 print("\n[ARM 3] post-fix | rc124 | receipt PRESENT -> expect rc 0 + verified stamp")
 rc3, rows3 = run_arm("arm3", TOOL_POST, seed_receipt=True)
+inf3, rec3 = split_rows(rows3)
 check("arm3 rc is 0 (receipt confirmed)", rc3 == 0, "got %r" % (rc3,))
-check("arm3 DID stamp the dispatch", len(rows3) == 1, "%d row(s)" % len(rows3))
-if rows3:
+check("arm3 DID stamp the dispatch", len(rec3) == 1, "%d record(s)" % len(rec3))
+if rec3:
     check("arm3 stamp is NOT flagged unverified",
-          "unverified" not in rows3[0], rows3[0][:120])
+          "unverified" not in rec3[0], rec3[0][:120])
 
 # --- ARM 4: post-fix, rc 2 -- the ONE rc that PROVES non-delivery ----------
 print("\n[ARM 4] post-fix | rc2 (no_route) | empty journal -> expect rc 3 + NO stamp")
 rc4, rows4 = run_arm("arm4", TOOL_POST, seed_receipt=False, stub_rc=2)
+inf4, rec4 = split_rows(rows4)
 check("arm4 rc is 3 (nothing sent -- the one PROVEN non-delivery)", rc4 == 3,
       "got %r" % (rc4,))
-check("arm4 stamped NOTHING (a retry is correct)", len(rows4) == 0,
-      "%d row(s): %r" % (len(rows4), rows4[:1]))
+check("arm4 stamped NO dispatch record (a retry is correct)", len(rec4) == 0,
+      "%d record(s): %r" % (len(rec4), rec4[:1]))
+check("arm4 SETTLED the in-flight note -- no stale IN FLIGHT claim stands",
+      len(inf4) == 1 and any("NOT SENT" in r for r in rows4),
+      "rows=%r" % (rows4[:3],))
 
 # --- ARM 5: post-fix, rc 4 -- the documented CATCH-ALL (#418/#433) ---------
 print("\n[ARM 5] post-fix | rc4 (transport catch-all) | empty journal -> expect rc 6 + stamp")
 rc5, rows5 = run_arm("arm5", TOOL_POST, seed_receipt=False, stub_rc=4)
+inf5, rec5 = split_rows(rows5)
 check("arm5 rc is RC_UNVERIFIED (6) -- rc 4 is not a non-delivery signal (#433)",
       rc5 == 6, "got %r" % (rc5,))
-check("arm5 DID stamp the dispatch", len(rows5) == 1, "%d row(s)" % len(rows5))
-if rows5:
+check("arm5 DID stamp the dispatch", len(rec5) == 1, "%d record(s)" % len(rec5))
+if rec5:
     check("arm5 stamp says the receipt is unverified",
-          "receipt unverified" in rows5[0], rows5[0][:120])
+          "receipt unverified" in rec5[0], rec5[0][:120])
 
 # --- the predicate is rc-2-SPECIFIC, not "any non-zero" -------------------
 check("PREDICATE: rc2 / rc124 / rc4 are classified DIFFERENTLY",

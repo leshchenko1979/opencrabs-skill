@@ -37,6 +37,9 @@ ulimit -u $(( $(ps -e --no-headers | wc -l) + 200 )) 2>/dev/null || true
 
 SKILL_DIR="/root/.opencrabs/profiles/ops/skills/opencrabs-dev"
 SRC="$SKILL_DIR/tools"
+#: The v0.4.255 regroup moved the fleet into kind subdirs, so a flat
+#: "$SRC/$COMMIT_REL" no longer resolves. One home for the location.
+COMMIT_REL="git/oc-commit"
 export OC_TOOLS_NOLOG=1
 
 WORK="$(mktemp -d)"
@@ -61,7 +64,7 @@ run_st() {  # run_st <tool-path> <outfile> -> echoes rc
 # --- baseline: the pristine tree must be GREEN -------------------------------
 cp -a "$SRC" "$WORK/baseline" || { echo "copy failed"; exit 2; }
 base_out="$WORK/baseline.out"
-rc_base="$(run_st "$WORK/baseline/oc-commit" "$base_out")"
+rc_base="$(run_st "$WORK/baseline/$COMMIT_REL" "$base_out")"
 if [ "$rc_base" = "0" ]; then
   ok "baseline oc-commit --selftest GREEN (rc=0)"
 else
@@ -76,7 +79,7 @@ grep -q '^selftest OK$' "$base_out" \
 # mutant can only redden a leg that exists, and a renamed leg would otherwise
 # silently disable this whole guard.
 for leg in '#428-negated-rc0' '#428-negated-class' '#428-negated-names-shape' '#428-genuine-class'; do
-  if grep -q "$leg " "$SRC/oc-commit"; then
+  if grep -q "$leg " "$SRC/$COMMIT_REL"; then
     ok "baseline carries leg '$leg'"
   else
     bad "leg '$leg' is MISSING from oc-commit — the guard would be vacuous"
@@ -88,7 +91,7 @@ done
 # on stdin, so a non-ASCII anchor — every warning string in oc-commit carries an
 # em-dash — is one encoding surprise from a silent no-op)
 mutate() {  # mutate <tree> <label> -> rc 0 on success
-  python3 - "$1/oc-commit" "$2" <<'PYEOF'
+  python3 - "$1/$COMMIT_REL" "$2" <<'PYEOF'
 import sys
 path, label = sys.argv[1], sys.argv[2]
 MUTATIONS = {
@@ -149,14 +152,14 @@ guard_one() {
 
   # Prove the mutant really differs (a no-op mutation would make this section
   # vacuous while every assertion below still reported PASS).
-  if cmp -s "$SRC/oc-commit" "$mut/oc-commit"; then
+  if cmp -s "$SRC/$COMMIT_REL" "$mut/$COMMIT_REL"; then
     bad "[$label] mutant is byte-identical to the pristine tool — no-op mutation"
     return
   else
-    ok "[$label] mutant applied ($(cmp -l "$SRC/oc-commit" "$mut/oc-commit" 2>/dev/null | wc -l) differing bytes)"
+    ok "[$label] mutant applied ($(cmp -l "$SRC/$COMMIT_REL" "$mut/$COMMIT_REL" 2>/dev/null | wc -l) differing bytes)"
   fi
 
-  rc_m="$(run_st "$mut/oc-commit" "$outf")"
+  rc_m="$(run_st "$mut/$COMMIT_REL" "$outf")"
   if [ "$rc_m" = "0" ]; then
     bad "[$label] mutant selftest PASSED (rc=0) — the aimed leg does not catch the regression"
     return

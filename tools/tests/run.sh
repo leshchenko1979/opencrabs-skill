@@ -110,6 +110,13 @@ run_selftest() {
 # (which contains this driver) cannot recurse.
 BATTERY_MODE="sequential"
 extract_chunk() { # $1 = 1-based section chunk; prints prelude + that section
+  # POSITIONAL CONSTRAINT (measured 2026-09-25): the `/^verdict=PASS/ { exit }`
+  # guard below is what stops the prelude extraction at the receipt write. A
+  # numbered section placed AFTER that line therefore extracts to an EMPTY chunk
+  # and runs zero legs in parallel mode -- while the run still prints a clean
+  # summary and the PASS count simply does not move. Section 78 landed there and
+  # was invisible. Put new sections ABOVE the receipt write, and the leg in
+  # section 78 asserts the last section stays reachable.
   awk -v want="$1" '
     /^# ---- [0-9]/ { n++; insec = (n == want); next }
     /^verdict=PASS/ { exit }
@@ -1771,6 +1778,46 @@ adopted="$(oc_tools_dir "$ANC/tools/sub/probe.sh" 2>/dev/null)"
   && ok "oc_tools_dir: marker-less tools/ stops the walk (no ancestor adoption)" \
   || bad "oc_tools_dir: adopted the ANCESTOR root $ANC across a marker-less tools/ — basename arm missing"
 rm -rf "$ANC" "$RT"
+
+# ---- 78. negctl-* controls invoke their tool at a RESOLVABLE path ------------
+# The negctl-* family is standalone by design (not run here -- some take minutes
+# and run full selftests on copied trees). But a control that cannot run is
+# decoration: on the v0.4.255 regroup three of five silently began invoking their
+# tool at a FLAT path (`$SRC/oc-health`, `$WORK/baseline/oc-commit`) after the
+# fleet moved into kind subdirs, and reported "guard is inert" instead of testing
+# anything. Nothing noticed for hours.
+#
+# The assertion is deliberately narrow: no control may invoke its tool as a
+# DIRECT child of a tools dir. That is the exact shape the regroup broke, and it
+# has no false positives on runtime-composed paths (`$WORK/mut_<label>/...`) or
+# on prose naming an old layout.
+for _nc in "$TOOLS_DIR"/tests/negctl-*; do
+  [ -e "$_nc" ] || continue
+  _nb="$(basename "$_nc")"
+  # A flat invocation: a variable path ending in a tools dir, then /oc-<name>.
+  _flat="$(grep -nE '\$[A-Za-z_][A-Za-z0-9_]*/(baseline/|mut_[a-z_]*/|mut/)?oc-[a-z0-9-]+' "$_nc" \
+            | grep -vE '/(state|git|audit|ship|issue|harvest|smoke|notify|tests|lib|tools)/' \
+            | head -3)"
+  [ -z "$_flat" ] \
+    && ok "negctl $_nb: invokes its tool at a resolvable (non-flat) path" \
+    || bad "negctl $_nb: FLAT tool invocation -- post-regroup this cannot resolve: $(printf '%s' "$_flat" | head -1 | cut -c1-90)"
+done
+
+# The extractor exits at the receipt write, so a numbered section placed AFTER
+# it extracts to an empty chunk and runs ZERO legs while the run still reports a
+# clean summary. Measured 2026-09-25: section 78 landed there and the battery
+# count did not move (255 -> 255). Assert the extractor can reach the LAST
+# numbered section, so this trap reddens instead of hiding.
+_nch="$(grep -cE '^# ---- [0-9]' "$0")"
+_reach="$(awk -v want="$_nch" '
+    /^# ---- [0-9]/ { n++; insec = (n == want); next }
+    /^verdict=PASS/ { exit }
+    n == 0 || insec { print }
+  ' "$0" | grep -cE '^# ---- [0-9]|oc-|negctl')"
+[ "${_reach:-0}" -gt 0 ] \
+  && ok "battery extractor reaches the LAST numbered section (chunk $_nch)" \
+  || bad "battery extractor CANNOT reach section $_nch — it sits after the receipt write, so it runs zero legs in parallel mode"
+
 
 
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL

@@ -1187,6 +1187,25 @@ def _stamp_inflight(issue_num, target_uuid, budget_secs):
     except Exception:  # noqa: BLE001 -- best-effort by contract
         pass
 
+def _stamp_not_sent(issue_num, target_uuid, rc):
+    """Settle the in-flight note when the send is PROVEN not to have happened.
+
+    The rc=2 path writes no dispatch record -- correctly, so a retry stays
+    available -- but that leaves `_stamp_inflight`'s `IN FLIGHT` note as the
+    ledger's only trace, asserting a send is in flight about one that provably
+    never left. The ledger is append-only, so the settlement is a new row.
+    """
+    ledger_bin = os.path.join(TOOL_DIR, "state/oc-ledger")
+    if not os.path.exists(ledger_bin):
+        return
+    try:
+        run_cmd([ledger_bin, "stamp", "note",
+                 f"Triage dispatch issue #{issue_num} to editor {target_uuid[:8]}"
+                 f" \u2014 NOT SENT (rc {rc}: no route); a retry is correct"],
+                timeout=30)
+    except Exception:  # noqa: BLE001 -- best-effort by contract
+        pass
+
 def classify_notify_rc(receipt_seen, rc):
     """Pure predicate: what does a notify attempt's rc MEAN? (#S)
 
@@ -1294,6 +1313,7 @@ def dispatch_to_lane(target_uuid, envelope, issue_num, dry_run=False, ledger_pat
             return RC_UNVERIFIED
         else:
             print(f"ERROR: {label} failed (rc={rc}): {err.strip()}", file=sys.stderr)
+            _stamp_not_sent(issue_num, target_uuid, rc)
             return 3
 
     _stamp_dispatch(issue_num, target_uuid, unverified=False, rc=rc)
@@ -2658,6 +2678,30 @@ def run_selftest():
     assert_eq("#S classify_notify_rc: rc 2 is the ONLY non-delivery verdict",
               sorted(c for c in (2, 4, 124, 1, -9, 137)
                      if classify_notify_rc(False, c) == 3), [2])
+
+    # Test 16b (#576 follow-up): the pre-send IN FLIGHT note must be SETTLED on
+    # the one path that writes no dispatch record (rc=2, the proven
+    # non-delivery). Otherwise the ledger's ONLY trace of a send that never
+    # happened is a note asserting one is in flight -- a durable record stating
+    # a state the run is not in. The ledger is append-only, so the settlement is
+    # a NEW row, and it must not carry the marker the dedup reader keys on, or
+    # it would suppress the retry it exists to explain.
+    # MUTATION KILL: delete the _stamp_not_sent call in dispatch_to_lane and
+    # 16b-2 reddens; remove the helper and 16b-1 reddens.
+    with open(os.path.abspath(__file__), "r") as _sf16:
+        _src16 = _sf16.read()
+    assert_true("#S _stamp_not_sent is defined (the settle path exists)",
+                "def _stamp_not_sent(" in _src16)
+    _disp16 = _src16.split("def dispatch_to_lane(")[1].split("\ndef ")[0]
+    assert_true("#S the rc=2 path CALLS the settle (a retry stays correct, but "
+                "no stale IN FLIGHT claim is left standing)",
+                "_stamp_not_sent(issue_num, target_uuid, rc)" in _disp16)
+    # The f-string is split across source lines, so join the body before
+    # asserting on it -- a line-wise filter reads half the sentence.
+    _settle16 = _src16.split("def _stamp_not_sent(")[1].split("\ndef ")[0]
+    _emit16 = _settle16.split("run_cmd(")[1] if "run_cmd(" in _settle16 else ""
+    assert_true("#S the settle row says NOT SENT, never a second IN FLIGHT claim",
+                "NOT SENT" in _emit16 and "IN FLIGHT" not in _emit16)
 
     # Test 17 (#483): the open-issue fetch is a WINDOW with an explicit ceiling,
     # never a hardcoded page size, and a FAILED fetch is None -- not [].

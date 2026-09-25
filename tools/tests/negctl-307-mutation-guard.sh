@@ -33,6 +33,10 @@ ulimit -u $(( $(ps -e --no-headers | wc -l) + 200 )) 2>/dev/null || true
 
 SKILL_DIR="/root/.opencrabs/profiles/ops/skills/opencrabs-dev"
 SRC="$SKILL_DIR/tools"
+#: The v0.4.255 regroup moved the fleet into kind subdirs; a flat
+#: "$SRC/$CENSUS_REL" no longer resolves. One home for each location.
+CENSUS_REL="harvest/oc-harvest-census"
+DISPATCH_REL="harvest/oc-harvest-dispatch"
 export OC_TOOLS_NOLOG=1
 
 WORK="$(mktemp -d)"
@@ -108,7 +112,7 @@ run_st() {  # run_st <label> <tool-path> [outfile] -> echoes rc
 # --- (1) census -------------------------------------------------------------
 echo
 echo "[1] oc-harvest-census --selftest"
-rc_base="$(run_st census "$WORK/baseline/oc-harvest-census")"
+rc_base="$(run_st census "$WORK/baseline/$CENSUS_REL")"
 if [ "$rc_base" = "0" ]; then ok "baseline census GREEN (rc=0)"; else bad "baseline census rc=$rc_base (expected 0)"; fi
 rc_mut="$(run_st census-mut "$WORK/mutant/oc-harvest-census")"
 if [ "$rc_mut" != "0" ]; then
@@ -121,7 +125,7 @@ fi
 # --- (2) dispatch -----------------------------------------------------------
 echo
 echo "[2] oc-harvest-dispatch --selftest"
-rc_base="$(run_st dispatch "$WORK/baseline/oc-harvest-dispatch")"
+rc_base="$(run_st dispatch "$WORK/baseline/$DISPATCH_REL")"
 if [ "$rc_base" = "0" ]; then ok "baseline dispatch GREEN (rc=0)"; else bad "baseline dispatch rc=$rc_base (expected 0)"; fi
 rc_mut="$(run_st dispatch-mut "$WORK/mutant/oc-harvest-dispatch")"
 if [ "$rc_mut" != "0" ]; then
@@ -162,7 +166,7 @@ echo
 echo "[4] #365 gate-4 subject predicate + #375 in-flight registry exemption (oc-harvest-census --selftest)"
 
 base365="$WORK/base365.out"
-rc_base="$(run_st base365 "$SRC/oc-harvest-census" "$base365")"
+rc_base="$(run_st base365 "$SRC/$CENSUS_REL" "$base365")"
 if [ "$rc_base" = "0" ]; then
   ok "baseline census GREEN (rc=0, $(grep -c '^  ok   - ' "$base365") legs)"
 else
@@ -192,7 +196,7 @@ for label in case_a_dropped refuse_all_absent parent_number_dropped empty_deriva
     continue
   fi
 
-  if ! python3 - "$mut/oc-harvest-census" "$label" <<'PYEOF'
+  if ! python3 - "$mut/$CENSUS_REL" "$label" <<'PYEOF'
 import sys
 path, label = sys.argv[1], sys.argv[2]
 # ASCII-only anchors, deliberately: the census source carries em-dashes and this
@@ -258,7 +262,7 @@ PYEOF
   fi
 
   outf="$WORK/m365_$label.out"
-  rc_m="$(run_st "m365-$label" "$mut/oc-harvest-census" "$outf")"
+  rc_m="$(run_st "m365-$label" "$mut/$CENSUS_REL" "$outf")"
   if [ "$rc_m" = "0" ]; then
     bad "[$label] mutant census PASSED — the '$want_ok' leg does not catch it"
     continue

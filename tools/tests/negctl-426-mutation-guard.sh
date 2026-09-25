@@ -29,6 +29,9 @@ ulimit -u $(( $(ps -e --no-headers | wc -l) + 200 )) 2>/dev/null || true
 
 SKILL_DIR="/root/.opencrabs/profiles/ops/skills/opencrabs-dev"
 SRC="$SKILL_DIR/tools"
+#: The v0.4.255 regroup moved the fleet into kind subdirs, so a flat
+#: "$SRC/$HEALTH_REL" no longer resolves. One home for the location.
+HEALTH_REL="state/oc-health"
 export OC_TOOLS_NOLOG=1
 
 WORK="$(mktemp -d)"
@@ -53,7 +56,7 @@ run_st() {  # run_st <tool-path> <outfile> -> echoes rc
 # --- baseline: the pristine tree must be GREEN, with the aimed legs present --
 cp -a "$SRC" "$WORK/baseline" || { echo "copy failed"; exit 2; }
 base_out="$WORK/baseline.out"
-rc_base="$(run_st "$WORK/baseline/oc-health" "$base_out")"
+rc_base="$(run_st "$WORK/baseline/$HEALTH_REL" "$base_out")"
 if [ "$rc_base" = "0" ]; then
   ok "baseline oc-health --selftest GREEN (rc=0, $(grep -c '^oc-health selftest' "$base_out") summary line(s))"
 else
@@ -68,7 +71,7 @@ grep -q '^oc-health selftest: PASS=[0-9]* FAIL=0$' "$base_out" \
 # mutant can only redden a leg that exists, and a renamed leg would otherwise
 # silently disable this whole guard.
 for leg in schedulers-lawcron-rc0 schedulers-unset-direction-rc0; do
-  if grep -q "chk \"$leg\"" "$SRC/oc-health"; then
+  if grep -q "chk \"$leg\"" "$SRC/$HEALTH_REL"; then
     ok "baseline carries leg '$leg'"
   else
     bad "leg '$leg' is MISSING from oc-health — the guard would be vacuous"
@@ -79,7 +82,7 @@ done
 # label|anchor|replacement  (ASCII anchors only: this heredoc is fed to python3
 # on stdin, so a non-ASCII anchor is one encoding surprise from a silent no-op)
 mutate() {  # mutate <tree> <label> -> rc 0 on success
-  python3 - "$1/oc-health" "$2" <<'PYEOF'
+  python3 - "$1/$HEALTH_REL" "$2" <<'PYEOF'
 import sys
 path, label = sys.argv[1], sys.argv[2]
 MUTATIONS = {
@@ -146,14 +149,14 @@ guard_one() {  # guard_one <label> <aimed-legs>
 
   # Prove the mutant really differs (a no-op mutation would make this section
   # vacuous while every leg below still reported PASS).
-  if cmp -s "$SRC/oc-health" "$mut/oc-health"; then
+  if cmp -s "$SRC/$HEALTH_REL" "$mut/$HEALTH_REL"; then
     bad "[$label] mutant is byte-identical to the pristine tool — no-op mutation"
     return
   else
-    ok "[$label] mutant applied ($(cmp -l "$SRC/oc-health" "$mut/oc-health" 2>/dev/null | wc -l) differing bytes)"
+    ok "[$label] mutant applied ($(cmp -l "$SRC/$HEALTH_REL" "$mut/$HEALTH_REL" 2>/dev/null | wc -l) differing bytes)"
   fi
 
-  rc_m="$(run_st "$mut/oc-health" "$outf")"
+  rc_m="$(run_st "$mut/$HEALTH_REL" "$outf")"
   if [ "$rc_m" = "0" ]; then
     bad "[$label] mutant selftest PASSED (rc=0) — the aimed legs do not catch the regression"
     return
