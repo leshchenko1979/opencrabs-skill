@@ -126,7 +126,7 @@ Bump propagation mechanics (B-F4 v0.4.96 — moved out of the table cell):
    workers whose first signed commit is verified (standing practice, fleet B5
    + Duty-4 proposal, v0.4.96; the flag gap was 4 workers `confirmed:false`).
 
-> Delivery discipline per SKILL.md §session_notify mechanics (DELIVERY ≠
+> Delivery discipline per session-notify.md §Tool mechanics (DELIVERY ≠
 > QUEUE ACCEPTANCE canonical there): live roster check SAME turn; silent
 > target → one retry → ledger event note; `target_session` = FULL UUID only.
 > Delivery cadence and mode semantics: `fleet-directives.md §Cross-lane message delivery

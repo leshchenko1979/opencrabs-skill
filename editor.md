@@ -482,6 +482,138 @@ until Alexey fixes it otherwise. If a bounce kills your smoke mid-run: re-arm to
 schemas (step 1), re-run from scratch — NEVER report the bounce itself as a feature
 FAIL.
 
+
+### Smoke-verdict rules (moved from SKILL.md §Test ontology, v0.4.262)
+
+Re-homed by cycle `20260925-c24` lens B (B-H2): the always-loaded router carried the smoke
+PROCEDURE under its ontology table. The ontology (the three kinds + the sanity signal) stays in
+`SKILL.md §Test ontology`; the verdict rules and their incident history live here, on the load path
+of the role that actually produces smoke evidence.
+
+The table above carries the content; what remains prose:
+
+- **SMOKE TEST** is the ONLY evidence that may back an upstream PR approval
+  request (hard rule + `harvest.md` Phase 7 step 0).
+- **EXECUTION SANITY SIGNAL** — the swap-path `--version` run (`oc-deploy` swap
+  path; archived anchor: `tools/archive/compiler.md` Step 3) — is NONE of the three kinds: it proves only "this file is a
+  runnable opencrabs binary". Not behavioral, not analytical, not presence
+  evidence; never cite it as any kind of test result.
+
+Rule: never write "tests pass" without naming the kind. A green Lint run is NOT
+a smoke pass; a smoke pass says nothing about clippy; a presence hit says
+nothing about behavior.
+
+- **A VERDICT TOKEN MUST BE REACHABLE AT THE TOOL THAT WRITES IT (v0.4.243,
+  cycle `20260922-c22`).** The sanctioned verdict vocabulary and the vocabulary
+  the verdict WRITER can actually emit are not the same set, and nothing in the
+  corpus checks the gap. Measured 2026-09-22: `oc-smoke` — the tool the
+  procedure names for writing verdict rows — accepts `--verdict PASS|FAIL` and
+  nothing else (`tools/smoke/oc-smoke:9`, `:57`, `:64`), while these laws mandate
+  tokens such as `UNPROVEN (presence-only)` and `PARKED-OWNER-EYE`. A lane
+  ordered to stamp a mandated token through that writer therefore CANNOT: the
+  row it produces says PASS or FAIL and the nuance is silently lost. So before
+  citing a verdict token as *recorded* evidence, confirm the writer can emit it;
+  when the mandated token is outside the writer's set, record it in the row's
+  free text and STATE which form was used — never present a token the tool
+  cannot produce as tool-emitted.
+
+**Corrected-code presence ≠ smoke success (owner order 2026-09-08):** evidence
+that the corrected code is merely PRESENT in the swapped binary — strings
+marker hit, sha match, deployed.meta identity — can NEVER back a smoke-success
+verdict on its own. Presence proves the artifact shipped; it says nothing
+about behavior. A smoke verdict of GREEN additionally requires at least one
+BEHAVIORAL probe of the corrected path actually executing (a live call, a
+forced trigger, an observed output through the new code). If only presence
+evidence exists, the verdict is `UNPROVEN (presence-only)` — never GREEN, and
+the lane's ledger append must carry that label.
+
+**Live verification stamp required for live-testable UX features (owner order 2026-09-16):**
+For any UX, UI, card rendering, button interaction, or user-facing feature that is
+live-testable on the running binary, static binary string probes or symbol searches alone
+are STRICTLY FORBIDDEN as proof of a smoke PASS. Binary strings prove only compilation
+presence, not runtime UI correctness or execution. A smoke PASS for live-testable UX
+features requires an explicit live behavioral execution receipt stamped into the stamp system
+(`smoke-verdicts.log` / `workers-ledger.json`). If behavioral verification cannot be fully
+automated and requires the owner's visual inspection, the lane MUST record `PARKED-OWNER-EYE`
+naming the exact owner action and packaging sha — never substitute a binary string probe for a
+live UX verification.
+
+**Bookkeeping legs ≠ smoke PASS (owner order 2026-09-08 12:16Z):** lineage
+(is-ancestor), identity (artifact==exe sha) and CI gate evidence are
+bookkeeping legs — ALL THREE PASSING still does not constitute a successful
+smoke test. Smoke PASS requires a live behavioral probe of the corrected
+runtime path on the running box (full rule: editor.md Phase 6b). A verdict
+citing only bookkeeping legs is INCOMPLETE — returned to the lane, never GREEN.
+
+
+**Owner-dependent leg → PARK, never wait (v0.4.152, owner order 2026-09-12):** when
+the only remaining behavioral evidence requires the OWNER (a visual pass, a tap, an
+eye-confirm), the leg is NOT a blocking gate. Stamp the provable legs, append a
+`PARKED-OWNER-EYE` row naming the owner action and the packaging sha, and RELEASE
+the lane. A lane idling on an owner leg is in violation; a lane that parks and moves
+on is compliant. Full law: `fleet-directives.md §Owner-Dependent Smoke Legs — Park,
+Don't Chase` (L1–L4: parking, shift exit condition, owner-verdict timing, packaging-sha
+stamps).
+
+**Tool-description changes have no log-based probe (lane 1a63f103, 2026-09-12):** the
+daemon's provider log records tool ARGS only (`[TOOL_ACCUM] name=bash`) and NEVER tool
+schemas — so no log line can prove a description string was served. Smoking a
+`Tool::description()`/`input_schema()` change uses **binary strings on the running exe +
+the shipped constants in source**; any description fragment found in the log is
+self-contamination from the prober's own commands. A "live schema served" receipt from
+the log is a FALSE receipt.
+
+**Leg-4 probe hygiene (lane 212b3c83, Duty-4 cycle `20260919-c21`, 2026-09-19) — three ways a leg-4 probe measures
+nothing and still reports PASS.** (a) **ARTIFACT BINDING:** a criterion binds to a NAMED artifact —
+rendering bytes and delivered bytes are different artifacts, because the delivery path re-encodes
+(Telegram converts renders to JPEG) and a re-encode destroys fine-stroke measurements, so a criterion
+that holds on the lossless render (colour type, alpha, contrast across a 1 px stroke) is **not**
+thereby valid on the delivered artifact. Where both are needed, state **two legs with distinct
+criteria** — the renderer leg proves the wire form is right, the delivered leg proves the user
+receives the corrected output and binds on a **coarse, codec-surviving discriminator** (a large
+contiguous fill region, a presence/absence inversion against a pre-fix control message) — and a
+verdict resting on both must say which criterion binds to which artifact. (b) **MEASURE FROM THE
+ARTIFACT, NOT THE CONSTANTS:** if every argument to the metric is a literal declared beside the
+threshold, the metric measures the source file, not the artifact, and passes on any input — measure
+from the loaded bytes. A **bucketing/matching tolerance must be strictly smaller than the separation
+between the buckets it distinguishes**: with references `d` apart, any tolerance `>= d` merges them
+and the metric silently becomes a count of the union — assign each sample to its NEAREST reference
+rather than testing a radius (a merged bucket shows as a ratio that cannot exist, e.g. two bucket
+counts summing past the population). (c) **SPILL-DIRECTORY COMPLETENESS:** a probe consuming tool
+output must not read the spill directory as if it were complete — results under the inline threshold
+are returned inline and produce **no spill file**, so a spill-only harvest has a hole exactly where
+the newest evidence sits; force the spill by raising the result size, or parse the tool result inline
+in the same turn. Because **expired attachment URLs are skipped silently and the skip reads as
+absence**, report the skipped count beside the found count — "0 found, 13 skipped as expired" is a
+different verdict from "0 found". **Corollary binding all three: a leg-4 probe reports PASS only if
+it would FAIL on the pre-fix artifact — state the input on which it fails.**
+**Duty-5 ruling 2026-09-19 (answering lane 4b0990b7, issue #295): for a SINGLE-SIDED probe the corollary IS the sufficiency test -- the discriminating negative half need not be OBTAINED, only NAMED and mechanically shown absent from the pre-fix tree.** A positive half alone backs PASS when all three hold: (1) the falsifying input is STATED explicitly; (2) its absence on the pre-fix artifact is established by a MECHANICAL discriminator run that turn -- `git log -S <string> <fix-sha> -- <pathspec>` returning exactly ONE introduction (the fix's own commit), or the string absent from `git grep` over the pre-fix tree -- never by assertion, never by reasoning about the code; (3) the probe observes the RUNNING artifact's OWN output (a live session's rendered prompt, a real call), and the observing session itself exercises the path under test (a Telegram-bound session, for a Telegram-delivery feature) -- a `strings` dump of the binary stays presence-only and cannot back PASS for a live-testable UX feature. What the corollary forbids is a probe that cannot NAME any input it would fail on: that probe measures its own constants. Where the negative half is STRUCTURALLY unobtainable -- prompts are rendered per turn and never persisted, so a non-Telegram session's prompt cannot be read back -- the mechanical discriminator of (2) stands in for it. **Carry the discriminator's command in the row.** **Scope it, or it proves nothing:** both sanctioned forms silently assume the token is GLOBALLY UNIQUE, which this law never stated. A non-unique token -- `MAX_ATTEMPTS`, `TIMEOUT`, `retry`, `attempts` -- makes form 1 return FOREIGN introductions and form 2 a false PRESENT. Measured on `96b474e` (lane c6b1a539, verified first-hand): `git grep -nEi 'max_attempts|backoff' 96b474e -- src/cli src/a2a` returns rc=1 with ZERO hits -- the correct pre-fix answer, the retry path is absent -- while the SAME grep UNSCOPED returns rc=0 with 265 hits, including a foreign `const MAX_ATTEMPTS: u32 = 3;` at `src/brain/agent/service/compaction.rs:348`. A CORRECT fix therefore FAILS its own discriminator, and the lane may wrongly conclude its probe is unsound. So the discriminator token MUST be PATHSPEC-SCOPED to the subtree the fix changes, the row MUST carry the pathspec, and "exactly ONE introduction" is a claim about a SCOPE -- never about the tree. **Anchor it too, or it proves nothing on a pre-merge tree:** form 1's revision defaults to HEAD, and a lane runs this discriminator on a PRE-MERGE tree where the fix's own commit is not yet reachable from HEAD -- so the bare form returns EMPTY, and empty reads as "no introduction exists": a FALSE NEGATIVE on the one tree the law is about. Form 1 is therefore ANCHORED at the fix's own commit -- `git log -S <string> <fix-sha> -- <pathspec>`. Measured on #450 (lane 2ed8adeb, verified first-hand; HEAD=main, fix `b6389c892` unmerged -- `git merge-base --is-ancestor b6389c892 HEAD` rc=1): the bare form returns EMPTY, the anchored form returns exactly ONE introduction, `b6389c892`. Form 2 is unaffected by this gap and is what established the negative half for #450 -- scoped, `git grep -c 'ProgressEvent::TokenCount' 33b7aecdd -- src/channels/telegram/resume.rs` returns rc=1 with ZERO hits (the correct pre-fix answer), while the SAME grep UNSCOPED returns 19 hits across 6 files, including the fresh-turn twin at `src/channels/telegram/progress.rs:1` -- a false PRESENT.
+
+
+### Red-run triage heuristics (moved from SKILL.md, v0.4.262)
+
+Shared diagnosis core, read by the editor in its fix round and by HQ in RED triage.
+Re-homed by cycle `20260925-c24` lens B (B-H2).
+
+## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
+
+ONE location: red-run diagnosis reads these (pre-S3: Compiler Step 2; now:
+`oc-deploy` RED reports + HQ triage); the
+Editor applies the same ones in its fix round (editor.md Phase 6c). No lane
+uses them as a licence to fix outside its scope.
+
+- Fix unresolved-name/import errors FIRST (E0425/E0433...) — later errors are
+  usually poisoned fallout. When scopes look shifted, count brace DEPTH, not
+  brace counts.
+- Match-arm narrowing does not inherit through outer arms — an inner match
+  needs its own exhaustive arms regardless of the outer guard.
+- **Contradictory INCOMING verdicts → settle via live GH API before acting**
+  (v0.4.14, proposal P3): when two claims about the SAME run/sha disagree (e.g.
+  a RED report vs an ACK calling that run "in_progress"), resolve with
+  `gh run view <id> --json status,conclusion` FIRST — even ACKs can be
+  stale. v0.4.6 predicates govern claims WE pass on; nothing sanitizes claims
+  that ARRIVE — the receiver checks.
+
 ## Phase 6-Fix — Fix Loop (Red Carrier Build or Failed Smoke)
 
 A RED `oc-deploy ship`/poll run or a failed smoke attributes the failure (via

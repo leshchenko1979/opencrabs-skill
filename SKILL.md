@@ -15,7 +15,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.261
+version: 0.4.262
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -79,12 +79,10 @@ role loads — do not fuse the roles in one pass without Alexey saying so explic
 
 ## Canonical tooling (v0.4.12, PROCESS-TOOL ownership)
 
-Mechanical rituals the roles once hand-ran are now single commands in `tools/`
-(owner-aware: CLI-tool creation/fix is the TOOLSMITH lane's scope — v0.4.87 carve-out). Canonical
-commands run INSIDE `oc-deploy` (ship/poll/swap-execute); this section is the
-register + test source of truth (archived compiler-step anchors stripped
-2026-08-29 — `tools/archive/compiler.md` carries the old numbering for re-enable context).
-Fleet-wide rc conventions + FULL per-tool rc register: `tools/docs/RC-CONTRACT.md` — the SOLE register (lens A H1/B F1, v0.4.79; rows below carry purpose only):
+Mechanical rituals the roles once hand-ran are now single commands in `tools/` (CLI-tool creation/fix is
+the TOOLSMITH lane's scope, v0.4.87). This section is the register; archived compiler-step anchors live at
+`tools/archive/compiler.md`. Fleet-wide rc conventions + the FULL per-tool rc register (the SOLE register):
+`tools/docs/RC-CONTRACT.md` (lens A H1/B F1, v0.4.79; rows below carry purpose only):
 
 **Directory layout — one level per KIND (v0.4.254):** `tools/` holds the `oc-*` fleet executables (the public interface) grouped ONE LEVEL PER FUNCTION — `audit/` `git/` `harvest/` `issue/` `notify/` `ship/` `smoke/` `state/` — beside `tools/lib/` shared helpers, `tools/tests/` the battery, `tools/archive/` retired tools, `tools/docs/` the law that documents the tools, and **`tools/instruments/` corpus-agnostic analysis tools that are NOT fleet tools** — an instrument that reviews an arbitrary corpus has no place in the `oc-*` namespace, and lands there instead.
 
@@ -138,22 +136,18 @@ Fleet-wide rc conventions + FULL per-tool rc register: `tools/docs/RC-CONTRACT.m
 | `./tools/git/oc-rebase-safety overlap\|audit` | re-gate split rule arithmetic |
 | `./tools/state/oc-roster <live\|forum\|claims\|work\|classify> [--detail\|--json]` | the DERIVED in-progress roster — joins ledger claim events + worktree dirty state + session-DB liveness + forum bindings; stores nothing. `live` = the freeze list; `classify` = ACTIVE/IDLE/ORPHAN/UNKNOWN per row; a claim author absent from the session DB is reported PHANTOM and excluded. `--selftest` = 44 checks. **`--role <role>` is a supported delegation to `oc-ledger roster --live --role <role>` — byte-identical output (verified 2026-09-19, `cmp` rc=0); a bare `--role` with no value answers rc 2.** Sync runbook step 0 |
 
-Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (the
-SELFTEST BATTERY — tool selftests, distinct from the CI-gate CODE TESTS
-cargo triad; the `oc-seal-state` IFS-join case is one guard inside it).
-Must stay green before any version
+Tests: `tools/tests/run.sh` — one command, exit 0 only if all pass (the SELFTEST BATTERY — tool
+selftests, distinct from the CI-gate CODE TESTS cargo triad). Must stay green before any version
 bump; tools are never edited without re-running it.
 
 ### Unified tools log
 
-Every tool in `tools/` appends ONE JSONL line on exit (aggregate; per-run
-journals stay per-run). Path, schema, suppression rules, and verified jq
-recipes: `tools/docs/RC-CONTRACT.md` §Unified tools log.
+Every tool in `tools/` appends ONE JSONL line on exit. Path, schema, suppression
+rules and verified jq recipes: **`tools/docs/RC-CONTRACT.md` §Unified tools log** (sole home).
 
 ## Session-notify loop (since v0.3.3)
 
-Editors live in a Telegram forum group: one topic = one editor = one live session
-= ONE feature.
+Editors live in a Telegram forum group: one topic = one editor = one live session = ONE feature.
 
 - **TOPIC NAMES stay in sync with their lane, are `<Area>: <Qualifier>`, and are
   <= 22 characters** (owner order 2026-09-25: "keep the telegram topic names in
@@ -193,91 +187,28 @@ Editors live in a Telegram forum group: one topic = one editor = one live sessio
 - Separation holds inside the loop: the fan-out notifies + attributes but NEVER
   fixes code; Editors fix + re-push but NEVER attribute others' failures.
 
-### session_notify mechanics (upstream #1203, commit 13a24f25)
+### session_notify mechanics — see `session-notify.md`
 
-- Same-process only: pushes into a LIVE session's queue on THIS box. Target must
-  have messaged since boot; dead/cross-instance targets error → fall back to
-  `a2a_send`, else list UNREACHABLE in the report.
-- DELIVERY ≠ QUEUE ACCEPTANCE: a ping counts as delivered
-  ONLY with post-ping proof — same-turn live roster check (`session_search`),
-  target PINGED-WOKEN (`last_active` > ping time) or PINGED-SILENT. Ledger
-  entries saying "pinged" without wake evidence are forbidden (all roles).
-- Sender identity is mechanical — deliveries arrive prefixed
-  `[session-notify from=<uuid>]`; replies route back with `target_session = from`.
-  Neither role can forge or strip identity.
-- Delivery drains at the target's next tool-loop boundary and wakes idle
-  sessions — no polling anywhere.
-- DELIVERY MODES (v0.4.69; defaults re-ruled 2026-09-19 03:34:30Z — fleet-directives
-  §Cross-lane message delivery discipline is CANONICAL: `turn-end` is THE DEFAULT,
-  `quiet` is a deliberate choice, `now` is RETIRED and hard-errors):
+The `session_notify` TOOL mechanics (same-process scope, delivery-vs-queue-acceptance,
+sender identity, per-surface rate limits, refusal handling, the CLI form, and the
+`from`-is-a-return-address rule) live in **`session-notify.md`**. The delivery LAW is
+canonical at `fleet-directives.md` §Cross-lane message delivery discipline.
 
-  | Mode | Note |
-  |---|---|
-  | `turn-end` (DEFAULT) / `quiet` / redirect / no-route | full table = fleet-directives.md §Cross-lane message delivery discipline (CANONICAL — this row is a failsafe pointer, lens B-F15 v0.4.96) |
-  | `now` | **RETIRED — passing it FAILS the delivery** (`notify_policy.rs` returns `Err`; the schema's `delivery.mode` enum is exactly `[turn-end, interrupt, quiet]`; #373 landed + deployed). It is NOT an available mode. |
-  | `interrupt` (urgent tier) | `interrupt: true` is the **LEGACY ALIAS for `delivery.mode: interrupt`** — the URGENT tier (#393, landed + deployed): the SAME delivery point as `turn-end`, carrying a precedence frame so the target yields its current plan and answers in that turn, and never deferred. It is **NOT pre-emption** — no boundary exists inside a running tool call, so a mid-turn target still QUEUES for its next tool-loop boundary. |
-
-  Escalation ladder canonical: fleet-directives.md §Cross-lane message delivery discipline
-  (`turn-end` is the default and `interrupt` is the URGENT tier — same boundary plus precedence framing, never pre-emption — lens A5
-  v0.4.89: pointer only, no second copy).
-- **RATE LIMITS ARE ENFORCED PER SURFACE (owner ruling 2026-09-08, research-backed —
-  `governor.rs`):** Telegram's per-chat flood limits are enforced **per surface** —
-  1 msg/s per chat, 20 msg/min per group, ~20 edits/min per group — so a window
-  declared on the rich arm does NOT throttle the send arm's separate budget. On a
-  429 the daemon pauses **ONLY the offending arm**; pausing everything
-  over-punishes unrelated traffic, because the offending arm IS the evidence.
-  A proposal to bound the **SUM** of the buckets (an aggregate per-chat gate)
-  would REVERSE this ruling — the buckets are deliberately independent. Fork issue
-  #580 owns the open question of whether anything should bound their sum; until it
-  rules, do not add one.
-- Refusal handling: **the `session_notify` path never refuses.** `interrupt` is
-  hardcoded true on this tool's route (`src/brain/tools/subagent/notify.rs:371`),
-  so the mid-turn gate (`src/brain/agent/service/session_routes.rs:336`) is
-  bypassed and a busy target QUEUES the message for its next tool-loop boundary —
-  send `turn-end` (the default) and do nothing else. `interrupt: true` is a
-  legacy alias for the urgent tier (precedence framing, never deferred — but still
-  not pre-emption); `now` fails the delivery outright.
-  A `no wake observed` confirm verdict MEANS the target is mid-turn — never
-  re-send on it. Do NOT generalise this to "there is no refusal path": the
-  `Delivery::RefusedInFlight` variant is still constructed and reachable from
-  other callers that pass `interrupt=false` (`quiet_delivery.rs:199`,
-  `a2a/handler/notify.rs:266`, `cron/scheduler.rs:1174`).
-- CLI form carries `--sender "<lane label>" --title "<topic>"` where supported
-  (oc-deploy fanout precedent) — the mechanical `from=<uuid>` header is added
-  on top and cannot be forged or stripped.
-- **`from` is a RETURN ADDRESS only when the sender is a LIVE SESSION (v0.4.243,
-  cycle `20260922-c22`).** The identity bullet above ("replies route back with
-  `target_session = from`") holds for a lane-to-lane notify and NOT for a notify
-  whose sender is not a session at all — a cron job, a fan-out generator, or a
-  tool. There `from` is a SYNTHETIC label naming the component that sent it, not
-  a mailbox: a reply addressed to it reaches nothing, and the label is not a
-  roster entry. So read the header before treating it as an address — an address
-  you can reply to belongs to a session that exists; a synthetic `from` is
-  WRITE-ONLY. Measured 2026-09-22 (lanes 4b4463d5 and a5b34466, converged
-  independently): the distinction appeared nowhere in the corpus, and a lane
-  replying to a cron-originated notify was writing into a label. A reply that
-  matters must name the PROCESS OWNER session, resolved live, not the `from`.
 
 ### Telegram surface law (v0.4.31)
 
-Inter-role communication is **session_notify ONLY**. No lane ever uses telegram
-send/edit tools to talk to another session, another role's topic, the forum
-General area, an unrelated chat, or the owner DM.
+Inter-role communication is **session_notify ONLY**. No lane ever uses telegram send/edit tools to talk
+to another session, another role's topic, the forum General area, an unrelated chat, or the owner DM.
 
-- An Editor's telegram surface is ITS OWN TOPIC and nothing else. Normal replies
-  auto-route there as session text — that is the ONLY sanctioned output.
-  Editors NEVER invoke send/edit telegram tools (`telegram_send`,
-  `tg_send_message`, `tg_edit_message`, `telegram_edit`) — not even into their
-  own topic (session text already covers it); no `tg_search_global` /
-  cross-chat reads; `tg_get_messages` limited to the own topic. Reactions are
+- An Editor's surface is ITS OWN TOPIC and nothing else; normal replies auto-route there as session
+  text, the ONLY sanctioned output. Editors NEVER invoke send/edit telegram tools (`telegram_send`,
+  `tg_send_message`, `tg_edit_message`, `telegram_edit`) — not even into their own topic; no
+  `tg_search_global`/cross-chat reads; `tg_get_messages` limited to the own topic. Reactions are
   allowed (owner consent signal).
-- Sanctioned senders (NOT editors — none of this is lane-to-lane): the
-  task-queue skill's documented `/tq-approve` topic-creation + invitation flow;
-  alerting lanes reporting to the owner DM per the ops runbook; the
-  HQ's own session text.
-- Violation pattern for HQ: a TOOL_ACCUM row showing an editor
-  lane calling a telegram send/edit tool → session_notify the rule; second
-  offense → review toggled.
+- Sanctioned senders (NOT editors — none of this is lane-to-lane): the task-queue skill's documented
+  `/tq-approve` flow; alerting lanes reporting to the owner DM per the ops runbook; HQ's session text.
+- Violation pattern for HQ: a TOOL_ACCUM row showing an editor lane calling a telegram send/edit
+  tool → session_notify the rule; second offense → review toggled.
 
 ## Test ontology (v0.4.2 — three kinds + one sanity signal, NEVER conflate)
 
@@ -292,104 +223,11 @@ General area, an unrelated chat, or the owner DM.
 | Evidence | one line: drove X, observed Y (+ run id / sha) | job/step conclusions read via API | marker found/not-found + checksum line in baseline.json |
 | On FAIL | issue FIRST, then evidence to the HQ lane (`session_notify`) | fix before merge / PR | NO swap — feature missing from build; regression stated plainly |
 
-The table above carries the content; what remains prose:
-
-- **SMOKE TEST** is the ONLY evidence that may back an upstream PR approval
-  request (hard rule + `harvest.md` Phase 7 step 0).
-- **EXECUTION SANITY SIGNAL** — the swap-path `--version` run (`oc-deploy` swap
-  path; archived anchor: `tools/archive/compiler.md` Step 3) — is NONE of the three kinds: it proves only "this file is a
-  runnable opencrabs binary". Not behavioral, not analytical, not presence
-  evidence; never cite it as any kind of test result.
-
-Rule: never write "tests pass" without naming the kind. A green Lint run is NOT
-a smoke pass; a smoke pass says nothing about clippy; a presence hit says
-nothing about behavior.
-
-- **A VERDICT TOKEN MUST BE REACHABLE AT THE TOOL THAT WRITES IT (v0.4.243,
-  cycle `20260922-c22`).** The sanctioned verdict vocabulary and the vocabulary
-  the verdict WRITER can actually emit are not the same set, and nothing in the
-  corpus checks the gap. Measured 2026-09-22: `oc-smoke` — the tool the
-  procedure names for writing verdict rows — accepts `--verdict PASS|FAIL` and
-  nothing else (`tools/smoke/oc-smoke:9`, `:57`, `:64`), while these laws mandate
-  tokens such as `UNPROVEN (presence-only)` and `PARKED-OWNER-EYE`. A lane
-  ordered to stamp a mandated token through that writer therefore CANNOT: the
-  row it produces says PASS or FAIL and the nuance is silently lost. So before
-  citing a verdict token as *recorded* evidence, confirm the writer can emit it;
-  when the mandated token is outside the writer's set, record it in the row's
-  free text and STATE which form was used — never present a token the tool
-  cannot produce as tool-emitted.
-
-**Corrected-code presence ≠ smoke success (owner order 2026-09-08):** evidence
-that the corrected code is merely PRESENT in the swapped binary — strings
-marker hit, sha match, deployed.meta identity — can NEVER back a smoke-success
-verdict on its own. Presence proves the artifact shipped; it says nothing
-about behavior. A smoke verdict of GREEN additionally requires at least one
-BEHAVIORAL probe of the corrected path actually executing (a live call, a
-forced trigger, an observed output through the new code). If only presence
-evidence exists, the verdict is `UNPROVEN (presence-only)` — never GREEN, and
-the lane's ledger append must carry that label.
-
-**Live verification stamp required for live-testable UX features (owner order 2026-09-16):**
-For any UX, UI, card rendering, button interaction, or user-facing feature that is
-live-testable on the running binary, static binary string probes or symbol searches alone
-are STRICTLY FORBIDDEN as proof of a smoke PASS. Binary strings prove only compilation
-presence, not runtime UI correctness or execution. A smoke PASS for live-testable UX
-features requires an explicit live behavioral execution receipt stamped into the stamp system
-(`smoke-verdicts.log` / `workers-ledger.json`). If behavioral verification cannot be fully
-automated and requires the owner's visual inspection, the lane MUST record `PARKED-OWNER-EYE`
-naming the exact owner action and packaging sha — never substitute a binary string probe for a
-live UX verification.
-
-**Bookkeeping legs ≠ smoke PASS (owner order 2026-09-08 12:16Z):** lineage
-(is-ancestor), identity (artifact==exe sha) and CI gate evidence are
-bookkeeping legs — ALL THREE PASSING still does not constitute a successful
-smoke test. Smoke PASS requires a live behavioral probe of the corrected
-runtime path on the running box (full rule: editor.md Phase 6b). A verdict
-citing only bookkeeping legs is INCOMPLETE — returned to the lane, never GREEN.
-
-
-**Owner-dependent leg → PARK, never wait (v0.4.152, owner order 2026-09-12):** when
-the only remaining behavioral evidence requires the OWNER (a visual pass, a tap, an
-eye-confirm), the leg is NOT a blocking gate. Stamp the provable legs, append a
-`PARKED-OWNER-EYE` row naming the owner action and the packaging sha, and RELEASE
-the lane. A lane idling on an owner leg is in violation; a lane that parks and moves
-on is compliant. Full law: `fleet-directives.md §Owner-Dependent Smoke Legs — Park,
-Don't Chase` (L1–L4: parking, shift exit condition, owner-verdict timing, packaging-sha
-stamps).
-
-**Tool-description changes have no log-based probe (lane 1a63f103, 2026-09-12):** the
-daemon's provider log records tool ARGS only (`[TOOL_ACCUM] name=bash`) and NEVER tool
-schemas — so no log line can prove a description string was served. Smoking a
-`Tool::description()`/`input_schema()` change uses **binary strings on the running exe +
-the shipped constants in source**; any description fragment found in the log is
-self-contamination from the prober's own commands. A "live schema served" receipt from
-the log is a FALSE receipt.
-
-**Leg-4 probe hygiene (lane 212b3c83, Duty-4 cycle `20260919-c21`, 2026-09-19) — three ways a leg-4 probe measures
-nothing and still reports PASS.** (a) **ARTIFACT BINDING:** a criterion binds to a NAMED artifact —
-rendering bytes and delivered bytes are different artifacts, because the delivery path re-encodes
-(Telegram converts renders to JPEG) and a re-encode destroys fine-stroke measurements, so a criterion
-that holds on the lossless render (colour type, alpha, contrast across a 1 px stroke) is **not**
-thereby valid on the delivered artifact. Where both are needed, state **two legs with distinct
-criteria** — the renderer leg proves the wire form is right, the delivered leg proves the user
-receives the corrected output and binds on a **coarse, codec-surviving discriminator** (a large
-contiguous fill region, a presence/absence inversion against a pre-fix control message) — and a
-verdict resting on both must say which criterion binds to which artifact. (b) **MEASURE FROM THE
-ARTIFACT, NOT THE CONSTANTS:** if every argument to the metric is a literal declared beside the
-threshold, the metric measures the source file, not the artifact, and passes on any input — measure
-from the loaded bytes. A **bucketing/matching tolerance must be strictly smaller than the separation
-between the buckets it distinguishes**: with references `d` apart, any tolerance `>= d` merges them
-and the metric silently becomes a count of the union — assign each sample to its NEAREST reference
-rather than testing a radius (a merged bucket shows as a ratio that cannot exist, e.g. two bucket
-counts summing past the population). (c) **SPILL-DIRECTORY COMPLETENESS:** a probe consuming tool
-output must not read the spill directory as if it were complete — results under the inline threshold
-are returned inline and produce **no spill file**, so a spill-only harvest has a hole exactly where
-the newest evidence sits; force the spill by raising the result size, or parse the tool result inline
-in the same turn. Because **expired attachment URLs are skipped silently and the skip reads as
-absence**, report the skipped count beside the found count — "0 found, 13 skipped as expired" is a
-different verdict from "0 found". **Corollary binding all three: a leg-4 probe reports PASS only if
-it would FAIL on the pre-fix artifact — state the input on which it fails.**
-**Duty-5 ruling 2026-09-19 (answering lane 4b0990b7, issue #295): for a SINGLE-SIDED probe the corollary IS the sufficiency test -- the discriminating negative half need not be OBTAINED, only NAMED and mechanically shown absent from the pre-fix tree.** A positive half alone backs PASS when all three hold: (1) the falsifying input is STATED explicitly; (2) its absence on the pre-fix artifact is established by a MECHANICAL discriminator run that turn -- `git log -S <string> <fix-sha> -- <pathspec>` returning exactly ONE introduction (the fix's own commit), or the string absent from `git grep` over the pre-fix tree -- never by assertion, never by reasoning about the code; (3) the probe observes the RUNNING artifact's OWN output (a live session's rendered prompt, a real call), and the observing session itself exercises the path under test (a Telegram-bound session, for a Telegram-delivery feature) -- a `strings` dump of the binary stays presence-only and cannot back PASS for a live-testable UX feature. What the corollary forbids is a probe that cannot NAME any input it would fail on: that probe measures its own constants. Where the negative half is STRUCTURALLY unobtainable -- prompts are rendered per turn and never persisted, so a non-Telegram session's prompt cannot be read back -- the mechanical discriminator of (2) stands in for it. **Carry the discriminator's command in the row.** **Scope it, or it proves nothing:** both sanctioned forms silently assume the token is GLOBALLY UNIQUE, which this law never stated. A non-unique token -- `MAX_ATTEMPTS`, `TIMEOUT`, `retry`, `attempts` -- makes form 1 return FOREIGN introductions and form 2 a false PRESENT. Measured on `96b474e` (lane c6b1a539, verified first-hand): `git grep -nEi 'max_attempts|backoff' 96b474e -- src/cli src/a2a` returns rc=1 with ZERO hits -- the correct pre-fix answer, the retry path is absent -- while the SAME grep UNSCOPED returns rc=0 with 265 hits, including a foreign `const MAX_ATTEMPTS: u32 = 3;` at `src/brain/agent/service/compaction.rs:348`. A CORRECT fix therefore FAILS its own discriminator, and the lane may wrongly conclude its probe is unsound. So the discriminator token MUST be PATHSPEC-SCOPED to the subtree the fix changes, the row MUST carry the pathspec, and "exactly ONE introduction" is a claim about a SCOPE -- never about the tree. **Anchor it too, or it proves nothing on a pre-merge tree:** form 1's revision defaults to HEAD, and a lane runs this discriminator on a PRE-MERGE tree where the fix's own commit is not yet reachable from HEAD -- so the bare form returns EMPTY, and empty reads as "no introduction exists": a FALSE NEGATIVE on the one tree the law is about. Form 1 is therefore ANCHORED at the fix's own commit -- `git log -S <string> <fix-sha> -- <pathspec>`. Measured on #450 (lane 2ed8adeb, verified first-hand; HEAD=main, fix `b6389c892` unmerged -- `git merge-base --is-ancestor b6389c892 HEAD` rc=1): the bare form returns EMPTY, the anchored form returns exactly ONE introduction, `b6389c892`. Form 2 is unaffected by this gap and is what established the negative half for #450 -- scoped, `git grep -c 'ProgressEvent::TokenCount' 33b7aecdd -- src/channels/telegram/resume.rs` returns rc=1 with ZERO hits (the correct pre-fix answer), while the SAME grep UNSCOPED returns 19 hits across 6 files, including the fresh-turn twin at `src/channels/telegram/progress.rs:1` -- a false PRESENT.
+The table above carries the ontology. **The smoke-verdict rules and their incident history —
+presence-is-not-behaviour, the live-verification stamp for live-testable UX, bookkeeping-legs-are-not-a-pass,
+the owner-dependent leg's PARK disposition, the no-log-probe rule for tool-description changes, leg-4
+probe hygiene, and the single-sided-probe sufficiency ruling — are canonical at `editor.md`
+§Phase 6b (Smoke-verdict rules).** Read them there before writing or judging a verdict.
 
 ## Glossary — official terms (v0.4.62; one concept = one name)
 
@@ -501,127 +339,28 @@ it would FAIL on the pre-fix artifact — state the input on which it fails.**
   removed 2026-09-24); the bare word "cluster" in harvest law always means
   this one.
 
-## Red-run triage heuristics (shared core, v0.4.10 — moved from editor.md Phase 6)
+## Red-run triage heuristics (shared core)
 
-ONE location: red-run diagnosis reads these (pre-S3: Compiler Step 2; now:
-`oc-deploy` RED reports + HQ triage); the
-Editor applies the same ones in its fix round (editor.md Phase 6c). No lane
-uses them as a licence to fix outside its scope.
-
-- Fix unresolved-name/import errors FIRST (E0425/E0433...) — later errors are
-  usually poisoned fallout. When scopes look shifted, count brace DEPTH, not
-  brace counts.
-- Match-arm narrowing does not inherit through outer arms — an inner match
-  needs its own exhaustive arms regardless of the outer guard.
-- **Contradictory INCOMING verdicts → settle via live GH API before acting**
-  (v0.4.14, proposal P3): when two claims about the SAME run/sha disagree (e.g.
-  a RED report vs an ACK calling that run "in_progress"), resolve with
-  `gh run view <id> --json status,conclusion` FIRST — even ACKs can be
-  stale. v0.4.6 predicates govern claims WE pass on; nothing sanitizes claims
-  that ARRIVE — the receiver checks.
+ONE location: `editor.md` §Red-run triage heuristics (moved v0.4.262). Read by the editor in its
+fix round and by HQ in RED triage — fix unresolved-name/import errors FIRST, count brace DEPTH not
+brace counts, give an inner match its own exhaustive arms, and **settle contradictory INCOMING
+verdicts via the live GH API before acting** (even ACKs can be stale).
 
 ## Shared environment facts (all roles)
 
-- **Actor attribution is automatic via ambient `OPENCRABS_SESSION_ID` (v0.4.176):**
-  `lib/oc-log.sh`, `oc-commit`, `oc-ledger`, and tool scripts derive `actor:` directly
-  from `$OPENCRABS_SESSION_ID` (commit `978fe5fe`). Manual `export OC_ACTOR` is retired.
-- Checkout `~/opencrabs`: remote **`origin`** = fork `leshchenko1979/opencrabs`
-  (push target) · remote **`adolfousier`** = sync source (upstream).
-- **`gh` in `~/opencrabs` defaults to UPSTREAM — `-R` is MANDATORY (2026-09-22).**
-  The fork remote carries NO `gh-resolved` key while `remote.adolfousier.gh-resolved
-  base` does, so gh's resolver selects upstream `adolfousier/opencrabs` for ANY command
-  run from that directory without `-R` / `--repo`. It fails SILENTLY in both directions:
-  a number that exists upstream returns a REAL but WRONG issue, and one that does not
-  404s and reads as "no such issue" — while a write (`gh issue close` / `comment` / `edit`)
-  lands on the OWNER'S UPSTREAM REPO. Measured 2026-09-22 from that cwd: unscoped
-  `gh issue list --state open` → 9 (upstream), `-R leshchenko1979/opencrabs` → 144;
-  `gh issue view 340` 404s unscoped and resolves scoped. Every prescribed `gh` command
-  in this corpus already carries `-R` (14 sites) — this bullet states the RULE they were
-  silently following. The environment fix (`gh repo set-default`) rewrites shared repo
-  config and is the OWNER's call, never a lane's.
-- **The skill glob GATE matches PATHS, not intent (v0.4.243, cycle
-  `20260922-c22`).** A skill whose `SKILL.md` declares a `globs:` frontmatter key
-  guards its own topic: any tool call whose harvested path tokens match one of
-  those globs — matched against the NORMALIZED ABSOLUTE path — is REJECTED while
-  the skill body has not been seen in this session. Harvested keys are `path` /
-  `file_path` / `filePath`, plus path-like tokens inside a `bash` command;
-  `grep`'s and `glob`'s own `pattern` key is deliberately NOT harvested ("a glob
-  pattern string is not a path"). Five consequences a lane must know before
-  reading a rejection: **(a)** it is a glob verdict about a PATH, never a verdict
-  about intent — an unrelated call that merely names a matching path is gated all
-  the same; **(b)** it re-arms after EVERY compaction (owner decision 2026-09-10),
-  so post-compaction the skill is unseen again even if you loaded it earlier the
-  same session; **(c)** recovery is `load_brain_file '<slug>'` or `read_file` on
-  the skill's own source path — BOTH are exempt, and `load_brain_file` marks the
-  skill seen exactly as the gate's own bookkeeping does — then re-issue the
-  IDENTICAL call (the retry is armed before the rejection returns); **(d)** the
-  body appended to a rejection is NOT a complete read, because tool output is
-  capped and a long skill arrives as a head/tail preview — read it with an
-  explicit `max_output_bytes`, or via `load_brain_file`; **(e)** the gate FAILS
-  OPEN, so a rejection you did NOT receive proves nothing about the path — it
-  means no globs were declared, the skill was already seen, or an internal error
-  passed the call. Source of these semantics: `src/brain/tools/skill_gate.rs`
-  (issue #150).
-- BUILD SOURCE = fork `main`. Editors fast-forward their signed commits into
-  `leshchenko1979/opencrabs@main`; `oc-deploy ship` dispatches THAT ref — every
-  artifact compiles all editors' merged changes TOGETHER (decision 2026-08-25).
-  Building upstream/adolfousier refs is the exception, explicit ask only.
-- Branch NAMESPACES are reserved so any role can tell development from upstream
-  PR heads at a glance (decision 2026-08-25): `<type>/<slug>` with type ∈
-  `feat|fix|ci|chore` = DEVELOPMENT — fork-only, ff-merged into fork `main`
-  (editor Phase 5 `oc-ship-chain`), archived after merge · `leshchenko1979/<slug>` = UPSTREAM PR HEADS ONLY (renamed from `up/*`, decision 2026-08-27)
-  — created solely in harvest Phase 7 off `adolfousier/main`, never merged into
-  fork `main`, never a dispatch source. Any lane reads the prefix and knows
-  what it is looking at.
-- This box has **no sanctioned Rust toolchain** — CI is the only sanctioned
-  compile/test executor (Compiler role RETIRED 2026-08-28). No cargo/rustc/clippy in ANY form —
-  install, PATH-prepend, explicit path, even an invocation that exits 0 is a
-  violation. **No local tool exists at all** — `/root/.rustup` is gone and the
-  `rustfmt` wrapper was RETIRED 2026-09-19 (exits 1 `BLOCKED`), so fmt runs only
-  in CI as the soft-fail leg of `pr-checks.yml`; **cosmetic diffs it reports on
-  CI-green code are KEPT AS-IS, not applied — fix only formatting artifacts you
-  introduced yourself**; modum RETIRED 2026-08-28; lint evidence =
-  GREEN pr-checks.yml run. Full ban list: editor.md §Box law (canonical;
-  "(box law)" tags elsewhere refer to it).
-- Daemons run as systemd **user** units (`systemctl --user`) — system-scope queries
-  (`systemctl`, `/etc/systemd`) find nothing. (Binary path: `which opencrabs`.)
-- Daemon PID identity (v0.4.15): NEVER `pgrep | head -1` — three daemons share
-  this box (family, default, ops) and pgrep can grab the wrong one. The ops unit's
-  PID comes only from `systemctl --user show opencrabs-ops -p MainPID --value`.
-- Builds are MINIMAL-FEATURE by design: `cargo build --locked --profile ci
-  --no-default-features --features "<set>"` *(profile ci = thin LTO /
-codegen-units=16 — carrier yml since fork 8994be14)*. Upstream #1186 (missing #[cfg]
-  gates) CLOSED 2026-08-25 — feature subsets compile clean.
-- The feature set is PARAMETRIZED (`ebf44f69`, 2026-08-25): a workflow_dispatch
-  input `features` (comma-separated). Its **`default:` in the workflow yml on the
-  CARRIER branch `ci/quick-build-linux` is the SINGLE SOURCE OF TRUTH** for what we
-  ship — these skill files NEVER copy the set (drift killed 2026-08-25). Read it
-  live with `tools/ship/oc-carrier-features` (the reader oc-deploy itself resolves
-  through).
-  Changing the pick later = one-line Editor commit to that yml's `default:` —
-  skills untouched.
-- Dispatch ALWAYS passes the set explicitly: `-f features=<set>` (decision
-  2026-08-25), even though a safe default exists. Artifact name carries the set:
-  `opencrabs-linux-amd64-<set>`; job: `Linux amd64 (<ref>, <set>)`. The binary
-  FILENAME stays `opencrabs-linux-amd64` (swap scripts depend on it). Anything
-  outside the set (local-stt/local-tts voice, whatsapp/discord/slack/trello,
-  pdfium…) is absent from the swapped binary — missing-feature behavior afterward
-  is expected, not a bug.
-- ORDER and dispatch carry sha AND feature set (v0.4.15, proposals P7+P8): a bare
-  sha cannot identify WHICH build is meant under single-flight. The carrier yml has
-  NO `--all-features` path — the build step hardwires `--no-default-features --features "$features"`
-  — optional features order ONLY as `features=<comma-set>`, and a different-set build
-  of the SAME sha is a DISTINCT build, serialized by the single-flight invariant.
-- `source_ref` accepts a branch NAME (`main`) or the FULL 40-char commit sha —
-  NEVER an 8-char short form: actions/checkout treats it as a glob and fetches a
-  branch literally named `<sha>*`). PASS THE FULL SHA ALWAYS —
-  see next rule for why it is now the only auditable record of what was built.
-- The workflow lives ONLY on the carrier branch `ci/quick-build-linux` (moved off
-  fork `main` 2026-08-26, Alexey's call — mirrors upstream dropping it from their
-  main). Dispatch pattern adds `--ref ci/quick-build-linux`. CONSEQUENCE: the run
-  object's `headSha` reports the CARRIER tip, not the built tree — the built
-  commit is verified via the JOB NAME, which embeds `(source_ref, features)`.
-  Carrier branches NEVER merge to `main` (same reservation discipline as `leshchenko1979/*`).
+**Full text: `environment.md`.** The load-bearing facts, inline so a cold session cannot miss them:
+
+- **No local cargo — EVER.** This box has no sanctioned Rust toolchain; CI is the only
+  sanctioned compile/test executor (Box law, `editor.md §Box law`). No `cargo`/`rustc`/`clippy`
+  in any form — install, PATH-prepend, explicit path, or an invocation that exits 0.
+- **`gh` in `~/opencrabs` defaults to UPSTREAM.** `-R`/`--repo` is MANDATORY for any
+  fork-targeted read or write; an unscoped call returns a real but WRONG issue or 404s.
+- **`origin` = fork `leshchenko1979/opencrabs`** (push target + issues home) · **`adolfousier`** = upstream (PRs only).
+- **Actor attribution is automatic** via ambient `OPENCRABS_SESSION_ID`.
+
+Everything else — the skill glob gate's exact matching semantics, branch namespaces, the
+carrier/feature-set/dispatch rules, and the daemon facts — is in `environment.md`.
+
 
 ## Upstream relations (v0.4.0, owner-approved 2026-08-26)
 
@@ -642,30 +381,23 @@ Upstream movement is WATCHED and ABSORBED on a schedule per the matrix below:
 - Reports to Alexey: every issue/PR reference
   carries the LINK behind the number (issues: `https://github.com/leshchenko1979/opencrabs/issues/N`
   — the fork is the issues home; PRs: `https://github.com/adolfousier/opencrabs/pull/N`) — a bare `#N` is never enough.
-- Refer to workers by TOPIC/CHAT NAME only (owner 2026-08-31): Mermaid, Push to
-  session, Vector memory, … — NEVER by session uuid. Applies to EVERY surface:
-  owner reports, inter-lane advisories, session_notify text, verdict tables,
-  ledger commentary. Uuids are for ROUTING fields only (`target_session`,
-  `OC_ACTOR`, `Session-Id` trailers, tool arguments) — never prose. Test: an
-  owner reading the message must know WHICH chat to open without a lookup.
-- Stick to the OFFICIAL ONTOLOGY (owner 2026-08-31): all roles use the
-  vocabulary this SKILL defines — test ontology (§Test ontology: SMOKE TEST /
-  CODE TESTS / FEATURE-PRESENCE CHECK), infra terms (§Glossary: selftest /
-  battery / CI gate), roles (Editor / HQ / Triage / Toolsmith / Harvest / Reviewer lenses),
-  gate colors (GREEN/RED with run receipt), phases, tool names. No ad-hoc
-  synonyms for existing concepts; a NEW concept gets proposed via the poll
-  format and named on owner word — never improvised mid-report. Reviewer A
-  (REDUNDANCY + ONTOLOGY) enforces this lens-side.
+- Refer to workers by TOPIC/CHAT NAME only (owner 2026-08-31) — NEVER by session uuid, on EVERY
+  surface (owner reports, inter-lane advisories, session_notify text, verdict tables, ledger
+  commentary). Uuids are for ROUTING fields only (`target_session`, `OC_ACTOR`, `Session-Id`
+  trailers, tool arguments). Test: the owner must know WHICH chat to open without a lookup.
+- Stick to the OFFICIAL ONTOLOGY (owner 2026-08-31): all roles use the vocabulary this SKILL
+  defines — test ontology (§Test ontology), infra terms (§Glossary: selftest/battery/CI gate),
+  roles (Editor/HQ/Triage/Toolsmith/Harvest/Reviewer lenses), gate colors (GREEN/RED with run
+  receipt), phases, tool names. No ad-hoc synonyms; a NEW concept is proposed via the poll format
+  and named on owner word. Reviewer A (REDUNDANCY + ONTOLOGY) enforces this lens-side.
 - **Context Manifest Curation (Compaction Section 10, owner order 2026-09-17):** when context compaction occurs, the compactor MUST explicitly retain `opencrabs-dev`, `opencrabs-dev/fleet-directives.md`, and the active role file (`opencrabs-dev/editor.md`, `opencrabs-dev/hq.md`, `opencrabs-dev/triage.md`, `opencrabs-dev/toolsmith.md`, or `opencrabs-dev/harvest.md`) in `active_skills`. Only non-active role files are placed in `discard_skills`. Essential tools (`session_notify`, `session_search`, `bash`, `read_file`, `telegram_send`) must stay pre-activated. Canonical: `fleet-directives.md §Post-compaction skill reload & context manifest curation`.
-- ONLY HQ edits skill files — census (G7, v0.4.84; `triage.md` added v0.4.86; `toolsmith.md` added + `tools/**` carve-out v0.4.87; `README.md` + `tools/docs/RC-CONTRACT.md` added v0.4.96, lens A15; `CHANGELOG.md` added v0.4.116, lens G-9; `tools/docs/HEALTH-CHECKS.md` + `tools/docs/HEALTH-CLASSES.md` added v0.4.171; `harvest.md` added v0.4.175): `SKILL.md` /
-  `editor.md` / `harvest.md` / `hq.md` / `triage.md` / `toolsmith.md` / `review-lenses.md` / `fleet-directives.md` /
-  `upstream-merge-runbook.md` / `war-stories.md` /
-  `s2-swap-journal-spec.md` / `README.md` / `CHANGELOG.md` / `tools/docs/RC-CONTRACT.md` / `tools/docs/HEALTH-CHECKS.md` / `tools/docs/HEALTH-CLASSES.md` — including all worker lanes AND the TRIAGE lane AND the TOOLSMITH lane (decision 7,
-  2026-08-26; the Compiler role retired 2026-08-28). Workers propose via poll format or direct notify; they never
-  write. ONE exception: `tools/**` CODE is owned by the TOOLSMITH lane (v0.4.87 carve-out) — every change ships
-  with battery receipts (README.md's tool-fleet section and `tools/docs/RC-CONTRACT.md`
-count as tools/ surface — toolsmith-writable; the rest of README.md stays
-HQ-only). Skill markdown + fleet-directives stay HQ-only.
+- ONLY HQ edits skill files: `SKILL.md` · `editor.md` · `harvest.md` · `hq.md` · `triage.md` · `toolsmith.md` ·
+  `review-lenses.md` · `fleet-directives.md` · `upstream-merge-runbook.md` · `war-stories.md` ·
+  `s2-swap-journal-spec.md` · `README.md` · `CHANGELOG.md` · `tools/docs/*.md` — including all worker lanes AND
+  the TRIAGE and TOOLSMITH lanes (2026-08-26; Compiler retired 2026-08-28). Workers propose via poll format or
+  direct notify; they never write. ONE exception: `tools/**` CODE is the TOOLSMITH lane's (v0.4.87 carve-out),
+  shipped with battery receipts — README's tool-fleet section and `tools/docs/*.md` count as that surface; the
+  rest of README and all skill markdown stay HQ-only.
 - Relay only PREDICATED claims (v0.4.6, from fabrication deviation #3): any
   build/deploy/artifact claim you pass onward must carry evidence YOU verified
   same-turn — run id against the API, sha against `ls-remote`/job-name embed,
@@ -762,6 +494,5 @@ links; development-time upstream contact is PR-comments only (supersedes the
 
 ## Shared war stories (why these rules exist)
 
-Incident histories behind the hard rules live in `war-stories.md`
-(disclosed v0.4.80, lens B F6 — history is reference, not procedure; the
-version-level record is CHANGELOG.md).
+Incident histories behind the hard rules live in `war-stories.md` (history is reference, not
+procedure; the version-level record is `CHANGELOG.md`).

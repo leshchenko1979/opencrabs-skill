@@ -1,5 +1,26 @@
 # Changelog — opencrabs-dev
 
+## v0.4.262 — B-H1 + B-H2: live law out from under a RETIRED heading, and the router back under its own budget
+
+Cycle `20260925-c24` lens B, both HIGH findings, landed in their entirety (the v0.4.259 order removed the gate, so they do not wait).
+
+**B-H1 — the runbook carried LIVE law under a heading that says it is history.** The section headed `RETIRED 2026-09-24; kept as history` held the GENERAL resume-job law — the tracked-state-file rule, the date-keyed one-shot trap, the 30 s trigger ceiling vs the 300 s body budget, the refusal-token classes, and the ~24 h floor — which bind ANY resume job, harvest or not. A cold reader who obeyed the heading never reached any of it. The general law is promoted to its own heading, `§Resume-job law (any job, not only harvest) — LIVE`; the RETIRED heading keeps only the suspension record, with a pointer that says so. Two bold lead-ins buried inside `§Ledger hygiene laws` are promoted the same way: `§PORT-WORK OWNERSHIP — three-role split` and `§Upstream PR law`. Two live refs to the renamed heading are re-pointed.
+
+**The reviewer's 46.8 % figure was STALE, and saying so is part of the fix.** It measured the RETIRED section before the v0.4.258 batch extracted `§Ledger hygiene laws`; by the time this landed the section was 24 lines, not 46.8 % of the file. The real remaining defect was the NESTING, not the size — so the fix is the promotion above, not a deletion.
+
+**B-H2 — the always-loaded router was 53 % over its own 500-line budget.** `SKILL.md` **767 → 498 lines**. Every move takes procedure off the one file all four roles re-read in full, and leaves a pointer:
+
+- `### session_notify mechanics` → **`session-notify.md`** (NEW law file). Its mode table was a **duplicate** of `fleet-directives.md §Cross-lane message delivery discipline` — its own bullet read *"pointer only, no second copy"* **while carrying a second copy**. The duplicate is deleted, the tool mechanics live in the new page, and the router keeps a pointer.
+- `## Test ontology` procedure prose (98 lines) → `editor.md §Phase 6b (Smoke-verdict rules)`. The ontology TABLE stays — it is the one thing the BUDGET RULE assigns to the router.
+- `## Shared environment facts` → **`environment.md`** (NEW law file). The load-bearing hard facts stay inline so a cold session cannot miss them: the local-cargo ban (Box law), the `gh -R` mandate, and `origin` = fork.
+- `## Red-run triage heuristics` → `editor.md`.
+- `### Unified tools log` — an explicit duplicate of `RC-CONTRACT.md §Unified tools log` — reduced to a pointer.
+- Compressions, each asserted 1:1: the Canonical-tooling preamble, the tests block, the Telegram surface law, the HQ-ownership census, two Hard-rules bullets, the war-stories pointer.
+
+**Two consequences chased down rather than left:** `hq.md:129` pointed at the moved `§session_notify mechanics` and is re-pointed; and the **lint corpus gains both new law files** — a law file outside `DEFAULT_CORPUS` is unlinted, which is exactly the #575 defect class (the corpus named a file that no longer existed, so every real run died rc 3 before checking anything).
+
+**LOC** (predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))`, LINES READ, anchored at `4a232a21` which reproduces the v0.4.261 entry's 3650 exactly). **8-file corpus: 3650 → 3519 (−131)**, per file: `SKILL.md` 767 → 498 (−269) · `editor.md` 533 → 665 (+132) · `upstream-merge-runbook.md` 431 → 437 (+6) · `fleet-directives.md` 652 · `harvest.md` 364 · `hq.md` 334 · `triage.md` 404 · `toolsmith.md` 165 all unchanged. **Two new law files: `session-notify.md` 71 + `environment.md` 114 = 185.** Net over the 10-file corpus: **3650 → 3704 (+54)** — the router sheds 269 lines and the corpus gains two reference pages, which is the point of the move: the load path changes, the content does not.
+
 ## v0.4.261 — c23's reviewer catalog takes its own findings back
 
 **c23's verdict read *"Nothing was edited this cycle"*** — 38 findings, none landed. This closes the reviewer-catalog half of that backlog.
