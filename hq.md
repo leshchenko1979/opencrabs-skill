@@ -189,6 +189,15 @@ incident suggests drift.
 Method:
 0. **Cycle State Durability & Step-0 Recovery** (v0.4.170, owner order 2026-09-13; **instrumentation schema FROZEN v0.4.227**, HQ ruling 2026-09-20 answering lane `ef83024b`):
    Every Duty 4+6 cycle maintains a machine-readable state file at `reviews/<cycle-id>/state.json` (under `$OC_DEV_STATE`).
+   **TWO `reviews/` ROOTS EXIST AND ONLY ONE IS LIVE (v0.4.258, from Duty-6 cycle `20260925-c24` finding D-F5).**
+   The **state-repo root** (`~/.opencrabs/profiles/ops/opencrabs-dev/reviews/`) is CANONICAL — it holds the live
+   cycles and is what `$OC_DEV_STATE` resolves to. The **skill-repo root**
+   (`~/.opencrabs/profiles/ops/skills/opencrabs-dev/reviews/`) is FROZEN EVIDENCE: keep it, never sweep it,
+   never write a new cycle into it. Measured 2026-09-25: 26 cycle dirs live vs 13 frozen, and **three cycle ids
+   exist in BOTH roots** (`20260915-c17`, `20260915-c18`, `20260919-c21`) — so a cycle id alone does not
+   identify a root, and a sweep keyed on the id would hit the frozen copy. **Always pass `--dir` explicitly:**
+   `oc-review-persist`'s own `DEFAULT_DIR` is the SKILL root, which diverges from this law (routed to the
+   Toolsmith as a `tools/**` defect) — a run without `--dir` writes evidence to the frozen tree.
    **FROZEN SCHEMA — these five field names are law. Instrument against them; do NOT invent parallel spellings.**
    `{ "cycle_id": "<id>", "cadence": "<cadence-string>", "started_at": "<ts>", "ended_at": "<ts|null>", "duration_review_min": <num|null>, "duration_cycle_min": <num|null>, "status": "IN_PROGRESS|COMPLETED", "proposals": [...], "lenses": { "<lens>": { "status": "PENDING|COMPLETED", "report_path": "...", "verdict": "..." } }, "codification_plan": [...] }`
 
