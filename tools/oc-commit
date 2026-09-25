@@ -6,6 +6,12 @@
 #   2. Session-Id trailer from OC_ACTOR (refuses unset actor)
 #   3. Issue-Ref trailer derived from the actor's latest ledger claim event
 #      (same derivation as `oc-ledger confirm`; override with --issue N)
+#      #501: the derivation picks the NEWEST open claim, so it is a GUESS when
+#      the actor holds several. A derived ref that contradicts the branch name
+#      or the subject's trailing (#N) is REFUSED, not silently preferred —
+#      measured 2026-09-25, lane a5b34466 committed #500 work under
+#      `Issue-Ref: #548` and the wrapper posted an implementation comment onto
+#      #548 (a durable false attribution, corrected by hand).
 # NEVER stages anything — the stage-only-your-paths rule is untouched; it
 # refuses when the index is empty instead of improvising a stage.
 #
@@ -33,7 +39,8 @@
 # evidence.
 #
 # Exit codes: 0 committed+commented · 2 usage · 3 gate-fail (detached HEAD /
-#             no actor / nothing staged / no issue derivable) · 4
+#             no actor / nothing staged / no issue derivable / derived ref
+#             contradicts the branch or subject) · 4
 #             git-commit failure · 5 commit landed but comment FAILED
 # Env: OC_ACTOR (required) · OC_LEDGER (ledger override) · OC_TOOLS_LOG
 # =============================================================================
@@ -184,17 +191,43 @@ Part B alone does NOT fix #321." --no-comment --repo "$R" ) >/dev/null 2>"$E"
 This closes #321 for real." --no-comment --repo "$R" ) >/dev/null 2>"$E"
   [ $? -eq 0 ] || { echo "selftest: #428-genuine-rc0" >&2; exit 1; }
   grep -q 'class=genuine' "$E" || { echo "selftest: #428-genuine-class a bare close keyword must warn as genuine" >&2; exit 1; }
+  # 9. (#501) the derived ref is cross-checked against the branch and subject.
+  #    9a. DISAGREEMENT -> 3. Fixture branch names #777 while the derived claim
+  #        is #149: the 2026-09-25 shape (work on #500 committed under #548
+  #        because #548 was that actor's newest open claim).
+  git -C "$R" checkout -q -b fix/777-dup-turn
+  ( cd "$R" && echo m1 > m1 && git add m1 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix(x): land the thing (#777)" --no-comment --repo "$R" ) >/dev/null 2>"$d/501.err"
+  [ $? -eq 3 ] || { echo "selftest: #501 branch/subject contradiction != 3" >&2; exit 1; }
+  grep -q '#777' "$d/501.err" || { echo "selftest: #501 must name the contradicting issue" >&2; exit 1; }
+  grep -q '#149' "$d/501.err" || { echo "selftest: #501 must name the derived ref" >&2; exit 1; }
+  grep -q -- '--issue' "$d/501.err" || { echo "selftest: #501 must state the remedy" >&2; exit 1; }
+  #    9b. AGREEMENT -> 0. The check must not fire on the ordinary path, where
+  #        branch and subject both name the derived issue.
+  git -C "$R" checkout -q -b fix/149-agree
+  ( cd "$R" && echo m2 > m2 && git add m2 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix(x): land the thing (#149)" --no-comment --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: #501 agreement must commit (rc 0)" >&2; exit 1; }
+  #    9c. --issue is the override and skips the cross-check entirely
+  ( cd "$R" && echo m3 > m3 && git add m3 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "fix(x): land the thing (#777)" --issue 42 --no-comment --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: #501 --issue override != 0" >&2; exit 1; }
+  #    9d. NO SIGNAL -> 0. A subject with no trailing (#N) on a neutral branch
+  #        leaves the derivation standing: the check refuses on CONTRADICTION
+  #        only, never on absence. NOTE: `checkout -` is NOT neutral here — it
+  #        returns to fix/777-dup-turn, whose branch candidate would still fire
+  #        (measured while writing this leg, which is why it names main).
+  git -C "$R" checkout -q main
+  ( cd "$R" && echo m4 > m4 && git add m4 && OC_ACTOR=f1c7c0de-0000-4000-8000-000000000149 "$OC" -m "chore: no ref here" --no-comment --repo "$R" ) >/dev/null 2>&1
+  [ $? -eq 0 ] || { echo "selftest: #501 no-signal must commit (rc 0)" >&2; exit 1; }
   echo "selftest OK"; exit 0
 fi
 
-REPO="$(pwd)"; MSGS=(); ISSUE=""; NO_COMMENT=0; CSTATE=""; MBODY=""
+REPO="$(pwd)"; MSGS=(); ISSUE=""; ISSUE_EXPLICIT=0; NO_COMMENT=0; CSTATE=""; MBODY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     # #428: the body text is ALSO accumulated — MBODY is the scan's input. MSGS
     # stays the verbatim passthrough to `git commit`; the accumulation is purely
     # additive and changes nothing git itself receives.
     -m) [ -n "${2:-}" ] || usage; MSGS+=("$1" "$2"); MBODY="${MBODY}${2}"$'\n'; shift 2 ;;
-    --issue) ISSUE="${2:-}"; [ -n "$ISSUE" ] || usage; shift 2 ;;
+    --issue) ISSUE="${2:-}"; [ -n "$ISSUE" ] || usage; ISSUE_EXPLICIT=1; shift 2 ;;
     --repo) REPO="${2:-}"; [ -n "$REPO" ] || usage; shift 2 ;;
     --no-comment) NO_COMMENT=1; shift ;;
     --state) CSTATE="${2:-}"; [ -n "$CSTATE" ] || usage; shift 2 ;;
@@ -239,6 +272,40 @@ else
   echo "gate-fail: no OPEN claim with #N by $OC_ACTOR and no --issue passed${DERIVE_ERR:+ — $DERIVE_ERR}" >&2
   echo "          claim the issue first, or pass --issue <N> to commit against it explicitly" >&2
   exit 3
+fi
+
+# --- #501: cross-check the DERIVED ref against the caller's own statements ----
+# `claim-ref --open` returns the actor's NEWEST open claim, so the derivation is
+# a GUESS whenever the actor holds more than one. Measured 2026-09-25 (lane
+# a5b34466): work on #500 — branch `fix/500-...`, subject ending `(#500)` — was
+# committed under `Issue-Ref: #548` because #548 was that actor's newest claim,
+# and the wrapper then posted an implementation comment onto #548. The trailer
+# and the comment were both durable false attributions, corrected by hand.
+#
+# The branch name and the subject's trailing (#N) are POSITIVE assertions about
+# which issue the work belongs to, so a disagreement with the derived ref is not
+# a tie to break — it is a contradiction, and picking silently is what caused the
+# harm. The wrapper refuses and names both; `--issue N` remains the override for
+# the case where the lane really does mean the other issue.
+if [ "$ISSUE_EXPLICIT" = 0 ]; then
+  _br="$($G rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  _br_issue="$(printf '%s' "$_br" | grep -oE '(feat|fix|ci|chore|test|docs|refactor)/[0-9]+-' | tail -n 1 | grep -oE '[0-9]+' || true)"
+  _subj="$(printf '%s' "$MBODY" | head -n 1 | sed 's/[[:space:]]*$//')"
+  _subj_issue="$(printf '%s' "$_subj" | grep -oE '\(#[0-9]+\)$' | tr -dc '0-9' || true)"
+  _conflict=""
+  for _c in "$_br_issue" "$_subj_issue"; do
+    [ -n "$_c" ] || continue
+    [ "$_c" = "$ISSUE" ] && continue
+    case " $_conflict " in *" $_c "*) continue ;; esac
+    _conflict="${_conflict}${_conflict:+, }$_c"
+  done
+  if [ -n "$_conflict" ]; then
+    echo "gate-fail: derived Issue-Ref #$ISSUE contradicts the branch/subject (#$_conflict)" >&2
+    echo "          branch '$_br' · subject '$_subj'" >&2
+    echo "          the derivation takes the NEWEST open claim, which is a guess with several held." >&2
+    echo "          pass --issue <N> to commit against the intended issue explicitly (#501)." >&2
+    exit 3
+  fi
 fi
 
 # --- #428 close-keyword hazard scan — ADVISORY: it warns, it never gates -----
