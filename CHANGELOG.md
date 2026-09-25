@@ -1,5 +1,25 @@
 # Changelog — opencrabs-dev
 
+## v0.4.252 — the tool table is corrected against the live tools (owner order 2026-09-25)
+
+**Owner order, verbatim:** *"assign fix tool table docs"*.
+
+The table's own defect: `oc-issue-dispatch` was documented as `[--auto] [--issue N] [--lane U]`, and **neither flag exists**. The real interface is a **POSITIONAL** issue number plus `--to <uuid>`, with `--force`, `--allow-landed`, `--redispatch` and `--budget-secs N` all undocumented — the last three being the LEG-SCOPE additions. Verified against the tool's own `--help` and `tools/RC-CONTRACT.md` row 36, not against another doc. Found live: `--issue 574` errors, and the correct form was needed to dispatch #574.
+
+**`oc-questions` was absent from the table entirely** — the sanctioned blocked-on-you channel, live since #547, so a lane reading the table could not discover it. Added with its verb set, the `ask --factory <KEY>` contract, the env-derived session/lane rule, the unbound-session refusal, and the constant readable URL with per-lane anchors.
+
+**Three stale `editor Phase 7` references re-pointed to `harvest`** (`oc-pr-atomicity`, `oc-harvest-sweep`, and the reserved-branch-namespace paragraph) — residue of the v0.4.250 role split that its own step-7 criterion missed, because that criterion grepped the four ownership sites and these were three other places in the same file.
+
+**Four of the five line citations in the `oc-lint-laws` row were stale at this revision** and are corrected: `SKILL.md:99`→`:102`, `:352`→`:455`, `hq.md:108`→`:117`, `RC-CONTRACT.md:55`→`:40`. Only `hq.md:31` still held. This is the pointer-drift class the 2026-09-22 ruling names — a citation asserts a ROLE as well as a number, and these had drifted silently. Corrected because this edit shifted one of them a further line.
+
+**Audit method, so it is re-runnable:** every flag documented in the table was extracted and tested for presence in its own tool — **0 of 46 rows now document a flag their tool does not carry**. Completeness was measured the other way: **42 of 45 live `oc-*` tools are listed**. The three absentees are deliberate — `oc-waiter` is a RETIRED v0.4.135 stub documented in `README.md:52`, `oc-questions-render.mjs` is an asset of `oc-questions` rather than a tool, and `oc-issue-dispatch.pre-*` is a backup file, not a tool.
+
+**Bundled tool fixes from the Toolsmith lane** (named per the v0.4.239 law): `a0c8907a` (#568, the `goal` domain added to `AFFINITY_KEYWORDS` — the table half of the Triage grant) · `c64ea5a6` (#573, the questions backend no longer forwards the submit button's label as a choice).
+
+**A regression this edit surfaced, filed not fixed:** `tools/oc-lint-laws:70` still names `editor-upstream-pr.md` in its `DEFAULT_CORPUS`, so the tool exits **rc 3** (corpus file missing) — the v0.4.250 rename updated the law but not the lint tool's corpus list, and `harvest.md` is consequently not linted at all. `tools/**` is the Toolsmith's carve-out, so it is dispatched rather than edited here.
+
+LOC: 3591 -> 3592 (net +1; predicate as the v0.4.233 entry states it — `sum(1 for _ in open(f, encoding='utf-8'))` over the 8-file law corpus, LINES READ, anchored at `162fea49` which reproduces the v0.4.251 entry's 3591 exactly). Only `SKILL.md` changed (727 -> 728, the added `oc-questions` row); the four citation corrections and the three Phase-7 re-points are same-line replacements. `fleet-directives.md`, `editor.md`, `harvest.md`, `hq.md`, `triage.md`, `toolsmith.md` and `upstream-merge-runbook.md` are unchanged.
+
 ## v0.4.251 — Triage gets affinity-table and lane-repurposing authority (owner order 2026-09-25)
 
 **Owner order, verbatim:** *"New law - You have the authority to alter the affinity table and repurpose / rename lanes."* (2026-09-25 ~10:20Z, OC DEV Factory Triage topic.)
