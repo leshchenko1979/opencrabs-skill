@@ -1,5 +1,17 @@
 # Changelog — opencrabs-dev
 
+## v0.4.261 — c23's reviewer catalog takes its own findings back
+
+**c23's verdict read *"Nothing was edited this cycle"*** — 38 findings, none landed. This closes the reviewer-catalog half of that backlog.
+
+**I-1 [HIGH]** — Reviewer D's brief handed it a hand-rolled reference enumeration (grep `tools/`, crons, skill files, journal vocabulary) for every artifact it examines. That is the exact class Reviewer J exists to find: the reference list is a **pure function of state on disk**, so where a tool already computes it the brief must NAME the tool, and where none covers a class it must propose one. A grep held in a reviewer's head is agent memory as a gate input.
+
+**I-2 [MED]** — the I brief's scope list terminated at `(4) EVIDENCE DISCIPLINE` and carried no item for the two classes the lens demonstrably runs: the c23 cycle spent both its HIGH findings on **catalog hygiene** (a family heading grouping no reviewer, a pointer to a heading that no longer exists). Now `(4) CATALOG HYGIENE` and `(5) MECHANICAL-VS-MEMORY`, with evidence discipline folded into the trailing rule sentence so the numbering stays short.
+
+**I-5 [LOW]** — the accuracy precedents were frozen at 2026-09-08 while later documented retractions sat on disk. The brief now requires them folded in at ship time, citing `n=449` as the worked instance.
+
+**LOC** (8-file corpus, `sum(1 for _ in open(f))`, LINES READ): **3650 → 3650** (net 0 — `review-lenses.md` is outside the corpus).
+
 ## v0.4.260 — the Duty 4/6 backlog sweep: every ignored finding from cycles c20–c24 dispositioned
 
 **Owner order, 2026-09-25:** *"can you sweep the 5 recent reviews and fix all the ignored findings?"* — executed under the v0.4.259 law (findings land in their entirety, no human gate).
