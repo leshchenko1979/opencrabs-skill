@@ -321,6 +321,28 @@ AFFINITY_KEYWORDS = {
     # scope prefix. No ROLE_DOMAINS entry is needed (unlike #342's toolsmith,
     # whose feature named no tools/ token): the lane-side match works on prose.
     "plan": ["(plan):", "plan-tool", "plan_cards"],
+    # The goal subsystem (fork #568). Chosen by MEASUREMENT, same method as
+    # `tools`/`plan` above. Ground truth = the issue TITLE carries the `(goal):`
+    # scope prefix (7 open issues: #299 #300 #364 #456 #473 #480 #567), scored
+    # over the 166 open fork issues. A loose sweep for `src/brain/goal` anywhere
+    # in the body added 2 more (#372, #489) and both are PROSE MENTIONS, not fix
+    # surfaces -- #372's path sits inside a pasted log line, #489's is a
+    # code-index example -- so the prefix is the DECLARATION and the path is not.
+    #   (goal): ........... fires 7,  precision 100%, recall 100%
+    #   + goal-subsystem .. fires 7,  precision 100%, recall 100% (0 issue fires)
+    #   + goal_state ...... fires 9,  precision  78% -- adds #344/#372, prose
+    #   + bare "goal" ..... fires 16, precision  44% -- measures English
+    #   + src/brain/goal .. fires 9,  precision  78% -- prose mentions only
+    # Two tokens, one per side -- the `plan` domain's shape: `(goal):` is how an
+    # ISSUE declares the domain, and `goal-subsystem` is how the LANE does (the
+    # goal lane's feature string carries no scope prefix). Both are needed: the
+    # prefix alone scores 100/100 on issues but leaves the lane UNREACHABLE,
+    # which is the live defect this entry fixes -- #567 was proposed to a
+    # suggest-options lane while the subsystem's own owner could not be matched.
+    # NOT COVERED HERE: the -50 mismatch arm. `specialized_domains` is a
+    # hardcoded set that does not include `goal`, so a non-goal issue can still
+    # be dumped on this lane; adding a domain to this table does not reach it.
+    "goal": ["(goal):", "goal-subsystem"],
 }
 
 # Role-owned domains (fork #342, Design I step 18 -- sufficiency leg). A lane's
