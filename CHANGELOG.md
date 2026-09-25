@@ -1,5 +1,24 @@
 # Changelog — opencrabs-dev
 
+## v0.4.259 — the Duty 4/6 fix gate is removed: reviewers' findings land in their entirety
+
+**Owner order, 2026-09-25 21:29Z, verbatim:** *"update your duty 4 and 6 laws so that next time reviewers findings are not wasted but fixed in their entirety. remove the human gate fro the duty 4 and 6 fixing process"*
+
+**Why it was needed.** Duty-6 cycle `20260925-c24` produced **79 findings**. My own verdict's codification plan named only the **24 converged items** and silently dropped **17 law findings** from reviewers A, H and D — a partial plan wearing a complete plan's shape. The owner caught it by asking why the plan's count did not match the findings'. The old Duty 6 step 5 was the cause: *"Mechanical fixes land directly as ONE version batch. Anything SEMANTIC goes to the owner as proposals"* — which makes the semantic half of every cycle's output wait on an approval that historically does not come.
+
+**The law now.** A third **EXCEPTION** bullet sits beside the Toolsmith `tools/**` and Triage affinity carve-outs in `fleet-directives.md §Discussion links + fix-approval gate`. Two halves:
+
+- **COMPLETENESS ("not wasted").** The cycle verdict MUST enumerate every finding by ID and assert that the partition sums to the census count. An accepted finding with no landed home is a **cycle-completion failure**, never a scheduling choice. Converged findings are ONE landing carrying every contributing ID. A finding whose fix belongs to another owner (daemon/carrier source, upstream repo, `tools/**` code) is **ROUTED** — routed is a disposition, dropped is not.
+- **NO GATE ("remove the human gate").** No `plan init mode="design"`, no diagrammed card, no `/execute`, no per-finding or per-cycle owner approval. HQ decides the fix shape, lands it in the cycle's version batch, and reports what landed. **The verdict table is the RECORD of what was decided and landed — it is not a request, and it does not wait.**
+
+**Autonomy is over the DECISION, never over the RECORD** — same shape as the two carve-outs above. **Scope is exactly Duty-4/Duty-6 findings on this factory's law surface**; it does NOT extend to daemon/carrier source (Editor territory), upstream PRs, `tools/**` code (Toolsmith), the lens-catalog standing triggers, or the owner-gated actions in `AGENTS.md` (daemon restarts, pushes, binary swaps, the MODE register). Item 2 remains absolute for every other design.
+
+**Sites changed.** `fleet-directives.md` (the EXCEPTION bullet) · `hq.md` Duty 4 step 5 (*"ships ONLY on his word"* → HQ lands every accepted proposal itself) · `hq.md` Duty 6 step 5 (mechanical-only landing → **every** accepted finding, mechanical AND semantic) · `hq.md` Duty 6 rationale (*"the owner gate keeps the set honest"* → HQ's own completeness check keeps it whole) · ops `AGENTS.md` always-loaded pointer.
+
+**LOC** (8-file corpus, `sum(1 for _ in open(f))`, LINES READ): 3645 → **3648** (+3).
+
+**Also landed in this window — a regroup regression, owner-facing.** `questions.l1979.ru` returned **502** on every answer submit: the vpn backend (`/opt/questions/backend.py:37`) hardcoded the **flat** tool path `tools/oc-questions`, which the v0.4.255 regroup moved to `tools/state/oc-questions`. The backend's own log carried it verbatim — `answer rc=127 err=bash: line 1: …/tools/oc-questions: No such file or directory`. Fixed to the new path (backup `backend.py.pre-regroup-fix`), service restarted, verified: **409** on an answered qid, **no rc=127** since. This was the **fifth** regroup regression and the first outside the repo — the sweep had covered law, crons, tools and the battery, but not a hardcoded path in a service on another host. The same sweep found one more live consumer, `321-harvest-state.md` (its wake-gate command and two refs), re-pointed.
+
 ## v0.4.258 — Duty-6 cycle c24: 79 findings triaged, the 24-item law batch landed, and the codification gap closed
 
 **What this version is.** Duty 6 cycle `20260925-c24` ran 11 lenses (corpus hash
