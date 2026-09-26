@@ -1112,6 +1112,42 @@ for p in prs:
 issue_map, pr_entries = parse_issue_map(prs)
 
 
+def member_ready(iss, commits_by_issue, repo_path, swaps, st_dir,
+                 mock_deployed_ts=None):
+    """Is this set member READY? ready = swapped AND smoked.
+
+    `closed` is deliberately NOT required (owner order 2026-09-26, verbatim:
+    "the closed+swapped+smoked rule should exclude closed"). Under the closure
+    law a standalone src/** issue closes only AFTER its own upstream PR files,
+    and the PR files only through the harvest lane whose pre-flight gate IS this
+    census -- so requiring `closed` made closure a precondition of the act that
+    produces it. Measured at the ruling instant: HELD 58 of 58 open fix-titled,
+    zero harvestable.
+
+    BOTH halves are required and neither is redundant -- measured on the live
+    set (89 members): 10 are swapped-but-unsmoked and 2 are
+    smoked-but-unswapped, so neither implies the other. `swapped` is also the
+    only source of the soak clock's anchor, so it cannot be dropped for that
+    reason alone.
+
+    Returns (ready: bool, why: str); `why` names the MISSING half so a refusal
+    can say which condition failed rather than print a bare GH state.
+    """
+    swapped_ts = 0
+    for c in commits_by_issue.get(int(iss), []):
+        t = c.get('deployed_ts') or get_commit_deploy_ts(
+            c.get('sha', ''), repo_path, swaps, mock_deployed_ts, st_dir)
+        if t and t > swapped_ts:
+            swapped_ts = t
+    smoke_ts = get_issue_smoke_pass_ts(int(iss), st_dir)
+    missing = []
+    if not swapped_ts:
+        missing.append('not swapped')
+    if not smoke_ts:
+        missing.append('not smoked')
+    return (not missing), ('+'.join(missing) if missing else 'swapped+smoked')
+
+
 def cycle_note(active_claims, target_iss):
     """Name mutual substantive overlaps; older filed claim keeps precedence."""
     own = [c for c in active_claims if c.get('issue') == target_iss]
@@ -1602,29 +1638,41 @@ if action == 'check':
                   'A set verdict is NOT claimed.' % target_iss)
         else:
             _by_iss = build_commits_by_issue(commits)
-            _open_members, _unreadable = [], []
+            _unready, _unreadable = [], []
             for _m in sorted(_set_members):
+                if _m == target_iss:
+                    # HQ ruling 2026-09-26 (n=11674): THE TARGET IS EXCLUDED FROM
+                    # ITS OWN READINESS SET. It is the unit being harvested and the
+                    # per-unit legs above gate it; a set verdict is about the SET.
+                    continue
                 _st = get_issue_live_state(_m, mock_file=mock_issue_state)
                 if _st is None:
                     _unreadable.append(_m)
                     continue
-                if (_st.get('state') or '').lower() != 'closed':
-                    _open_members.append(_m)
-            if _open_members:
-                _detail = ', '.join(
-                    '#%d%s' % (m, ' (own)' if m == target_iss else '') for m in _open_members)
-                refuse('REFUSED: Target %s cluster set {%s} has %d OPEN member(s) '
-                       '[HELD_SET: %s] -- the owner rule requires every member '
-                       'swapped+smoked+CLOSED, so an open own-issue is an unready '
-                       'member of its OWN set' % (
+                _rdy, _why = member_ready(_m, _by_iss, repo_path, swaps, st_dir)
+                if not _rdy:
+                    _unready.append((_m, (_st.get('state') or '?').lower(), _why))
+            if _unready:
+                _detail = ', '.join('#%d(%s, %s)' % (m, st, why) for m, st, why in _unready)
+                refuse('REFUSED: Target %s cluster set {%s} has %d UNREADY member(s) '
+                       '[HELD_SET: %s] -- a member is ready when it is swapped+smoked; '
+                       'CLOSED is NOT required because closure is this harvest\'s '
+                       'OUTPUT, so requiring it made the set unharvestable by '
+                       'construction' % (
                            target, ', '.join('#%d' % m for m in sorted(_set_members)),
-                           len(_open_members), _detail))
+                           len(_unready), _detail))
             if _unreadable:
                 print('NOTE(HELD_SET): %d set member(s) could not be read (%s) -- the '
                       'set verdict above is INCOMPLETE, never a clean one.'
                       % (len(_unreadable), ', '.join('#%d' % m for m in _unreadable)))
+            # The clock walks the SET, not the target: the target's own 24h
+            # soak is leg 1 above, and including it here would make a fresh
+            # target block the very set it is the subject of. A RELATIVE
+            # deployed 2h ago still resets the clock -- that is the owner's
+            # stated intent ("a fix deployed 2h ago resets its parent's clock").
+            _set_for_clock = [m for m in _set_members if m != target_iss]
             _anchor, _age, _scanned, _anchor_sha = set_soak_clock(
-                _set_members, _by_iss, repo_path, swaps, now_ts, state_dir=st_dir)
+                _set_for_clock, _by_iss, repo_path, swaps, now_ts, state_dir=st_dir)
             if _age is None:
                 print('NOTE(HELD_SET_SOAK): set soak clock UNRESOLVABLE -- no member '
                       'commit of the set carries a deploy anchor (%d commit(s) '
@@ -1675,6 +1723,15 @@ elif action == 'clusters':
     # The set soak clock walks git ancestry per member commit, so it is OPT-IN
     # and its absence is DISCLOSED rather than rendered as a clean set.
     clock_on = '--clock' in sys.argv
+    # The same three names the `check` arm loads, with the SAME derivation.
+    # They were MISSING from this arm entirely, so `clusters --clock` died with
+    # `NameError: name 'swaps' is not defined` on every invocation -- and the
+    # readiness leg below needs them unconditionally, not only under --clock.
+    # No leg covered it: the #607 legs exercised `check` and the non-clock
+    # `clusters` path, so the flag was broken from the day it shipped.
+    now_ts = int(os.environ.get('OC_HARVEST_NOW_TS') or time.time())
+    st_dir = os.path.dirname(registry_file) if registry_file else os.environ.get('STATE_DIR', '')
+    swaps = load_swap_history(st_dir)
 
     commits = get_ahead_commits(repo_path, mock_commits)
     clusters, unclustered = cluster_ahead_commits(commits)
@@ -1715,18 +1772,26 @@ elif action == 'clusters':
     # the cluster in its own `linked`. The real gap was that `held` never
     # consulted the OWN issue's state, so an open own-issue with no open
     # file-linked sibling read as FREE (measured: #458, #513, #593).
+    # BOTH legs key on READINESS (owner order 2026-09-26). Measured: fixing
+    # only the gh leg leaves 56 of 58 held, because the FILE leg is the dominant
+    # hold (55 of 58) -- so a one-leg change would have looked like a fix while
+    # the deadlock stood.
     open_fix = {r['cluster'] for r in rows if r['state'] == 'open' and r['fix_titled']}
     _mock_rel = os.environ.get('OC_HARVEST_MOCK_RELATIONS')
     _by_iss = build_commits_by_issue(commits)
     for r in rows:
         r['linked_open_fix'] = sorted(set(r['linked']) & open_fix)
+        r['linked_unready'] = sorted(
+            m for m in r['linked_open_fix']
+            if not member_ready(m, _by_iss, repo_path, swaps, st_dir)[0])
         r['own_open'] = (r['state'] == 'open')
+        r['own_ready'] = member_ready(r['cluster'], _by_iss, repo_path, swaps, st_dir)[0]
         r['set_members'] = None
         r['set_open_relatives'] = []
         r['set_unreadable'] = False
         r['set_clock_age_h'] = None
         r['set_clock_state'] = 'not computed (--clock not passed)' if not clock_on else None
-        r['held'] = bool(r['linked_open_fix']) or r['own_open']
+        r['held'] = bool(r['linked_unready'])
 
     # The gh leg of the union -- evaluated for the CANDIDATES only, so the cost
     # is bounded by the open fix-titled population rather than every cluster.
@@ -1740,18 +1805,21 @@ elif action == 'clusters':
         if not _ok:
             r['set_unreadable'] = True
             continue
-        _openrel = []
+        _unreadyrel = []
         for _m in sorted(_members):
             if _m == r['cluster']:
-                continue
+                continue  # the target never gates its own set (HQ n=11674)
             _meta = issues.get(_m)
             if _meta is None:
                 r['set_unreadable'] = True
                 continue
-            if (_meta.get('state') or '') != 'closed':
-                _openrel.append(_m)
-        r['set_open_relatives'] = _openrel
-        if _openrel:
+            _rdy, _why = member_ready(_m, _by_iss, repo_path, swaps, st_dir)
+            if not _rdy:
+                _unreadyrel.append({'issue': _m, 'state': _meta.get('state') or '?',
+                                    'why': _why})
+        r['set_open_relatives'] = [d['issue'] for d in _unreadyrel]
+        r['set_unready_relatives'] = _unreadyrel
+        if _unreadyrel:
             r['held'] = True
 
     if clock_on:
@@ -1760,7 +1828,8 @@ elif action == 'clusters':
                 r['set_clock_state'] = 'not evaluated (not an open fix-titled candidate)'
                 continue
             _anchor, _age, _scanned, _asha = set_soak_clock(
-                r['set_members'], _by_iss, repo_path, swaps, now_ts, state_dir=st_dir)
+                [m for m in r['set_members'] if m != r['cluster']],
+                _by_iss, repo_path, swaps, now_ts, state_dir=st_dir)
             if _age is None:
                 r['set_clock_state'] = ('UNRESOLVABLE (%d commit(s) scanned, no deploy '
                                         'anchor) -- not "fresh", not clearance' % _scanned)
@@ -1783,7 +1852,9 @@ elif action == 'clusters':
         # The number the GATE acts on: held among the open fix-titled candidates.
         'held_open_fix_titled': sum(1 for r in rows
                                     if r['held'] and r['state'] == 'open' and r['fix_titled']),
-        'held_by_own_issue': sum(1 for r in rows if r['own_open'] and not r['linked_open_fix']),
+        'held_by_own_issue': sum(1 for r in rows if r['own_open'] and not r['linked_unready']),
+        'own_ready': sum(1 for r in rows if r.get('own_ready')),
+        'linked_unready_total': sum(1 for r in rows if r['linked_unready']),
         'held_by_gh_relative': sum(1 for r in rows if r['set_open_relatives']),
         'set_relations_unreadable': sum(1 for r in rows if r['set_unreadable']),
         'set_clock': ('computed' if clock_on else 'NOT computed (--clock not passed)'),
@@ -1804,9 +1875,9 @@ elif action == 'clusters':
         print('  open fix-titled: %d   PURE: %d   MIXED: %d   issue lookup missed: %d'
               % (summary['open_fix_titled'], summary['pure'], summary['mixed'],
                  summary['issues_unresolved']))
-        print('  HELD: %d of %d open fix-titled  (own issue open: %d, open gh relative: %d)   set clock: %s'
+        print('  HELD: %d of %d open fix-titled  (file-linked unready: %d, unready gh relative: %d)   set clock: %s'
               % (summary['held_open_fix_titled'], summary['open_fix_titled'],
-                 summary['held_by_own_issue'],
+                 summary['linked_unready_total'],
                  summary['held_by_gh_relative'], summary['set_clock']))
         if open_fix_only:
             print('  (--open-fix: showing only open fix-titled clusters)')
@@ -3763,70 +3834,108 @@ sys.exit(0 if json.load(sys.stdin)["summary"]["open_fix_titled"]==2 else 1)
   "files": ["src/set607/mod.rs"]}]
 C600EOF
 
-  # (a) OWN ISSUE OPEN HOLDS. This is the leg that contradicted the owner's
-  #     rule: `held` never consulted the own issue's state, so an open own-issue
-  #     with no open file-linked sibling read as FREE (measured live: #458,
-  #     #513, #593 were all reported free while open).
+  # HERMETIC SMOKE FIXTURE. member_ready() reads $st_dir/smoke-verdicts.log and
+  # with no file there falls back to the LIVE log -- so a missing fixture would
+  # silently make every leg read the real fleet's smoke history.
+  printf '2026-09-10T00:00:00Z\tPASS\tissue=#601\tsha=set601\trun=1\ttarget=t\tevidence="smoked"\n' \
+    > "$selftest_tmp/smoke-verdicts.log"
+  # A commit for #601, so `swapped` can be TRUE for it. `swaps` is empty here,
+  # so get_commit_deploy_ts falls back to commit_ts; an OLD ts keeps the set
+  # soak clock clear, which is what these legs want.
+  local c601="$setdir/c601.json"
+  cat << 'C601EOF' > "$c601"
+[{"sha": "6010000cb0000000000000000000000000000000",
+  "short_sha": "6010000",
+  "subject": "fix(set): a relative (#601)",
+  "trailer": "leshchenko1979/opencrabs#601",
+  "commit_ts": 100000,
+  "deployed_ts": 100000,
+  "files": ["src/set607/rel.rs"]}]
+C601EOF
+
+  # (a) THE TARGET IS EXCLUDED FROM ITS OWN SET (HQ ruling 2026-09-26, n=11674).
+  #     The own issue is OPEN with no relatives, so the set is EMPTY and nothing
+  #     holds it. Before the ruling this refused "#600 (own)" -- the circular
+  #     hold that made closure a precondition of the act that produces it.
   rc=0
   out="$(OC_HARVEST_MOCK_RELATIONS="$rel_empty" OC_HARVEST_MOCK_ISSUE_STATE="$st_open" \
     OC_HARVEST_MOCK_COMMITS="$c600" OC_HARVEST_MOCK_PRS="$mock_prs" \
     OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
     run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "600" "" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_SET" && oc_has "$out" "#600 (own)"; then
-    ok "HELD_SET: an OPEN own issue holds its OWN set (rc=1, names it as own)"
+  if ! oc_has "$out" "[HELD_SET:"; then
+    ok "HELD_SET: the TARGET is excluded from its own set (open own issue, no relatives -> not held)"
   else
-    echo "  bad  - HELD_SET own-issue leg expected rc=1 naming #600 (own), got rc=$rc ($out)"
+    echo "  bad  - HELD_SET must not gate a cluster on its own issue; got rc=$rc ($out)"
   fi
 
-  # (b) GH RELATIVE LEG: own issue CLOSED, a DIRECT relative OPEN -> held.
+  # (b) A READY RELATIVE DOES NOT HOLD. #601 is swapped (has a commit) AND smoked
+  #     (the PASS row above), so it is a READY member.
+  rc=0
+  out="$(OC_HARVEST_MOCK_RELATIONS="$rel_one" OC_HARVEST_MOCK_ISSUE_STATE="$st_mixed" \
+    OC_HARVEST_MOCK_COMMITS="$c601" OC_HARVEST_MOCK_PRS="$mock_prs" \
+    OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
+    run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "600" "" 2>&1)" || rc=$?
+  if ! oc_has "$out" "[HELD_SET:"; then
+    ok "HELD_SET: a READY relative (swapped+smoked) does NOT hold the set"
+  else
+    echo "  bad  - HELD_SET held a set whose only relative is READY; got rc=$rc ($out)"
+  fi
+
+  # (b2) AN UNREADY RELATIVE HOLDS, and the refusal names the MISSING HALF rather
+  #      than a bare GH state. #601 has no commit here, so `swapped` is FALSE.
   rc=0
   out="$(OC_HARVEST_MOCK_RELATIONS="$rel_one" OC_HARVEST_MOCK_ISSUE_STATE="$st_mixed" \
     OC_HARVEST_MOCK_COMMITS="$c600" OC_HARVEST_MOCK_PRS="$mock_prs" \
     OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
     run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "600" "" 2>&1)" || rc=$?
-  if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_SET" && oc_has "$out" "#601"; then
-    ok "HELD_SET: a closed own issue is still held by an OPEN DIRECT gh relative"
+  if [ "$rc" -eq 1 ] && oc_has "$out" "[HELD_SET:" && oc_has "$out" "#601" \
+     && oc_has "$out" "not swapped"; then
+    ok "HELD_SET: an UNREADY relative holds the set and the refusal names the missing half"
   else
-    echo "  bad  - HELD_SET gh-relative leg expected rc=1 naming #601, got rc=$rc ($out)"
+    echo "  bad  - HELD_SET unready-relative leg expected rc=1 naming #601 + 'not swapped', got rc=$rc ($out)"
   fi
 
-  # (c) 1-HOP ONLY -- the leg that stops a degenerate closure. #601 is a
-  #     relative and CLOSED; #602 is only a GRAND-relative and is OPEN. If the
-  #     set closed transitively this would refuse; at 1-hop it must not.
+  # (c) 1-HOP ONLY -- the leg that stops a degenerate closure. #601 is READY;
+  #     #602 is only a GRAND-relative and is unready. At 1-hop the set is free;
+  #     under closure it would refuse.
   rc=0
   out="$(OC_HARVEST_MOCK_RELATIONS="$rel_chain" OC_HARVEST_MOCK_ISSUE_STATE="$st_chain" \
-    OC_HARVEST_MOCK_COMMITS="$c600" OC_HARVEST_MOCK_PRS="$mock_prs" \
+    OC_HARVEST_MOCK_COMMITS="$c601" OC_HARVEST_MOCK_PRS="$mock_prs" \
     OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
     run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "600" "" 2>&1)" || rc=$?
   # NB: anchored on "[HELD_SET:" -- the bare token is a SUBSTRING of
   # HELD_SET_SOAK, so an unanchored test cannot tell the two legs apart.
   if ! oc_has "$out" "[HELD_SET:"; then
-    ok "HELD_SET: 1-hop only -- an OPEN grand-relative does NOT hold (no transitive closure)"
+    ok "HELD_SET: 1-hop only -- an unready GRAND-relative does NOT hold (no transitive closure)"
   else
     echo "  bad  - HELD_SET must not close transitively; grand-relative #602 refused ($out)"
   fi
 
   # (d) SET SOAK CLOCK -- the youngest member's swap under 24h holds the set.
-  local c600_recent="$setdir/c600_recent.json"
-  cat << 'C600REOF' > "$c600_recent"
-[{"sha": "6000000cb0000000000000000000000000000000",
-  "short_sha": "6000000",
-  "subject": "fix(set): a set member (#600)",
-  "trailer": "leshchenko1979/opencrabs#600",
+  # The anchor must be a RELATIVE's swap: the target is excluded from the set
+  # clock (its own 24h soak is leg 1), so a recent TARGET commit alone no
+  # longer holds the set -- that is the corrected contract, and this fixture
+  # plants the recent deploy on #601 to reach the clock at all.
+  local c601_recent="$setdir/c601_recent.json"
+  cat << 'C601REOF' > "$c601_recent"
+[{"sha": "6010000cb0000000000000000000000000000000",
+  "short_sha": "6010000",
+  "subject": "fix(set): a relative (#601)",
+  "trailer": "leshchenko1979/opencrabs#601",
   "commit_ts": 100000,
   "deployed_ts": 1790000000,
-  "files": ["src/set607/mod.rs"]}]
-C600REOF
+  "files": ["src/set607/rel.rs"]}]
+C601REOF
   rc=0
-  out="$(OC_HARVEST_NOW_TS=1790003600 OC_HARVEST_MOCK_RELATIONS="$rel_empty" \
-    OC_HARVEST_MOCK_ISSUE_STATE="$st_open" OC_HARVEST_MOCK_COMMITS="$c600_recent" \
+  out="$(OC_HARVEST_NOW_TS=1790003600 OC_HARVEST_MOCK_RELATIONS="$rel_one" \
+    OC_HARVEST_MOCK_ISSUE_STATE="$st_mixed" OC_HARVEST_MOCK_COMMITS="$c601_recent" \
     OC_HARVEST_MOCK_PRS="$mock_prs" \
     OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
     run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "600" "" 2>&1)" || rc=$?
   if [ "$rc" -eq 1 ] && oc_has "$out" "HELD_SET_SOAK" && oc_has "$out" "1.0h"; then
-    ok "HELD_SET_SOAK: youngest member swap 1.0h old holds the set (rc=1)"
+    ok "HELD_SET_SOAK: a RELATIVE's 1.0h swap holds the set (rc=1, target excluded from the clock)"
   else
-    echo "  bad  - HELD_SET_SOAK expected rc=1 naming a 1.0h youngest swap, got rc=$rc ($out)"
+    echo "  bad  - HELD_SET_SOAK expected rc=1 naming a 1.0h relative swap, got rc=$rc ($out)"
   fi
 
   # (e) UNRESOLVABLE CLOCK MUST DISCLOSE. No member commit carries a deploy
@@ -3858,16 +3967,20 @@ C600REOF
 
   # (f) UNREADABLE RELATIONS ARE NOT A FREE SET. An unreadable graph means the
   #     leg DID NOT RUN, and the output must say so rather than imply clean.
+  # A mock path that does not exist falls through to `gh`, so the fixture must
+  # make the reader FAIL rather than silently return nothing: an unreadable
+  # graph has to be disclosed, and a silent empty set would read as free.
+  printf '{"600": null}\n' > "$setdir/rel_unreadable.json"
   rc=0
-  out="$(OC_HARVEST_MOCK_RELATIONS="$setdir/does_not_exist.json" \
-    OC_HARVEST_MOCK_ISSUE_STATE="$st_open" OC_HARVEST_MOCK_COMMITS="$c600" \
+  out="$(OC_HARVEST_MOCK_RELATIONS="$setdir/rel_unreadable.json" \
+    OC_HARVEST_MOCK_ISSUE_STATE="$st_open" OC_HARVEST_MOCK_COMMITS="$c601" \
     OC_HARVEST_MOCK_PRS="$mock_prs" \
     OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
     run_engine "check" "mock/repo" "$selftest_tmp" "$mock_reg" "600" "" 2>&1)" || rc=$?
-  if oc_has "$out" "HELD_SET" && oc_has "$out" "#600 (own)"; then
-    ok "HELD_SET: an unreadable graph is disclosed as NOT RUN, never read as a free set"
+  if oc_has "$out" "UNREADABLE" || oc_has "$out" "did NOT run"; then
+    ok "HELD_SET: an unreadable graph is DISCLOSED (leg did not run), never read as a free set"
   else
-    echo "  bad  - unreadable relations must disclose NOT RUN and still refuse on the own issue ($out)"
+    echo "  bad  - unreadable relations must disclose the un-run leg ($out)"
   fi
 
   # (g) THE VIEW AGREES WITH THE GATE. `held` must include an open OWN issue --
@@ -3876,14 +3989,13 @@ C600REOF
   local cv_out cv_rc
   cv_rc=0
   cv_out="$(OC_HARVEST_MOCK_RELATIONS="$rel_empty" OC_HARVEST_MOCK_ISSUE_STATE="$st_open" \
-    OC_HARVEST_MOCK_COMMITS="$c600" OC_HARVEST_MOCK_PRS="$mock_prs" \
+    OC_HARVEST_MOCK_COMMITS="$c601" OC_HARVEST_MOCK_PRS="$mock_prs" \
     OC_HARVEST_MOCK_LEDGER="$selftest_tmp/mock_ledger_empty.json" \
     run_engine "clusters" "adolfousier/opencrabs" "$selftest_tmp" "$mock_reg" "" "" "--open-fix" 2>&1)" || cv_rc=$?
-  if [ "$cv_rc" -eq 0 ] && oc_has "$cv_out" "HELD: own issue OPEN" \
-     && oc_has "$cv_out" "HELD: 1 of 1 open fix-titled"; then
-    ok "clusters view: an OPEN own issue holds its own set, and the HELD count says so"
+  if [ "$cv_rc" -eq 0 ] && oc_has "$cv_out" "HELD: 0 of 1 open fix-titled"; then
+    ok "clusters view: an OPEN own issue does NOT hold its own set (target excluded)"
   else
-    echo "  bad  - clusters view must report an open own-issue as held, got rc=$cv_rc"
+    echo "  bad  - clusters view must exclude the target from its own set, got rc=$cv_rc"
   fi
 
   # (h) ABSENT CLOCK IS DISCLOSED. The set soak clock is opt-in (it walks git
