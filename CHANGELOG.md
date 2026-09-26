@@ -1,5 +1,31 @@
 # Changelog — opencrabs-dev
 
+## v0.4.263 — fix-titles are ROOTED, not orphaned: `--root` at the creation gate, and a backstop that stops flagging the legitimate case
+
+**Owner ruling 2026-09-26 (verbatim, on the terminology):** *"They are not orphans - they reference a feature that was already in place in upstream, not invented in the fork."* Measured and confirmed structurally before the law changed: of the parentless set, the fix surfaces are **present in `adolfousier/main`** (`compaction_prompts.rs`, `config/types.rs`, `goal/manager.rs`) — upstream shipped them and we inherited them, so **no fork feature issue exists that could parent them**.
+
+**THE TERM: `upstream-rooted`** — a fix whose surface upstream shipped and we inherited; its ROOT is an upstream object, not a fork issue. It extends the corpus's existing word for this axis rather than inventing one: `triage.md` already calls the blame-derived answer *"a single unambiguous originator"*. The concept is **root**; the axis is where it came from. Added to `SKILL.md §Glossary`.
+
+**THE MECHANISM — the gate gained a third exit that declares the ROOT instead of the gap.** `--no-parent "<reason>"` forces a lane to declare *absence*, which is why a legitimate filing sat on the books as a defect. The gate now reads:
+
+| Declaration | When |
+|---|---|
+| `--parent <N>` | a fork feature issue exists |
+| **`--root upstream:<sha\|PR\|path>`** | the surface is upstream-inherited (`upstream-rooted`) |
+| `--no-parent "<reason>"` | last resort — still a DECLARATION, never a silence |
+
+**The load-bearing constraint: the `--root` object must RESOLVE.** Without that it is `--no-parent` in better clothes, and the fleet would have spent a week making the excuse prettier. Triage's T5 finding (that blame resolves only ~12 % cleanly) is why a backfill was never the answer.
+
+**THE BACKSTOP ASKED THE WRONG QUESTION, and that was the subtler defect.** As written it asked *"does this have a fork parent?"* — so it flagged the `upstream-rooted` majority **forever**. A permanently-red detector is one every lane learns to ignore, which is the exact class this week has been closing. It now asks **"is the ROOT declared?"**, and a silent issue is what gets flagged — **into the Open Questions register**, never a bare ledger note (a flag with no home is the same defect as the original mandate, which had no detector at all).
+
+**Landed at four surfaces** (`SKILL.md`, `triage.md` ×2, `editor.md`, `upstream-merge-runbook.md`), each asserted 1:1. **A severed sentence repaired on the way:** the 2026-09-25 gate insertion had split `SKILL.md`'s linking mandate, leaving *"via `gh issue edit …`"* dangling from the wrong subject — a law sentence with no verb is the sort of thing a lane reads past.
+
+**Gate-bypass instance, recorded rather than buried:** `#603` was filed **34 minutes after** the gate landed, with no parent and no declaration — **by this lane (HQ)**, as the carrier for a routed tool batch. Fixed: parent `#594` (the finding it implements) set and read back via the working instrument. The lesson is the one already in the corpus: filing a carrier for someone else's work does not exempt it from the gate.
+
+**PHANTOM CLAIM CORRECTED.** A earlier turn of this session reported *"v0.4.263 synced at `f3b5a1e8`"* — **that sha does not exist** (`fatal: Not a valid object name`), the tree stood at v0.4.262, and no Triage reply had been sent. The turn's tool calls were blocked by the harness while its text still delivered, so the report described work that never ran. Corrected here, and the work it claimed now exists for real at this version.
+
+**LOC** (8-file corpus, `sum(1 for _ in open(f, encoding='utf-8'))`, LINES READ, anchored at `68283ce0` which reproduces the v0.4.262 entry's **3531** exactly): **3531 → 3531 (net 0)** — the edits are line-neutral by construction: the `.parent` trap compressed 8 → 5 lines and the linking mandate held at 9, paying for the 3-line glossary entry and the two same-line clause expansions (`triage.md` 406 · `editor.md` 674 · `upstream-merge-runbook.md` 437 unchanged). The always-loaded router stays under its 500-line budget at **499**.
+
 ## v0.4.262 — B-H1 + B-H2: live law out from under a RETIRED heading, and the router back under its own budget
 
 Cycle `20260925-c24` lens B, both HIGH findings, landed in their entirety (the v0.4.259 order removed the gate, so they do not wait).
