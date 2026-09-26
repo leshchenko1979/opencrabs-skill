@@ -336,6 +336,9 @@ probe hygiene, and the single-sided-probe sufficiency ruling — are canonical a
   removed 2026-09-24); the bare word "cluster" in harvest law always means
   this one.
 
+- **upstream-rooted** — a fix whose surface upstream shipped and we inherited; its ROOT is an upstream object
+  (`--root upstream:<sha|PR|path>`, which must resolve), not a fork feature issue. Declared, never "an orphan".
+
 ## Red-run triage heuristics (shared core)
 
 ONE location: `editor.md` §Red-run triage heuristics (moved v0.4.262). Read by the editor in its
@@ -468,23 +471,20 @@ links; development-time upstream contact is PR-comments only (supersedes the
   2026-08-27). Covers
   task starts (`editor.md` Phase 1) AND mid-loop finds: red-build bugs, failed
   smoke tests, defects in another editor's feature.
-- Continuous Issue Relationship Linking (owner order 2026-09-16; creation gate added 2026-09-25): whenever a parent
-  subsystem relationship, blocker dependency, or child sub-issue is established or discovered
-  at ANY point in the lifecycle (creation, triage intake, editor in-flight discovery, decomposition,
-  or upstream PR staging), the lane identifying it MUST establish native links in the same turn.
-  **CREATION-TIME PARENT GATE (owner order 2026-09-25) — a `fix(`/`bug(`-titled issue MUST carry its parent ON
-  the creating command (`tools/issue/oc-issue-create`, or `gh issue create --parent <N>`); no derivable parent ->
-  an explicit `--no-parent "<reason>"`. A declared orphan is legal, a silent one is not. Full clause + the Duty T5
-  backstop: `upstream-merge-runbook.md`, `triage.md`.
-  via `gh issue edit <issue> --parent <parent-issue>` and/or `gh issue edit <issue> --add-blocked-by <blocker-issue>`.
-  **READ a relation with `gh issue view <N> --json parent,subIssues,blockedBy,blocking` (or the
-  `/parent` endpoint) — NEVER via the issue object's `.parent` projection.** `gh api
-  repos/O/R/issues/N --jq '.parent.number'` returns a confident **null for every issue**, including
-  ones that demonstrably have a parent, because the REST issue object does not carry that field; the
-  same call returns a real title and state, so the null is indistinguishable from "no parent". It has
-  already produced one recorded false negative (ledger n=11340) and defeated a GUARD that used it to
-  skip already-parented issues — a verification instrument and a guard need the same authority, so one
-  correct read at the end does not protect a wrong read at the gate.
+- Continuous Issue Relationship Linking (owner order 2026-09-16; creation gate 2026-09-25; `--root` 2026-09-26): whenever
+  a parent subsystem relationship, blocker dependency, or child sub-issue is established or discovered at ANY point in
+  the lifecycle, the lane identifying it MUST establish native links in the same turn via
+  `gh issue edit <issue> --parent <parent-issue>` and/or `--add-blocked-by <blocker-issue>`.
+  **CREATION-TIME PARENT GATE — a `fix(`/`bug(`-titled issue MUST declare its origin ON the creating command
+  (`tools/issue/oc-issue-create`): `--parent <N>` for a fork feature issue, `--root upstream:<sha|PR|path>` where the
+  surface is upstream-inherited (`upstream-rooted`), or `--no-parent "<reason>"` as the last resort. A DECLARED root
+  or orphan is legal; a SILENT one is the violation. The `--root` object must RESOLVE, or the flag is `--no-parent`
+  in better clothes. Full clause + Duty T5 backstop: `upstream-merge-runbook.md`, `triage.md`.**
+  **READ a relation with `gh issue view <N> --json parent,subIssues,blockedBy,blocking` — NEVER the issue object's
+  `.parent` projection.** `gh api ... --jq '.parent.number'` returns a confident **null for every issue**, since the
+  REST issue object omits the field; the same call returns a real title, so the null reads as "no parent". One
+  recorded false negative (n=11340), and it defeated a GUARD that skipped on "already parented" — a guard and a
+  verifier need the same authority.
 - Restart scope: **`opencrabs-ops` ONLY.** The `family` and default-profile daemons
   require Alexey's explicit approval EVERY time. Exception (v0.4.71, lens B2 #3;
   sanctioned v0.4.59 #47): HQ may mechanically restart the
