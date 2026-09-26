@@ -15,7 +15,7 @@ globs:
   - ~/.opencrabs/profiles/*/skills/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/opencrabs-dev/**
   - ~/.opencrabs/profiles/*/projects/opencrabs-dev/**
-version: 0.4.264
+version: 0.4.265
 author: leshchenko1979
 metadata:
   tags: [opencrabs, rust, ci, quick-build, binary-swap, worktree, session-notify]
@@ -319,18 +319,18 @@ probe hygiene, and the single-sided-probe sufficiency ruling — are canonical a
 - **issue cluster** — the harvest unit: fork-only commits grouped by their
   canonical issue ref, filtered on the ISSUE TITLE for fix-type. The dependency
   leg is the **UNION of TWO graphs** (owner ruling 2026-09-25) — the COMMIT/FILE
-  graph AND the gh relationship graph — and they do NOT behave alike. The file
-  graph is unusable as a set former: transitive closure of file overlap over the
-  live delta collapses to **3 components (159+1+1)**, so only **1-HOP** file
-  overlap is a leg. The gh relationship graph is sparse and semantic (138 edges
-  over 123 sets carrying delta work, 21 non-trivial, largest 11 members) but is
-  structurally weak while parent-linking is unenforced — 13 of 55 open fix-titled
-  clusters carry a parent (23.6%). A set is **READY** iff (a) the most recent swap
-  among its ready members is >24h ago AND (b) it has **no unready members**, where
-  ready = swapped + smoked + **closed** — so an open own-issue holds its own set.
-  Defined by
-  `tools/harvest/oc-harvest-census clusters`, which derives it and emits every
-  cluster (never pages silently); the soak gate keys on it and Triage surfaces
+  graph AND the gh relationship graph — and they do NOT behave alike: only
+  **1-HOP** file overlap is usable as a leg, because transitive closure collapses
+  the whole delta; the gh graph is sparse and semantic but structurally weak while
+  parent-linking is unenforced (13 of 55 open fix-titled clusters carry a parent).
+  A set is **READY** iff (a) the most recent swap among its ready members is >24h
+  ago AND (b) it has **no unready members**, where ready = swapped + smoked +
+  **closed**. **THE TARGET IS EXCLUDED FROM ITS OWN READINESS SET** (HQ ruling
+  2026-09-26, `n=11674`): the issue BEING harvested never gates itself; its **gh
+  relatives** do. Including it was **circular** — closure is the harvest's OUTPUT
+  (`triage.md:236`), never its precondition. Residual (mutually-linked pair): `upstream-merge-runbook.md §Cluster readiness`.
+  Defined by `tools/harvest/oc-harvest-census clusters`, which derives it and emits
+  every cluster (never pages silently); the soak gate keys on it and Triage surfaces
   by it. NOT "convergence cluster" (a Duty-4/6 group of rule proposals merged
   into one law change) and NOT a retired freeze T-group (the register was
   removed 2026-09-24); the bare word "cluster" in harvest law always means
