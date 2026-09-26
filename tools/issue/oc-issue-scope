@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+# =============================================================================
+# oc-issue-scope — body-surface scope classifier for fork issues
+# =============================================================================
+# Triage build order 2026-09-26. The factory-scoped patrol classifies ~180 open
+# issues every cycle by reading each body for the file surface its fix lands on.
+# That test was mechanized NOWHERE (grep body_surface|scope_classif|classify_scope
+# across tools/ -> 0 hits), so every lane re-implemented it as an ad-hoc regex and
+# THREE failure variants were hand-caught in ONE session:
+#
+#   1. TITLE-PREFIX — bucketing on fix(...) instead of the body surface. The owner
+#      files every tool-related issue as `fix(tools):` whether the fix lands in
+#      tools/** or src/brain/tools/**, so the prefix is a LABEL, not a surface.
+#      Cost: #419/#471 wired out of scope (law fixed v0.4.236).
+#   2. BARE-PREFIX NEGATION — #531's body reads
+#      "- Surface: `src/tests/**` — Editor territory, not tools/**."
+#      A bare token test matches `tools/**` and existence-testing `tools/`
+#      returns TRUE (the directory exists), so a genuine src/** issue reads IN.
+#   3. SUBSTRING — `src/brain/tools/registry.rs` CONTAINS `tools/`; #439's body
+#      quotes exactly such a path from a log line. A substring test fires on a
+#      path that is not at a path boundary.
+#
+# Usage: oc-issue-scope <N> [--json] [--repo <slug>] [--repo-path <dir>]
+#        oc-issue-scope --open [--json] [--repo <slug>] [--repo-path <dir>]
+#        oc-issue-scope --selftest
+# Exit:  0 classified (IN or OUT) / 1 UNPINNED (no resolvable surface claim)
+#        2 usage / 3 gh or git failed
+#
+# THREE RULES, each measured before it was encoded:
+#
+# (a) POLARITY. A token inside a negation is not a surface claim. The window is
+#     30 chars immediately before the token — MEASURED on the live corpus:
+#     W<=40 suppresses exactly 3 tokens and ALL THREE are correct (#531 `tools/**`,
+#     #359 `not in tools/`, #327 `excluding tools/tests/`), while W>=45 starts
+#     eating REAL claims (#607 `tools/harvest/oc-harvest-census`, #343 `tools/**`,
+#     #327 `tools/oc-harvest-census`) because a line-level negation test is not
+#     local to the token. 30 sits mid-band. Do NOT widen it.
+# (b) RESOLUTION. The token must resolve to a TRACKED path. The tracked index is
+#     built once per repo, so a bare prefix that names nothing (e.g. tools/nope/)
+#     is not evidence and is reported as unresolved rather than counted.
+# (c) PATH BOUNDARY. The match must begin at a path start (`(?<![\w/.-])`), so
+#     `src/brain/tools/registry.rs` yields `src/brain/tools/registry.rs` and never
+#     a bare `tools/` inside it.
+#
+# The resolved path is always printed, so a reader can check the verdict rather
+# than trust it. The TITLE scope is reported as CONTEXT and never decides the
+# bucket — that is failure variant 1, and --json carries a `title_disagrees` flag
+# so the patrol sees the #419/#471 shape the moment it recurs.
+# =============================================================================
+set -u
+
+_oc_r="$(dirname "$0")"; _oc_d="$_oc_r"; while [ "$_oc_r" != "/" ] && ! { [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; } && [ "$(basename "$_oc_r")" != "tools" ]; do _oc_r="$(dirname "$_oc_r")"; done
+if [ "$(basename "$_oc_r")" = "tools" ]; then _oc_d="$_oc_r"; fi
+if [ -f "$_oc_r/lib/oc-root.sh" ] && [ ! -L "$_oc_r/lib" ]; then . "$_oc_r/lib/oc-root.sh"; else OC_TOOLS_DIR="$(cd "$_oc_d" && pwd)"; fi
+_OC_LIB="$OC_TOOLS_DIR/lib/oc-log.sh"
+if [ -f "$_OC_LIB" ]; then source "$_OC_LIB"; oc_log_init "oc-issue-scope" "$@"; else oc_log_finish() { :; }; oc_log_extra() { :; }; fi
+
+FORK_REPO="leshchenko1979/opencrabs"
+SRC_REPO_PATH="${OC_SRC_REPO:-/root/opencrabs}"
+SKILL_REPO_PATH="$(cd "$OC_TOOLS_DIR/.." && pwd)"
+
+usage() { sed -n '/^# Usage:/,/^# Exit:/p' "$0" | sed 's/^# \{0,1\}//'; }
+
+N=""; MODE="one"; JSON=0; REPO="$FORK_REPO"; RPATH=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --open) MODE="open"; shift ;;
+    --selftest) MODE="selftest"; shift ;;
+    --json) JSON=1; shift ;;
+    --repo) REPO="${2:-}"; shift 2 ;;
+    --repo-path) RPATH="${2:-}"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    -*) echo "oc-issue-scope: unknown flag $1" >&2; exit 2 ;;
+    *) N="$1"; shift ;;
+  esac
+done
+[ -n "$RPATH" ] && SRC_REPO_PATH="$RPATH"
+
+# --- selftest (tests the SHIPPED classifier by marker) ----------------------
+if [ "$MODE" = "selftest" ]; then
+python3 - "$0" <<'PYEOF'
+import sys
+src = open(sys.argv[1], encoding='utf-8').read()
+ns = {}
+_B = '# --- CLASSIFIER ' + 'BEGIN ---'   # built, not typed: the literal would self-match below
+_E = '# --- CLASSIFIER ' + 'END ---'
+exec(compile(src[src.index(_B):src.index(_E)], 'classifier', 'exec'), ns)
+ok = bad = 0
+def ck(name, cond):
+    global ok, bad
+    if cond: print(f"  ok   - {name}"); ok += 1
+    else:    print(f"  FAIL - {name}"); bad += 1
+T = ns['build_index']([('skill','tools/lib/oc-notify.sh'), ('skill','tools/tests/run.sh'),
+                       ('src','src/tests/x.rs'), ('src','.github/workflows/ci.yml')])
+ext, claims, bucket, classify = ns['extract'], ns['claims'], ns['bucket'], ns['classify']
+
+ck('boundary: src/brain/tools/registry.rs yields the WHOLE path (variant 3)',
+   ext('src/brain/tools/registry.rs') == ['src/brain/tools/registry.rs'])
+ck('boundary: a real tools path still extracts', 'tools/lib/x.sh' in ext('see tools/lib/x.sh'))
+ck('polarity window is 30 (measured mid-band; W>=45 eats real claims)', ns['NEG_WIN'] == 30)
+
+b531 = '- Surface: `src/tests/**` — Editor territory, not tools/**.'
+ck('NEGATION: #531 yields no tools claim (variant 2)',
+   not any(t.startswith('tools/') for t in claims(b531, T)))
+ck('  and #531 buckets OUT', bucket(b531, T)[0] == 'OUT')
+
+cl = claims('Scope: `tools/**`, excluding `tools/tests/`.', T)
+ck('sub-path negation: exclusion dropped, surface kept', 'tools/**' in cl and 'tools/tests/' not in cl)
+ck('  and that body buckets IN', bucket('Scope: `tools/**`, excluding `tools/tests/`.', T)[0] == 'IN')
+
+cl = claims('written by `oc-ledger sync` (`tools/oc-ledger`:532), not in `tools/`.', T)
+ck('local window: tools/oc-ledger kept, bare tools/ suppressed', 'tools/oc-ledger' in cl and 'tools/' not in cl)
+
+ck('resolution: a bare prefix naming nothing is not evidence', claims('see tools/nope/here.sh', T) == [])
+ck('UNPINNED: no path token at all', bucket('nothing to see here', T)[0] == 'UNPINNED')
+ck('UNPINNED: token resolves nowhere', bucket('see tools/nope/x.sh', T)[0] == 'UNPINNED')
+ck('IN: real tracked tools file', bucket('see tools/lib/oc-notify.sh', T)[0] == 'IN')
+ck('OUT: src/ path with no factory claim', bucket('see src/tests/x.rs', T)[0] == 'OUT')
+ck('IN: .github/workflows resolves', bucket('see .github/workflows/ci.yml', T)[0] == 'IN')
+
+v, r, c, dis = classify('fix(tools): x', 'Surface: src/tests/**', T)
+ck('TITLE-PREFIX: fix(tools) title + src body buckets OUT (variant 1)', v == 'OUT')
+ck('  and the disagreement is FLAGGED for the patrol', dis is True)
+v, r, c, dis = classify('fix(tools): x', 'Surface: `tools/lib/y.sh`', T)
+ck('TITLE agrees with body -> not flagged', v == 'IN' and dis is False)
+
+ck('rc contract: single UNPINNED is the rc-1 verdict (documented in the header)',
+   ns['bucket']('no paths here', T)[0] == 'UNPINNED')
+
+print(f"\n{'='*30}\n  PASS: {ok}   FAIL: {bad}")
+sys.exit(1 if bad else 0)
+PYEOF
+exit $?
+fi
+
+# --- gather -----------------------------------------------------------------
+command -v gh >/dev/null 2>&1 || { echo "oc-issue-scope: gh not found" >&2; exit 3; }
+TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"; oc_log_finish $?' EXIT
+{
+  git -C "$SKILL_REPO_PATH" ls-files 2>/dev/null | sed 's/^/skill\t/'
+  [ -d "$SRC_REPO_PATH/.git" ] && git -C "$SRC_REPO_PATH" ls-files 2>/dev/null | sed 's/^/src\t/'
+} > "$TMPD/index"
+[ -s "$TMPD/index" ] || { echo "oc-issue-scope: no tracked paths (skill=$SKILL_REPO_PATH src=$SRC_REPO_PATH)" >&2; exit 3; }
+
+if [ "$MODE" = "open" ]; then
+  gh issue list -R "$REPO" --state open --limit 400 --json number,title,body > "$TMPD/payload" 2>/dev/null || exit 3
+else
+  [ -n "$N" ] || { usage >&2; exit 2; }
+  case "$N" in ''|*[!0-9]*) echo "oc-issue-scope: <N> must be an issue number" >&2; exit 2 ;; esac
+  gh issue view "$N" -R "$REPO" --json number,title,body 2>/dev/null > "$TMPD/one" || exit 3
+  [ -s "$TMPD/one" ] || { echo "oc-issue-scope: issue $N not found in $REPO" >&2; exit 3; }
+  printf '[%s]' "$(cat "$TMPD/one")" > "$TMPD/payload"
+fi
+
+python3 - "$0" "$TMPD/index" "$TMPD/payload" "$JSON" "$MODE" <<'PYEOF'
+import json, sys
+src = open(sys.argv[1], encoding='utf-8').read()
+ns = {}
+_B = '# --- CLASSIFIER ' + 'BEGIN ---'   # built, not typed: the literal would self-match below
+_E = '# --- CLASSIFIER ' + 'END ---'
+exec(compile(src[src.index(_B):src.index(_E)], 'classifier', 'exec'), ns)
+T = ns['build_index']((l.split('\t', 1)[0], l.split('\t', 1)[1])
+                      for l in open(sys.argv[2], encoding='utf-8') if '\t' in l)
+issues = json.load(open(sys.argv[3], encoding='utf-8'))
+as_json, mode = sys.argv[4] == '1', sys.argv[5]
+
+rows = []
+for it in issues:
+    v, res, claims, dis = ns['classify'](it.get('title') or '', it.get('body') or '', T)
+    rows.append({'number': it['number'], 'title': (it.get('title') or '')[:70],
+                 'bucket': v, 'resolved': res, 'claims': claims,
+                 'title_disagrees': dis})
+
+if as_json:
+    print(json.dumps(rows if mode == 'open' else rows[0], indent=2))
+elif mode == 'open':
+    from collections import Counter
+    c = Counter(r['bucket'] for r in rows)
+    print(f"oc-issue-scope: {len(rows)} open issue(s) — "
+          f"IN {c['IN']} · OUT {c['OUT']} · UNPINNED {c['UNPINNED']}\n")
+    for b in ('IN', 'OUT', 'UNPINNED'):
+        sub = [r for r in rows if r['bucket'] == b]
+        if not sub: continue
+        print(f"{b} ({len(sub)})")
+        for r in sub:
+            flag = '  [TITLE-DISAGREES]' if r['title_disagrees'] else ''
+            print(f"  #{r['number']:<5} {r['resolved'] or '-':<40}{flag}")
+    print("\nTITLE-DISAGREES = the fix(...) prefix names a different surface than the")
+    print("body does. That is the #419/#471 shape; the BODY decides the bucket.")
+else:
+    r = rows[0]
+    print(f"#{r['number']}  {r['bucket']}")
+    print(f"  resolved: {r['resolved'] or '(none)'}")
+    print(f"  claims:   {', '.join(r['claims']) if r['claims'] else '(none)'}")
+    if r['title_disagrees']:
+        print("  NOTE: the title's fix(...) prefix disagrees with the body surface — the body decides.")
+sys.exit(0 if mode == 'open' else (1 if rows[0]['bucket'] == 'UNPINNED' else 0))
+PYEOF
+
+: <<'OC_CLASSIFIER_PY'   # discarded by bash; the markers below are the extractor's source
+# --- CLASSIFIER BEGIN --- (pure python; single source for selftest + runtime)
+import re
+# ANY path-shaped token, not only factory ones -- OUT/UNPINNED need the rest.
+# The lookbehind is the PATH BOUNDARY (rule c): it is why
+# src/brain/tools/registry.rs yields the whole path and never a bare tools/.
+TOK = re.compile(r'(?<![\w/.-])([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.*-]*)+/?)')
+NEG = re.compile(r'(?i)\b(not|never|outside|excluding|rather than|instead of|without)\b')
+NEG_WIN = 30
+FACTORY = ('tools/', '.github/workflows/')
+SCOPE_IN_TITLE = re.compile(r'(?i)^\s*(?:fix|feat|bug|test|docs|chore)\s*\(([^)]*)\)')
+
+def build_index(pairs):
+    """(repo, tracked-path) pairs -> {dir/: repo} plus {dir/ + ext: repo}.
+
+    The EXTENSION map is what rejects a truncated log path. `tools/registry.rs`
+    names a directory that exists (tools/) with an extension that does not exist
+    anywhere beneath it -- tools/ holds only .sh/.md/.py/.mjs/.json, because the
+    real file is `src/brain/tools/registry.rs`. Without this check a quoted log
+    line reads as a surface claim, which is failure variant 3 (#439).
+    """
+    idx = {}
+    for repo, p in pairs:
+        p = p.strip()
+        if not p: continue
+        idx.setdefault(p, repo)
+        parts = p.split('/')
+        for i in range(1, len(parts)):
+            idx.setdefault('/'.join(parts[:i]) + '/', repo)
+        if len(parts) > 1 and '.' in parts[-1]:
+            ext = '.' + parts[-1].rsplit('.', 1)[1]
+            idx.setdefault('/'.join(parts[:-1]) + '/' + ext, repo)
+    return idx
+
+def _clean(tok):
+    return tok.rstrip('.,;:)!?\"\'`')   # sentence punctuation is not part of a path
+
+def extract(text):
+    return [_clean(m.group(1)) for m in TOK.finditer(text)]
+
+def _own_dir(tok):
+    """The directory a token SITS IN, or itself when it names a directory/glob."""
+    if tok.endswith('/') or any(ch in tok for ch in '*?'):
+        return tok.rstrip('*').rstrip('/') + '/'
+    parts = [x for x in tok.split('/') if x]
+    return '/'.join(parts[:-1]) + '/' if len(parts) > 1 else ''
+
+
+def _resolves(tok, T):
+    """(dir, repo) when the token's OWN directory is tracked, else (None, None).
+
+    Deliberately NOT a walk to the deepest tracked ancestor: that would make
+    `tools/nope/here.sh` resolve to `tools/` and read as a claim. The token's own
+    directory must exist -- a lane naming a file it is about to create still
+    names the surface it lands on (`tools/lib/y.sh` -> tracked `tools/lib/`),
+    while a path under a directory that does not exist is not evidence.
+    """
+    d = _own_dir(tok)
+    if not d or d not in T: return None, None
+    tail = tok.rstrip('/').rsplit('/', 1)[-1]
+    if '.' in tail and not any(ch in tail for ch in '*?'):
+        ext = '.' + tail.rsplit('.', 1)[1]
+        if d + ext not in T:            # (b) the extension must exist THERE
+            return None, None
+    return d, T[d]
+
+
+def _is_evidence(tok):
+    """A token is a SURFACE CLAIM only if it is specific enough to be one.
+
+    Requirement (b): a bare directory prefix is not evidence. `tools/` alone is
+    a generic reference -- it resolves because the directory exists, which is
+    exactly the trap that let #531's negated mention read as a claim. So a
+    single-segment directory is NOT evidence; a glob, a path with 2+ segments,
+    or a tracked FILE is.
+    """
+    if any(ch in tok for ch in '*?'): return True
+    # The regex requires a '/', so a 1-segment token is always a bare directory.
+    return len([x for x in tok.strip('/').split('/') if x]) >= 2
+
+def claims(body, T):
+    """Non-negated tokens that RESOLVE to tracked paths, in body order."""
+    out = []
+    for m in TOK.finditer(body):
+        pre = body[max(0, m.start() - NEG_WIN):m.start()]
+        if NEG.search(pre):            # (a) POLARITY
+            continue
+        tok = _clean(m.group(1))
+        d, repo = _resolves(tok, T)                           # (b) RESOLUTION
+        if d and _is_evidence(tok) and tok not in out:
+            out.append(tok)
+    return out
+
+def bucket(body, T):
+    cl = claims(body, T)
+    if not cl:
+        return 'UNPINNED', None, cl
+    fac = [c for c in cl if c.startswith(FACTORY)]
+    return ('IN' if fac else 'OUT'), (fac[0] if fac else cl[0]), cl
+
+def classify(title, body, T):
+    """(bucket, resolved, claims, title_disagrees). The BODY decides the bucket."""
+    v, res, cl = bucket(body, T)
+    dis = False
+    m = SCOPE_IN_TITLE.match(title or '')
+    if m:
+        scope = m.group(1).strip().lower()
+        title_in = any(scope.startswith(d.rstrip('/')) for d in FACTORY)
+        dis = (title_in != (v == 'IN'))
+    return v, res, cl, dis
+# --- CLASSIFIER END ---
+OC_CLASSIFIER_PY

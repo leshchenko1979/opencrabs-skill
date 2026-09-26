@@ -1857,6 +1857,62 @@ if [ -f "$TOOLS_DIR/issue/oc-issue-create" ]; then
   rm -rf "$_ic_t"
 fi
 
+# ---- 80. oc-issue-scope (body-surface classifier, #608) ----------------------
+if [ -f "$TOOLS_DIR/issue/oc-issue-scope" ]; then
+  bash "$TOOLS_DIR/issue/oc-issue-scope" --selftest >/dev/null 2>&1 \
+    && ok "oc-issue-scope --selftest" || bad "oc-issue-scope --selftest"
+  bash "$TOOLS_DIR/issue/oc-issue-scope" --help >/dev/null 2>&1 \
+    && ok "oc-issue-scope --help rc=0" || bad "oc-issue-scope --help rc=0"
+
+  # Hermetic end-to-end: gh is STUBBED (no network) and the tracked-path index
+  # comes from the real repos on disk, so the verdicts are deterministic.
+  # The three specimens are the failure variants hand-caught in one session.
+  _sq_t="$(mktemp -d)"; mkdir -p "$_sq_t/bin"
+  cat > "$_sq_t/bin/gh" <<'SQGH'
+#!/bin/sh
+# $1=issue $2=view ... ; emit the specimen body for the requested number.
+case "$*" in
+  *"view 531"*) printf '{"number":531,"title":"test(isolation): x","body":"- Surface: `src/tests/**` — Editor territory, not tools/**."}' ;;
+  *"view 439"*) printf '{"number":439,"title":"fix(notify): x","body":"run_tool_loop{...}: tools/registry.rs:428: Executing tool: session_notify"}' ;;
+  *"view 419"*) printf '{"number":419,"title":"fix(tools): notify schema","body":"The fix lands in src/brain/tools/subagent/notify.rs — Editor territory."}' ;;
+  *) exit 1 ;;
+esac
+SQGH
+  chmod +x "$_sq_t/bin/gh"
+  _sq() { PATH="$_sq_t/bin:$PATH" bash "$TOOLS_DIR/issue/oc-issue-scope" "$@" 2>/dev/null; }
+
+  # (a) NEGATION — a token inside a negation is not a surface claim.
+  _sq 531 | grep -q "^#531  OUT" \
+    && ok "oc-issue-scope: #531 negated mention buckets OUT" \
+    || bad "oc-issue-scope: #531 negated mention did NOT bucket OUT"
+  # (b) SUBSTRING — a truncated log path is not a surface claim (no .rs under tools/).
+  _sq 439 | grep -q "^#439  UNPINNED" \
+    && ok "oc-issue-scope: #439 truncated log path is not a claim" \
+    || bad "oc-issue-scope: #439 truncated log path read as a claim"
+  # (c) TITLE-PREFIX — the body decides, and the disagreement is FLAGGED.
+  _sq 419 | grep -q "^#419  OUT" \
+    && ok "oc-issue-scope: #419 fix(tools) title + src body buckets OUT" \
+    || bad "oc-issue-scope: #419 title prefix decided the bucket"
+  _sq 419 | grep -q "disagrees with the body surface" \
+    && ok "oc-issue-scope: #419 title/body disagreement is FLAGGED" \
+    || bad "oc-issue-scope: title/body disagreement was silent"
+
+  # DISCRIMINATING CONTROL: the naive shape a lane writes by hand (substring, no
+  # polarity, no tracked-path resolution) buckets ALL THREE IN. If this control
+  # ever stops being IN, the legs above have stopped measuring anything.
+  _sq_naive() {
+    printf '%s' "$2" | python3 -c '
+import re,sys
+b=sys.stdin.read()
+hits=re.findall(r"(?:tools|\.github)/[A-Za-z0-9_./*-]*", b)
+print("IN" if hits else "UNPINNED")'
+  }
+  [ "$(_sq_naive x '- Surface: `src/tests/**` — Editor territory, not tools/**.')" = "IN" ] \
+    && ok "oc-issue-scope control: the NAIVE substring shape reads #531 as IN (legs discriminate)" \
+    || bad "oc-issue-scope control: the naive shape did NOT read #531 as IN -- legs may be vacuous"
+  rm -rf "$_sq_t"
+fi
+
 verdict=PASS; [ "$FAIL" -eq 0 ] || verdict=FAIL
 finalize_fail_log
 printf '{\n  "path": "%s",\n  "ts": "%s",\n  "pass": %d,\n  "fail": %d,\n  "verdict": "%s",\n  "fail_log": "%s"\n}\n' \
