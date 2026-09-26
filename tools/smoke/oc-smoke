@@ -52,6 +52,13 @@ UNIT="opencrabs-ops"
 NO_LEDGER=0
 SELFTEST=0
 LINEAGE="unverified"
+# #598: the behavioral leg (leg 4). Empty means "caller did not declare";
+# the probe block below sets it from the ACTUAL run, and the final
+# resolution sets `absent` when no probe ran at all.  #306 gave lineage an
+# `unverified` default on the reasoning that a leg this tool did not check
+# must not read as a checked one; leg 4 had no equivalent guard, so a
+# probe-less run was durably recorded as a 4-leg verdict.
+BEHAVIORAL=""
 
 usage() {
   local code="${1:-2}"
@@ -61,6 +68,7 @@ usage() {
 usage: $PROG <issue> [--verdict PASS|FAIL] [--probe <cmd>]
                  [--markers m1,m2] [--evidence <text>]
                  [--lineage verified|failed|unverified]
+                 [--behavioral verified|failed|absent|na]
                  [--target <name>] [--unit <unit>] [--no-ledger] | --selftest
 
 Options:
@@ -73,6 +81,12 @@ Options:
   --lineage <tok>     Lineage leg status: verified|failed|unverified (default:
                       unverified — oc-smoke computes no ancestry itself, so it
                       never claims a lineage it did not check)
+  --behavioral <tok>  Behavioral leg (leg 4) status when NO --probe is given:
+                      verified|failed|absent|na. Default: derived — a probe that
+                      runs sets verified/failed; with no probe it is `absent`,
+                      and the row then opens "3-leg smoke pass" rather than
+                      claiming a leg it never ran (#598). A `na` declaration is
+                      the legitimate structural-N/A case the rubric allows.
   --target <name>     Deployment unit the verdict is about (default: live-ops)
   --unit <unit>       Systemd user unit to check (default: opencrabs-ops)
   --no-ledger         Skip automatic done stamp in workers-ledger.json on PASS
@@ -347,8 +361,12 @@ EOF
     OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
     "$0" 247 --verdict FAIL --evidence "smoke of a FAIL" 2>&1)" || rc=$?
   row247="$(grep 'issue=#247' "$d/state/smoke-verdicts.log" | tail -n 1)"
-  if printf '%s' "$row247" | grep -q 'evidence="4-leg smoke FAIL: ' \
-     && ! printf '%s' "$row247" | grep -q '4-leg smoke pass'; then
+  # #436's property is "the FAIL row NAMES ITS OWN VERDICT and never opens by
+  # claiming a pass". The leg count is not that property — #598 made the count
+  # vary with whether leg 4 ran — so the assertion is on the verdict token and
+  # on the absence of any pass claim, which is what the leg means.
+  if printf '%s' "$row247" | grep -qE 'evidence="[34]-leg smoke FAIL: ' \
+     && ! printf '%s' "$row247" | grep -q 'smoke pass'; then
     t_ok "a FAIL row names its own verdict and never opens by claiming a pass (#436)"
   else
     t_bad "FAIL opening clause (rc=$rc row=$row247)"
@@ -385,6 +403,70 @@ EOF
     t_ok "--lineage rejects a token outside verified|failed|unverified -> 2"
   else
     t_bad "--lineage domain check (rc=$rc out=$out)"
+  fi
+
+  # ---- #598: the behavioral leg must be stated, never assumed ------------
+  # A probe-less run is a 3-leg run. Before this fix every PASS row opened
+  # "4-leg smoke pass" regardless, so leg 4 never ran and nothing said so —
+  # the same class #306 fixed for lineage. The four arms below are the
+  # discriminating set: absent (no probe) / verified (probe passed) /
+  # failed (probe failed) / na (declared structural N/A).
+  local row251 row252 row253 row254
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 251 --evidence "no probe" 2>&1)" || rc=$?
+  row251="$(grep 'issue=#251' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if [ "$rc" -eq 0 ] && printf '%s' "$row251" | grep -q '3-leg smoke pass: ' \
+     && printf '%s' "$row251" | grep -q 'behavioral=absent' \
+     && ! printf '%s' "$row251" | grep -q '4-leg smoke pass'; then
+    t_ok "a probe-less run records 3 legs and behavioral=absent, never a 4-leg claim (#598)"
+  else
+    t_bad "probe-less leg count (rc=$rc row=$row251)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 252 --probe "echo probe-ok" 2>&1)" || rc=$?
+  row252="$(grep 'issue=#252' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if [ "$rc" -eq 0 ] && printf '%s' "$row252" | grep -q '4-leg smoke pass: ' \
+     && printf '%s' "$row252" | grep -q 'behavioral=verified'; then
+    t_ok "a probed run keeps 4 legs and records behavioral=verified (#598 control)"
+  else
+    t_bad "probed leg count (rc=$rc row=$row252)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 253 --probe "exit 4" 2>&1)" || rc=$?
+  row253="$(grep 'issue=#253' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if [ "$rc" -eq 1 ] && printf '%s' "$row253" | grep -q 'behavioral=failed'; then
+    t_ok "a FAILED probe records behavioral=failed (#598)"
+  else
+    t_bad "failed probe behavioral (rc=$rc row=$row253)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 254 --behavioral na --evidence "structural N/A" 2>&1)" || rc=$?
+  row254="$(grep 'issue=#254' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if [ "$rc" -eq 0 ] && printf '%s' "$row254" | grep -q 'behavioral=na'; then
+    t_ok "a declared structural-N/A leg records behavioral=na and keeps 4 legs (#598)"
+  else
+    t_bad "behavioral na (rc=$rc row=$row254)"
+  fi
+
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 \
+    "$0" 255 --behavioral bogus 2>&1)" || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    t_ok "--behavioral rejects a token outside verified|failed|absent|na -> 2"
+  else
+    t_bad "--behavioral domain check (rc=$rc out=$out)"
   fi
 
   echo "selftest: $pass passed, $fail failed"
@@ -434,6 +516,19 @@ while [ $# -gt 0 ]; do
           LINEAGE="$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ;;
         *)
           die 2 "--lineage accepts exactly verified|failed|unverified (got: $2)" ;;
+      esac
+      shift 2
+      ;;
+    --behavioral)
+      # #598: the caller's declaration for leg 4 when NO probe is supplied.
+      # `na` is the legitimate structural-N/A case the 4-leg rubric allows.
+      # A probe that actually RUNS overrides this — the run is the evidence.
+      [ $# -ge 2 ] || die 2 "--behavioral requires a token (verified|failed|absent|na)"
+      case "$2" in
+        verified|VERIFIED|failed|FAILED|absent|ABSENT|na|NA|n/a|N/A)
+          BEHAVIORAL="$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ;;
+        *)
+          die 2 "--behavioral accepts exactly verified|failed|absent|na (got: $2)" ;;
       esac
       shift 2
       ;;
@@ -531,9 +626,11 @@ if [ -n "$PROBE_CMD" ]; then
     echo "$PROG: behavioral probe FAILED (rc=$PROBE_RC)" >&2
     VERDICT="FAIL"
     PROBE_DETAILS="probe failed (rc=$PROBE_RC): $(clip "$(flatten "$PROBE_OUT")" "$SMOKE_PROBE_CAP")"
+    BEHAVIORAL="failed"
   else
     echo "$PROG: behavioral probe PASSED"
     PROBE_DETAILS="probe passed: $(clip "$(flatten "$PROBE_OUT")" "$SMOKE_PROBE_CAP")"
+    BEHAVIORAL="verified"
   fi
 fi
 
@@ -557,11 +654,26 @@ fi
 # so the durable record asserted a pass in its first five words while field 2
 # said FAIL. PASS keeps the phrase byte-for-byte (no migration, no lost marker);
 # a FAIL row now opens by naming its own verdict.
-CLAUSE="4-leg smoke ${VERDICT}"
-if [ "$VERDICT" = "PASS" ]; then
-  CLAUSE="4-leg smoke pass"
+# #598: resolve leg 4's status. A probe that ran set BEHAVIORAL above; an
+# absent probe leaves the caller's declaration, or `absent` when there is
+# none. NEVER `verified` by default — that is the whole point.
+if [ -z "$BEHAVIORAL" ]; then
+  BEHAVIORAL="absent"
 fi
-FULL_EVIDENCE="${CLAUSE}: lineage=${LINEAGE} identity=$( [ "$IDENTITY_RC" -eq 0 ] && echo "MATCH" || echo "MISMATCH" )"
+# #598: the leg COUNT must describe the legs actually run. A probe-less run is
+# a 3-leg run, and opening it "4-leg smoke pass" asserts a leg it never ran —
+# the same class #306 fixed for lineage, and the shape the owner's 2026-09-16
+# order forbids (a live behavioral receipt is mandatory for live-testable UX).
+# The phrase stays byte-for-byte for a probed PASS row, so no migration.
+LEG_COUNT=4
+if [ "$BEHAVIORAL" = "absent" ]; then
+  LEG_COUNT=3
+fi
+CLAUSE="${LEG_COUNT}-leg smoke ${VERDICT}"
+if [ "$VERDICT" = "PASS" ]; then
+  CLAUSE="${LEG_COUNT}-leg smoke pass"
+fi
+FULL_EVIDENCE="${CLAUSE}: lineage=${LINEAGE} behavioral=${BEHAVIORAL} identity=$( [ "$IDENTITY_RC" -eq 0 ] && echo "MATCH" || echo "MISMATCH" )"
 if [ -n "$MARKERS" ]; then
   FULL_EVIDENCE="${FULL_EVIDENCE} markers=${MARKERS}"
 fi
