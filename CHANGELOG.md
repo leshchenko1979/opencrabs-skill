@@ -14,6 +14,8 @@
 
 **LOC** (8-file corpus, `sum(1 for _ in open(f, encoding="utf-8"))`, LINES READ, anchored at `2c2db37a` which reproduces the v0.4.264 entry's **3533** exactly): **3533 → 3548 (+15)** — `upstream-merge-runbook.md` 437 → **451** (+14, the new canon section) and `triage.md` 406 → **407** (+1, the polarity/resolve clause). `SKILL.md` holds at **499**, under the 500-line router budget: the glossary edit initially pushed it to **500**, and it was paid back by merging two lines of the same entry rather than by trimming law. The other five corpus files are unchanged.
 
+**Bundled and named (C8):** `7f1e88fe` — this entry's own law commit (`triage.md` + `upstream-merge-runbook.md`), named here because the C8 leg flags a bundled commit that carries an issue ref and is therefore not covered by the self-commit skip; `f829eb28` — the mechanized `oc-issue-scope` (#608), which landed before this sync and is what item 2's clause points at.
+
 ## v0.4.264 — the fourth design-gate EXCEPTION: harvesting, and three stale fences released whose own work had landed
 
 **Owner order 2026-09-26 12:20 MSK / 09:20Z** (topic `Upstream: Harvest`, lane `4b0990b7`), verbatim: *"Remive my design gate from harvesting"* (typo in original: *Remove*). Ledger `n=11663`.
