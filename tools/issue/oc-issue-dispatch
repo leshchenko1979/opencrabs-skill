@@ -984,14 +984,45 @@ def get_worker_roster(ledger_data, mock_classify=None, mock_sessions=None, db_pa
     return editor_lanes
 
 
+# A match whose token is the DIRECT OBJECT of a negation is not a surface claim
+# (fork #605). A literal token has no polarity, so "NOT (tools):" read as the
+# tools domain -- the matcher fired on the surface being RULED OUT. The guard
+# requires the negation to be the LAST thing before the token, with at most an
+# article between; that adjacency is what separates an exclusion ("not (tools):")
+# from an instruction that still NAMES the surface ("do not touch
+# tools/lib/oc-notify.sh" -- "touch" intervenes, so it still fires). A looser
+# window would suppress the second, a false negative on a genuine mention.
+_NEGATION_BEFORE_RE = re.compile(
+    r"(?<![a-z])(?:not|never|no|nor|isn'?t|aren'?t|don'?t|doesn'?t|cannot|can'?t"
+    r"|without|excluding|except|instead\s+of|rather\s+than|vs\.?)"
+    r"(?![a-z])(?:\s+(?:a|an|the|any))?\s*$", re.I)
+
+def _negated_at(text, i):
+    """True when the token at i is directly negated by the words before it."""
+    return _NEGATION_BEFORE_RE.search(text[max(0, i - 30):i]) is not None
+
 def _keyword_matches(text, keyword):
-    """Match structured scope tokens literally, prose tokens by word."""
+    """Match structured scope tokens literally, prose tokens by word.
+
+    Both classes carry the negation guard (#605): a token is only a claim when
+    at least one occurrence is NOT directly negated.
+    """
     text = text.lower()
     keyword = keyword.lower()
     if any(mark in keyword for mark in "(:/"):
-        return keyword in text
-    return re.search(r"(?<![a-z0-9_])" + re.escape(keyword)
-                    + r"(?![a-z0-9_])", text) is not None
+        start = 0
+        while True:
+            i = text.find(keyword, start)
+            if i == -1:
+                return False
+            if not _negated_at(text, i):
+                return True
+            start = i + 1
+    for mt in re.finditer(r"(?<![a-z0-9_])" + re.escape(keyword)
+                          + r"(?![a-z0-9_])", text):
+        if not _negated_at(text, mt.start()):
+            return True
+    return False
 
 
 def _domains_for_text(text):
@@ -2043,6 +2074,38 @@ def run_selftest():
                 "bash" in _domains_for_text(lane_topic["topic"]))
     assert_true("#543: shared matcher is the only keyword predicate",
                 _keyword_matches("should", "sh") is False and _keyword_matches("sh", "sh"))
+
+    # #605: a token is only a CLAIM when it is not the direct object of a
+    # negation. A literal token has no polarity, so "NOT (tools):" fired as the
+    # tools domain -- the matcher read the surface being RULED OUT.
+    assert_true("#605: a negated structured token does NOT claim the domain",
+                "tools" not in detect_issue_domains(
+                    {"title": "", "body": "Surface: src/tests/** - Editor territory, NOT (tools):."}))
+    assert_true("#605: a negated subdir token does NOT claim the domain",
+                "tools" not in detect_issue_domains(
+                    {"title": "", "body": "this is not tools/lib/oc-notify.sh work"}))
+    assert_true("#605: the legitimate structured form still claims it (control)",
+                "tools" in detect_issue_domains(
+                    {"title": "fix(tools): dispatch affinity", "body": ""}))
+    assert_true("#605: naming a tools file still claims it (control)",
+                "tools" in detect_issue_domains(
+                    {"title": "", "body": "the culprit is tools/issue/oc-issue-dispatch"}))
+    # The adjacency requirement is what keeps an INSTRUCTION that names the
+    # surface: a looser window would suppress this and lose a genuine mention.
+    assert_true("#605: a negation with a verb between still names the surface",
+                "tools" in detect_issue_domains(
+                    {"title": "", "body": "do not touch tools/lib/oc-notify.sh"}))
+    # One occurrence negated, another not -> the domain still holds.
+    assert_true("#605: a later un-negated occurrence still claims the domain",
+                "tools" in detect_issue_domains(
+                    {"title": "", "body": "not tools/lib/a.sh, but tools/lib/b.sh is the writer"}))
+    # The prose class carries the same guard, and this is the pair that pins it.
+    assert_true("#605: a negated prose token does not arm its domain",
+                "harvest" not in detect_issue_domains(
+                    {"title": "", "body": "no upstream PR implied by this"}))
+    assert_true("#605: the un-negated prose form still arms it (control)",
+                "harvest" in detect_issue_domains(
+                    {"title": "", "body": "port this upstream"}))
 
     # #546: the bash vocabulary names the SHELL-TOOL surface, not generic English.
     # The pre-#546 list broke the -50 arm on BOTH sides: it fired on 156/163 open
