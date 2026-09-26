@@ -30,6 +30,17 @@
 #
 # (a) POLARITY. A token inside a negation is not a surface claim. The window is
 #     30 chars immediately before the token — MEASURED on the live corpus:
+#   KNOWN LIMIT -- NOT mechanically resolvable, do not "fix" it by guessing:
+#      #610 (fix(tools), body says only `src/**` as the AFFECTED POPULATION) and
+#      #471 (fix(tools), body names NO path at all) are INDISTINGUISHABLE on
+#      every signal here: same title scope, no concrete file claim, and the
+#      correct buckets are OPPOSITE (IN vs OUT, Triage 2026-09-26). So a title
+#      fallback on this shape is UNSAFE -- it would send #471 IN, which is
+#      failure variant 1, the very pair (#419/#471) the scope law exists for.
+#      Demoting globs is also unsafe: `Scope: tools/**` is a legitimate claim
+#      (asserted by a selftest leg), and demoting it leaves #610 UNPINNED rather
+#      than IN. The posture is therefore: bucket what the BODY proves, carry
+#      title_disagrees=true, and let the patrol apply a mechanism override.
 #     W<=40 suppresses exactly 3 tokens and ALL THREE are correct (#531 `tools/**`,
 #     #359 `not in tools/`, #327 `excluding tools/tests/`), while W>=45 starts
 #     eating REAL claims (#607 `tools/harvest/oc-harvest-census`, #343 `tools/**`,
@@ -110,6 +121,26 @@ ck('  and that body buckets IN', bucket('Scope: `tools/**`, excluding `tools/tes
 
 cl = claims('written by `oc-ledger sync` (`tools/oc-ledger`:532), not in `tools/`.', T)
 ck('local window: tools/oc-ledger kept, bare tools/ suppressed', 'tools/oc-ledger' in cl and 'tools/' not in cl)
+
+# ANALOGY is not a surface claim. #387's ONLY tools token is a sibling-defect
+# comparison while its own Fix section names src/cli/args.rs; bucketing it IN
+# would wire an src/** fix to the tools lane.
+b387 = ('This is the same defect class as `tools/lib/oc-notify.sh` accepting the '
+        'retired mode. Source: `src/tests/x.rs`.')
+ck('ANALOGY: #387 yields no tools claim (its token names a sibling defect)',
+   not any(t.startswith('tools/') for t in claims(b387, T)))
+ck('  and #387 buckets OUT on the real fix surface', bucket(b387, T)[0] == 'OUT')
+# POSITIVE CONTROL: the same token OUTSIDE an analogy frame must still claim, or
+# the rule has eaten the surface it was meant to leave alone.
+ck('ANALOGY control: the same token without the frame still claims IN',
+   any(t.startswith('tools/') for t in claims('Fix: `tools/lib/oc-notify.sh`:12.', T)))
+ck('analogy demotes ONLY the compared object (gap 8)',
+   ns['ANALOG_GAP'] == 8)
+# The tightening's own negative direction: a fix surface named RIGHT AFTER the
+# analogy sentence must survive, or the rule eats the surface it exists to leave.
+b387b = ('This is the same defect class as `tools/lib/oc-notify.sh` accepting the '
+         'retired mode. Source: `src/tests/x.rs`.')
+ck('ANALOGY does not eat a following fix surface', 'src/tests/x.rs' in claims(b387b, T))
 
 ck('resolution: a bare prefix naming nothing is not evidence', claims('see tools/nope/here.sh', T) == [])
 ck('UNPINNED: no path token at all', bucket('nothing to see here', T)[0] == 'UNPINNED')
@@ -206,6 +237,18 @@ import re
 TOK = re.compile(r'(?<![\w/.-])([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.*-]*)+/?)')
 NEG = re.compile(r'(?i)\b(not|never|outside|excluding|rather than|instead of|without)\b')
 NEG_WIN = 30
+# A COMPARISON is not a claim about where the fix lands. #387's only tools token
+# reads "This is the same defect class as `tools/oc-notify-fanout` accepting the
+# retired mode" while its own Fix section names src/cli/args.rs -- so the token
+# names a SIBLING DEFECT, not the surface. Measured: suppressing it flips #387
+# IN -> OUT and changes NO other issue of 181 (the frame is rare and explicit).
+ANALOG = re.compile(r'(?i)\b(same\s+\w*\s*(?:defect\s+)?class\s+as|same\s+as|'
+                    r'analogous\s+to|compare\s+with|like\s+the\s+way)\b')
+# Only the COMPARED OBJECT is demoted -- the single token right after the frame.
+# A lookback WINDOW is wrong here and measurably so: on a body where the real fix
+# surface follows the analogy closely, a 90-char window suppressed BOTH, so the
+# fixture lost its src claim and the tool read the body as having no claim at all.
+ANALOG_GAP = 8
 FACTORY = ('tools/', '.github/workflows/')
 SCOPE_IN_TITLE = re.compile(r'(?i)^\s*(?:fix|feat|bug|test|docs|chore)\s*\(([^)]*)\)')
 
@@ -280,9 +323,14 @@ def _is_evidence(tok):
 def claims(body, T):
     """Non-negated tokens that RESOLVE to tracked paths, in body order."""
     out = []
+    # (a2) COMPARISON is not a claim: the object of an analogy names a SIBLING
+    # defect. Suppress only the token immediately following the frame.
+    cmp_ends = [m.end() for m in ANALOG.finditer(body)]
     for m in TOK.finditer(body):
         pre = body[max(0, m.start() - NEG_WIN):m.start()]
         if NEG.search(pre):            # (a) POLARITY
+            continue
+        if any(0 <= m.start() - e <= ANALOG_GAP for e in cmp_ends):
             continue
         tok = _clean(m.group(1))
         d, repo = _resolves(tok, T)                           # (b) RESOLUTION
