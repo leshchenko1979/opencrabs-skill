@@ -218,3 +218,23 @@ oc_append_line_safe() { # <file> <line> -> appends, terminating a prior untermin
   fi
   printf '%s\n' "$c" >> "$f"
 }
+
+# #588: the CHARACTER-safe clip has ONE home.
+# `cut -c1-N` counts BYTES under C.UTF-8 (this box's locale), not characters.
+# A cap landing inside a multi-byte character leaves a DANGLING LEAD BYTE, and
+# appending a literal ellipsis after it yields a string no UTF-8 reader can
+# decode — the whole file then fails a plain text read. Measured on the live
+# smoke-verdicts.log: 2 rows carry `...PASS \xe2\xe2\x80\xa6[tru`, and
+# `open(path, encoding='utf-8').read()` dies on them. The damage is silent to
+# grep/tail, which is why it survived a green battery.
+# Bash's `${var:0:N}` is character-safe (and this lib is bash-only: it already
+# uses `local`). Use it for ANY text that can hold non-ASCII.
+oc_clip_chars() { # <text> <cap-chars> -> prints at most <cap> CHARACTERS
+  local t="${1:-}" cap="${2:-0}"
+  case "$cap" in ''|*[!0-9]*) cap=0 ;; esac
+  if [ "$cap" -le 0 ] || [ "${#t}" -le "$cap" ]; then
+    printf '%s' "$t"
+  else
+    printf '%s' "${t:0:$cap}"
+  fi
+}

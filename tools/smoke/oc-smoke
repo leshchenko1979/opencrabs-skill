@@ -121,7 +121,13 @@ clip() {
   if [ "$len" -le "$cap" ]; then
     printf '%s' "$txt"
   else
-    printf '%s…[truncated at %s of %s chars]' "$(printf '%s' "$txt" | cut -c1-"$cap")" "$cap" "$len"
+    # #588: the cut MUST be character-safe. `cut -c1-N` counts BYTES under
+    # C.UTF-8, so a cap landing inside a multi-byte character stamped a
+    # dangling lead byte into the durable log and the literal ellipsis after
+    # it made the row undecodable — 2 such rows are in the canonical log
+    # today, and grep/tail cannot see the damage. oc_clip_chars is bash's
+    # character-safe `${var:0:N}`, in lib/oc-log.sh.
+    printf '%s…[truncated at %s of %s chars]' "$(oc_clip_chars "$txt" "$cap")" "$cap" "$len"
   fi
 }
 
@@ -301,6 +307,56 @@ EOF
     t_ok "probe truncation is marked with the cap and the true length (#409)"
   else
     t_bad "probe truncation unmarked (rc=$rc row=$(grep 'issue=#243' "$d/state/smoke-verdicts.log" | tail -n1))"
+  fi
+
+  # ---- #588: the clip is CHARACTER-safe, not byte-safe --------------------
+  # `cut -c1-N` counts BYTES under C.UTF-8 (this box's locale). A cap landing
+  # inside a multi-byte character leaves a DANGLING LEAD BYTE, and the literal
+  # ellipsis appended after it makes the row undecodable — so a plain
+  # `open(path, encoding='utf-8').read()` over the whole durable log dies, while
+  # grep/tail see nothing wrong. Measured in production: 2 rows of the canonical
+  # smoke-verdicts.log carry `PASS \xe2\xe2\x80\xa6`, byte-identical to what the
+  # mutant below produces. The probe emits three U+2705 marks and the cap is 6,
+  # which lands INSIDE the first one (5 bytes of "PASS " + 1 byte of a 3-byte
+  # char), so the assertion is the discriminating negative the issue names.
+  cat > "$d/mbprobe" <<'MBEOF'
+#!/usr/bin/env bash
+printf 'PASS \342\234\205\342\234\205\342\234\205 tail text here repeated to exceed the cap'
+MBEOF
+  chmod +x "$d/mbprobe"
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 OC_SMOKE_PROBE_CAP=6 \
+    "$0" 256 --probe "$d/mbprobe" 2>&1)" || rc=$?
+  if python3 -c "import sys; open(sys.argv[1], encoding='utf-8').read()" \
+       "$d/state/smoke-verdicts.log" 2>/dev/null; then
+    t_ok "a multi-byte probe clipped mid-character leaves the log decodable (#588)"
+  else
+    t_bad "multi-byte clip corrupted the log — byte-cut, not character-cut (#588)"
+  fi
+
+  # The cut must also be a CHARACTER count, so the marker's two units agree:
+  # `${#txt}` reports characters, so `of N chars` must match a character cut.
+  row256="$(grep 'issue=#256' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if printf '%s' "$row256" | grep -q 'truncated at 6 of 50 chars'; then
+    t_ok "the truncation marker reports the CHARACTER count it actually cut (#588)"
+  else
+    t_bad "truncation marker units disagree (row=$row256)"
+  fi
+
+  # A NON-multi-byte clip must still behave exactly as before (no regression on
+  # the ordinary path): the #409 leg above is that control, and this one pins
+  # the boundary case where the text is shorter than the cap.
+  rc=0
+  out="$(OC_DEPLOY_STATE_DIR="$d/state" OC_SMOKE_EVIDENCE_BIN="$d/fake-evidence" \
+    OPENCRABS_SESSION_ID="test-session-uuid" OC_TOOLS_NOLOG=1 OC_SMOKE_PROBE_CAP=400 \
+    "$0" 257 --probe "$d/mbprobe" 2>&1)" || rc=$?
+  row257="$(grep 'issue=#257' "$d/state/smoke-verdicts.log" | tail -n 1)"
+  if [ "$rc" -eq 0 ] && printf '%s' "$row257" | grep -q '✅✅✅' \
+     && ! printf '%s' "$row257" | grep -q 'truncated'; then
+    t_ok "an unclipped multi-byte probe lands INTACT — no spurious marker (#588 control)"
+  else
+    t_bad "unclipped multi-byte probe (rc=$rc row=$row257)"
   fi
 
   # ---- #432: target= carries the DEPLOYMENT UNIT, not the subject ---------

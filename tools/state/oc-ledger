@@ -916,7 +916,13 @@ cmd_stamp() {
     # catchable by eye. Prints the value read back OFF DISK (r_what), so it
     # reports what landed, not what was intended. Sanitised to one line.
     local w_show w_len w_hash
-    w_show="$(printf '%s' "$r_what" | tr '\n' ' ' | cut -c1-80)"
+    # #588 sibling (2026-09-26, toolsmith): the `what=` READ-BACK line used
+    # `cut -c1-80`, which counts BYTES under C.UTF-8, so a `what` holding
+    # non-ASCII clipped mid-character and printed a dangling lead byte on the
+    # one line whose entire purpose is to let an operator see what landed.
+    # Same class as the oc-smoke clip (#588), same fix (oc_clip_chars in
+    # lib/oc-log.sh).
+    w_show="$(oc_clip_chars "$(printf '%s' "$r_what" | tr '\n' ' ')" 80)"
     w_len=${#r_what}
     w_hash="$(printf '%s' "$r_what" | sha256sum | cut -c1-8)"
     echo "stamped n=$n kind=$kind (read-back ok) what=\"$w_show\" len=$w_len hash8=$w_hash"
@@ -2530,6 +2536,29 @@ AMBEOF
   _o="$(OC_ACTOR="$W3" bash "$ME" stamp done --allow-no-ref "deliberately ref-less" 2>&1)"
   chk "stamp-done-no-ref-hatch-silent" 0 "$(printf '%s' "$_o" | grep -c "$_lw")"
   bash "$ME" claim-ref "00000000-0000-0000-0000-000000000000" >/dev/null 2>&1; chk "claim-ref-no-claim-rc3" 3 $?
+  # #588 sibling (2026-09-26, toolsmith): the `what=` READ-BACK line must be
+  # CHARACTER-safe. `cut -c1-80` counts BYTES under C.UTF-8, so a `what` holding
+  # non-ASCII clipped mid-character printed a dangling lead byte on the one line
+  # whose entire purpose is to let an operator see what landed. Same class as
+  # the oc-smoke clip (#588), same fix (oc_clip_chars).
+  # The construction MUST actually trigger the clip: dash's `${#}` counts BYTES
+  # while the tool's bash counts CHARACTERS, so a fixture sized by eye can sit
+  # under the cap and assert a boundary it never reached. This value is 106
+  # CHARACTERS (6-byte prefix + 100 single-char marks), so the 80-char cap clips
+  # and byte offset 80 lands 2 bytes INTO the 25th 3-byte mark.
+  _mb="#601  $(printf '\342\234\205%.0s' $(seq 1 100))"
+  _o="$(OC_ACTOR="$W3" bash "$ME" stamp done "$_mb" 2>&1)"
+  if printf '%s' "$_o" | python3 -c "import sys; sys.stdin.buffer.read().decode('utf-8')" 2>/dev/null; then
+    ok "stamp read-back line stays decodable with a multi-byte what (#588)"
+  else
+    bad "stamp read-back line is NOT valid UTF-8 with a multi-byte what (#588)"
+  fi
+  # Control: still BOUNDED at 80 CHARACTERS — the fix must not stop clipping.
+  _wlen="$(printf '%s' "$_o" | sed -n 's/.*what="\(.*\)" len=.*/\1/p' | python3 -c "import sys; print(len(sys.stdin.read().rstrip(chr(10))))")"
+  chk "stamp-read-back-clipped-to-80-chars" 80 "$_wlen"
+  # And len= must report CHARACTERS, not bytes: 106, not 306.
+  _slen="$(printf '%s' "$_o" | sed -n 's/.*len=\([0-9]*\) hash8=.*/\1/p')"
+  chk "stamp-len-reports-characters-not-bytes" 106 "$_slen"
   # #441 (Design Q shape 1, Decision 15): the ARGUMENT DOMAIN. Until the fix
   # this verb validated PRESENCE only, so a plain issue number was accepted as
   # the actor and _latest_claim_issue's free substring answered with a FOREIGN
